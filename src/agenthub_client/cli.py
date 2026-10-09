@@ -9,7 +9,8 @@ Team lifecycle (a rig defaults to ``4genthub-min``)::
     4genteam log [RIG]      follow its log
     4genteam ui             open the OpenRig web UI
 
-Tools, each the command line of one module (``4genteam <tool> --help``)::
+Tools, each the command line of one module (``4genteam <tool> --help``). EVERY verb answers
+``--help`` with its own usage, the lifecycle verbs above included::
 
     sync     seat_sync     pull and pin seats from the cloud
     seat     seat_client   status / sync / watch of a room's seats
@@ -32,16 +33,47 @@ DEFAULT_RIG = "4genthub-min"
 LIFECYCLE = ("up", "compact", "stop", "status", "log", "ui")
 WATCH_VERBS = ("feed", "grid", "inputs", "input")
 
+EXIT_OK = 0
+# A start that did not survive is its own exit condition: the verb is the documented way to
+# restart the supervisor, so returning 0 there would say it restarted when it did not.
+EXIT_START_FAILED = 3
+
+# One line per verb, printed when the verb is asked for help. Every entry starts with the verb's own
+# invocation, which is what a reader is looking for and what the test asserts.
+LIFECYCLE_USAGE = {
+    "up": f"4genteam up [RIG]        OpenRig daemon, compaction supervisor, herdr watch view and the OpenRig UI (default RIG: {DEFAULT_RIG})",
+    "compact": "4genteam compact [RIG]   (re)start the compaction supervisor, detached",
+    "stop": "4genteam stop [RIG]      stop the compaction supervisor",
+    "status": "4genteam status [RIG]    the supervisor's process and the last log lines",
+    "log": "4genteam log [RIG]       follow the supervisor's log",
+    "ui": "4genteam ui             open the OpenRig web UI",
+    "feedback": "4genteam feedback [ARGS]  the friction channel: run the packaged seat-feedback client",
+}
+
 
 def supervisor_pattern(rig: str) -> str:
     return f"agenthub_client.compact --rig {rig}"
+
+
+# How long a started supervisor must survive before the start is called a success. Long enough for
+# an argument error or an import failure to end the child, short enough that the verb stays snappy.
+SUPERVISOR_START_GRACE = 1.5
 
 
 def log_path(rig: str):
     return paths.LOG_DIR / f"compact-supervisor-{rig}.log"
 
 
-def start_supervisor(rig: str) -> None:
+def start_supervisor(rig: str) -> bool:
+    """Start the supervisor detached and report whether it SURVIVED the start.
+
+    A child that exits immediately is a FAILED start, and `4genteam compact` is the documented way
+    to restart the supervisor - so reporting a pid for a child that is already dead tells the user
+    it restarted when it did not. That is exactly what happened with `--help` as the rig name
+    before the per-verb help existed: the child died on `error: argument --rig: expected one
+    argument` while this function printed its pid and the verb returned 0. The status is therefore
+    read from the child rather than assumed from a successful Popen.
+    """
     stop_supervisor(rig, quiet=True)
     paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(log_path(rig), "ab") as log:
@@ -49,7 +81,17 @@ def start_supervisor(rig: str) -> None:
             [sys.executable, "-m", "agenthub_client.compact", "--rig", rig],
             stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
         )
-    print(f"compact supervisor: pid {proc.pid}, log {log_path(rig)}")
+    try:
+        proc.wait(timeout=SUPERVISOR_START_GRACE)
+    except subprocess.TimeoutExpired:
+        print(f"compact supervisor: pid {proc.pid}, log {log_path(rig)}")
+        return True
+    print(
+        f"4genteam: the compaction supervisor exited immediately (status {proc.returncode}); "
+        f"nothing is supervising this rig. Its output is in {log_path(rig)}",
+        file=sys.stderr,
+    )
+    return False
 
 
 def stop_supervisor(rig: str, quiet: bool = False) -> None:
@@ -107,11 +149,14 @@ def feedback(rest: list[str]) -> int:
 
 
 def lifecycle(command: str, rest: list[str]) -> int:
+    # `--help` never reaches here: main() answers it per verb. It must not, because this function
+    # reads rest[0] as the RIG, so a help flag in that position was started as one - the fault this
+    # comment replaces.
     rig = rest[0] if rest else DEFAULT_RIG
     if command == "ui":
         open_ui()
     elif command == "compact":
-        start_supervisor(rig)
+        return EXIT_OK if start_supervisor(rig) else EXIT_START_FAILED
     elif command == "stop":
         stop_supervisor(rig)
     elif command == "status":
@@ -120,12 +165,16 @@ def lifecycle(command: str, rest: list[str]) -> int:
         os.execvp("tail", ["tail", "-f", str(log_path(rig))])
     else:
         ensure_daemon()
-        start_supervisor(rig)
+        if not start_supervisor(rig):
+            print(
+                "4genteam: continuing without a running compaction supervisor (see above)",
+                file=sys.stderr,
+            )
         argv_tool(watch.main, ["watch", "--rig", rig])
         open_ui()
         if not os.environ.get("HERDR_ENV"):
             os.execvp("herdr", ["herdr"])
-    return 0
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,6 +182,12 @@ def main(argv: list[str] | None = None) -> int:
     command, rest = (args[0], args[1:]) if args else ("up", [])
     if command in ("-h", "--help", "help"):
         print(__doc__)
+        return 0
+    if command in LIFECYCLE_USAGE and rest[:1] and rest[0] in ("-h", "--help"):
+        # HELP IS HELP FOR EVERY VERB. Before this, only the FIRST token was inspected, so
+        # `4genteam compact --help` made `--help` the rig of a lifecycle verb and `feedback --help`
+        # handed the flag to the shell client, which refused it as an unknown option.
+        print(LIFECYCLE_USAGE[command])
         return 0
     if command in LIFECYCLE:
         return lifecycle(command, rest)
