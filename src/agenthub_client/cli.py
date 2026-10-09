@@ -17,12 +17,14 @@ Tools, each the command line of one module (``4genteam <tool> --help``)::
     team     team_setup    create the team in the cloud: apply, import-project, publish-skills, drift-check
     bridge   bridge        this machine's status to the cloud: register, run, once, install-service
     watch    watch         herdr view: watch (grid + lead window), grid, feed, inputs
+    feedback seat_feedback.sh  what went wrong, to the friction channel - the door for a runtime with no MCP
     compact-run            the supervisor loop in the foreground (what ``compact`` starts)
 """
 
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from . import bridge, compact, paths, seat_client, seat_policy, seat_sync, team_setup, watch
 
@@ -88,6 +90,22 @@ def argv_tool(module_main, argv: list[str]) -> int:
     return 0
 
 
+FEEDBACK_SCRIPT = Path(__file__).with_name("seat_feedback.sh")
+
+
+def feedback(rest: list[str]) -> int:
+    """The door for a seat whose runtime has no MCP: run the packaged shell client.
+
+    The script owns the contract - it validates the layer before dialing, takes the identity from
+    the client, and posts to the same route the MCP tool uses - so this verb passes its arguments
+    through and reports only a missing file. It must never fall through to `up`: a seat asking for
+    the friction channel must not get a started stack instead.
+    """
+    if not FEEDBACK_SCRIPT.exists():
+        sys.exit(f"4genteam: the feedback script is missing from this install ({FEEDBACK_SCRIPT})")
+    return subprocess.run(["sh", str(FEEDBACK_SCRIPT), *rest]).returncode
+
+
 def lifecycle(command: str, rest: list[str]) -> int:
     rig = rest[0] if rest else DEFAULT_RIG
     if command == "ui":
@@ -118,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if command in LIFECYCLE:
         return lifecycle(command, rest)
+    if command == "feedback":
+        return feedback(rest)
     if command == "sync":
         return tool(seat_sync.main, rest)
     if command == "seat":

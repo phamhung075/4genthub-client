@@ -16,6 +16,12 @@ agenthub-client = "agenthub_client.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The no-MCP submission door is a shell script, not a module, so setuptools drops it unless it is
+# named here: a wheel built without this line carries the twelve modules and no seat_feedback.sh,
+# and `4genteam feedback` then has nothing to run on any machine but an editable checkout.
+[tool.setuptools.package-data]
+agenthub_client = ["seat_feedback.sh"]
+
 [tool.pytest.ini_options]
 addopts = "--noconftest -p no:cacheprovider"
 testpaths = ["tests"]
