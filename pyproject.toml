@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agenthub-client"
+version = "0.1.0"
+description = "The 4genthub local client: seat sync, status bridge, seat policy, team setup, context compaction and watch tools"
+requires-python = ">=3.12"
+dependencies = ["PyYAML>=6", "python-dotenv>=1"]
+
+[project.scripts]
+4genteam = "agenthub_client.cli:main"
+agenthub-client = "agenthub_client.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--noconftest -p no:cacheprovider"
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["unit: no network, no rig, no seat"]
