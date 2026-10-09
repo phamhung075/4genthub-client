@@ -112,9 +112,31 @@ from pathlib import Path
 from . import paths
 from .scrub import scrub
 
-if str(paths.HOOKS_DIR) not in sys.path:
-    sys.path.insert(0, str(paths.HOOKS_DIR))
-from utils.env_loader import get_project_root  # noqa: E402
+
+def get_project_root() -> str:
+    """The project root the Claude-code hooks derive, imported where it is USED.
+
+    THE HOOKS LIVE IN THE REPOSITORY, under ``.claude/hooks``, so an installation that is not a
+    checkout has none: ``paths.HOOKS_DIR`` then resolves to a path that is not there. Importing this
+    module used to die outright in that case with ``ModuleNotFoundError: No module named 'utils'`` -
+    a message that names nothing a reader can act on, raised at import time, which took the whole
+    ``4genteam`` CLI with it, ``--help`` included. The import therefore moves into this function,
+    where its result is needed, and a missing hook tree raises the ONE thing that is actionable.
+
+    The name stays ``get_project_root`` because it is this module's seam: the tests replace it to
+    point a run at a temporary root. The derivation is still the hooks' own - this function returns
+    what ``utils.env_loader.get_project_root`` returns and computes nothing itself.
+    """
+    if str(paths.HOOKS_DIR) not in sys.path:
+        sys.path.insert(0, str(paths.HOOKS_DIR))
+    try:
+        from utils.env_loader import get_project_root as hooks_get_project_root
+    except ModuleNotFoundError as err:
+        raise SystemExit(
+            f"4genteam: this client needs the repository's Claude hooks, which only a checkout has "
+            f"({err}). Set AGENTHUB_REPO_ROOT to the repository root; looked in {paths.HOOKS_DIR}"
+        ) from err
+    return hooks_get_project_root()
 
 DEFAULT_TEAM_DIR = paths.TEAM_DIR
 # The skill library inventory (machine-readable twin of skill-library.md): 52 skills, each

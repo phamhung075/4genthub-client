@@ -569,11 +569,24 @@ def test_import_project_dry_run_makes_no_requests(
 
 
 def test_import_project_uses_the_hooks_project_root_derivation():
+    """ONE derivation, and it is the hooks' - but bound WHERE IT IS USED.
+
+    This asserted identity (`team_setup.get_project_root is hooks_get_project_root`), which held
+    only because the hook import ran at MODULE import time. That is precisely what made a wheel
+    install die with `ModuleNotFoundError: No module named 'utils'` before the CLI could print
+    `--help`. The binding moved into the function, so the property worth pinning is the one that
+    survives the move: the module still derives nothing of its own, it returns the hooks' answer,
+    and the identity being FALSE is what proves the import is no longer at module level.
+    """
     if str(HOOKS_DIR) not in sys.path:
         sys.path.insert(0, str(HOOKS_DIR))
     from utils.env_loader import get_project_root as hooks_get_project_root
 
-    assert team_setup.get_project_root is hooks_get_project_root
+    assert team_setup.get_project_root() == hooks_get_project_root()
+    assert team_setup.get_project_root is not hooks_get_project_root, (
+        "the hook import is bound at module level again, which is what made a wheel install die "
+        "at import time instead of naming AGENTHUB_REPO_ROOT"
+    )
 
 
 def _store_pushes(server):
