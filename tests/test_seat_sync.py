@@ -848,7 +848,7 @@ def test_rig_applies_the_per_seat_policy_from_the_single_source(
 
     assert code == 0
     config = _omp_config_path(tmp_path)
-    assert config.read_text() == policy.render_config("seat1", "dev")
+    assert config.read_text() == policy.render_config("seat1", "dev", "room1")
     assert "applied the per-seat policy" in err
 
     parsed = yaml.safe_load(config.read_text())

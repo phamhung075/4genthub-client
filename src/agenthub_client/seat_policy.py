@@ -149,8 +149,14 @@ def policy_for(role: str) -> tuple[list[str], list[str]]:
     return bash, tools
 
 
-def render_config(seat: str, role: str, rig: str | None = None) -> str:
-    """The seat's config.yml. json.dumps gives YAML-safe double-quoted scalars."""
+def render_config(seat: str, role: str, rig: str) -> str:
+    """The seat's config.yml. json.dumps gives YAML-safe double-quoted scalars.
+
+    ``rig`` is REQUIRED rather than defaulted. It selects the per-rig thinking level, and a caller
+    that omitted it used to get a document with that level silently ABSENT: no exception, no log
+    line, nothing to fail - the seat would come up on the wrong level and only a reader of the
+    rendered file could tell. The omission now fails at the call site instead.
+    """
     bash, tools = policy_for(role)
     thinking = SEAT_THINKING.get(rig, {}).get(seat)
     lines = [

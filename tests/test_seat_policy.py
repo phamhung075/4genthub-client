@@ -4,6 +4,7 @@ They render and apply to a temporary state root; no seat, daemon or omp process 
 """
 
 import importlib.util
+import inspect
 import os
 import pwd
 from pathlib import Path
@@ -26,7 +27,7 @@ policy = load_module()
 
 
 def parsed(seat: str) -> dict:
-    return yaml.safe_load(policy.render_config(seat, policy.SEAT_ROLES[RIG][seat]))
+    return yaml.safe_load(policy.render_config(seat, policy.SEAT_ROLES[RIG][seat], RIG))
 
 
 def deny_patterns(config: dict) -> list[str]:
@@ -217,3 +218,21 @@ def test_only_the_trial_seat_runs_a_lower_thinking_level():
 
     assert level("writer") == "medium"
     assert {level(s) for s in policy.SEAT_ROLES[RIG] if s != "writer"} == {None}
+
+
+def test_render_config_refuses_a_call_that_omits_the_rig():
+    """The rig is REQUIRED, and this is the defect the requirement closes.
+
+    With a default of None, a caller that omitted the rig rendered a document whose per-rig thinking
+    level was simply ABSENT - no exception, no log line, no test - so the seat came up on the wrong
+    level and only a reader of the rendered file could notice. Both halves are asserted here: the
+    call fails where the argument is missing, and the signature carries no default for a future
+    caller to lean on, so a reintroduced default fails in this file rather than in a seat.
+    """
+    with pytest.raises(TypeError):
+        policy.render_config("writer", "writer")
+
+    assert (
+        inspect.signature(policy.render_config).parameters["rig"].default
+        is inspect.Parameter.empty
+    )
