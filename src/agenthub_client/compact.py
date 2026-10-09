@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Keep every seat of a rig under the per-session context limit without cutting a job short.
 
-A seat may run past the limit, up to ``HARD_LIMIT`` where it is compacted at once: an omp seat gets an RPC
-compact from ``forcecompact`` whatever it is doing; another runtime has its turn interrupted first (a /compact
-sent to a working seat is read as text). At ``WARN_LIMIT``
-the seat is told once that the forced compaction is close. When its context crosses ``COMPACT_LIMIT`` the supervisor tells the
-seat once, in its terminal, that the limit is reached and how to compact itself. When the seat then
-finishes (its session log is silent for ``--quiet`` seconds) and is still over the limit, the
-supervisor sends ``/compact`` for it. A compaction counts only when a new compaction record appears
-(omp) or the context drops (Claude Code); a send with no such witness is logged as a failure.
+Three limits. At ``COMPACT_LIMIT`` the seat is told once, in its terminal, to find its own safe point and
+stop; when it then finishes (its session log is silent for ``--quiet`` seconds) the supervisor sends
+``/compact``. At ``WARN_LIMIT`` the seat is told it is compacted now: it no longer waits for quiet. An omp
+seat gets an RPC compact from ``forcecompact`` (omp applies it at its next turn boundary, the safe point
+that still exists in a long job); another runtime is sent ``/compact`` as soon as it is idle (a /compact
+sent to a working seat is read as text). At ``HARD_LIMIT``, when that has not worked, the turn is cut: an
+omp seat is aborted and then compacted, another runtime is interrupted. A compaction counts only when a new
+compaction record appears (omp) or the context drops (Claude Code); a send with no such witness is logged
+as a failure and retried.
 Once a compaction is witnessed the seat is told to resume, so it carries on without the owner typing continue.
 Run it from the host, not inside a seat pane: a loop in a seat dies with the seats it watches.
 """
@@ -86,8 +87,9 @@ def notice(rig: str, seat: str) -> str:
 def warning() -> str:
     return (
         f"VERY IMPORTANT: your session is past {watch.kilo(watch.WARN_LIMIT)} tokens. "
-        "Reach a safe point and stop NOW so you are compacted cleanly. "
-        f"At {watch.kilo(watch.HARD_LIMIT)} your turn is interrupted and /compact is forced, "
+        "Reach a safe point and stop NOW. "
+        "A compaction is being requested now and runs at your next turn boundary. "
+        f"If you are still running at {watch.kilo(watch.HARD_LIMIT)} your turn is aborted and /compact is forced, "
         "and whatever you had not written down is lost. Write down the job, what is done, what is next and the files you hold."
     )
 
@@ -95,6 +97,12 @@ def warning() -> str:
 def interrupt(rig: str, seat: str) -> None:
     """Escape in the seat's tmux pane ends the running turn."""
     subprocess.run(["tmux", "send-keys", "-t", f"{rig}-{seat}@{rig}", "Escape"], capture_output=True)
+
+
+def abort(rig: str, seat: str) -> None:
+    """``/abort`` is the one pane text the omp runner turns into an abort of the running turn. It is sent
+    without waiting for idle, because the seat is working by definition."""
+    subprocess.Popen(["rig", "send", f"{rig}-{seat}@{rig}", "/abort", "--raw"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def rpc_compact(rig: str, seat: str) -> str:
@@ -137,12 +145,14 @@ def step(rig: str, state: dict, quiet: int) -> None:
             s["warned"] = True
             log(f"{seat}: warned, {watch.kilo(used)} of {watch.kilo(watch.HARD_LIMIT)}")
         silent = now - path.stat().st_mtime
-        hard = used >= watch.HARD_LIMIT
+        urgent, hard = used >= watch.WARN_LIMIT, used >= watch.HARD_LIMIT
         if now - s["sent"] <= COOLDOWN:
             continue
-        if hard and runtime == "omp":
+        if runtime == "omp" and urgent:
+            if hard:
+                abort(rig, seat)
             s.update(sent=now, before=used, count=compactions(path))
-            log(f"{seat}: {watch.kilo(used)} past the hard limit: {rpc_compact(rig, seat)}")
+            log(f"{seat}: {watch.kilo(used)} past the {'hard' if hard else 'warn'} limit{', aborted' if hard else ''}: {rpc_compact(rig, seat)}")
             continue
         if hard and not idle(rig, seat):
             if now - s["interrupted"] > INTERRUPT_GAP:
@@ -150,10 +160,10 @@ def step(rig: str, state: dict, quiet: int) -> None:
                 s["interrupted"] = now
                 log(f"{seat}: interrupted at {watch.kilo(used)} (hard limit)")
             continue
-        if (hard or silent >= quiet) and idle(rig, seat):
+        if (urgent or silent >= quiet) and idle(rig, seat):
             s.update(sent=now, before=used, count=compactions(path))
             say(rig, seat, "/compact", raw=True)
-            log(f"{seat}: quiet {silent:.0f}s at {watch.kilo(used)}, sent /compact{' (hard limit)' if hard else ''}")
+            log(f"{seat}: quiet {silent:.0f}s at {watch.kilo(used)}, sent /compact{' (past the warn limit)' if urgent else ''}")
 
 
 def main() -> None:

@@ -62,9 +62,9 @@ CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 # Per-session context limit: past it the seat finishes its job, then the compaction supervisor
 # (4genteam compact-run) sends it /compact. The harness itself only compacts at ~850k.
 # Each limit is read from .env (or the environment) so it can be changed without editing code.
-COMPACT_LIMIT = int(os.environ.get("COMPACT_LIMIT_TOKENS", 150_000))  # soft: told to compact when the job ends
-WARN_LIMIT = int(os.environ.get("COMPACT_WARN_TOKENS", 250_000))  # told once that the forced compaction is close
-HARD_LIMIT = int(os.environ.get("COMPACT_HARD_TOKENS", 300_000))  # hard: compacted at once, a working seat's turn is interrupted
+COMPACT_LIMIT = int(os.environ.get("COMPACT_LIMIT_TOKENS", 150_000))  # soft: told to find a safe point; compacted once the seat is quiet
+WARN_LIMIT = int(os.environ.get("COMPACT_WARN_TOKENS", 250_000))  # urgent: compacted now, without waiting for quiet; told once
+HARD_LIMIT = int(os.environ.get("COMPACT_HARD_TOKENS", 300_000))  # hard: still not compacted, the running turn is aborted and compaction forced
 BAR_CELLS = 16
 
 
