@@ -1222,6 +1222,11 @@ def test_the_shipped_inventory_digests_match_the_committed_openrig_checkout():
     inventory = team_setup.load_skill_inventory(inventory_path)
     assert inventory["count"] == len(inventory["skills"]), "the count disagrees with the rows"
     assert len(modules) == inventory["count"], "one block per skill, so a short list is a lost skill"
+    sides = sum(1 for entry in inventory["skills"] for edge in ("canonical", "plugin") if edge in entry)
+    assert sides == 54, (
+        f"{sides} recorded sides: 52 skills with 2 mirrored pairs is what this inventory documents. "
+        "Every recorded side must be read, so confirm the new count deliberately before changing it."
+    )
 
 
 def test_the_inventory_guard_names_the_skill_and_both_digests(tmp_path):
@@ -1247,3 +1252,65 @@ def test_the_inventory_guard_names_the_skill_and_both_digests(tmp_path):
     assert recomputed in message, (
         "the RECOMPUTED digest must be named too, or the reader cannot tell which side moved"
     )
+
+
+def test_the_inventory_guard_reads_the_mirror_too(tmp_path):
+    """The same red, one side further out: the MIRROR's file is read and digested as well.
+
+    A mirrored skill records two digests. Verifying only the source leaves the mirror free to rot:
+    its digest was recorded, never checked, so a stale mirror stayed green. This case is the one
+    that goes red the moment the module stops reading the mirror's file.
+    """
+    source_root = _openrig_root_or_skip()
+    inventory = json.loads(team_setup.DEFAULT_SKILL_INVENTORY.read_text(encoding="utf-8"))
+    row = next(
+        entry for entry in inventory["skills"] if "canonical" in entry and "plugin" in entry
+    )
+    recomputed = row["plugin"]["sha256"]
+    row["plugin"]["sha256"] = "0" * 64
+    perturbed = tmp_path / "skill-library.json"
+    perturbed.write_text(json.dumps(inventory), encoding="utf-8")
+
+    with pytest.raises(team_setup.SetupError) as refused:
+        _inventory_guard(perturbed, source_root)
+
+    message = str(refused.value)
+    assert row["name"] in message, "the failing skill must be named"
+    assert "0" * 64 in message, "the RECORDED mirror digest must be named"
+    assert recomputed in message, "the RECOMPUTED mirror digest must be named too"
+
+
+def _curation_gaps(inventory: dict) -> list:
+    """Every way the curation fails to account for the skills, as sentences. Empty means none.
+
+    The inventory is hand-maintained, so a row added without a home and a name typed into
+    ``unused_by_default`` are the two edits that are quiet everywhere else. The Go seed test
+    checks that curated refs resolve and that each unused name reaches no seed - and a MISSPELLED
+    unused name passes that second check by reaching no seed either. This is the check that
+    closes it, and the arithmetic that says all 52 are accounted for exactly once.
+    """
+    names = {row["name"] for row in inventory["skills"]}
+    curated = {
+        entry["skill"] for entries in inventory["seat_curation"].values() for entry in entries
+    }
+    unused = set(inventory["unused_by_default"])
+    gaps = [f"curated skill {name!r} is not a row" for name in sorted(curated - names)]
+    gaps += [f"unused_by_default name {name!r} is not a row" for name in sorted(unused - names)]
+    gaps += [
+        f"skill {name!r} is neither curated nor unused_by_default" for name in sorted(names - curated - unused)
+    ]
+    gaps += [f"skill {name!r} is both curated and unused_by_default" for name in sorted(curated & unused)]
+    return gaps
+
+
+def test_the_inventory_curation_accounts_for_every_skill():
+    """Every row has exactly one home, and every curated and unused name resolves to a row.
+
+    No checkout is needed - the inventory documents its own curation - so this case runs wherever
+    the suite runs, including on a machine that has never cloned OpenRig.
+    """
+    inventory = team_setup.load_skill_inventory(team_setup.DEFAULT_SKILL_INVENTORY)
+
+    gaps = _curation_gaps(inventory)
+
+    assert not gaps, "the curation does not account for the inventory:\n  " + "\n  ".join(gaps)

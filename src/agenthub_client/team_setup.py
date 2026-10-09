@@ -46,9 +46,9 @@ sha256 of its SKILL.md) and sends ONE ``skill`` block per skill through the same
 A skill committed on two edges (canonical and plugin) is ONE block, with the canonical copy
 as ``source_path``/``sha256`` and the plugin copy as ``mirror_path``/``mirror_sha256``. The
 inventory carries paths, not text, so the OpenRig checkout they are relative to is named by
-``--source-root`` (or ``OPENRIG_SKILLS_ROOT``); the file read is verified against the
-inventory's digest, so a stale inventory fails loudly instead of publishing a block whose
-provenance is already wrong. It shares ``import-project``'s resolve-then-push idempotence.
+``--source-root`` (or ``OPENRIG_SKILLS_ROOT``); the file reads are verified against the
+inventory's digests - the source's and its mirror's - so a stale inventory fails loudly instead
+of publishing a block whose provenance is already wrong. It shares ``import-project``'s resolve-then-push idempotence.
 
 A published skill block records where it came from: its content JSON carries ``source_path``
 (the repo-relative path of the committed file) and ``sha256`` (the digest of that file's bytes
@@ -706,15 +706,43 @@ def _inventory_edge(edge: str, row: dict, name: str) -> dict:
     return source
 
 
+def _verified_skill_text(
+    name: str, path: str, recorded: str, source_root: Path, side: str
+) -> bytes:
+    """Read one recorded side of a skill, refusing when its bytes do not match the recorded digest.
+
+    ``side`` names which copy is being read (``source`` or ``mirror``) so a failure says which half
+    of the pair moved. Both sides come through here: it is one rule, applied twice.
+    """
+    skill_file = source_root / path / SKILL_FILE
+    try:
+        raw = skill_file.read_bytes()
+    except OSError as err:
+        raise SetupError(
+            f"skill {name!r}: cannot read {side} {skill_file} under --source-root: {err}", EXIT_USAGE
+        )
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != recorded:
+        raise SetupError(
+            f"skill {name!r}: {side} {skill_file} digests {digest}, but the inventory records "
+            f"{recorded}; the inventory is stale - regenerate it before publishing",
+            EXIT_USAGE,
+        )
+    return raw
+
+
 def skill_library_modules(inventory: dict, source_root: Path) -> list:
     """One skill block per inventory skill: the SKILL.md text plus its source provenance.
 
     A skill committed on both edges is ONE module: the canonical copy is the source and the
     plugin copy is its mirror, so the block records both digests and the drift check can see
     either. Library paths are relative to the OpenRig repository root (``source_root``), not to
-    this project. The recorded sha256 is the inventory's, but the file read is verified against
-    it: publishing bytes the inventory does not describe would write a block whose provenance
-    is stale the moment it lands, which is exactly what the drift check exists to catch.
+    this project.
+
+    BOTH recorded digests are verified against the files they name - the source's and the
+    mirror's. A digest that is recorded but never read is a side free to rot green, which is the
+    failure this path exists to refuse: publishing bytes the inventory does not describe would
+    write a block whose provenance is stale the moment it lands.
     """
     rows = {}
     for row in inventory["skills"]:
@@ -730,23 +758,14 @@ def skill_library_modules(inventory: dict, source_root: Path) -> list:
         row = rows[name]
         primary_edge = "canonical" if "canonical" in row else "plugin"
         primary = row[primary_edge]
-        skill_file = source_root / primary["path"] / SKILL_FILE
-        try:
-            raw = skill_file.read_bytes()
-        except OSError as err:
-            raise SetupError(
-                f"skill {name!r}: cannot read {skill_file} under --source-root: {err}", EXIT_USAGE
-            )
-        digest = hashlib.sha256(raw).hexdigest()
-        if digest != primary["sha256"]:
-            raise SetupError(
-                f"skill {name!r}: {skill_file} digests {digest}, but the inventory records "
-                f"{primary['sha256']}; the inventory is stale - regenerate it before publishing",
-                EXIT_USAGE,
-            )
+        raw = _verified_skill_text(name, primary["path"], primary["sha256"], source_root, "source")
         content = raw.decode("utf-8", "replace")
         _refuse_secret(f"skill {name!r}", content)
         mirror = row.get("plugin") if primary_edge == "canonical" else None
+        if mirror is not None:
+            # Read even though only the source's text is published: the mirror's digest is part of
+            # the block's provenance, so an unread mirror is a claim nothing has checked.
+            _verified_skill_text(name, mirror["path"], mirror["sha256"], source_root, "mirror")
         modules.append({
             "slug": _module_slug(name, "skill"),
             "kind": SKILL_KIND,
