@@ -2,7 +2,7 @@
 
 Team lifecycle (a rig defaults to ``4genthub-min``)::
 
-    4genteam [up] [RIG]     OpenRig daemon, compaction supervisor + herdr watch view + OpenRig UI
+    4genteam [up] [RIG]     OpenRig daemon, the rig's seats, forcecompact, status bridge, compaction supervisor + herdr watch view + OpenRig UI
     4genteam compact [RIG]  (re)start the compaction supervisor, detached
     4genteam stop [RIG]     stop it
     4genteam status [RIG]   its process and the last log lines
@@ -22,6 +22,7 @@ Tools, each the command line of one module (``4genteam <tool> --help``). EVERY v
     compact-run            the supervisor loop in the foreground (what ``compact`` starts)
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -41,7 +42,7 @@ EXIT_START_FAILED = 3
 # One line per verb, printed when the verb is asked for help. Every entry starts with the verb's own
 # invocation, which is what a reader is looking for and what the test asserts.
 LIFECYCLE_USAGE = {
-    "up": f"4genteam up [RIG]        OpenRig daemon, compaction supervisor, herdr watch view and the OpenRig UI (default RIG: {DEFAULT_RIG})",
+    "up": f"4genteam up [RIG]        OpenRig daemon, the rig's seats, forcecompact, compaction supervisor, herdr watch view and the OpenRig UI (default RIG: {DEFAULT_RIG})",
     "compact": "4genteam compact [RIG]   (re)start the compaction supervisor, detached",
     "stop": "4genteam stop [RIG]      stop the compaction supervisor",
     "status": "4genteam status [RIG]    the supervisor's process and the last log lines",
@@ -108,12 +109,72 @@ def supervisor_status(rig: str) -> None:
         print("\n".join(log_path(rig).read_text(errors="replace").splitlines()[-5:]))
 
 
+BRIDGE_PATTERN = "agenthub_client.bridge run"
+
+
+def bridge_env() -> dict[str, str] | None:
+    """The environment the bridge needs, read from the file `bridge register` wrote (what the systemd unit loads)."""
+    try:
+        lines = bridge.DEFAULT_ENV_FILE.read_text().splitlines()
+    except OSError:
+        return None
+    pairs = (line.split("=", 1) for line in lines if "=" in line and not line.lstrip().startswith("#"))
+    env = {k.strip(): v.strip().strip("\"'") for k, v in pairs}
+    return env if env.get("AGENTHUB_URL") and env.get("AGENTHUB_MACHINE_TOKEN") else None
+
+
+def start_bridge() -> bool:
+    """Run the status bridge detached, so the 4genthub frontend sees every seat and rig of this PC."""
+    env = bridge_env()
+    if env is None:
+        print("4genteam: no machine token: run `4genteam bridge register` once (needs AGENTHUB_URL and AGENTHUB_TOKEN)", file=sys.stderr)
+        return False
+    subprocess.run(["pkill", "-f", BRIDGE_PATTERN])
+    paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(paths.LOG_DIR / "bridge.log", "ab") as log:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "agenthub_client.bridge", "run"],
+            env={**os.environ, **env}, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
+        )
+    try:
+        proc.wait(timeout=SUPERVISOR_START_GRACE)
+    except subprocess.TimeoutExpired:
+        print(f"bridge: pid {proc.pid}, log {paths.LOG_DIR / 'bridge.log'}")
+        return True
+    print(f"4genteam: the bridge exited immediately (status {proc.returncode}); see {paths.LOG_DIR / 'bridge.log'}", file=sys.stderr)
+    return False
+
+
 def ensure_daemon() -> None:
     """Every rig command needs the OpenRig daemon, so `up` starts it before anything else."""
     if subprocess.run(["rig", "daemon", "status"], capture_output=True).returncode == 0:
         return
     if subprocess.run(["rig", "daemon", "start"]).returncode != 0:
         sys.exit("4genteam: the OpenRig daemon did not start (see: rig daemon logs)")
+
+
+def ensure_rig(rig: str) -> None:
+    """Restore the rig when any of its seats is not running: the latest snapshot, every seat resumes its own session."""
+    out = subprocess.run(["rig", "ps", "--nodes", "--rig", rig, "--json"], capture_output=True, text=True).stdout
+    try:
+        nodes = json.loads(out)
+    except json.JSONDecodeError:
+        nodes = []
+    if nodes and all(n.get("sessionStatus") == "running" for n in nodes):
+        return
+    if subprocess.run(["rig", "up", rig, "--existing"]).returncode != 0:
+        print(f"4genteam: could not restore rig {rig} (see: rig up {rig} --existing)", file=sys.stderr)
+
+
+def ensure_forcecompact() -> None:
+    """The compaction supervisor force-compacts an omp seat through this binary, which needs CAP_SYS_PTRACE
+    (a rebuild clears it, and only root can grant it)."""
+    if not paths.FORCECOMPACT.exists():
+        if subprocess.run(["cargo", "build", "--release"], cwd=paths.FORCECOMPACT.parents[2]).returncode != 0:
+            print("4genteam: forcecompact did not build: omp seats past the hard limit cannot be force-compacted", file=sys.stderr)
+            return
+    if "cap_sys_ptrace" not in subprocess.run(["getcap", str(paths.FORCECOMPACT)], capture_output=True, text=True).stdout:
+        print(f"4genteam: run once: sudo setcap cap_sys_ptrace+ep {paths.FORCECOMPACT}", file=sys.stderr)
 
 
 def open_ui() -> None:
@@ -159,12 +220,16 @@ def lifecycle(command: str, rest: list[str]) -> int:
         return EXIT_OK if start_supervisor(rig) else EXIT_START_FAILED
     elif command == "stop":
         stop_supervisor(rig)
+        subprocess.run(["pkill", "-f", BRIDGE_PATTERN])
     elif command == "status":
         supervisor_status(rig)
     elif command == "log":
         os.execvp("tail", ["tail", "-f", str(log_path(rig))])
     else:
         ensure_daemon()
+        ensure_rig(rig)
+        ensure_forcecompact()
+        start_bridge()
         if not start_supervisor(rig):
             print(
                 "4genteam: continuing without a running compaction supervisor (see above)",

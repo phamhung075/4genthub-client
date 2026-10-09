@@ -14,6 +14,7 @@ load_dotenv(REPO_ROOT / ".env")  # values already in the environment win
 CLIENT_DIR = REPO_ROOT / "agenthub_client"
 LOG_DIR = REPO_ROOT / "logs"
 GO_DIR = REPO_ROOT / "agenthub_go"
+FORCECOMPACT = CLIENT_DIR / "rust" / "forcecompact" / "target" / "release" / "forcecompact"
 HOOKS_DIR = REPO_ROOT / ".claude" / "hooks"
 TEAM_DIR = REPO_ROOT / "scripts" / "team" / "4genthub"
 SKILL_INVENTORY = REPO_ROOT / "ai_docs" / "agent-system" / "skill-library.json"

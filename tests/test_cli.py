@@ -31,6 +31,9 @@ def _no_side_effects(monkeypatch):
     stack or hang is not a test, so every action is replaced here.
     """
     monkeypatch.setattr(cli, "ensure_daemon", lambda: None)
+    monkeypatch.setattr(cli, "ensure_rig", lambda rig: None)
+    monkeypatch.setattr(cli, "ensure_forcecompact", lambda: None)
+    monkeypatch.setattr(cli, "start_bridge", lambda: True)
     monkeypatch.setattr(cli, "argv_tool", lambda *a: 0)
     monkeypatch.setattr(cli, "open_ui", lambda: None)
     monkeypatch.setattr(cli, "start_supervisor", lambda rig: True)
@@ -79,6 +82,20 @@ def test_help_after_a_verb_never_runs_a_lifecycle_action(monkeypatch):
     assert cli.main(["compact", "--help"]) == 0
     assert cli.main(["up", "--help"]) == 0
     assert ran == [], f"asking for help ran a lifecycle action: {ran}"
+
+
+def test_up_initialises_every_service_in_order(monkeypatch):
+    """`up` starts the daemon, restores the rig, checks forcecompact, then the supervisor, watch view and UI."""
+    ran = []
+    for name, args in (("ensure_daemon", ()), ("ensure_rig", ("rig",)), ("ensure_forcecompact", ()), ("start_bridge", ()), ("open_ui", ())):
+        monkeypatch.setattr(cli, name, lambda *a, n=name: ran.append(n))
+    monkeypatch.setattr(cli, "start_supervisor", lambda rig: ran.append("supervisor") or True)
+    monkeypatch.setattr(cli, "argv_tool", lambda *a: ran.append("watch") or 0)
+    monkeypatch.setattr(cli.os, "execvp", lambda *a: ran.append("herdr"))
+    monkeypatch.delenv("HERDR_ENV", raising=False)
+
+    assert cli.main(["up"]) == 0
+    assert ran == ["ensure_daemon", "ensure_rig", "ensure_forcecompact", "start_bridge", "supervisor", "watch", "open_ui", "herdr"]
 
 
 class _DiedImmediately:
