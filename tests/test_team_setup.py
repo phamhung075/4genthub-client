@@ -1184,24 +1184,50 @@ def test_publish_skills_needs_a_source_root(capsys, monkeypatch, library):
 # implementation and there is no second copy of it to drift from the first.
 
 
+# OPENRIG_SKILLS_ROOT is set nowhere committed, so the root is DERIVED when it is absent: the
+# checkout beside this repository. A guard whose default state is skip reports on its own baseline -
+# it would have stayed quiet on the stale digest this file was written for - so the derived root is
+# used whenever it can satisfy the inventory, and the skip is kept for a path that is not there.
+OPENRIG_CHECKOUT_DEFAULT = REPO_ROOT.parent / "openrig"
+
+# The two committed skill edges the inventory's recorded paths live under: all 35 canonical rows
+# under the first, all 19 plugin rows under the second. Both must be present, or a half-cloned tree
+# would be digested as if it were a checkout and fail on a path rather than report itself absent.
+OPENRIG_SKILL_EDGES = (
+    Path("skills") / "_canonical",
+    Path("packages") / "daemon" / "assets" / "plugins" / "openrig-core" / "skills",
+)
+
+
 def _openrig_root_or_skip() -> Path:
     """The real OpenRig checkout, or a skip that says so LOUDLY.
 
     A skip that reads as a pass is the same silence this guard exists to end, one level down, so
     the reason names the variable, the value it holds and what to set instead.
+
+    The configured root wins when it is a usable checkout; otherwise the derived root is tried, so
+    an ordinary checkout runs these cases with no environment set at all. Every candidate that was
+    unusable is named in the skip, so the reason a reader sees is the path that was actually tried.
     """
-    root = os.environ.get(team_setup.LIBRARY_ROOT_ENV)
-    if root and Path(root).is_dir():
-        return Path(root)
+    configured = os.environ.get(team_setup.LIBRARY_ROOT_ENV)
+    candidates = [Path(configured)] if configured else []
+    candidates.append(OPENRIG_CHECKOUT_DEFAULT)
+    unusable = []
+    for candidate in candidates:
+        absent = [edge for edge in OPENRIG_SKILL_EDGES if not (candidate / edge).is_dir()]
+        if not absent:
+            return candidate
+        unusable.append(f"{candidate} has no {', '.join(str(edge) for edge in absent)}")
     state = (
-        f"{team_setup.LIBRARY_ROOT_ENV}={root!r}, which is not a directory"
-        if root
+        f"{team_setup.LIBRARY_ROOT_ENV}={configured!r}"
+        if configured
         else f"{team_setup.LIBRARY_ROOT_ENV} is not set"
     )
     pytest.skip(
         f"SKIPPED, NOT PASSED ({state}): the inventory's digests can only be verified against a real "
-        f"OpenRig checkout. Set {team_setup.LIBRARY_ROOT_ENV}=/path/to/openrig - the variable "
-        "publish-skills --source-root and drift-check --library-root already read - to run it."
+        f"OpenRig checkout, and none of these is one - {'; '.join(unusable)}. Set "
+        f"{team_setup.LIBRARY_ROOT_ENV}=/path/to/openrig - the variable publish-skills "
+        "--source-root and drift-check --library-root already read - to run it."
     )
 
 
