@@ -7,6 +7,7 @@ real 4genthub server is needed.
 import hashlib
 import importlib.util
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1167,3 +1168,82 @@ def test_publish_skills_needs_a_source_root(capsys, monkeypatch, library):
 
     assert code == 2
     assert "source-root" in out.err
+
+
+# --- the shipped inventory's digests vs the committed OpenRig checkout (the guard) ---------
+#
+# ai_docs/agent-system/skill-library.json records, per skill, the committed OpenRig path and the
+# sha256 of that skill's SKILL.md. Until this test, the only thing that verified those digests was
+# `publish-skills` - a networked action that runs when someone decides to publish. So when OpenRig
+# 31fe301b changed openrig-user's SKILL.md, the stored digest went stale and NOTHING SAID SO: it was
+# found by re-running the rule by hand, a day later, while this seat was idle.
+#
+# It lives here rather than as a CLI verb because a guard that runs when a human remembers is a
+# guard that does not run, and this one rides the suite every seat already runs. It recomputes
+# THROUGH skill_library_modules(), the publish path's own function, so the rule has exactly one
+# implementation and there is no second copy of it to drift from the first.
+
+
+def _openrig_root_or_skip() -> Path:
+    """The real OpenRig checkout, or a skip that says so LOUDLY.
+
+    A skip that reads as a pass is the same silence this guard exists to end, one level down, so
+    the reason names the variable, the value it holds and what to set instead.
+    """
+    root = os.environ.get(team_setup.LIBRARY_ROOT_ENV)
+    if root and Path(root).is_dir():
+        return Path(root)
+    state = (
+        f"{team_setup.LIBRARY_ROOT_ENV}={root!r}, which is not a directory"
+        if root
+        else f"{team_setup.LIBRARY_ROOT_ENV} is not set"
+    )
+    pytest.skip(
+        f"SKIPPED, NOT PASSED ({state}): the inventory's digests can only be verified against a real "
+        f"OpenRig checkout. Set {team_setup.LIBRARY_ROOT_ENV}=/path/to/openrig - the variable "
+        "publish-skills --source-root and drift-check --library-root already read - to run it."
+    )
+
+
+def _inventory_guard(inventory_path: Path, source_root: Path) -> list:
+    """The check itself: the publish path's own verifier, fed the inventory it publishes from."""
+    return team_setup.skill_library_modules(
+        team_setup.load_skill_inventory(inventory_path), source_root
+    )
+
+
+def test_the_shipped_inventory_digests_match_the_committed_openrig_checkout():
+    """Every recorded digest still describes the file at its committed path."""
+    source_root = _openrig_root_or_skip()
+    inventory_path = team_setup.DEFAULT_SKILL_INVENTORY
+
+    modules = _inventory_guard(inventory_path, source_root)
+
+    inventory = team_setup.load_skill_inventory(inventory_path)
+    assert inventory["count"] == len(inventory["skills"]), "the count disagrees with the rows"
+    assert len(modules) == inventory["count"], "one block per skill, so a short list is a lost skill"
+
+
+def test_the_inventory_guard_names_the_skill_and_both_digests(tmp_path):
+    """A perturbed digest must fail, naming WHICH side moved - the case that must not be vacuous.
+
+    Hermetic: it perturbs a COPY of the inventory under tmp_path and leaves the shipped file alone,
+    so the guard is seen to fail without the shared tree being touched.
+    """
+    source_root = _openrig_root_or_skip()
+    inventory = json.loads(team_setup.DEFAULT_SKILL_INVENTORY.read_text(encoding="utf-8"))
+    row = next(entry for entry in inventory["skills"] if "canonical" in entry)
+    recomputed = row["canonical"]["sha256"]
+    row["canonical"]["sha256"] = "0" * 64
+    perturbed = tmp_path / "skill-library.json"
+    perturbed.write_text(json.dumps(inventory), encoding="utf-8")
+
+    with pytest.raises(team_setup.SetupError) as refused:
+        _inventory_guard(perturbed, source_root)
+
+    message = str(refused.value)
+    assert row["name"] in message, "the failing skill must be named"
+    assert "0" * 64 in message, "the RECORDED digest must be named"
+    assert recomputed in message, (
+        "the RECOMPUTED digest must be named too, or the reader cannot tell which side moved"
+    )
