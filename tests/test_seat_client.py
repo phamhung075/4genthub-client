@@ -70,7 +70,7 @@ def test_wait_until_quiet_does_not_count_a_seat_that_just_wrote():
 
 
 class FakeSync:
-    """Stands in for openrig_seat_sync: a cloud of fixed hashes and pins held in a dict."""
+    """Stands in for agenthub_client.seat_sync: a cloud of fixed hashes and pins held in a dict."""
 
     def __init__(self, cloud, pins):
         self.cloud, self.pins = cloud, pins

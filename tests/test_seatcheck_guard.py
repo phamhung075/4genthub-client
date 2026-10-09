@@ -1,7 +1,7 @@
 """Acceptance tests for the seatcheck guard, end to end.
 
-Unlike the unit tests in test_openrig_seat_sync.py, these run the REAL binary that
-`openrig_seat_sync.py install-checker` builds and links, against a seat `pull`
+Unlike the unit tests in test_seat_sync.py, these run the REAL binary that
+`4genteam sync install-checker` builds and links, against a seat `pull`
 materialized, so the pinned policy and the guard are exercised together. Each case is
 classified the way G3's L2 ruling requires: an allowed peer is PERMITTED, a disallowed
 peer is REFUSED with an audit row, and a forged direct `rig send` is DETECTED by
@@ -170,7 +170,7 @@ def installed_checker(monkeypatch, tmp_path):
     # The link location is MACHINE-LEVEL and resolves from the passwd entry, not from HOME, so a
     # temp HOME can no longer redirect it: without this stub install-checker links into the REAL
     # ~/.local/bin while every assertion here looks in the temp one. Same seam, and the same
-    # reason, as the sibling fixture in test_openrig_seat_sync.py.
+    # reason, as the sibling fixture in test_seat_sync.py.
     monkeypatch.setattr(seat_sync, "checker_link", lambda: link_dir / "seatcheck")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv(

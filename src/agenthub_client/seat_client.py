@@ -281,7 +281,7 @@ def main(argv=None) -> int:
     except ClientError as err:
         print(f"error: {err}", file=sys.stderr)
         return err.code
-    except Exception as err:  # openrig_seat_sync.SyncError carries its own exit code
+    except Exception as err:  # agenthub_client.seat_sync.SyncError carries its own exit code
         code = getattr(err, "code", None)
         if not isinstance(code, int):
             raise
