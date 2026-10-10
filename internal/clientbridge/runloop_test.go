@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,9 +24,9 @@ import (
 // are those behaviours, ported onto this package's seams.
 //
 // Nothing here touches a rig, a seat or a network, and nothing sleeps: the local tools are fixtures
-// behind Runner, the transport is a script of statuses behind Send (or an in-process http.RoundTripper
-// for the sender itself), and the wait the loop would take comes back from Cycle as a VALUE, so a test
-// asserts it instead of living through it.
+// behind Runner, the transport is a script of answers and failures behind Send (or an in-process
+// http.RoundTripper for the sender itself), and the wait the loop would take comes back from Cycle as a
+// VALUE, so a test asserts it instead of living through it.
 
 // fixtureNodes is one OpenRig node in the shape `rig ps --json --nodes` prints. It carries a
 // latestError on purpose: the seat's detail must be NON-EMPTY, or the 422 strip would be asserted
@@ -33,12 +34,20 @@ import (
 const fixtureNodes = `[{"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp",` +
 	`"sessionStatus":"running","agentActivity":{"state":"working"},"latestError":"boom in seat-a"}]`
 
-// step is one scripted exchange: the status the transport answers, and the body it answers with. A code
-// of 0 is a TRANSPORT FAILURE - the shape the Python's hanging request and its OSError both arrive in.
+// step is one scripted exchange: the status the transport answers and the body it answers with, OR the
+// error of a transport that never answered. A failure is an ERROR and not a status, because the status
+// is the cloud's answer and there was none - the shape the Python's sender raised in when its request
+// timed out or the cloud was unreachable.
 type step struct {
 	code   int
 	answer []byte
+	err    error
 }
+
+// errNoAnswer is a transport that never answered, in the shape net/http hands one back: the URL it was
+// trying, then the reason. It carries the URL and NOT the credential - the token lives in a header - so
+// the loop can print it and the operator can see which cloud was unreachable.
+var errNoAnswer = errors.New(`Post "http://bridge.invalid/api/v2/openrig/seat-status": dial tcp: connect: connection refused`)
 
 type fakeClock struct{ at time.Time }
 
@@ -81,14 +90,14 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 
 // send is the fake transport: it records the body as it was handed over and answers the next scripted
 // step, defaulting to an accepted empty answer so a test only scripts what it is about.
-func (f *fixture) send(body []byte) (int, []byte) {
+func (f *fixture) send(body []byte) (int, []byte, error) {
 	f.bodies = append(f.bodies, append([]byte(nil), body...))
 	if len(f.steps) == 0 {
-		return 200, nil
+		return 200, nil, nil
 	}
 	next := f.steps[0]
 	f.steps = f.steps[1:]
-	return next.code, next.answer
+	return next.code, next.answer, next.err
 }
 
 // reported is the report the transport received at index i, decoded.
@@ -182,9 +191,17 @@ func TestCycle422StripsDetailThenRecovers(t *testing.T) {
 // answered all back the loop off by one interval and then two, and an accepted cycle resets it. The
 // codes and the waits are the assertion; the sentences are not.
 func TestCycleFailureClassesBackOffAndReset(t *testing.T) {
-	for _, code := range []int{0, 400, 401, 500} {
-		t.Run(fmt.Sprintf("status_%d", code), func(t *testing.T) {
-			f := newFixture(t, step{code: code}, step{code: code}, step{code: 200})
+	for _, tc := range []struct {
+		name string
+		step step
+	}{
+		{"a transport that never answered", step{err: errNoAnswer}},
+		{"status_400", step{code: 400}},
+		{"status_401", step{code: 401}},
+		{"status_500", step{code: 500}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, tc.step, tc.step, step{code: 200})
 			if got := f.cycle(); got != f.bridge.Interval {
 				t.Errorf("the first failure waited %s, want %s", got, f.bridge.Interval)
 			}
@@ -201,12 +218,64 @@ func TestCycleFailureClassesBackOffAndReset(t *testing.T) {
 	}
 }
 
+// The Python's mixed chain (tests/test_bridge.py:566): 401, then 500, then a request that never answers,
+// all in ONE loop, doubling 20, 40 and 80 and resetting on the accepted cycle that follows - the only
+// place the transport failure's WAIT is pinned inside a chain rather than as a class of its own. The last
+// cycle is the unchanged payload: it is not resent, and the loop still waits one interval. 4 requests.
+func TestTheFailureChainDoublesThroughATransportFailureAndResets(t *testing.T) {
+	f := newFixture(t, step{code: 401}, step{code: 500}, step{err: errNoAnswer}, step{code: 200})
+	want := []time.Duration{
+		20 * time.Second, 40 * time.Second, 80 * time.Second, 20 * time.Second, 20 * time.Second,
+	}
+	waits := make([]time.Duration, 0, len(want))
+	for i, expected := range want {
+		got := f.cycle()
+		waits = append(waits, got)
+		if got != expected {
+			t.Fatalf("cycle %d waited %s, want %s", i+1, got, expected)
+		}
+	}
+	if len(f.bodies) != 4 {
+		t.Errorf("%d reports went out, want 4: the 401, the 500, the request that never answered and the accepted one", len(f.bodies))
+	}
+	if f.bridge.backoff != 0 {
+		t.Errorf("the accepted cycle left a backoff of %s, want none", f.bridge.backoff)
+	}
+	for i, w := range waits {
+		if w < f.bridge.Interval {
+			t.Errorf("wait %d is %s, below the one interval %s: the loop must never retry faster", i+1, w, f.bridge.Interval)
+		}
+	}
+}
+
+// A transport that never answered earns a sentence about ITS failure, not about an answer. The Python
+// named the reason (tests/test_bridge.py:587 asserts the words its urllib timeout prints) and never
+// printed `server answered HTTP 0` for a request that never arrived; the reason now travels out of the
+// sender as an error and the loop prints it. The 500 row is the contrast that keeps the two apart: a
+// real answer still names its status, so the no-answer path cannot be reached with one.
+func TestCycleNamesTheTransportFailureReason(t *testing.T) {
+	f := newFixture(t, step{err: errNoAnswer}, step{code: 500})
+	f.cycle()
+	if got := f.logged(); !strings.Contains(got, "cycle failed: ") || !strings.Contains(got, "connection refused") {
+		t.Errorf("the note does not name the transport reason: %q", got)
+	}
+	if got := f.logged(); strings.Contains(got, "answered HTTP") {
+		t.Errorf("a transport that never answered was reported as an answer: %q", got)
+	}
+
+	f.cycle()
+	if got := f.logged(); !strings.Contains(got, "server answered HTTP 500") {
+		t.Errorf("a real answer is not named with its status: %q", got)
+	}
+}
+
 // The backoff doubles to MaxBackoffSecs and STOPS there, and an accepted cycle clears it: the cap is
 // what keeps a cloud outage from becoming an hourly report, and the reset is what keeps it from being
 // permanent.
 func TestBackoffDoublesToTheCapAndResets(t *testing.T) {
 	f := newFixture(t,
-		step{code: 0}, step{code: 0}, step{code: 0}, step{code: 0}, step{code: 0}, step{code: 0}, step{code: 200})
+		step{err: errNoAnswer}, step{err: errNoAnswer}, step{err: errNoAnswer},
+		step{err: errNoAnswer}, step{err: errNoAnswer}, step{err: errNoAnswer}, step{code: 200})
 	want := []time.Duration{
 		20 * time.Second, 40 * time.Second, 80 * time.Second,
 		120 * time.Second, 120 * time.Second, 120 * time.Second,
@@ -233,20 +302,20 @@ func TestBackoffDoublesToTheCapAndResets(t *testing.T) {
 func TestRunOnceExitCodes(t *testing.T) {
 	cases := []struct {
 		name string
-		code int
+		step step
 		want int
 	}{
-		{"accepted", 200, clientcmd.ExitOK},
-		{"the text was refused", 422, clientcmd.ExitRemote},
-		{"the credential was refused", 401, clientcmd.ExitRemote},
-		{"the cloud failed", 500, clientcmd.ExitRemote},
-		{"the cloud did not answer", 0, clientcmd.ExitRemote},
+		{"accepted", step{code: 200}, clientcmd.ExitOK},
+		{"the text was refused", step{code: 422}, clientcmd.ExitRemote},
+		{"the credential was refused", step{code: 401}, clientcmd.ExitRemote},
+		{"the cloud failed", step{code: 500}, clientcmd.ExitRemote},
+		{"the cloud did not answer", step{err: errNoAnswer}, clientcmd.ExitRemote},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFixture(t, step{code: tc.code})
+			f := newFixture(t, tc.step)
 			if got := f.bridge.Run(context.Background(), nil, true); got != tc.want {
-				t.Errorf("run once against %d exited %d, want %d", tc.code, got, tc.want)
+				t.Errorf("run once against %s exited %d, want %d", tc.name, got, tc.want)
 			}
 		})
 	}
@@ -433,7 +502,7 @@ func TestTheRecordSurvivesARestartAndNamesAChangedSeat(t *testing.T) {
 
 	// a restarted bridge reads the record from the file, exactly as a new process would, and the cloud
 	// does not answer at all
-	restarted := newFixture(t, step{code: 0})
+	restarted := newFixture(t, step{err: errNoAnswer})
 	restarted.bridge.PinsDir = first.bridge.PinsDir
 	restarted.bridge.StatePath = first.bridge.StatePath
 	restarted.bridge.state = ReadSyncState(first.bridge.StatePath)
@@ -519,7 +588,10 @@ func TestSenderPostsTheWireContractWithTheUserToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("senderFromEnv: %v", err)
 	}
-	status, answer := send([]byte(`{"machine_id":"pc-1"}`))
+	status, answer, sendErr := send([]byte(`{"machine_id":"pc-1"}`))
+	if sendErr != nil {
+		t.Fatalf("a transport that answered came back as an error: %v", sendErr)
+	}
 	if status != 200 || !strings.Contains(string(answer), "verdicts") {
 		t.Errorf("the answer came back as %d %q, want the transport's own", status, answer)
 	}
@@ -593,7 +665,7 @@ func TestTheTokenNeverAppearsInANoteOrInTheError(t *testing.T) {
 	t.Setenv("AGENTHUB_URL", "http://bridge.invalid")
 	t.Setenv("AGENTHUB_TOKEN", token)
 
-	f := newFixture(t, step{code: 401}, step{code: 500}, step{code: 0})
+	f := newFixture(t, step{code: 401}, step{code: 500}, step{err: errNoAnswer})
 	f.rigJSON = strings.Replace(fixtureNodes, "boom in seat-a", "auth failed token="+token, 1)
 	for i := 0; i < 3; i++ {
 		f.cycle()
@@ -622,22 +694,28 @@ func TestTheTokenNeverAppearsInANoteOrInTheError(t *testing.T) {
 
 	// And the sender's OWN error text cannot carry it either: a transport that fails with the URL in
 	// its message - the shape net/http uses - must not put the credential in front of the operator,
-	// neither in what the sender returns nor in the note the loop writes.
+	// neither in what the sender returns nor in the note the loop writes. The failure here is the
+	// spec's own: a request that never answers (tests/test_bridge.py:581), which asserted the timeout's
+	// own words reach the output. Go's words for that event are the client timeout, and it is THE
+	// REASON reaching the operator that is asserted, not a particular spelling of it.
 	calls := 0
 	withTransport(t, func(request *http.Request) (*http.Response, error) {
 		calls++
-		return nil, fmt.Errorf("Post %q: dial tcp: connection refused", request.URL.String())
+		return nil, fmt.Errorf("Post %q: context deadline exceeded (Client.Timeout exceeded while awaiting headers)", request.URL.String())
 	})
 	send, err := senderFromEnv()
 	if err != nil {
 		t.Fatalf("senderFromEnv: %v", err)
 	}
-	status, answer := send([]byte(`{"machine_id":"pc-1"}`))
-	if status != 0 || len(answer) == 0 {
-		t.Errorf("a transport failure came back as %d %q, want the failure carried in the answer", status, answer)
+	status, answer, sendErr := send([]byte(`{"machine_id":"pc-1"}`))
+	if sendErr == nil {
+		t.Errorf("a transport that never answered came back as %d %q with no error, want the failure", status, answer)
 	}
-	if strings.Contains(string(answer), token) {
-		t.Errorf("the sender's error text carries the credential: %q", answer)
+	if !strings.Contains(sendErr.Error(), "Client.Timeout exceeded") {
+		t.Errorf("the sender's error does not name the reason: %q", sendErr)
+	}
+	if strings.Contains(sendErr.Error(), token) {
+		t.Errorf("the sender's error text carries the credential: %q", sendErr)
 	}
 
 	calls = 0 // counted again below, for the loop's own request only
@@ -647,6 +725,12 @@ func TestTheTokenNeverAppearsInANoteOrInTheError(t *testing.T) {
 	g.cycle()
 	if calls != 1 {
 		t.Errorf("the loop made %d requests, want 1", calls)
+	}
+	if !strings.Contains(g.logged(), "Client.Timeout exceeded") {
+		t.Errorf("the note does not name the reason the transport failed: %q", g.logged())
+	}
+	if strings.Contains(g.logged(), "answered HTTP") {
+		t.Errorf("a transport that never answered was reported as an answer: %q", g.logged())
 	}
 	if strings.Contains(g.logged(), token) {
 		t.Errorf("the transport failure put the credential in a note: %q", g.logged())

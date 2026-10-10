@@ -249,3 +249,13 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `cmd/seatcheck` stops carrying its own copy of the home and store resolution: the guard takes the
   client's (`clientenv.ResolveSeatStore`), so the two cannot disagree about where a seat's policy was
   installed - the duplication that let a week-stale installed binary read as current.
+- A transport that never answered is reported by its REASON instead of as an answer: `bridge` printed
+  `server answered HTTP 0` for a request that timed out or a cloud that was unreachable, a sentence about
+  an answer that never existed, where the Python named the reason (its sender raised and the loop printed
+  the exception). The reason now travels out of the sender as an ERROR - `Sender` returns
+  `(status, body, error)`, and a transport that never answered returns no status at all - so the
+  `server answered HTTP %d` branch is reachable only by a real answer, which still names its status. The
+  push path is otherwise unchanged: the credential rides in the `Authorization` header and a transport
+  error carries the URL, never the token, which the credential test pins on the sender's error AND on the
+  loop's note. Spec: `tests/test_bridge.py:581` asserted the timeout's own words reach the output, and
+  `:587` that the token does not.

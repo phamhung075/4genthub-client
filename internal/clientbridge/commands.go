@@ -262,22 +262,25 @@ func senderFromEnv() (Sender, error) {
 	}
 	client := statusClient
 	endpoint := strings.TrimRight(baseURL, "/") + statusPath
-	return func(body []byte) (int, []byte) {
+	return func(body []byte) (int, []byte, error) {
 		request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
-			return 0, []byte(err.Error())
+			return 0, nil, err
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
 		request.Header.Set("Content-Type", "application/json")
 		response, err := client.Do(request)
 		if err != nil {
-			return 0, []byte(err.Error())
+			// The reason travels out of here as an ERROR, never as a status: this transport never
+			// answered. The text names the URL it was trying and the reason; the credential is in a
+			// header, so it cannot be in this text.
+			return 0, nil, err
 		}
 		defer func() { _ = response.Body.Close() }()
 		// The body is read on an error status too: it is small and bounded, and a caller naming what
 		// the server said is better than a bare code.
 		answer, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseSize))
-		return response.StatusCode, answer
+		return response.StatusCode, answer, nil
 	}, nil
 }
 

@@ -26,7 +26,12 @@ const (
 
 // Sender posts a report and returns the status and the (bounded) body. The body matters on an error
 // status too: it is the only channel that says what the cloud expects per seat.
-type Sender func(body []byte) (int, []byte)
+//
+// A transport that never answered comes back as an error, NOT as a status: the status is the cloud's
+// answer, and there was none. The Python modelled it this way too - its sender raised and the loop named
+// the reason - so a failure can never be reported as `server answered HTTP 0`, a sentence about an
+// answer that did not exist.
+type Sender func(body []byte) (int, []byte, error)
 
 // Runner runs a LOCAL tool and returns its stdout. The rig itself is reached through clientcmd.Rig,
 // which is the one place an external command starts; herdr is not rig, so it gets this seam - argv,
@@ -300,12 +305,16 @@ func (b *Bridge) Cycle(ctx context.Context, rig *clientcmd.Rig) time.Duration {
 	}
 }
 
-// send wraps the sender so a transport error is a cycle failure rather than a panic.
+// send hands the report to the transport. A transport that never answered is a cycle failure carrying
+// its own reason - not a status - and the body is bounded here whatever a Sender hands back.
 func (b *Bridge) send(body []byte) (int, []byte, error) {
 	if b.Send == nil {
 		return 0, nil, fmt.Errorf("no sender configured")
 	}
-	status, answer := b.Send(body)
+	status, answer, err := b.Send(body)
+	if err != nil {
+		return 0, nil, err
+	}
 	if len(answer) > MaxResponseSize {
 		answer = answer[:MaxResponseSize]
 	}
