@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
 
@@ -61,6 +62,16 @@ func supervisorFor(path, runtime string, working bool, sent *[]string, interrupt
 	supervisor.Abort = func(string, string) { *sent = append(*sent, "ABORT") }
 	supervisor.Interrupt = func(_, seat string) { *interrupted = append(*interrupted, seat) }
 	supervisor.Log = func(string) {}
+	// The off-peak gate is OFF for every other test in this file: they are about the compaction logic,
+	// so the resume path must behave exactly as it did before the gate existed. The gate's own tests set
+	// both seams themselves.
+	supervisor.Nodes = func(string) []map[string]any { return nil }
+	supervisor.Getenv = func(key string) string {
+		if key == clientoffpeak.ModeEnv {
+			return clientoffpeak.ValueOff
+		}
+		return ""
+	}
 	return supervisor
 }
 
@@ -240,5 +251,72 @@ func TestAnUnwitnessedCompactionIsReportedAndRetried(t *testing.T) {
 	}
 	if supervisor.State["lead"].hasBefore {
 		t.Error("the unwitnessed branch left the pending witness in place")
+	}
+}
+
+// gatedSupervisor is one pass on the resume path with a WITNESSED compaction, and the off-peak gate's
+// two inputs wired to this suite's seams: the node reading, and the environment (which is where both
+// the setting and the UTC clock pin live - clientoffpeak reads them through this one function).
+// `mode` is what OFFPEAK_ONLY answers and `pin` what OFFPEAK_UTC answers.
+func gatedSupervisor(t *testing.T, mode, pin string, nodes []map[string]any) (*Supervisor, *[]string, *[]string) {
+	t.Helper()
+	withDocumentedLimits(t)
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// The compaction record is both the witness and the new reading: 40k is under the soft limit, so the
+	// pass is about the resume alone.
+	if err := os.WriteFile(path, []byte(`{"type":"compaction","tokensAfter":40000}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var sent, interrupted, logged []string
+	supervisor := supervisorFor(path, "omp", false, &sent, &interrupted)
+	supervisor.Log = func(text string) { logged = append(logged, text) }
+	supervisor.Nodes = func(string) []map[string]any { return nodes }
+	supervisor.Getenv = func(key string) string {
+		switch key {
+		case clientoffpeak.ModeEnv:
+			return mode
+		case clientoffpeak.PinEnv:
+			return pin
+		}
+		// The holiday file stays empty, so the machine's own cannot change what these tests assert.
+		return ""
+	}
+	supervisor.State["lead"] = &seatState{before: 300_000, hasBefore: true, count: 0, sent: supervisor.Now() - 200}
+	return supervisor, &sent, &logged
+}
+
+// TestAPeakResumeIsHeldByTheOffPeakGate: the witnessed compaction is an automatic wake, so at peak the
+// resume text must NOT go out and the supervisor's own log must record WHY.
+func TestAPeakResumeIsHeldByTheOffPeakGate(t *testing.T) {
+	supervisor, sent, logged := gatedSupervisor(t, "", "2026-10-09 02:00", deepSeekRoomNode())
+	supervisor.Step()
+	if len(*sent) != 0 {
+		t.Fatalf("the resume was sent at peak: %v", *sent)
+	}
+	joined := strings.Join(*logged, "|")
+	if !strings.Contains(joined, "PEAK") {
+		t.Errorf("a held resume was not logged with its reason: %v", *logged)
+	}
+}
+
+// TestAnOffPeakResumeIsSentExactlyAsBefore: the same witnessed compaction off-peak sends the resume.
+func TestAnOffPeakResumeIsSentExactlyAsBefore(t *testing.T) {
+	supervisor, sent, logged := gatedSupervisor(t, "", "2026-10-09 05:00", deepSeekRoomNode())
+	supervisor.Step()
+	if len(*sent) != 1 || (*sent)[0] != resumeText {
+		t.Errorf("sent = %v, want exactly the resume text", *sent)
+	}
+	if !strings.Contains(strings.Join(*logged, "|"), "told to resume") {
+		t.Errorf("the resume was not logged: %v", *logged)
+	}
+}
+
+// TestTheResumeIsSentWhenTheGateIsOff: OFFPEAK_ONLY=0 is no check at all - not even the clock is read -
+// so a peak instant cannot hold the resume back. That is the behaviour this path had before the gate.
+func TestTheResumeIsSentWhenTheGateIsOff(t *testing.T) {
+	supervisor, sent, _ := gatedSupervisor(t, clientoffpeak.ValueOff, "2026-10-09 02:00", deepSeekRoomNode())
+	supervisor.Step()
+	if len(*sent) != 1 || (*sent)[0] != resumeText {
+		t.Errorf("sent = %v, want exactly the resume text while the gate is off", *sent)
 	}
 }

@@ -3,6 +3,34 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — the post-compact resume passes the off-peak gate like every other automatic wake
+
+### Fixed
+- `internal/clientlifecycle/supervisor.go`: the witnessed-compaction resume was the one automatic wake the
+  off-peak gate did not cover — 7.9's rule is that the gate covers every automatic wake, and the architect
+  measured zero references to it on that path. `Step` now calls
+  `clientoffpeak.Check(false, s.Nodes(s.Rig), s.Getenv)` before `Say(resumeText)`. `allowPeak` is false, so
+  `--allow-peak` is never automatic on this path, and the predicate is the same one the gated verbs take, in
+  UTC. A held-back resume is written through the supervisor's own log seam together with the gate's reason,
+  so it is observable rather than silent.
+- Two seams carry the gate's inputs, both defaulted in `New`: `Nodes` (the room's node reading — the same
+  `rigNodes` this package already takes for its other gate, reached through the one platform matrix,
+  `clientcmd.RequireRig`) and `Getenv` (the environment and clock the gate resolves from). An unreadable
+  node reading yields no seats and therefore no refusal, which is the semantics the existing gate already
+  has.
+
+### Tests
+- `internal/clientlifecycle/supervisor_test.go`: three cases, with the clock and the environment pinned
+  through the `Getenv` seam rather than real time or the real environment: at peak the resume is NOT sent and
+  the log carries `PEAK`; off-peak it IS sent, exactly `resumeText`; and `OFFPEAK_ONLY=0` under the SAME peak
+  pin sends it — the old behaviour, and the control that makes the first case mean something.
+- Red first, and quoted: before the fix the peak case failed with `the resume was sent at peak: [Context was
+  compacted. Continue the job you were on: …]`, while the off-peak and gate-off cases already passed.
+- Verified by the seat that committed it, not relayed: `gofmt -l` empty on both files; `go build ./...` rc 0;
+  `go vet ./internal/clientlifecycle/ ./internal/clientoffpeak/` rc 0;
+  `go test -count=1 ./internal/clientlifecycle/ ./internal/clientoffpeak/` ok; and the whole module,
+  `go test -count=1 ./...` — 20 packages ok, 0 FAIL.
+
 ## 2026-10-11 — `4genteam rigd`: one long-running process supervises the rig's safeguards, and `doctor` names the one that is down
 
 **What it is.** `rigd` is the always-on half the rig never had: one process per machine that keeps the

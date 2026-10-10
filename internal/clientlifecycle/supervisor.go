@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
@@ -64,6 +66,10 @@ type Supervisor struct {
 	Abort      func(rig, seat string)
 	Interrupt  func(rig, seat string)
 	Log        func(text string)
+	// Nodes is the room's node records - the reading the off-peak gate decides over, the same one the
+	// gated verbs take. Getenv is the environment the gate resolves its setting and its clock from.
+	Nodes  func(rig string) []map[string]any
+	Getenv func(string) string
 
 	State map[string]*seatState
 }
@@ -87,6 +93,16 @@ func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *
 	supervisor.RPCCompact = func(r, seat string) string { return supervisor.rpcCompact(r, seat) }
 	supervisor.Abort = rigAbort
 	supervisor.Interrupt = tmuxInterrupt
+	// The gate's reading is the room's `rig ps --nodes` records, the ONE reading this package already
+	// takes for its other gate (rigNodes), reached through the platform matrix in one place.
+	supervisor.Nodes = func(rig string) []map[string]any {
+		tool, err := clientcmd.RequireRig()
+		if err != nil {
+			return nil
+		}
+		return rigNodes(tool, rig)
+	}
+	supervisor.Getenv = os.Getenv
 	supervisor.Log = func(text string) {
 		fmt.Fprintf(out, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), text)
 	}
@@ -127,8 +143,19 @@ func (s *Supervisor) Step() {
 					state.sent = 0
 				}
 				if done {
-					s.Say(s.Rig, seat, resumeText, false)
-					s.Log(seat + ": told to resume")
+					// The resume is an AUTOMATIC wake, so it passes the same gate every other automatic
+					// wake passes. --allow-peak is never automatic on this path: allowPeak is false, so
+					// the gate is ON unless the setting itself turns it off. A refusal (or a schedule the
+					// gate cannot read) holds the resume back and says why in this log, so a held-back
+					// resume is observable rather than silent.
+					if proceed, message, err := clientoffpeak.Check(false, s.Nodes(s.Rig), s.Getenv); err != nil {
+						s.Log(fmt.Sprintf("%s: resume held, off-peak gate: %v", seat, err))
+					} else if !proceed {
+						s.Log(fmt.Sprintf("%s: resume held, %s", seat, message))
+					} else {
+						s.Say(s.Rig, seat, resumeText, false)
+						s.Log(seat + ": told to resume")
+					}
 				}
 			}
 		}
