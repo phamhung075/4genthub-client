@@ -138,6 +138,11 @@ func bridgeRun(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, s
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
 		return clientcmd.ExitUsage
 	}
+	notify, err := notifySenderFromEnv()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
+		return clientcmd.ExitUsage
+	}
 	pins, err := defaultPinsDir()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
@@ -148,7 +153,7 @@ func bridgeRun(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, s
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	bridge := NewBridge(id, time.Duration(interval*float64(time.Second)), send,
+	bridge := NewBridge(id, time.Duration(interval*float64(time.Second)), send, notify,
 		secretscan.KnownValuesFromEnv(os.Environ()), pins, state, noteTo(stderr))
 	_, _ = fmt.Fprintf(stderr, "4genteam bridge: reporting as %s\n", id)
 	return bridge.Run(ctx, rig, onceOnly || switches["once"])
@@ -184,7 +189,7 @@ func bridgeOnce(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, 
 		return clientcmd.ExitUsage
 	}
 	if switches["print"] {
-		bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), nil,
+		bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), nil, nil,
 			known, pins, state, noteTo(stderr))
 		payload := bridge.BuildPayload(rig)
 		payload.LocalRecord = bridge.LocalRecord(payload.Seats)
@@ -201,7 +206,12 @@ func bridgeOnce(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, 
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), send,
+	notify, err := notifySenderFromEnv()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), send, notify,
 		known, pins, state, noteTo(stderr))
 	return bridge.Run(ctx, rig, true)
 }
@@ -253,15 +263,15 @@ func noteTo(stderr io.Writer) func(string) {
 // are exercised with NO network at all. This is a push path, and the suite cannot run it live.
 var statusClient = &http.Client{Timeout: SendTimeout}
 
-// senderFromEnv builds the sender from the user credential. A missing one is a usage error, because a
-// bridge without a token cannot report and must not start quietly.
-func senderFromEnv() (Sender, error) {
+// bearerSender builds the POST transport for ONE cloud path. Both of this client's push paths take the
+// same credential and differ only in the endpoint, so they differ only in the argument here.
+func bearerSender(path string) (Sender, error) {
 	baseURL, token := os.Getenv("AGENTHUB_URL"), os.Getenv("AGENTHUB_TOKEN")
 	if baseURL == "" || token == "" {
 		return nil, fmt.Errorf("AGENTHUB_URL and AGENTHUB_TOKEN must be set")
 	}
 	client := statusClient
-	endpoint := strings.TrimRight(baseURL, "/") + statusPath
+	endpoint := strings.TrimRight(baseURL, "/") + path
 	return func(body []byte) (int, []byte, error) {
 		request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
@@ -282,6 +292,18 @@ func senderFromEnv() (Sender, error) {
 		answer, _ := io.ReadAll(io.LimitReader(response.Body, MaxResponseSize))
 		return response.StatusCode, answer, nil
 	}, nil
+}
+
+// senderFromEnv builds the sender from the user credential. A missing one is a usage error, because a
+// bridge without a token cannot report and must not start quietly.
+func senderFromEnv() (Sender, error) {
+	return bearerSender(statusPath)
+}
+
+// notifySenderFromEnv builds the sender for the dashboard notifications (D3): the same credential and
+// the same client as the report, posting to the notify path instead.
+func notifySenderFromEnv() (Sender, error) {
+	return bearerSender(notifyPath)
 }
 
 // The three locations the Python client used, named here so a test can point them at a scratch tree.

@@ -269,21 +269,10 @@ func BuildAgents(raw []any) []AgentStatus {
 	return agents
 }
 
-// ParseRigNodes reads `rig ps --json --nodes` output: a list, or an object carrying `items`.
+// ParseRigNodes reads `rig ps --json --nodes` output: a list, or an object carrying `items`. The
+// unwrapping is shared with the queue reader (parseItems), so the two cannot disagree about it.
 func ParseRigNodes(output string) ([]any, error) {
-	var decoded any
-	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
-		return nil, err
-	}
-	switch value := decoded.(type) {
-	case []any:
-		return value, nil
-	case map[string]any:
-		if items, ok := value["items"].([]any); ok {
-			return items, nil
-		}
-	}
-	return nil, fmt.Errorf("unexpected rig ps JSON shape")
+	return parseItems(output, "rig ps")
 }
 
 // ParseHerdrAgents reads `herdr api snapshot` output: result.snapshot.agents.

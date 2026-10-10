@@ -140,7 +140,46 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
  dump-only parity test, which cannot reach the missing states. Non-vacuity: with the blocked arm and the passthrough
  broken the test goes red on exactly those three readings, and green again when the patch is reversed.
 
+- The bridge PRODUCES agent-to-human notifications (`internal/clientbridge/notifications.go`): each cycle it lists the
+  rigs this machine sees (`rig ps --json`), reads the rows addressed to that rig's human
+  (`rig queue list --destination human@<rig> --json` — the daemon's own destination form), and posts ONE frame per row
+  to `/api/v2/broadcast/notify`: `event_type`/`entity_type` `notification`, `entity_id` the OpenRig row id, and
+  `data.message` the row's summary (its first non-empty body line as the fallback, bounded to 300 characters). The
+  contract is fixed by the consumer rather than chosen here: the route requires those three fields and takes the target
+  user from the caller's TOKEN (so the body carries no user id), the server copies the body's `data` into
+  `payload.data.primary`, which the dashboard reads and DROPS when its message is empty
+  (`agenthub-frontend/src/hooks/useRealtimeSync.ts:911-937`), and the toast is deduplicated on `metadata.entity_id`, so
+  the row id is what makes a reconnect toast exactly once. No metadata is sent at all, because the store path reads
+  `metadata.user_id` as an ADDITIONAL offline target — sending it would be a way to address someone else's inbox. A row
+  whose summary and body are both blank is skipped, and a row addressed to a seat is ignored even though the read is
+  already destination-filtered. Sent ids live in the bridge's own state file and an id is written only AFTER the cloud
+  accepted the frame, so a refused post is retried on the next cycle instead of being counted as delivered, and a
+  restarted bridge does not re-notify; the record keeps the newest 500 ids and one cycle posts at most 20 rows, so
+  neither the file nor a first run against a long human queue is unbounded.
+- The producer's cases (`internal/clientbridge/notifications_test.go`, 11 cases): the frame's fields, the ABSENCE of
+  `user_id` and `metadata` from the body, one post per row, no second post on the next cycle, survival across a restart,
+  the retry after a 500, the no-text skip, the seat-addressed row, the sweep running while the CYCLE SKIPS ITS REPORT,
+  the sweep disabled without a sender, and the bounded record. Four of them are the red for the change, not a
+  description of it: with the cycle's sweep call commented out, `TestNotifyPostsOneFrameForAHumanRow`,
+  `...DoesNotPostTheSameRowTwice`, `...StateSurvivesARestart` and `...RetriesARefusedPost` FAIL, and they pass again once
+  the call is restored. A fifth pins the ORDER rather than the call, and it is the only case that does: with the sweep
+  moved below the cycle's early return — so it runs only when a report goes out — `TestNotifyRunsEvenWhenTheCycleSkipsItsReport`
+  alone FAILS (`notification frames = 0, want 1: the sweep sits behind the report's early return`) and passes again when
+  the call is put back. The acceptance itself was measured end
+  to end rather than argued: the producer's own bytes, POSTed through the real route on a real database with the target
+  user OFFLINE, were replayed as exactly one frame on the next connect and as none on the one after
+  (`go test -count=1 -run TestZZD3ProducerAcceptance -v ./fastmcp/server/httpapp/` → PASS 3.48s, in `agenthub_go`). That
+  harness was a throwaway and was deleted: a byte-exact copy of this repository's frame parked in another repository's
+  suite would couple the two.
+
 ### Changed
+
+- The bridge carries TWO transports instead of one (`internal/clientbridge/bridge.go`, `commands.go`): the report's and,
+  new, the notification path's. Both are built from the same `AGENTHUB_URL`/`AGENTHUB_TOKEN` by one helper and differ
+  only in the endpoint, and both are required at startup for the same reason — a bridge that cannot report must not
+  start quietly. The notification sweep runs BEFORE the decision to send a report, because that decision returns early
+  when nothing changed and a row addressed to the human is news on its own; a test pins that order by notifying while
+  the cycle's own report is unchanged.
 
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the `--seat` row is the exhaustive set now —
   `feed` and `inputs` take it repeatably as a filter, and `input` takes it once as the seat to send

@@ -16,6 +16,7 @@ import (
 // The wire contract, in the Python bridge's own numbers.
 const (
 	statusPath      = "/api/v2/openrig/seat-status"
+	notifyPath      = "/api/v2/broadcast/notify"
 	HeartbeatSecs   = 60.0
 	MaxBackoffSecs  = 120.0
 	SendTimeout     = 15 * time.Second
@@ -43,6 +44,10 @@ type Bridge struct {
 	MachineID string
 	Interval  time.Duration
 	Send      Sender
+	// Notify posts one dashboard notification frame per human-addressed OpenRig row (D3). Nil
+	// disables the producer: 4genteam bridge once --print and the parity fixtures build payloads
+	// without talking to anything, and a bridge that cannot notify must still report.
+	Notify Sender
 	// Runner runs a LOCAL tool that is not rig; rig itself arrives through clientcmd.Rig, the one
 	// place an external command starts. Named Runner rather than Run so it cannot collide with the
 	// loop's own Run method.
@@ -57,6 +62,7 @@ type Bridge struct {
 	clock func() time.Time
 
 	state       map[string]string
+	notified    map[string]string
 	notes       map[string]string
 	stripDetail bool
 	backoff     time.Duration
@@ -65,15 +71,17 @@ type Bridge struct {
 }
 
 // NewBridge builds a bridge with the defaults the Python had: the pins directory the client writes,
-// the sync record beside it, and a runner that shells out to argv.
-func NewBridge(machineID string, interval time.Duration, send Sender, known map[string]string, pinsDir, statePath string, note func(string)) *Bridge {
+// the sync record beside it, and a runner that shells out to argv. notify may be nil - a bridge that
+// only builds payloads has nowhere to post notifications, and says so by not sending any.
+func NewBridge(machineID string, interval time.Duration, send Sender, notify Sender, known map[string]string, pinsDir, statePath string, note func(string)) *Bridge {
 	if interval <= 0 {
 		interval = time.Duration(DefaultInterval * float64(time.Second))
 	}
 	return &Bridge{
-		MachineID: machineID, Interval: interval, Send: send, Runner: execRunner,
+		MachineID: machineID, Interval: interval, Send: send, Notify: notify, Runner: execRunner,
 		Known: known, PinsDir: pinsDir, StatePath: statePath, Note: note,
-		clock: time.Now, state: ReadSyncState(statePath), notes: map[string]string{},
+		clock: time.Now, state: ReadSyncState(statePath), notified: ReadNotifiedState(statePath),
+		notes: map[string]string{},
 	}
 }
 
@@ -252,7 +260,7 @@ func (b *Bridge) ApplyVerdicts(body []byte) {
 		b.note("cloud:"+where, message)
 	}
 	if changed {
-		WriteSyncState(b.StatePath, b.MachineID, b.state, b.Note)
+		WriteSyncState(b.StatePath, b.MachineID, b.state, b.notified, b.Note)
 	}
 }
 
@@ -272,6 +280,11 @@ func (b *Bridge) Cycle(ctx context.Context, rig *clientcmd.Rig) time.Duration {
 				where, record.Running, record.LastInSync))
 		}
 	}
+	// The human-addressed rows are forwarded whether or not a report goes out this cycle. The early
+	// return below skips the REPORT when nothing changed, and a row addressed to the human is news on
+	// its own, so this must not sit behind that decision.
+	b.notifyHumans(rig)
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return b.fail(fmt.Sprintf("cycle failed: %v", err))
@@ -375,6 +388,30 @@ func verdictsOf(body []byte) []any {
 	return verdicts
 }
 
+// ReadNotifiedState reads the ids of the human-addressed rows this bridge has already posted, or empty.
+// It shares the sync record's file on purpose: one record for one bridge, so a restart cannot lose one
+// half while keeping the other. A missing, unreadable or malformed record reads as empty, which costs
+// at most one duplicate notification (the dashboard deduplicates on entity_id) and never a wrong one.
+func ReadNotifiedState(path string) map[string]string {
+	out := map[string]string{}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	var record struct {
+		Notified map[string]string `json:"notified"`
+	}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return out
+	}
+	for key, value := range record.Notified {
+		if value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 // ReadSyncState reads the recorded last-in-sync hash per seat key, or empty. A missing, unreadable or
 // malformed record reads as empty rather than failing: a bridge whose own state file is gone must
 // still report, and it never invents a hash.
@@ -398,11 +435,17 @@ func ReadSyncState(path string) map[string]string {
 	return out
 }
 
-// WriteSyncState records the expected hash per seat through a temporary file and a rename, so a
-// reader sees the previous whole record or the new one and never a half-written file. A write that
-// fails is loud but not fatal: a bridge that cannot record must still report.
-func WriteSyncState(path, machineID string, seats map[string]string, note func(string)) {
-	payload, err := json.MarshalIndent(map[string]any{"machine_id": machineID, "seats": seats}, "", "  ")
+// WriteSyncState records the expected hash per seat, and the human rows already notified, through a
+// temporary file and a rename, so a reader sees the previous whole record or the new one and never a
+// half-written file. BOTH halves are written together: they share one file, and a writer that carried
+// only its own half would erase the other one. A write that fails is loud but not fatal: a bridge that
+// cannot record must still report.
+func WriteSyncState(path, machineID string, seats, notified map[string]string, note func(string)) {
+	record := map[string]any{"machine_id": machineID, "seats": seats}
+	if len(notified) > 0 {
+		record["notified"] = notified
+	}
+	payload, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return
 	}

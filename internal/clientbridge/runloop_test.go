@@ -64,6 +64,15 @@ type fixture struct {
 	rigJSON string
 	bodies  [][]byte
 	steps   []step
+	// queueJSON is what the notification sweep's queue read answers. Empty means the rig fixtures
+	// answer it instead, which parses to a rig with no rows - the sweep then does nothing.
+	queueJSON string
+	// frames are the notification frames the sweep posted, and notifySteps scripts their answers the
+	// same way steps scripts the report's.
+	frames      [][]byte
+	notifySteps []step
+	dir         string
+	statePath   string
 }
 
 // newFixture builds the bridge every test below drives: fixture local tools, a scripted transport, a
@@ -72,8 +81,9 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 	t.Helper()
 	f := &fixture{rigJSON: fixtureNodes, steps: steps}
 	dir := t.TempDir()
-	f.bridge = NewBridge("pc-1", time.Duration(DefaultInterval*float64(time.Second)), f.send,
-		secretscan.KnownValuesFromEnv(os.Environ()), dir, filepath.Join(dir, "sync.json"),
+	f.dir, f.statePath = dir, filepath.Join(dir, "sync.json")
+	f.bridge = NewBridge("pc-1", time.Duration(DefaultInterval*float64(time.Second)), f.send, f.notify,
+		secretscan.KnownValuesFromEnv(os.Environ()), dir, f.statePath,
 		func(line string) { f.notes = append(f.notes, line) })
 	f.bridge.Runner = func(_ context.Context, argv ...string) (string, error) {
 		if argv[0] == "herdr" {
@@ -81,11 +91,26 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 			// empty source, not a failed report.
 			return "", fmt.Errorf("herdr: not on PATH")
 		}
+		if f.queueJSON != "" && len(argv) > 1 && argv[1] == "queue" {
+			return f.queueJSON, nil
+		}
 		return f.rigJSON, nil
 	}
 	f.clock = &fakeClock{at: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	f.bridge.clock = f.clock.now
 	return f
+}
+
+// notify is the fake notification transport: the frame is recorded as it was handed over and the next
+// scripted answer is returned, defaulting to accepted.
+func (f *fixture) notify(body []byte) (int, []byte, error) {
+	f.frames = append(f.frames, append([]byte(nil), body...))
+	if len(f.notifySteps) == 0 {
+		return 200, nil, nil
+	}
+	next := f.notifySteps[0]
+	f.notifySteps = f.notifySteps[1:]
+	return next.code, next.answer, next.err
 }
 
 // send is the fake transport: it records the body as it was handed over and answers the next scripted
