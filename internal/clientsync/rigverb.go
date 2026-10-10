@@ -27,7 +27,8 @@
 // seat's agent spec - OpenRig loads a skill only when a profile selects it, so the copy alone is inert.
 //
 // WHAT IS REUSED RATHER THAN RESTATED: ReadRigspec and ValidateName (rig.go), PullSeat (pull.go),
-// SafeRelative and ValidateHash (seatfiles.go), RequireEnv and DefaultSeatStore (statusverb.go),
+// SafeRelative and ValidateHash (seatfiles.go), RequireEnv (statusverb.go) and the seat store's
+// resolution (clientenv.ResolveSeatStore),
 // CheckerBinary/CheckerName/resolveChecker/describeFound/checkerLink and placeAgent/removePath
 // (installcheckerverb.go), copyFile (offlineinstallverb.go). The YAML merge helper has no equivalent
 // in this package (clientpolicy renders but does not merge), so it lives here, unexported and
@@ -297,7 +298,7 @@ type rigArgs struct {
 // rigParseArgs is the Python's subparser for `rig`: a positional room, `--out`, `--update` and
 // `--state-root`. An unknown flag or a missing room is a usage error, as argparse's exit 2 is.
 func rigParseArgs(args []string) (rigArgs, error) {
-	parsed := rigArgs{out: DefaultSeatStore()}
+	var parsed rigArgs
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; {
 		case arg == "--out":
@@ -341,6 +342,11 @@ func rigParseArgs(args []string) (rigArgs, error) {
 	if !parsed.hasRoom {
 		return parsed, errors.New("missing argument: room")
 	}
+	out, err := resolveSeatStore(parsed.out)
+	if err != nil {
+		return parsed, err
+	}
+	parsed.out = out
 	return parsed, nil
 }
 

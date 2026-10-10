@@ -87,6 +87,41 @@ func ResolveStateRoot(flagValue string) (string, error) {
 	return "", &clientcmd.CodedError{Message: StateRootMessage, Code: clientcmd.ExitUsage}
 }
 
+// SeatStoreMessage is the ONE refusal a machine that cannot resolve the seat store gets. It names the
+// reason rather than guessing, because a relative path would make the store depend on the working
+// directory - the dependency this client forbids everywhere.
+const SeatStoreMessage = "the seat store cannot be resolved on this machine: the account home directory is not readable"
+
+// DefaultSeatStore is where this client keeps the adopted snapshots and their pins. It lives here rather
+// than in a verb package because several verbs default to it, and because it is a MACHINE-level location:
+// resolved from the real home, it is the same inside a seat and out.
+//
+// Two reasons it answers "" and NEVER a relative path: OpenRig launches a seat with HOME pointed at the
+// seat's own state directory, so resolving from the environment would make the store a function of which
+// seat runs the client; and a relative store would make the tree a function of the working directory, so
+// a client run from a checkout could read whatever tree happened to sit under it. Callers refuse with
+// SeatStoreMessage instead - ResolveSeatStore is that refusal.
+func DefaultSeatStore() string {
+	home, err := realHome()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".openrig", "agenthub-seats")
+}
+
+// ResolveSeatStore is the ONE resolution every verb uses: the flag when it is given, else this machine's
+// own default. It REFUSES when both are empty, naming the reason - a machine with no resolvable home and
+// no flag gets that message rather than a path that depends on where the client was run from.
+func ResolveSeatStore(flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if store := DefaultSeatStore(); store != "" {
+		return store, nil
+	}
+	return "", &clientcmd.CodedError{Message: SeatStoreMessage, Code: clientcmd.ExitUsage}
+}
+
 // Load reads KEY=VALUE lines from path and sets each variable that is NOT already in the environment.
 // An existing value wins; a missing file is not an error, because the client is usable with the
 // environment alone. Blank lines and # comments are skipped, and a value may be quoted.

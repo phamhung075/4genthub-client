@@ -25,13 +25,16 @@ const bundleRigYAML = "version: \"0.2\"\n" +
 	"      - id: seat1\n" +
 	"        agent_ref: local:agents/seat1\n"
 
-// bundleStoreHome points the seat store (DefaultSeatStore reads the account home) at a scratch home,
-// and returns the store root under it. The Python tests monkeypatch DEFAULT_OUT for the same reason.
+// bundleStoreHome points the seat store at a scratch root and returns it. The store no longer follows
+// $HOME (a seat runs with HOME at its own state directory), so this overrides the resolution seam rather
+// than the environment; the Python tests monkeypatch DEFAULT_OUT for the same reason.
 func bundleStoreHome(t *testing.T) string {
 	t.Helper()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	return filepath.Join(home, ".openrig", "agenthub-seats")
+	store := filepath.Join(t.TempDir(), ".openrig", "agenthub-seats")
+	original := resolveSeatStore
+	resolveSeatStore = func(string) (string, error) { return store, nil }
+	t.Cleanup(func() { resolveSeatStore = original })
+	return store
 }
 
 // bundleWritePin writes the lock the verb must use - the PINNED hash, not the cloud's.

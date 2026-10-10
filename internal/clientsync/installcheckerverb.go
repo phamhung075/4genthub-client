@@ -288,7 +288,6 @@ func RunInstallCheckerVerb(_ context.Context, args []string, stdout, stderr io.W
 // parseInstallCheckerArgs is the Python's subparser for `install-checker`: `--go-dir` is required,
 // `--out` carries the seat-store default, and anything else is a usage error, as argparse's exit 2 is.
 func parseInstallCheckerArgs(args []string) (goDir, out string, err error) {
-	out = DefaultSeatStore()
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; {
 		case arg == "--go-dir" || arg == "--out":
@@ -311,6 +310,10 @@ func parseInstallCheckerArgs(args []string) (goDir, out string, err error) {
 	}
 	if goDir == "" {
 		return "", "", errors.New("missing argument: --go-dir")
+	}
+	out, err = resolveSeatStore(out)
+	if err != nil {
+		return "", "", err
 	}
 	return goDir, out, nil
 }

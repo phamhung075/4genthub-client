@@ -19,11 +19,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
@@ -136,7 +136,7 @@ func parseOptions(verb string, args []string, withRig, withInterval bool, stdout
 	}
 	flags := flag.NewFlagSet("seat "+verb, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	out := flags.String("out", clientsync.DefaultSeatStore(), "where the adopted snapshots and their pins live")
+	out := flags.String("out", "", "where the adopted snapshots and their pins live")
 	var seats repeatedFlag
 	flags.Var(&seats, "seat", "limit the work to this seat (repeatable)")
 	rig := flags.String("rig", "", "rig name when it differs from the room")
@@ -153,8 +153,13 @@ func parseOptions(verb string, args []string, withRig, withInterval bool, stdout
 		fmt.Fprintf(stderr, "4genteam seat %s: --relaunch must be none or quiet\n", verb)
 		return options{}, clientcmd.ExitUsage, false
 	}
+	store, err := clientenv.ResolveSeatStore(*out)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam seat %s: %v\n", verb, err)
+		return options{}, clientcmd.ExitUsage, false
+	}
 	return options{
-		room: flags.Arg(0), out: *out, seats: seats,
+		room: flags.Arg(0), out: store, seats: seats,
 		rig: *rig, relaunch: *relaunch, interval: *interval,
 	}, clientcmd.ExitOK, true
 }
@@ -313,7 +318,7 @@ func report(stderr io.Writer, err error) int {
 
 func expand(path string) string {
 	if strings.HasPrefix(path, "~") {
-		if home, err := os.UserHomeDir(); err == nil {
+		if home, err := clientenv.RealHome(); err == nil {
 			return filepath.Join(home, strings.TrimPrefix(path, "~"))
 		}
 	}

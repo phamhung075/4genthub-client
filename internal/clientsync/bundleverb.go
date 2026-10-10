@@ -143,7 +143,12 @@ func bundleCreate(parsed bundleArgs, stdout, stderr io.Writer) int {
 		return clientcmd.ExitUsage
 	}
 
-	seatDir := filepath.Join(DefaultSeatStore(), room, seat)
+	store, err := resolveSeatStore("")
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	seatDir := filepath.Join(store, room, seat)
 	lockPath := filepath.Join(seatDir, "pinned.json")
 	if !lockPresent(lockPath) {
 		fmt.Fprintf(stderr,

@@ -10,16 +10,14 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// DefaultSeatStore is the Python's `--out` default: Path.home() / ".openrig" / "agenthub-seats".
-func DefaultSeatStore() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".openrig", "agenthub-seats")
-	}
-	return filepath.Join(home, ".openrig", "agenthub-seats")
-}
+// resolveSeatStore is the ONE resolution the sync verbs use: the --out flag when given, else the
+// machine's store under the account home (clientenv.ResolveSeatStore). It is a var so a test can point
+// the store at a scratch tree: the store no longer follows $HOME, so t.Setenv("HOME", ...) can no longer
+// redirect it, exactly as the Python tests monkeypatch DEFAULT_OUT rather than the environment.
+var resolveSeatStore = clientenv.ResolveSeatStore
 
 // RequireEnv ports agenthub_client/src/agenthub_client/seat_sync.py's require_env: an unset or empty variable is a usage error with
 // the Python's message ("<name> is not set"), NOT a silent default - which is why the URL and the token
@@ -145,7 +143,6 @@ func filterSeats(order []string, cloud map[string]string, wanted []string) ([]st
 // default, and a repeatable `--seat`. An unknown flag or a missing room is a usage error, as argparse's
 // exit 2 is.
 func parseStatusArgs(args []string) (room, out string, seats []string, err error) {
-	out = DefaultSeatStore()
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; {
 		case arg == "--out":
@@ -175,6 +172,10 @@ func parseStatusArgs(args []string) (room, out string, seats []string, err error
 	}
 	if room == "" {
 		return "", "", nil, usageError("a room is required")
+	}
+	out, err = resolveSeatStore(out)
+	if err != nil {
+		return "", "", nil, err
 	}
 	return room, out, seats, nil
 }

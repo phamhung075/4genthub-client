@@ -3,6 +3,7 @@ package clientbridge
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -54,5 +55,35 @@ func TestBridgeSubVerbsAnswerHelp(t *testing.T) {
 		if !strings.Contains(out.String(), "4genteam bridge") {
 			t.Errorf("bridge %v help did not name the group: %q", args, out.String())
 		}
+	}
+}
+
+// test_the_path_defaults_do_not_follow_home pins the Python test of that name: the pins dir and the
+// state path resolve from the ACCOUNT home, so a decoy $HOME - what OpenRig gives a seat - does not move
+// either of them.
+func TestThePathDefaultsDoNotFollowHome(t *testing.T) {
+	decoy := t.TempDir()
+	t.Setenv("HOME", decoy)
+
+	home, err := clientenv.RealHome()
+	if err != nil {
+		t.Skipf("no account home on this machine: %v", err)
+	}
+	pins, err := defaultPinsDir()
+	if err != nil {
+		t.Fatalf("defaultPinsDir: %v", err)
+	}
+	if want := filepath.Join(home, ".openrig", "agenthub-seats"); pins != want {
+		t.Errorf("pins dir followed $HOME: %q, want %q", pins, want)
+	}
+	state, err := DefaultStatePath()
+	if err != nil {
+		t.Fatalf("DefaultStatePath: %v", err)
+	}
+	if want := filepath.Join(home, ".openrig", "bridge-sync.json"); state != want {
+		t.Errorf("state path followed $HOME: %q, want %q", state, want)
+	}
+	if strings.HasPrefix(pins, decoy) || strings.HasPrefix(state, decoy) {
+		t.Errorf("a default is under the decoy home: pins=%q state=%q", pins, state)
 	}
 }

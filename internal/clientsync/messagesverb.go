@@ -202,7 +202,6 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 // parseMessagesArgs is the verb's argument grammar: two positionals, then the three flags. The shape
 // mirrors `sync pull`'s parser, including where it refuses rather than defaulting.
 func parseMessagesArgs(args []string) (room, seat, session, out string, limit int, dryRun bool, err error) {
-	out = DefaultSeatStore()
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; {
 		case arg == "--session" || arg == "--out" || arg == "--limit":
@@ -239,6 +238,10 @@ func parseMessagesArgs(args []string) (room, seat, session, out string, limit in
 	}
 	if room == "" || seat == "" {
 		return "", "", "", "", 0, false, fmt.Errorf("messages needs a room and a seat")
+	}
+	out, err = resolveSeatStore(out)
+	if err != nil {
+		return "", "", "", "", 0, false, err
 	}
 	return room, seat, session, out, limit, dryRun, nil
 }

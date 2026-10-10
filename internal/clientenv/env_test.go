@@ -115,3 +115,33 @@ func TestAResolvableHomeGivesTheMachineDefault(t *testing.T) {
 		t.Errorf("ResolveStateRoot = %q, %v; want the machine default", root, err)
 	}
 }
+
+// A machine with no resolvable home REFUSES the seat store instead of answering a path relative to the
+// working directory: a relative store would make the tree a function of where the client was run from.
+func TestAnUnresolvableHomeRefusesTheSeatStore(t *testing.T) {
+	restore := realHome
+	realHome = func() (string, error) { return "", errors.New("no home") }
+	defer func() { realHome = restore }()
+
+	if store := DefaultSeatStore(); store != "" {
+		t.Errorf("DefaultSeatStore = %q, want empty: a relative path is never returned", store)
+	}
+	err := func() error { _, err := ResolveSeatStore(""); return err }()
+	if code := clientcmd.CodeOf(err, clientcmd.ExitRemote); code != clientcmd.ExitUsage {
+		t.Errorf("the refusal exits %d, want %d", code, clientcmd.ExitUsage)
+	}
+	if err == nil || !strings.Contains(err.Error(), SeatStoreMessage) {
+		t.Errorf("the refusal does not carry SeatStoreMessage: %v", err)
+	}
+}
+
+// A resolvable home gives the seat store under the account home's tree - never a relative path.
+func TestAResolvableHomeGivesTheSeatStore(t *testing.T) {
+	restore := realHome
+	realHome = func() (string, error) { return "/home/someone", nil }
+	defer func() { realHome = restore }()
+
+	if store, err := ResolveSeatStore(""); err != nil || store != "/home/someone/.openrig/agenthub-seats" {
+		t.Errorf("ResolveSeatStore = %q, %v; want the machine default", store, err)
+	}
+}

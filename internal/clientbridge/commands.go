@@ -138,8 +138,18 @@ func bridgeRun(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, s
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
 		return clientcmd.ExitUsage
 	}
+	pins, err := defaultPinsDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	state, err := DefaultStatePath()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
+		return clientcmd.ExitUsage
+	}
 	bridge := NewBridge(id, time.Duration(interval*float64(time.Second)), send,
-		secretscan.KnownValuesFromEnv(os.Environ()), defaultPinsDir(), DefaultStatePath(), noteTo(stderr))
+		secretscan.KnownValuesFromEnv(os.Environ()), pins, state, noteTo(stderr))
 	_, _ = fmt.Fprintf(stderr, "4genteam bridge: reporting as %s\n", id)
 	return bridge.Run(ctx, rig, onceOnly || switches["once"])
 }
@@ -163,9 +173,19 @@ func bridgeOnce(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, 
 		return clientcmd.ExitUsage
 	}
 	known := secretscan.KnownValuesFromEnv(os.Environ())
+	pins, err := defaultPinsDir()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	state, err := DefaultStatePath()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
+		return clientcmd.ExitUsage
+	}
 	if switches["print"] {
 		bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), nil,
-			known, defaultPinsDir(), DefaultStatePath(), noteTo(stderr))
+			known, pins, state, noteTo(stderr))
 		payload := bridge.BuildPayload(rig)
 		payload.LocalRecord = bridge.LocalRecord(payload.Seats)
 		encoded, err := json.MarshalIndent(payload, "", "  ")
@@ -182,7 +202,7 @@ func bridgeOnce(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, 
 		return clientcmd.ExitUsage
 	}
 	bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), send,
-		known, defaultPinsDir(), DefaultStatePath(), noteTo(stderr))
+		known, pins, state, noteTo(stderr))
 	return bridge.Run(ctx, rig, true)
 }
 
@@ -257,19 +277,17 @@ func senderFromEnv() (Sender, error) {
 }
 
 // The three locations the Python client used, named here so a test can point them at a scratch tree.
-func defaultPinsDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = ""
-	}
-	return filepath.Join(home, ".openrig", "agenthub-seats")
+// Both resolve from the ACCOUNT home's seat store and REFUSE rather than guessing a relative path - a
+// relative default would follow the working directory, and $HOME is the seat's own state directory.
+func defaultPinsDir() (string, error) {
+	return clientenv.ResolveSeatStore("")
 }
 
 // DefaultStatePath is the sync record the bridge keeps beside the pins.
-func DefaultStatePath() string {
-	home, err := os.UserHomeDir()
+func DefaultStatePath() (string, error) {
+	store, err := clientenv.ResolveSeatStore("")
 	if err != nil {
-		home = ""
+		return "", err
 	}
-	return filepath.Join(home, ".openrig", "bridge-sync.json")
+	return filepath.Join(filepath.Dir(store), "bridge-sync.json"), nil
 }

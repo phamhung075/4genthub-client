@@ -177,8 +177,11 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   room in it. It also fell back to a RELATIVE `.openrig/agenthub-seats` when the home could not be read,
   which made the store depend on the working directory. Both are gone: a store that cannot be resolved
   refuses with one message naming the reason and both escapes, and every verb that takes a store shares
-  that refusal - `sync pull|status|bundle|messages|rig|install-checker`, `bridge`, `seat` and the watch
-  verbs. `clientbridge`'s path defaults and `clientseat`'s `~` expansion stopped following `$HOME` with
-  it, and the per-package copies of the default went away.
+  that refusal - `sync pull|status|bundle|messages|rig|install-checker`, `bridge` and `seat`.
+  `clientbridge`'s path defaults and `clientseat`'s `~` expansion stopped following `$HOME` with it, and
+  the per-package copies of the default went away. Tested where each clause is reachable: `clientenv`'s
+  two store tests, `clientsync`'s store/state-root home-independence test, `clientbridge`'s path test,
+  and the built binary with `HOME` pointed at a seat's state directory, where the store still resolves
+  from the account home and a real room still streams.
 - `4genteam sync pull` refuses a room or seat name that is not `[a-zA-Z0-9][a-zA-Z0-9_-]*` before any
   network call, so a name like `../../evil` can no longer name a path outside the store.

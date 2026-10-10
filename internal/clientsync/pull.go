@@ -133,6 +133,16 @@ func RunPullVerb(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		fmt.Fprintln(stderr, err.Error())
 		return clientcmd.ExitUsage
 	}
+	room, err = ValidateName("room", room)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync pull: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	seat, err = ValidateName("seat", seat)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync pull: %v\n", err)
+		return clientcmd.ExitUsage
+	}
 	baseURL, err := RequireEnv("AGENTHUB_URL")
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())
@@ -154,7 +164,6 @@ func RunPullVerb(ctx context.Context, args []string, stdout, stderr io.Writer) i
 
 // parsePullArgs is the Python's subparser for `pull`: TWO positionals (room then seat), --out, --update.
 func parsePullArgs(args []string) (room, seat, out string, update bool, err error) {
-	out = DefaultSeatStore()
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; {
 		case arg == "--out":
@@ -182,6 +191,10 @@ func parsePullArgs(args []string) (room, seat, out string, update bool, err erro
 	}
 	if room == "" || seat == "" {
 		return "", "", "", false, usageError("pull needs a room and a seat")
+	}
+	out, err = resolveSeatStore(out)
+	if err != nil {
+		return "", "", "", false, err
 	}
 	return room, seat, out, update, nil
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 // TestParseStatusArgsMirrorsTheSubparser: a positional room, --out with the seat-store default, and a
@@ -161,5 +162,36 @@ func TestRunStatusVerbEndToEnd(t *testing.T) {
 	}
 	if got := strings.Count(stdout.String(), "\n"); got != 1 {
 		t.Errorf("filtered output has %d lines, want 1:\n%s", got, stdout.String())
+	}
+}
+
+// test_the_store_and_state_root_do_not_follow_home pins the Python test of that name: the store and the
+// state root are resolved from the ACCOUNT home, so a decoy $HOME - what OpenRig gives a seat - does not
+// move either of them.
+func TestTheStoreAndStateRootDoNotFollowHome(t *testing.T) {
+	decoy := t.TempDir()
+	t.Setenv("HOME", decoy)
+	t.Setenv(clientenv.StateRootEnv, "")
+
+	home, err := clientenv.RealHome()
+	if err != nil {
+		t.Skipf("no account home on this machine: %v", err)
+	}
+	store, err := clientenv.ResolveSeatStore("")
+	if err != nil {
+		t.Fatalf("ResolveSeatStore: %v", err)
+	}
+	if want := filepath.Join(home, ".openrig", "agenthub-seats"); store != want {
+		t.Errorf("the store followed $HOME: %q, want %q", store, want)
+	}
+	root, err := clientenv.ResolveStateRoot("")
+	if err != nil {
+		t.Fatalf("ResolveStateRoot: %v", err)
+	}
+	if want := filepath.Join(home, ".openrig", "state", "omp"); root != want {
+		t.Errorf("the state root followed $HOME: %q, want %q", root, want)
+	}
+	if strings.HasPrefix(store, decoy) || strings.HasPrefix(root, decoy) {
+		t.Errorf("a resolved path is under the decoy home: store=%q root=%q", store, root)
 	}
 }

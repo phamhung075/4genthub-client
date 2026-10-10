@@ -223,3 +223,36 @@ func readJSON(t *testing.T, path string) map[string]any {
 	}
 	return decoded
 }
+
+// test_unsafe_room_name_rejected: pull validates its room exactly as its sibling verbs do, refusing
+// before any network call with the name it refused.
+func TestPullRejectsAnUnsafeRoomName(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := RunPullVerb(context.Background(), []string{"../escape", "seat1"}, &stdout, &stderr)
+
+	if code != clientcmd.ExitUsage {
+		t.Errorf("exit = %d, want %d", code, clientcmd.ExitUsage)
+	}
+	if !strings.Contains(stderr.String(), "invalid room name") || !strings.Contains(stderr.String(), "../escape") {
+		t.Errorf("stderr = %q, want it to name the invalid room", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing", stdout.String())
+	}
+}
+
+// test_unsafe_seat_name_rejected: likewise for the seat, refused before any network call.
+func TestPullRejectsAnUnsafeSeatName(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := RunPullVerb(context.Background(), []string{"room1", "bad/name"}, &stdout, &stderr)
+
+	if code != clientcmd.ExitUsage {
+		t.Errorf("exit = %d, want %d", code, clientcmd.ExitUsage)
+	}
+	if !strings.Contains(stderr.String(), "invalid seat name") || !strings.Contains(stderr.String(), "bad/name") {
+		t.Errorf("stderr = %q, want it to name the invalid seat", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing", stdout.String())
+	}
+}
