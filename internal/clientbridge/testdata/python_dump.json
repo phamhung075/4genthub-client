@@ -120,7 +120,7 @@
       "redacted": false
     },
     {
-      "room": "f4death",
+      "room": "room-d",
       "seat": "alpha",
       "state": "stopped",
       "runtime": "agy",
@@ -129,7 +129,7 @@
       "redacted": false
     },
     {
-      "room": "f4kill",
+      "room": "room-e",
       "seat": "alpha",
       "state": "stopped",
       "runtime": "agy",
@@ -138,7 +138,7 @@
       "redacted": false
     },
     {
-      "room": "f4off",
+      "room": "room-f",
       "seat": "alpha",
       "state": "stopped",
       "runtime": "claude-code",
@@ -147,7 +147,7 @@
       "redacted": false
     },
     {
-      "room": "f4off",
+      "room": "room-f",
       "seat": "beta",
       "state": "stopped",
       "runtime": "claude-code",
@@ -156,7 +156,7 @@
       "redacted": false
     },
     {
-      "room": "f4rev",
+      "room": "room-g",
       "seat": "alpha",
       "state": "stopped",
       "runtime": "agy",
@@ -165,7 +165,7 @@
       "redacted": false
     },
     {
-      "room": "f4rev2",
+      "room": "room-h",
       "seat": "alpha",
       "state": "stopped",
       "runtime": "agy",
@@ -174,7 +174,7 @@
       "redacted": false
     },
     {
-      "room": "f4typed",
+      "room": "room-i",
       "seat": "alpha",
       "state": "stopped",
       "runtime": "claude-code",
@@ -183,7 +183,7 @@
       "redacted": false
     },
     {
-      "room": "f4typed",
+      "room": "room-i",
       "seat": "beta",
       "state": "stopped",
       "runtime": "claude-code",
@@ -192,7 +192,7 @@
       "redacted": false
     },
     {
-      "room": "first-project-claude",
+      "room": "room-j",
       "seat": "owner",
       "state": "stopped",
       "runtime": "claude-code",
@@ -201,7 +201,7 @@
       "redacted": false
     },
     {
-      "room": "first-project-claude",
+      "room": "room-j",
       "seat": "check",
       "state": "stopped",
       "runtime": "claude-code",
@@ -210,7 +210,7 @@
       "redacted": false
     },
     {
-      "room": "g6launch",
+      "room": "room-k",
       "seat": "alpha",
       "state": "stopped",
       "runtime": "omp",
@@ -219,7 +219,7 @@
       "redacted": false
     },
     {
-      "room": "kernel",
+      "room": "room-l",
       "seat": "lead",
       "state": "stopped",
       "runtime": "claude-code",
@@ -228,7 +228,7 @@
       "redacted": false
     },
     {
-      "room": "kernel",
+      "room": "room-l",
       "seat": "agent",
       "state": "stopped",
       "runtime": "claude-code",
@@ -237,7 +237,7 @@
       "redacted": false
     },
     {
-      "room": "kernel",
+      "room": "room-l",
       "seat": "human",
       "state": "stopped",
       "runtime": "terminal",
@@ -246,7 +246,7 @@
       "redacted": false
     },
     {
-      "room": "kernel",
+      "room": "room-l",
       "seat": "worker",
       "state": "stopped",
       "runtime": "claude-code",
@@ -255,7 +255,7 @@
       "redacted": false
     },
     {
-      "room": "kernel-agy",
+      "room": "room-m",
       "seat": "lead",
       "state": "stopped",
       "runtime": "agy",
@@ -264,7 +264,7 @@
       "redacted": false
     },
     {
-      "room": "kernel-agy",
+      "room": "room-m",
       "seat": "agent",
       "state": "stopped",
       "runtime": "agy",
@@ -273,7 +273,7 @@
       "redacted": false
     },
     {
-      "room": "kernel-agy",
+      "room": "room-m",
       "seat": "human",
       "state": "stopped",
       "runtime": "terminal",
@@ -282,7 +282,7 @@
       "redacted": false
     },
     {
-      "room": "kernel-agy",
+      "room": "room-m",
       "seat": "worker",
       "state": "stopped",
       "runtime": "agy",
@@ -291,7 +291,7 @@
       "redacted": false
     },
     {
-      "room": "of4room",
+      "room": "room-n",
       "seat": "alpha",
       "state": "stopped",
       "runtime": "omp",
@@ -300,7 +300,7 @@
       "redacted": false
     },
     {
-      "room": "of4room",
+      "room": "room-n",
       "seat": "beta",
       "state": "stopped",
       "runtime": "omp",
@@ -309,7 +309,7 @@
       "redacted": false
     },
     {
-      "room": "of4room",
+      "room": "room-n",
       "seat": "blankmodel",
       "state": "stopped",
       "runtime": "omp",
@@ -318,7 +318,7 @@
       "redacted": false
     },
     {
-      "room": "of4room",
+      "room": "room-n",
       "seat": "gamma",
       "state": "stopped",
       "runtime": "omp",
@@ -394,117 +394,117 @@
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "f4death/alpha": {
+    "room-d/alpha": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "f4kill/alpha": {
+    "room-e/alpha": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "f4off/alpha": {
+    "room-f/alpha": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "f4off/beta": {
+    "room-f/beta": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "f4rev/alpha": {
+    "room-g/alpha": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "f4rev2/alpha": {
+    "room-h/alpha": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "f4typed/alpha": {
+    "room-i/alpha": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "f4typed/beta": {
+    "room-i/beta": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "first-project-claude/owner": {
+    "room-j/owner": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "first-project-claude/check": {
+    "room-j/check": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "g6launch/alpha": {
+    "room-k/alpha": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "kernel/lead": {
+    "room-l/lead": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "kernel/agent": {
+    "room-l/agent": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "kernel/human": {
+    "room-l/human": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "kernel/worker": {
+    "room-l/worker": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "kernel-agy/lead": {
+    "room-m/lead": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "kernel-agy/agent": {
+    "room-m/agent": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "kernel-agy/human": {
+    "room-m/human": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "kernel-agy/worker": {
+    "room-m/worker": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "of4room/alpha": {
+    "room-n/alpha": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "of4room/beta": {
+    "room-n/beta": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "of4room/blankmodel": {
+    "room-n/blankmodel": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "of4room/gamma": {
+    "room-n/gamma": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
