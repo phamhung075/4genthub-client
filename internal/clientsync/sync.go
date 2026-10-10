@@ -39,6 +39,12 @@ func (syncCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		fmt.Fprintf(stderr, "4genteam sync: pick a verb: %s\n", verbList())
 		return clientcmd.ExitUsage
 	}
+	// HELP IS HELP FOR EVERY VERB, this group included: answering `--help` with an unknown-verb error
+	// and a non-zero exit was the fault this closes.
+	if args[0] == "-h" || args[0] == "--help" {
+		printUsage(stdout)
+		return clientcmd.ExitOK
+	}
 	// status, pull and connector are ported: status compares each seat's local pin with the cloud's
 	// hash, pull writes the snapshot and moves the pin, and connector reports one local session.
 	// messages is the other direction of the same path pull uses: it takes the text a window addressed
@@ -77,4 +83,16 @@ func verbList() string {
 		out += verb
 	}
 	return out
+}
+
+// printUsage is what `4genteam sync --help` prints. It lists the verbs the group declares, so a verb
+// added to syncVerbs appears here without a second edit.
+func printUsage(w io.Writer) {
+	_, _ = io.WriteString(w, "usage: 4genteam sync <verb> [args]\n\nverbs:\n")
+	for _, verb := range syncVerbs {
+		_, _ = io.WriteString(w, "  "+verb+"\n")
+	}
+	_, _ = io.WriteString(w, "\nstatus, pull and messages read the cloud and the local pins; rig materializes a room's seats;\n"+
+		"bundle, switch, respawn, offline-install and install-checker move or manage what was pulled.\n"+
+		"A verb that is not ported into this build refuses by name rather than doing something weaker.\n")
 }
