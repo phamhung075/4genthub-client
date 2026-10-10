@@ -306,13 +306,13 @@ func TestParseWhoamiRoster(t *testing.T) {
 
 // In a multi-pod rig the pod is not the rig name: the member is what follows the first dot.
 func TestParseWhoamiMultiPodRig(t *testing.T) {
-	who, err := parseWhoami([]byte(`{"identity":{"rigName":"4genthub-go","memberId":"coder"},"peers":[` +
-		`{"logicalId":"dev.reviewer","sessionName":"dev-reviewer@4genthub-go"},` +
-		`{"logicalId":"agy.check","sessionName":"agy-check@4genthub-go"}]}`))
+	who, err := parseWhoami([]byte(`{"identity":{"rigName":"room-c","memberId":"coder"},"peers":[` +
+		`{"logicalId":"dev.reviewer","sessionName":"dev-reviewer@room-c"},` +
+		`{"logicalId":"agy.check","sessionName":"agy-check@room-c"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(who.Peers["reviewer"], ",") != "dev-reviewer@4genthub-go" || strings.Join(who.Peers["check"], ",") != "agy-check@4genthub-go" || len(who.Peers) != 2 {
+	if strings.Join(who.Peers["reviewer"], ",") != "dev-reviewer@room-c" || strings.Join(who.Peers["check"], ",") != "agy-check@room-c" || len(who.Peers) != 2 {
 		t.Fatalf("peers = %v", who.Peers)
 	}
 }

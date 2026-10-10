@@ -65,8 +65,8 @@
   ],
   "machine_id_cases": [
     {
-      "in": "DESKTOP-TGKDSS8",
-      "expect": "DESKTOP-TGKDSS8"
+      "in": "machine-a",
+      "expect": "machine-a"
     },
     {
       "in": "  weird name ",

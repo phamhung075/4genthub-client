@@ -3,7 +3,7 @@
   "reported_at": "2026-10-06T19:58:42Z",
   "seats": [
     {
-      "room": "4genthub-deepseek",
+      "room": "room-b",
       "seat": "supervisor",
       "state": "stopped",
       "runtime": "omp",
@@ -12,7 +12,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-go",
+      "room": "room-c",
       "seat": "owner",
       "state": "stopped",
       "runtime": "claude-code",
@@ -21,7 +21,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-go",
+      "room": "room-c",
       "seat": "check",
       "state": "stopped",
       "runtime": "claude-code",
@@ -30,7 +30,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "lead",
       "state": "running",
       "runtime": "omp",
@@ -39,7 +39,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "go-dev",
       "state": "unknown",
       "runtime": "omp",
@@ -48,7 +48,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "reviewer",
       "state": "unknown",
       "runtime": "omp",
@@ -57,7 +57,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "fe-dev",
       "state": "running",
       "runtime": "omp",
@@ -66,7 +66,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "web-dev",
       "state": "running",
       "runtime": "omp",
@@ -75,7 +75,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "writer",
       "state": "running",
       "runtime": "omp",
@@ -84,8 +84,8 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
-      "seat": "go-dev2",
+      "room": "room-a",
+      "seat": "seat-a",
       "state": "running",
       "runtime": "omp",
       "pinned_hash": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
@@ -93,7 +93,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "skills-dev",
       "state": "unknown",
       "runtime": "omp",
@@ -102,7 +102,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "context-dev",
       "state": "unknown",
       "runtime": "omp",
@@ -111,7 +111,7 @@
       "redacted": false
     },
     {
-      "room": "4genthub-min",
+      "room": "room-a",
       "seat": "feedback-dev",
       "state": "unknown",
       "runtime": "omp",
@@ -329,67 +329,67 @@
   ],
   "agents": [],
   "local_record": {
-    "4genthub-deepseek/supervisor": {
+    "room-b/supervisor": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-go/owner": {
+    "room-c/owner": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-go/check": {
+    "room-c/check": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/lead": {
+    "room-a/lead": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/go-dev": {
+    "room-a/go-dev": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/reviewer": {
+    "room-a/reviewer": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/fe-dev": {
+    "room-a/fe-dev": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/web-dev": {
+    "room-a/web-dev": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/writer": {
+    "room-a/writer": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/go-dev2": {
+    "room-a/seat-a": {
       "running": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/skills-dev": {
+    "room-a/skills-dev": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/context-dev": {
+    "room-a/context-dev": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"
     },
-    "4genthub-min/feedback-dev": {
+    "room-a/feedback-dev": {
       "running": "",
       "last_in_sync": "",
       "since_last_in_sync": "unknown"

@@ -100,11 +100,11 @@ func TestPayloadParityWithThePythonBridge(t *testing.T) {
 
 	// The one pinned seat the dump carries, placed where the builder reads pins from.
 	pinsDir := t.TempDir()
-	pinDir := filepath.Join(pinsDir, "4genthub-min", "go-dev2")
+	pinDir := filepath.Join(pinsDir, "room-a", "seat-a")
 	if err := os.MkdirAll(pinDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pin, err := os.ReadFile(filepath.Join("testdata", "pins-4genthub-min-go-dev2.json"))
+	pin, err := os.ReadFile(filepath.Join("testdata", "pins-room-a-seat-a.json"))
 	if err != nil {
 		t.Fatalf("read the pin fixture: %v", err)
 	}
