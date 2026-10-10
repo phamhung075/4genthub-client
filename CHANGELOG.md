@@ -185,3 +185,15 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   from the account home and a real room still streams.
 - `4genteam sync pull` refuses a room or seat name that is not `[a-zA-Z0-9][a-zA-Z0-9_-]*` before any
   network call, so a name like `../../evil` can no longer name a path outside the store.
+- `4genteam watch`, `grid` and `feed` check that the ROOM exists rather than that it has live seats, so a
+  room whose seats are all stopped streams `-- following 0 seats` instead of refusing. A count-based check
+  refused a room that exists, which is what a stopped room hits by definition. The one check every verb
+  that resolves a room or a seat goes through now refuses an unknown room (2) and an unknown `--seat` (2)
+  before any pane is opened, and the store it looks in is resolved from the account home, never `$HOME`.
+- The watch verbs' state root is resolved by the ONE shared implementation too: `resolveStateRoot` calls
+  `clientenv.ResolveStateRoot` and keeps only this group's two additions - the root must exist and be a
+  directory, because the panes read session logs under it, and a root this group cannot resolve exits
+  unavailable (3) where the shared paths answer usage (2). The clauses were written twice and had already
+  drifted apart by exactly that exit code, so the difference is a wrapper decision with a test pinning it
+  now. The test-only seam that pointed the default at a scratch tree went with the duplicate, and the
+  tests assert agreement with the shared resolver instead.

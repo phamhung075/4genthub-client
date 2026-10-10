@@ -2,11 +2,15 @@ package clientwatch
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 // The verb behaviour: the grid, the input panes, the lead window, and the refusals - all with the exec
@@ -33,6 +37,7 @@ func TestInputsOpenSplitsASmallInputPaneUnderEachSeatPane(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.answerHerdr([]map[string]any{paneEntry("lead"), paneEntry("go-dev")})
 	fake.seatsFromTmux("r", []string{"lead", "go-dev"})
+	withSeatStore(t, "r", "lead", "go-dev")
 
 	code, out, errOut := runVerbT(t, "inputs", "open", "--rig", "r")
 	if code != 0 {
@@ -68,6 +73,7 @@ func TestInputsOpenTwiceAddsNothingTheSecondTime(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.answerHerdr([]map[string]any{paneEntry("lead"), paneEntry("lead" + inputSuffix)})
 	fake.seatsFromTmux("r", []string{"lead"})
+	withSeatStore(t, "r", "lead")
 
 	code, out, errOut := runVerbT(t, "inputs", "open", "--rig", "r")
 	if code != 0 {
@@ -88,6 +94,7 @@ func TestInputsHideClosesTheInputPanes(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.answerHerdr([]map[string]any{paneEntry("lead"), paneEntry("lead" + inputSuffix)})
 	fake.seatsFromTmux("r", []string{"lead"})
+	withSeatStore(t, "r", "lead")
 
 	code, out, errOut := runVerbT(t, "inputs", "hide", "--rig", "r")
 	if code != 0 {
@@ -111,6 +118,7 @@ func TestInputsHideClosesTheInputPanes(t *testing.T) {
 func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.on("rig send r-lead@r hello there", "sent\n")
+	withSeatStore(t, "r", "lead")
 
 	code, out, errOut := runVerbT(t, "input", "--rig", "r", "--seat", "lead")
 	if code != 0 {
@@ -150,11 +158,32 @@ func withStateRoot(t *testing.T) string {
 	return root
 }
 
+// withSeatStore gives the verb a seat store holding this room and these seats, so a verb that resolves
+// a room from --rig has a machine to resolve it on. It is the store the existence check reads and not
+// the live sessions: a room whose seats are all stopped is still a room.
+func withSeatStore(t *testing.T, rig string, seats ...string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, rig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, seat := range seats {
+		if err := os.MkdirAll(filepath.Join(root, rig, seat), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restore := seatStore
+	seatStore = func() string { return root }
+	t.Cleanup(func() { seatStore = restore })
+	return root
+}
+
 // Mirrors the grid's own line.
 func TestGridPrintsTheSeatAndColumnCount(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.answerHerdr(nil)
 	fake.seatsFromTmux("r", []string{"lead", "go-dev"})
+	withSeatStore(t, "r", "lead", "go-dev")
 	withStateRoot(t)
 
 	code, out, errOut := runVerbT(t, "grid", "--rig", "r")
@@ -171,6 +200,7 @@ func TestARelaunchedGridReplacesTheOldOneAndKeepsTheSameLayout(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.answerHerdr(nil)
 	fake.seatsFromTmux("r", []string{"lead", "go-dev", "reviewer"})
+	withSeatStore(t, "r", "lead", "go-dev", "reviewer")
 	withStateRoot(t)
 
 	layout := func() []string {
@@ -213,6 +243,7 @@ func TestWatchOpensTheGridAndALeadWindowWithItsInput(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.answerHerdr(nil)
 	fake.seatsFromTmux("r", []string{"lead", "go-dev"})
+	withSeatStore(t, "r", "lead", "go-dev")
 	fake.on("herdr workspace create --cwd "+workingDirKey()+" --label r lead --no-focus",
 		`{"result": {"root_pane": {"pane_id": "w25:lead1"}}}`)
 	fake.on("herdr pane split --pane w25:lead1 --direction down --ratio 0.800 --cwd "+workingDirKey(),
@@ -251,6 +282,77 @@ func TestWatchOpensTheGridAndALeadWindowWithItsInput(t *testing.T) {
 	}
 }
 
+// The reviewer's OBSERVATION, as a test: a verb that cannot do the work must refuse by name and
+// non-zero - never print a prompt and exit 0, and never stream nothing forever. All five verbs that
+// take --rig go through the ONE check, which is how grid, watch and inputs are covered here: they drive
+// herdr, and herdr must not be opened from a seat's terminal, so they are covered by construction
+// rather than by a live probe.
+func TestAnUnknownRoomRefusesEveryVerbThatTakesRig(t *testing.T) {
+	for _, verb := range []string{"feed", "grid", "watch", "inputs", "input"} {
+		t.Run(verb, func(t *testing.T) {
+			fake := newFakeExec(t)
+			args := []string{"--rig", "zz-no-such-room"}
+			switch verb {
+			case "inputs":
+				args = append([]string{"open"}, args...)
+			case "input":
+				args = append(args, "--seat", "zz")
+			}
+			code, _, errOut := runVerbT(t, verb, args...)
+			if code != 2 {
+				t.Errorf("exit %d, want 2: %q", code, errOut)
+			}
+			if !strings.Contains(errOut, "no such room: zz-no-such-room") {
+				t.Errorf("the refusal did not name the room: %q", errOut)
+			}
+			if got := len(fake.callsOf("herdr")) + len(fake.callsOf("tmux")) + len(fake.callsOf("rig")); got != 0 {
+				t.Errorf("the verb did %d call(s) for a room that does not exist", got)
+			}
+		})
+	}
+}
+
+// The seat half of the same rule: the room is there, the seat named by --seat is not.
+func TestAnUnknownSeatInARealRoomRefuses(t *testing.T) {
+	for _, verb := range []string{"feed", "input"} {
+		t.Run(verb, func(t *testing.T) {
+			fake := newFakeExec(t)
+			withSeatStore(t, "r", "lead")
+
+			code, _, errOut := runVerbT(t, verb, "--rig", "r", "--seat", "zz-no-such-seat")
+			if code != 2 {
+				t.Errorf("exit %d, want 2: %q", code, errOut)
+			}
+			if !strings.Contains(errOut, "no such seat: zz-no-such-seat in r") {
+				t.Errorf("the refusal did not name the seat and the room: %q", errOut)
+			}
+			if got := len(fake.callsOf("rig")); got != 0 {
+				t.Errorf("the verb wrote to a seat that does not exist: %v", fake.callsOf("rig"))
+			}
+		})
+	}
+}
+
+// The regression that proves the check is EXISTENCE and not a count: a real room whose seats are all
+// stopped still streams, with the header the docs call normal. A zero-count refusal would break it.
+func TestARealRoomWithNoLiveSeatsStillStreams(t *testing.T) {
+	fake := newFakeExec(t)
+	fake.seatsFromTmux("r", nil) // every seat stopped
+	withSeatStore(t, "r", "lead")
+	withStateRoot(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	stdout, stderr := &strings.Builder{}, &strings.Builder{}
+	code := runVerb(ctx, "feed", []string{"--rig", "r"}, stdout, stderr)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "-- following 0 seats") {
+		t.Errorf("a real room whose seats are all stopped did not stream its header: %q", stdout.String())
+	}
+}
+
 // The doc says "Always pass --rig; there is no default room" - so every verb refuses without one.
 func TestRigIsRequiredForEveryVerb(t *testing.T) {
 	installBareSeam(t)
@@ -275,6 +377,7 @@ func TestRigIsRequiredForEveryVerb(t *testing.T) {
 // A machine without herdr is a prerequisite to fix, not to work around.
 func TestAMachineWithoutHerdrRefusesByName(t *testing.T) {
 	newFakeExec(t) // nothing is on PATH
+	withSeatStore(t, "r")
 	code, _, errOut := runVerbT(t, "grid", "--rig", "r")
 	if code == 0 {
 		t.Fatal("grid succeeded without herdr")
@@ -288,29 +391,38 @@ func TestAMachineWithoutHerdrRefusesByName(t *testing.T) {
 }
 
 // The state root is `--state-root`, else $OPENRIG_STATE_ROOT, else the machine's own default - the
-// third clause docs/WATCH.md promises. The default is the seam, so this stays offline: a test that
-// resolved the real home would depend on the machine running it.
+// third clause docs/WATCH.md promises. That default is the SHARED one now, so this states the
+// delegation instead of a path literal, and it holds on any machine: a resolvable default must be
+// adopted, a default that is absent must be refused BY PATH (this group's own extra stat), and a
+// machine with no resolvable home must be refused as well.
 func TestTheStateRootFallsBackToTheMachineDefault(t *testing.T) {
 	newFakeExec(t)
-	root := t.TempDir()
-	restore := defaultStateRoot
-	defaultStateRoot = func() string { return root }
-	defer func() { defaultStateRoot = restore }()
 	t.Setenv(stateRootEnv, "")
 
-	resolved, err := resolveStateRoot("")
-	if err != nil || resolved != root {
-		t.Fatalf("resolveStateRoot = %q, %v; want the default %q", resolved, err, root)
+	machine, machineErr := clientenv.ResolveStateRoot("")
+	got, gotErr := resolveStateRoot("")
+	switch {
+	case machineErr != nil:
+		if gotErr == nil {
+			t.Fatalf("resolveStateRoot = %q with no resolvable home; want this group's refusal", got)
+		}
+	case !isDir(machine):
+		if gotErr == nil {
+			t.Fatalf("resolveStateRoot = %q for the absent machine default %q; want a refusal by path",
+				got, machine)
+		}
+	default:
+		if gotErr != nil || got != machine {
+			t.Fatalf("resolveStateRoot = %q, %v; want the shared machine default %q", got, gotErr, machine)
+		}
 	}
 }
 
 // The order the usage text states: the flag wins over the environment, and the environment over the
-// default.
+// default. The first two clauses are hermetic here; the default is stated in full by
+// TestTheStateRootFallsBackToTheMachineDefault, so this only checks it when this machine has one.
 func TestTheStateRootOrderIsFlagThenEnvironmentThenDefault(t *testing.T) {
-	flagRoot, envRoot, defRoot := t.TempDir(), t.TempDir(), t.TempDir()
-	restore := defaultStateRoot
-	defaultStateRoot = func() string { return defRoot }
-	defer func() { defaultStateRoot = restore }()
+	flagRoot, envRoot := t.TempDir(), t.TempDir()
 
 	t.Setenv(stateRootEnv, envRoot)
 	if got, err := resolveStateRoot(flagRoot); err != nil || got != flagRoot {
@@ -321,8 +433,10 @@ func TestTheStateRootOrderIsFlagThenEnvironmentThenDefault(t *testing.T) {
 		t.Errorf("with only the environment set, got %q, %v; want the environment %q", got, err, envRoot)
 	}
 	t.Setenv(stateRootEnv, "")
-	if got, err := resolveStateRoot(""); err != nil || got != defRoot {
-		t.Errorf("with neither set, got %q, %v; want the default %q", got, err, defRoot)
+	if machine, err := clientenv.ResolveStateRoot(""); err == nil && isDir(machine) {
+		if got, err := resolveStateRoot(""); err != nil || got != machine {
+			t.Errorf("with neither set, got %q, %v; want the machine default %q", got, err, machine)
+		}
 	}
 }
 
@@ -338,7 +452,7 @@ func TestTheUsageStatesTheStateRootHomeRelative(t *testing.T) {
 	if strings.Contains(usage.String(), "/home/") {
 		t.Errorf("the usage carries an absolute user-home path:\n%s", usage.String())
 	}
-	if strings.Contains(usage.String(), defaultStateRoot()) {
+	if machine := clientenv.DefaultStateRoot(); machine != "" && strings.Contains(usage.String(), machine) {
 		t.Errorf("the usage prints the resolved path instead of the home-relative form:\n%s", usage.String())
 	}
 }
@@ -346,6 +460,7 @@ func TestTheUsageStatesTheStateRootHomeRelative(t *testing.T) {
 // A root that is named but not there is refused BY ITS PATH, whichever clause named it.
 func TestAMissingStateRootIsRefusedByItsPath(t *testing.T) {
 	newFakeExec(t)
+	withSeatStore(t, "r")
 	missing := filepath.Join(t.TempDir(), "absent")
 
 	code, _, errOut := runVerbT(t, "feed", "--rig", "r", "--state-root", missing)
@@ -353,33 +468,28 @@ func TestAMissingStateRootIsRefusedByItsPath(t *testing.T) {
 		t.Errorf("a missing root named %q at exit %d, want the path and 3", errOut, code)
 	}
 
-	restore := defaultStateRoot
-	defaultStateRoot = func() string { return missing }
-	defer func() { defaultStateRoot = restore }()
-	t.Setenv(stateRootEnv, "")
+	t.Setenv(stateRootEnv, missing)
 	code, _, errOut = runVerbT(t, "feed", "--rig", "r")
 	if code != 3 || !strings.Contains(errOut, missing) {
-		t.Errorf("a missing DEFAULT root named %q at exit %d, want the path and 3", errOut, code)
+		t.Errorf("a missing root named by the environment gave %q at exit %d, want the path and 3",
+			errOut, code)
 	}
 }
 
-// A machine whose home cannot be resolved refuses instead of reading a state tree relative to the
-// working directory, and the refusal names both escapes.
-func TestTheWatchVerbRefusesAStateRootItCannotResolve(t *testing.T) {
-	newFakeExec(t)
-
-	restore := defaultStateRoot
-	defaultStateRoot = func() string { return "" }
-	defer func() { defaultStateRoot = restore }()
-	t.Setenv(stateRootEnv, "")
-
-	code, _, errOut := runVerbT(t, "feed", "--rig", "r")
-	if code != 3 {
-		t.Errorf("exit %d, want 3", code)
+// The wrapper's decision, pinned without a machine that cannot resolve a home: a root this group cannot
+// resolve exits unavailable (3) where the five shared paths answer the shared resolver's own usage (2).
+// The 2 half is pinned where it is reachable, in clientenv's refusal test; the message on both paths
+// stays the shared one, which names both escapes. reportError is what every verb returns through, so
+// this pins the code the user gets.
+func TestTheWatchRootRefusalIsUnavailableNotUsage(t *testing.T) {
+	stderr := &strings.Builder{}
+	code := reportError(watchRootError(errors.New("no resolvable home")), stderr)
+	if code != clientcmd.ExitUnavailable {
+		t.Errorf("the watch root refusal exits %d, want %d (unavailable)", code, clientcmd.ExitUnavailable)
 	}
 	for _, want := range []string{"--state-root", stateRootEnv} {
-		if !strings.Contains(errOut, want) {
-			t.Errorf("the refusal does not name %s: %q", want, errOut)
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("the refusal does not name %s: %q", want, stderr.String())
 		}
 	}
 }
@@ -422,6 +532,7 @@ func TestTheUmbrellaDispatchesToItsVerbs(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.answerHerdr(nil)
 	fake.seatsFromTmux("r", []string{"lead"})
+	withSeatStore(t, "r", "lead")
 	withStateRoot(t)
 
 	code, out, errOut := runWatchT(t, "grid", "--rig", "r")

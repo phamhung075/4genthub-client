@@ -2,8 +2,8 @@
 //
 // It renders what every seat of a rig is doing - each tool call and its result, the agent's own
 // reasoning, what it says and what it is told - from the seats' session logs, and it never types into
-// a seat from the feed. docs/WATCH.md and skills/watch-team/SKILL.md are the contract this code must
-// make true; the Python client's watch.py is the behaviour it was ported from.
+// a seat from the feed. docs/WATCH.md and skills/client/watch-team/SKILL.md are the contract this code
+// must make true; the Python client's watch.py is the behaviour it was ported from.
 //
 // Four deliberate departures from the Python, all recorded in the phase report:
 //
@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
@@ -85,35 +86,72 @@ func detailFlag(detail bool) string {
 	return ""
 }
 
-// defaultStateRoot is the third clause: where OpenRig keeps its per-seat state on THIS machine
-// (clientenv.DefaultStateRoot, resolved from the real home, so it is the same inside a seat and out).
-// It is a variable only so a test can replace it: resolving the real home in a test would make the
-// result depend on the machine running it, which the offline test rule forbids.
-var defaultStateRoot = clientenv.DefaultStateRoot
-
-// resolveStateRoot is `--state-root`, else $OPENRIG_STATE_ROOT, else clientenv.DefaultStateRoot().
-// A root that is not a directory is the caller's to fix, and the message says which path it tried.
+// resolveStateRoot is the watch group's state root: the ONE resolution every verb shares
+// (clientenv.ResolveStateRoot - `--state-root`, else $OPENRIG_STATE_ROOT, else this machine's own
+// default), plus the two things this group adds on top. Both are deliberate, and both stay here:
+//
+//   - the root must EXIST and be a directory, because every pane is about to read session logs under
+//     it, and the refusal has to say which path it tried;
+//   - a root this group cannot resolve is unavailableError (ExitUnavailable), where the five shared
+//     paths answer the shared resolver's coded error (ExitUsage): a machine that cannot watch is a
+//     prerequisite to fix, not a command line typed wrong. watchRootError pins that, so the difference
+//     stays a decision rather than drifting back into an accident.
 func resolveStateRoot(flagValue string) (string, error) {
-	root := flagValue
-	if root == "" {
-		root = os.Getenv(stateRootEnv)
-	}
-	if root == "" {
-		root = defaultStateRoot()
-	}
-	if root == "" {
-		// No flag, no variable and no resolvable home: the machine this client refuses on rather than
-		// reading a state tree relative to wherever it was run from.
-		return "", unavailableError(clientenv.StateRootMessage)
-	}
-	info, err := os.Stat(root)
+	root, err := clientenv.ResolveStateRoot(flagValue)
 	if err != nil {
+		return "", watchRootError(err)
+	}
+	info, statErr := os.Stat(root)
+	if statErr != nil {
 		return "", unavailableError(fmt.Sprintf("the omp state root is not there: %s", root))
 	}
 	if !info.IsDir() {
 		return "", unavailableError(fmt.Sprintf("the omp state root is not a directory: %s", root))
 	}
 	return root, nil
+}
+
+// watchRootError is the wrapper's whole decision, as a function so a test can pin it without a machine
+// that cannot resolve a home: the shared resolver's failure keeps the shared message (which names both
+// escapes) and takes this group's code.
+func watchRootError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return unavailableError(clientenv.StateRootMessage)
+}
+
+// seatStore is where this machine materializes a room's seats: clientenv.DefaultSeatStore(), the
+// account home's .openrig/agenthub-seats, never $HOME. A seat runs with HOME pointed at its own state
+// directory, so an environment-resolved store would refuse every real room when the client runs from a
+// seat. It is a variable only so a test can point it at a scratch tree.
+var seatStore = clientenv.DefaultSeatStore
+
+// requireRoomAndSeats is the ONE existence check every verb that resolves a room or a seat from --rig
+// goes through, so the refusals cannot disagree with each other: the room must be there in the seat
+// store, and, when --seat is given, each named seat must be one inside it. It checks EXISTENCE and
+// never a count - a real room whose seats are all stopped is still a room, and "following 0 seats" is
+// its correct output, so refusing on a zero count would break a legitimate case.
+func requireRoomAndSeats(rig string, seats []string) error {
+	store := seatStore()
+	if store == "" {
+		return unavailableError(clientenv.SeatStoreMessage)
+	}
+	if !isDir(filepath.Join(store, rig)) {
+		return usageError(fmt.Sprintf("no such room: %s", rig))
+	}
+	for _, seat := range seats {
+		if !isDir(filepath.Join(store, rig, seat)) {
+			return usageError(fmt.Sprintf("no such seat: %s in %s", seat, rig))
+		}
+	}
+	return nil
+}
+
+// isDir is the existence test itself: a room or a seat that was never materialized here is not one.
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // requireHerdr is the other prerequisite the doc names: "a missing herdr or tmux is a prerequisite to

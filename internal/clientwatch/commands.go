@@ -89,7 +89,11 @@ var verbUsages = map[string]verbUsage{
 // stateRootInHelp is how the usage text names the third clause: the home-RELATIVE form, never the
 // resolved absolute path. Help text carrying /home/<user>/... would name the machine's user, differ per
 // machine and make the output brittle in a test; only the RESOLUTION is absolute. This is the same
-// wording docs/WATCH.md:34 and skills/watch-team/SKILL.md:60 use for that clause.
+// wording the state-root row of the options table carries in docs/WATCH.md and
+// skills/client/watch-team/SKILL.md, and the state-directory sentence under "What you get" in
+// docs/WATCH.md. Sections, never line numbers: this comment was made stale twice - once by a move, once
+// by an insertion above the clause - and a line number in a cross-file comment is a stale fact waiting
+// to happen.
 const stateRootInHelp = "~/.openrig/state/omp"
 
 // commonFlags states the path --state-root resolves to rather than only naming the variable: the third
@@ -194,6 +198,13 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 		return clientcmd.ExitUsage
 	}
 	state.cols = max(1, state.cols)
+
+	// The room and every named seat must exist BEFORE anything else happens: a name that is not there is
+	// the caller's to fix, and telling them so beats opening a pane that shows nothing, streaming
+	// "following 0 seats" forever, or reporting a missing tool for a room that was never going to work.
+	if err := requireRoomAndSeats(state.rig, state.seats); err != nil {
+		return reportError(err, stderr)
+	}
 
 	switch verb {
 	case "feed":
