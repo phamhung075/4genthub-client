@@ -183,3 +183,59 @@ func TestASeatPastTheWarnLimitIsWarnedOnce(t *testing.T) {
 		t.Errorf("the warning was repeated: %v", sent)
 	}
 }
+
+// TestAWitnessedCompactionTellsTheSeatToResume covers the path the nine behaviours above miss: a
+// compaction the supervisor can SEE. The witness is a new `"type":"compaction"` record, and the seat is
+// then told to carry on without the owner typing continue.
+func TestAWitnessedCompactionTellsTheSeatToResume(t *testing.T) {
+	withDocumentedLimits(t)
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	// The compaction record is both the witness and the new reading: 40k is under the soft limit, so
+	// this pass is about the witness alone.
+	if err := os.WriteFile(path, []byte(`{"type":"compaction","tokensAfter":40000}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var sent, interrupted, logged []string
+	supervisor := supervisorFor(path, "omp", false, &sent, &interrupted)
+	supervisor.Log = func(text string) { logged = append(logged, text) }
+	supervisor.State["lead"] = &seatState{before: 300_000, hasBefore: true, count: 0, sent: supervisor.Now() - 200}
+
+	supervisor.Step()
+
+	if len(sent) != 1 || sent[0] != resumeText {
+		t.Errorf("sent = %v, want exactly the resume text", sent)
+	}
+	joined := strings.Join(logged, "|")
+	if !strings.Contains(joined, "WITNESSED") {
+		t.Errorf("the witnessed branch was not reported: %v", logged)
+	}
+	if !strings.Contains(joined, "told to resume") {
+		t.Errorf("the resume was not logged: %v", logged)
+	}
+}
+
+// TestAnUnwitnessedCompactionIsReportedAndRetried covers the other half: the compaction never appeared
+// and the context did not drop, so the supervisor says so and tries again instead of assuming success.
+func TestAnUnwitnessedCompactionIsReportedAndRetried(t *testing.T) {
+	withDocumentedLimits(t)
+	// A reading above the soft limit with NO compaction record and no drop: the send is unwitnessed.
+	path := seatLogFile(t, 200_000, 5)
+	var sent, interrupted, logged []string
+	supervisor := supervisorFor(path, "omp", false, &sent, &interrupted)
+	supervisor.Log = func(text string) { logged = append(logged, text) }
+	supervisor.State["lead"] = &seatState{before: 200_000, hasBefore: true, count: 0, sent: supervisor.Now() - 200}
+
+	supervisor.Step()
+
+	for _, text := range sent {
+		if text == resumeText {
+			t.Error("an unwitnessed compaction told the seat to resume")
+		}
+	}
+	if !strings.Contains(strings.Join(logged, "|"), "NOT witnessed") {
+		t.Errorf("the unwitnessed branch was not reported: %v", logged)
+	}
+	if supervisor.State["lead"].hasBefore {
+		t.Error("the unwitnessed branch left the pending witness in place")
+	}
+}

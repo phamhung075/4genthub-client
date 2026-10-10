@@ -24,9 +24,17 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   plus the one env file (`internal/clientenv`) and the seat-log reader the supervisor and the watch
   view need. Every verb that takes a rig requires it, the seat-role table is data from the team
   file, and the log directory is the XDG state location instead of the checkout.
+- The supervisor's witnessed-compaction path is tested (`internal/clientlifecycle`): a new
+  compaction record sends the seat the resume text, and an unwitnessed one is reported and retried
+  rather than assumed.
 
 ### Changed
 
 - `.env.sample` states the one-credential, one-file contract: `AGENTHUB_URL` and `AGENTHUB_TOKEN`
   in `~/.config/4genthub/.env`, with a variable already in the environment winning over the file.
   It carries no token value, and every key it lists is one the client reads.
+
+### Fixed
+
+- `4genteam sync --help` prints the verb group's usage and exits 0; it used to be read as an
+  unknown verb and exited 2 (`1e23ca2`).
