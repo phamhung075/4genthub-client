@@ -1,6 +1,9 @@
 package clientteam
 
 import (
+	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -243,5 +246,133 @@ func TestPublishSkillsNamesItsInventoryAndHasNoDefault(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "--inventory") {
 		t.Errorf("stderr did not name --inventory: %q", errOut)
+	}
+}
+
+// Mirrors test_publish_skills_reads_the_revision_the_inventory_names, the port target of the retired
+// Python case (DISPOSITION row 25).
+//
+// The digests and the pin disagree: the bytes and the recorded digest moved with a regenerated
+// inventory while generated_from kept naming the revision they were taken from before. Before this
+// guard the verb published it, because the digests are verified against the checkout the operator
+// points at and nothing compared them with the revision the inventory names.
+func TestPublishSkillsRefusesAnInventoryThatDoesNotDescribeTheRevisionItNames(t *testing.T) {
+	fake := installFake(t)
+	withCredentials(t, fake)
+	library := writeLibrary(t)
+	described := gitLibraryCommit(t, library, "the library as the inventory describes it")
+
+	moved := "# Alpha\nlibrary body\nsecond edition\n"
+	if err := writeSkillFile(t, filepath.Join(library, canonicalPaths["alpha-skill"]), moved); err != nil {
+		t.Fatal(err)
+	}
+	rewriteInventorySHA(t, library, "alpha-skill", "canonical", sha256Hex([]byte(moved)))
+	gitLibraryCommit(t, library, "the moved checkout the inventory was regenerated from")
+	setInventoryGeneratedFrom(t, library, described)
+
+	code, out, errOut := runTeam(t, "publish-skills", "--inventory", filepath.Join(library, "inventory.json"), "--source-root", library)
+	if code != ExitUsage {
+		t.Fatalf("exit %d, want %d: the verb accepted an inventory that does not describe %s (stdout %q)",
+			code, ExitUsage, described, out)
+	}
+	if !strings.Contains(errOut, "alpha-skill") || !strings.Contains(errOut, described[:8]) {
+		t.Errorf("stderr did not name the skill and the revision it does not describe: %q", errOut)
+	}
+	if !strings.Contains(errOut, sha256Hex([]byte(moved))) {
+		t.Errorf("stderr did not name the digest the named revision holds: %q", errOut)
+	}
+	if len(fake.recorded()) != 0 {
+		t.Errorf("an inventory whose pin does not match still sent %d request(s)", len(fake.recorded()))
+	}
+}
+
+// The other half, and the mirror of test_a_pin_that_moved_without_regenerating_is_refused: a pin that
+// DOES describe the digests must publish, through the whole path, losing no request on the way.
+func TestPublishSkillsPublishesAnInventoryThatDescribesTheRevisionItNames(t *testing.T) {
+	fake := installFake(t)
+	withCredentials(t, fake)
+	library := writeLibrary(t)
+	revision := gitLibraryCommit(t, library, "the library as the inventory describes it")
+	setInventoryGeneratedFrom(t, library, revision)
+
+	code, out, errOut := runTeam(t, "publish-skills", "--inventory", filepath.Join(library, "inventory.json"), "--source-root", library)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, "publish summary: 3 pushed, 0 new version(s), 0 skipped") {
+		t.Errorf("summary wrong:\n%s", out)
+	}
+}
+
+// A pin that cannot be read back is refused rather than trusted: an unverifiable pin is not a pin.
+func TestPublishSkillsRefusesAPinItCannotMaterialise(t *testing.T) {
+	installFake(t)
+	library := writeLibrary(t)
+	absent := strings.Repeat("a", 40)
+	setInventoryGeneratedFrom(t, library, absent)
+
+	code, _, errOut := runTeam(t, "publish-skills", "--inventory", filepath.Join(library, "inventory.json"),
+		"--source-root", library, "--dry-run")
+	if code != ExitUsage {
+		t.Fatalf("exit %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(errOut, absent[:8]) || !strings.Contains(errOut, "git archive") {
+		t.Errorf("stderr did not name the revision and the failed read: %q", errOut)
+	}
+}
+
+// gitLibraryCommit commits whatever the library fixture holds and returns the revision, so a case can
+// name one state of the tree and then move the tree again. The identity is passed by environment and
+// the user's own git configuration is bypassed, so the case cannot depend on the machine.
+func gitLibraryCommit(t *testing.T, root, message string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("SKIPPED, NOT PASSED: no git on PATH, so the pin cannot be materialised and this case " +
+			"did NOT run - the verb refuses in that case too, naming the revision it could not read")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		gitIn(t, root, "init", "-q")
+	}
+	gitIn(t, root, "add", "-A")
+	gitIn(t, root, "commit", "-q", "--allow-empty", "-m", message)
+	return gitIn(t, root, "rev-parse", "HEAD")
+}
+
+func gitIn(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", args...)
+	command.Dir = root
+	command.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=fixture", "GIT_AUTHOR_EMAIL=fixture@example.test",
+		"GIT_COMMITTER_NAME=fixture", "GIT_COMMITTER_EMAIL=fixture@example.test",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null", "GIT_CONFIG_NOSYSTEM=1")
+	out, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v: %s", args, root, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// setInventoryGeneratedFrom records the revision the digests came from, the way the inventory
+// generator writes its provenance line.
+func setInventoryGeneratedFrom(t *testing.T, libraryRoot, revision string) {
+	t.Helper()
+	path := filepath.Join(libraryRoot, "inventory.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read inventory: %v", err)
+	}
+	var inventory map[string]any
+	if err := json.Unmarshal(raw, &inventory); err != nil {
+		t.Fatalf("decode inventory: %v", err)
+	}
+	inventory["generated_from"] = "/fixture/openrig @ HEAD " + revision +
+		", re-verified 2026-10-10 (skills/_canonical + packages/daemon/assets/plugins/openrig-core/skills)"
+	encoded, err := json.Marshal(inventory)
+	if err != nil {
+		t.Fatalf("encode inventory: %v", err)
+	}
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatalf("write inventory: %v", err)
 	}
 }

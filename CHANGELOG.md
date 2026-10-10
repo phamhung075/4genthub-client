@@ -326,6 +326,22 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- `team publish-skills` no longer publishes an inventory whose `generated_from` names a revision it does
+  not describe (`internal/clientteam/publish.go`). The recorded digests were verified only against the
+  checkout `--source-root` points at, so an inventory regenerated from a MOVED checkout kept its old pin
+  and the verb published bytes the pin does not describe, silently. Reproduced on this pod: with the
+  committed inventory's digests recomputed from the checkout (23 of the 52 skills had to change to be
+  accepted), `team publish-skills --dry-run --inventory … --source-root <the moved checkout>` planned all
+  `52 skill block(s)` and exited 0 while `generated_from` still named `31fe301b`. The verb now reads the
+  named revision back out of git itself (`git archive`, unpacked in memory through `archive/tar`, never
+  through an external `tar` binary so a missing binary cannot read as a pass), digests the same paths
+  there and refuses on a mismatch, naming the skill, the path, the digest the revision holds, the digest
+  the inventory records and the revision. The committed inventory still passes against a checkout AT
+  `31fe301b` (`exit 0`, `plan: publish-skills 52 skill block(s)`), and the pod's moved checkout is
+  refused by the pre-existing staleness check, so the pin is an added claim rather than a replacement
+  for that one. An inventory that pins nothing is left to the digest check (the format is unchanged),
+  and a pin that cannot be read back - no git repository, an unknown revision - is refused rather than
+  trusted.
 - `cmd/4genteam`'s free-commands test no longer reads the HOST: it pins `clientcmd.LookPath` with the
   new `rigPresent` helper (mirroring `rigMissing`) and asserts BOTH answers to the no-argument
   invocation - `up`'s own missing-rig-name error with rig on PATH, and the platform matrix's one
