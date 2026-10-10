@@ -13,11 +13,14 @@ Owner decision, 2026-10-11. Every seat that writes files works in its own git wo
 2. If the toplevel is the main checkout or the branch is `main`, stop. Do not edit. Ask the lead for your worktree. The client creates it (`4genteam up <rig>`); do not make one by hand.
 3. Edit only inside your own worktree.
 
-## Committing and merging
+## Branches, merges and push
 
-- Commit on your branch with a pathspec: `git commit -m "..." -- <paths>`. Use `git add -N` for new files.
-- `main` changes only by a merge or fast-forward after the reviewer gate, done by the lead. A seat never commits to `main`, never pushes, never rebases someone else's branch.
+- The lead owns every branch and every merge. The lead creates each seat's branch and worktree, merges a seat's branch to `main` when the seat has finished and the reviewer gate has passed, and removes the branch afterwards.
+- Only the lead works on `main`. No other seat edits, commits or merges there.
+- Nobody pushes, the lead included. The owner pushes to the remote when the owner decides.
+- A seat commits on its own branch with a pathspec: `git commit -m "..." -- <paths>`. Use `git add -N` for new files. A seat never rebases another seat's branch.
 - A merge conflict is resolved by the author seat on its own branch, then the change goes through the gate again.
+- A seat that finishes tells the lead the branch name and the commit range. The lead does the rest.
 
 ## Reading other seats' work
 
