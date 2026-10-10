@@ -8,8 +8,8 @@ commands from.
 Setting a machine up, and then building a room and its seats, is in
 [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md). Watching a running room is in
 [docs/WATCH.md](docs/WATCH.md), and the same procedure is the skill
-[skills/watch-team/SKILL.md](skills/watch-team/SKILL.md), which any project can copy into its own
-skills path.
+[skills/client/watch-team/SKILL.md](skills/client/watch-team/SKILL.md), which any project can copy into
+its own skills path.
 
 ## What it is
 
