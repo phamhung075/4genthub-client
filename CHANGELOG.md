@@ -144,7 +144,8 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   rigs this machine sees (`rig ps --json`), reads the rows addressed to that rig's human
   (`rig queue list --destination human@<rig> --json` — the daemon's own destination form), and posts ONE frame per row
   to `/api/v2/broadcast/notify`: `event_type`/`entity_type` `notification`, `entity_id` the OpenRig row id, and
-  `data.message` the row's summary (its first non-empty body line as the fallback, bounded to 300 characters). The
+  `data.message` the row's summary (its first non-empty body line as the fallback, bounded to 300 BYTES - the slice is
+  by byte, so a multi-byte character on the boundary can be split). The
   contract is fixed by the consumer rather than chosen here: the route requires those three fields and takes the target
   user from the caller's TOKEN (so the body carries no user id), the server copies the body's `data` into
   `payload.data.primary`, which the dashboard reads and DROPS when its message is empty
@@ -159,18 +160,67 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The producer's cases (`internal/clientbridge/notifications_test.go`, 11 cases): the frame's fields, the ABSENCE of
   `user_id` and `metadata` from the body, one post per row, no second post on the next cycle, survival across a restart,
   the retry after a 500, the no-text skip, the seat-addressed row, the sweep running while the CYCLE SKIPS ITS REPORT,
-  the sweep disabled without a sender, and the bounded record. Four of them are the red for the change, not a
+  the sweep disabled without a sender, and the bounded record. FIVE of them are the red for the change, not a
   description of it: with the cycle's sweep call commented out, `TestNotifyPostsOneFrameForAHumanRow`,
-  `...DoesNotPostTheSameRowTwice`, `...StateSurvivesARestart` and `...RetriesARefusedPost` FAIL, and they pass again once
-  the call is restored. A fifth pins the ORDER rather than the call, and it is the only case that does: with the sweep
-  moved below the cycle's early return — so it runs only when a report goes out — `TestNotifyRunsEvenWhenTheCycleSkipsItsReport`
-  alone FAILS (`notification frames = 0, want 1: the sweep sits behind the report's early return`) and passes again when
-  the call is put back. The acceptance itself was measured end
+  `...DoesNotPostTheSameRowTwice`, `...StateSurvivesARestart`, `...RetriesARefusedPost` and
+  `TestNotifyRunsEvenWhenTheCycleSkipsItsReport` FAIL, and they pass again once the call is restored. That last one is
+  also the only case that discriminates the ORDER: it is red under BOTH mutations, and with the sweep moved below the
+  cycle's early return — so it runs only when a report goes out — it alone FAILS (`notification frames = 0, want 1: the
+  sweep sits behind the report's early return`) while the other four pass, and it passes again when the call is put back.
+  The count here is the reviewer's measurement at the gate (`GATE-fa486d9`), correcting this entry's first draft, which
+  said four and called the order case a distinct fifth; the correction is recorded here rather than in the gated
+  commit's message, because that hash is what the gate names and its message cannot change under it. The acceptance
+  itself was measured end
   to end rather than argued: the producer's own bytes, POSTed through the real route on a real database with the target
   user OFFLINE, were replayed as exactly one frame on the next connect and as none on the one after
   (`go test -count=1 -run TestZZD3ProducerAcceptance -v ./fastmcp/server/httpapp/` → PASS 3.48s, in `agenthub_go`). That
   harness was a throwaway and was deleted: a byte-exact copy of this repository's frame parked in another repository's
   suite would couple the two.
+
+- `4genteam offpeak`, and the DeepSeek peak gate in the client itself (`internal/clientoffpeak`): the port of the
+  shell gate `~/.openrig/bin/deepseek-offpeak.sh`, which the client now answers instead of shelling out. The default
+  form prints the one human line and the exit code IS the answer (0 off-peak, 1 peak), so it still works as
+  `offpeak --quiet && run-the-work`; `--json` emits one object (`state`, `utc`, `weekday`, `holiday`, `reason`,
+  `next`); `status` prints the setting, where it came from and the state now; `set on|off` writes the ONE
+  `OFFPEAK_ONLY` line. Peak is 01:00-04:00 and 06:00-10:00 UTC Monday-Friday; every other hour, all of Saturday and
+  Sunday, and every date in `DEEPSEEK_HOLIDAYS` are off-peak; `OFFPEAK_UTC` pins the instant the schedule is read at.
+  Measurements 2026-10-10, `4genteam` against the script it replaces, comparing the JSON, the human line AND the exit
+  code: 12 instants covering every edge (Fri 00:59, 01:00, 03:59, 04:00, 05:59, 06:00, 09:59, 10:00, 23:30, Sat 12:00,
+  Sun 07:00, Mon 05:00), the holiday file case and a holiday file that does not exist — identical in all 14 runs. ONE
+  deliberate divergence: a malformed `OFFPEAK_UTC` is refused by name with exit 2, where the script printed a
+  half-empty JSON object and exited 0; a broken clock must not read as off-peak, because that is the direction in
+  which the gate silently stops refusing, and every other blank-or-typo value in this client is refused by name too.
+- The gate is enforced on the three verbs that START or RESUME a seat — `up`, `compact` and `sync respawn`
+  (`internal/clientlifecycle`, `internal/clientsync`). With `OFFPEAK_ONLY` on (the default) a room holding a seat
+  whose model begins with `deepseek/` is refused at peak with exit 3 BEFORE the resume, the supervisor spawn or the
+  launch — in `up` after the daemon and nothing else — and the refusal names the seat, its model, the peak window it
+  is standing in and when off-peak resumes. The models come from each verb's own `rig ps --json --nodes --rig ROOM`
+  call, which the gate and the restore now share as ONE seam (`rigNodes`), so the gate costs no extra call and no
+  cloud round trip, and a room with NO DeepSeek seat is never refused. A reading that fails is not a refusal either:
+  the verb's own error says what is wrong, and guessing "peak" from an unreadable room would block a room this client
+  knows nothing about. `--any-time` skips the check for one run and wins over the environment or the env file,
+  `--offpeak-only` forces it back on, and passing both is a usage error rather than last-one-wins.
+- `clientenv.Set` writes ONE key into the client's env file and prints nothing else from it (`internal/clientenv`):
+  it replaces the FIRST assignment of that key — `export ` prefix included, which is the line `Load` reads — creates
+  the file `0600` and its directory `0700` when missing, keeps every other byte and the mode the operator chose,
+  follows a symlink instead of replacing it (the room `.env` files ARE links at this file), and refuses a name or a
+  value that would corrupt the file. The verb that needed it is `offpeak set`, and the reason it lives here rather
+  than in the verb is the same file's credential: a verb must be able to write one switch without reading, echoing
+  or rewriting anything else in it.
+- The gate's tests (`internal/clientoffpeak/schedule_test.go`, `gate_test.go`, `command_test.go`,
+  `internal/clientenv/set_test.go`, `internal/clientlifecycle/offpeak_gate_test.go`,
+  `internal/clientsync/respawn_offpeak_test.go`, 0 network, rig or seat): the 12-instant boundary table is asserted
+  against the SHELL GATE's own printed bytes, both the JSON and the human form, with the exit code taken through
+  `runReport`; both `OFFPEAK_ONLY` values and the flag-over-environment precedence on all four combinations; the
+  refusal text of each gated verb; and that a refusal happens BEFORE the effect — `up` runs the daemon and not the
+  resume, `compact` never spawns, `respawn` never launches. Writing the env-writer's test found a real defect in it:
+  `Set` on a file whose last line carried no newline left its own assignment unterminated, so the next tool to append
+  to that file would have glued its first line onto ours; the writer now always ends the file with one newline, and a
+  test pins that, the symlink case, the first-assignment rule and the private modes.
+- `README.md`, `.env.sample`, `docs/AGENT-SETUP.md` and the client skill `skills/client/offpeak-gate/SKILL.md`
+  document the gate: the schedule, the three commands, the exit codes, what a refusal means and the three legitimate
+  answers to it, that an unreadable room is not a refusal, and that `offpeak set` is the only way to change the
+  setting — never an editor, `sed` or a shell redirect into the file that holds the credential.
 
 ### Changed
 
