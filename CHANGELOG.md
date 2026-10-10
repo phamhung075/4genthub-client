@@ -65,6 +65,13 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- `skills/client/watch-team-grid/SKILL.md` is folded into `skills/client/watch-team/SKILL.md`, which
+  survives, in the client kind's generic voice. Every lesson of the grid playbook is in it: the
+  per-pane invocation and header, the `grid: <n> seats in <cols> columns` line, the checks to run
+  when the view stays silent, the `--cwd` fact, the compaction ladder with the supervisor restart,
+  the `rig-continue.sh` hook, the zero-size-file restore trap and the backtick warning. The
+  `watch-team-grid` directory is gone, and the skill's own options table carries `--state-root` as
+  `docs/WATCH.md` now does.
 - `docs/WATCH.md` names `--state-root` in its options table: where the session logs are read from
   is the flag, else `$OPENRIG_STATE_ROOT`, else `~/.openrig/state/omp`.
 - `.env.sample` states the one-credential, one-file contract: `AGENTHUB_URL` and `AGENTHUB_TOKEN`
