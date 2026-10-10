@@ -239,6 +239,7 @@ func TestOpenrigDaemonPortPrefersOpenrigPortThenOpenrigURL(t *testing.T) {
 		{"OPENRIG_URL with a path after the port", "", "http://127.0.0.1:9099/api", "9099"},
 		{"OPENRIG_URL with no port", "", "http://127.0.0.1", ""},
 		{"neither variable set is the empty fallback", "", "", ""},
+		{"an OPENRIG_URL whose port is not a number", "", "http://127.0.0.1:abc/", ""},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -252,8 +253,9 @@ func TestOpenrigDaemonPortPrefersOpenrigPortThenOpenrigURL(t *testing.T) {
 }
 
 // TestOpenrigDaemonPIDRefusesWhenNoListenerMatches pins the refusals: with no daemon port ss is never
-// run, a listing with no listener on the port has no pid, and a failed ss has no pid - each answers
-// the function's own zero rather than a guess.
+// run, a listing with no listener on the port has no pid, a line that IS on the port but names no pid
+// has none either, and a failed ss has no pid - each answers the function's own zero rather than a
+// guess.
 func TestOpenrigDaemonPIDRefusesWhenNoListenerMatches(t *testing.T) {
 	original := captureCommand
 	t.Cleanup(func() { captureCommand = original })
@@ -278,6 +280,18 @@ func TestOpenrigDaemonPIDRefusesWhenNoListenerMatches(t *testing.T) {
 		}
 		if got := openrigDaemonPID(); got != 0 {
 			t.Errorf("pid = %d, want 0 (nothing listens on 5555)", got)
+		}
+	})
+
+	t.Run("a listener on the port whose line names no pid", func(t *testing.T) {
+		t.Setenv("OPENRIG_PORT", "5556")
+		t.Setenv("OPENRIG_URL", "")
+		captureCommand = func([]string, time.Duration) (string, int, error) {
+			return "State  Recv-Q Send-Q Local Address:Port Peer Address:Port  Process\n" +
+				"LISTEN 0      4096       127.0.0.1:5556       0.0.0.0:*\n", 0, nil
+		}
+		if got := openrigDaemonPID(); got != 0 {
+			t.Errorf("pid = %d, want 0 (the line on 5556 carries no pid=)", got)
 		}
 	})
 
@@ -318,6 +332,64 @@ func TestProcEnvPathReadsThePathOfTheGivenPid(t *testing.T) {
 	if got := procEnvPath(6002); got != "" {
 		t.Errorf("path = %q, want the empty refusal for a pid whose environ has no PATH", got)
 	}
+}
+
+// TestSeatPathReadsTheDaemonPathAtColdStart pins the REAL resolver behind the seatPath var - the
+// installchecker tests all STUB that var, which is exactly why the resolver itself went unasserted.
+// The order is tmux, then a cold start's daemon (the daemon starts the first tmux server, so the first
+// seat inherits it), then this process: each branch returns the PATH it found AND the source it came
+// from, and with no daemon the process table is not consulted at all.
+func TestSeatPathReadsTheDaemonPathAtColdStart(t *testing.T) {
+	originalCommand, originalRoot := captureCommand, rigProcRoot
+	t.Cleanup(func() { captureCommand, rigProcRoot = originalCommand, originalRoot })
+	root := t.TempDir()
+	rigProcRoot = root
+	writeEnviron(t, root, 5150, "HOME=/home/daemon\x00PATH=/opt/openrig/bin:/usr/bin\x00LANG=C.UTF-8\x00")
+
+	var asked []string
+	captureCommand = func(command []string, _ time.Duration) (string, int, error) {
+		asked = append(asked, strings.Join(command, " "))
+		if command[0] == "tmux" {
+			return "", 1, nil // no tmux server: this is a cold start
+		}
+		return ssLtnpListing, 0, nil
+	}
+
+	t.Run("a cold start with a live daemon: the daemon PATH", func(t *testing.T) {
+		t.Setenv("OPENRIG_PORT", "7433")
+		t.Setenv("OPENRIG_URL", "")
+		t.Setenv("PATH", "/shell/only")
+		path, source := seatPath()
+		if path != "/opt/openrig/bin:/usr/bin" || source != daemonPathSource {
+			t.Errorf("seatPath = (%q, %q), want (%q, %q)", path, source, "/opt/openrig/bin:/usr/bin", daemonPathSource)
+		}
+	})
+
+	t.Run("no daemon at all: this process PATH, and no process table read", func(t *testing.T) {
+		t.Setenv("OPENRIG_PORT", "")
+		t.Setenv("OPENRIG_URL", "")
+		t.Setenv("PATH", "/shell/only")
+		asked = nil
+		path, source := seatPath()
+		if path != "/shell/only" || source != shellPathSource {
+			t.Errorf("seatPath = (%q, %q), want (%q, %q)", path, source, "/shell/only", shellPathSource)
+		}
+		for _, call := range asked {
+			if strings.HasPrefix(call, "ss ") {
+				t.Errorf("ss ran although no daemon port is known: %v", asked)
+			}
+		}
+	})
+
+	t.Run("a tmux server: the tmux global PATH", func(t *testing.T) {
+		captureCommand = func([]string, time.Duration) (string, int, error) {
+			return "PATH=/tmux/global/bin\n", 0, nil
+		}
+		path, source := seatPath()
+		if path != "/tmux/global/bin" || source != tmuxPathSource {
+			t.Errorf("seatPath = (%q, %q), want (%q, %q)", path, source, "/tmux/global/bin", tmuxPathSource)
+		}
+	})
 }
 
 // writeEnviron writes <root>/<pid>/environ, the file procEnvPath reads.
