@@ -283,6 +283,10 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `bridge` names a skipped invalid-name node with the Python's own word: `skipped N seat(s) with invalid
   names`, where the first Go draft said `node(s)`. The deleted test asserted that sentence, so the Go is
   the side that moved rather than the sentence.
+- The delivered skills name no owner room: `skills/client/rig-runtime-switch/SKILL.md` sent a reader on
+  the wait-for-reset path to a launcher named after one room of the owner's own setup. It names the
+  seats bin directory and describes the launchers instead, which is the `<RIG>`-placeholder rule the
+  rest of that file already follows — so `skills/` carries no room name of the owner's.
 
 ### Removed
 

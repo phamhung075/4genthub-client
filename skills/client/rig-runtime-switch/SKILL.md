@@ -81,5 +81,6 @@ usage window with the `resetsAt` it prints (task e7c7d763).
   is superseded by the switch (the snapshot + handover files are the continuity).
 - omp seats are per-token billed and share one `DEEPSEEK_API_KEY`; concurrent sessions can make
   requests fail as if the model were unavailable — diagnose key contention before aborting.
-- Prefer this playbook when the reset is far; the wait-for-reset path is covered by
-  `~/.openrig/agenthub-seats/bin/limit-waiter.py` and `min-team-after-reset.sh`.
+- Prefer this playbook when the reset is far; the wait-for-reset path is covered by the launchers in
+  the seats bin directory — `~/.openrig/agenthub-seats/bin/`, holding the limit waiter and that
+  rig's own after-reset script.
