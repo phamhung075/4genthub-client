@@ -7,7 +7,27 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from agenthub_client import compact as sup
+
+
+@pytest.fixture(autouse=True)
+def the_documented_limits(monkeypatch):
+    """The suite must not move with the operator's ``.env``.
+
+    ``watch`` reads these limits from the environment when it is imported, and the token counts in
+    the tests below only mean what their names say against the DOCUMENTED values: an operator whose
+    ``.env`` says ``COMPACT_WARN_TOKENS=999`` turns "told once, then left alone" into "compacted
+    now", and these tests fail for a reason that is not theirs. The result must be the same in a
+    checkout that sits inside an operator's environment and in a copy outside any repository.
+    """
+    for name, value in (
+        ("COMPACT_LIMIT", 150_000),
+        ("WARN_LIMIT", 250_000),
+        ("HARD_LIMIT", 300_000),
+    ):
+        monkeypatch.setattr(sup.watch, name, value)
 
 
 def seat_log(tmp_path, tokens, age):
