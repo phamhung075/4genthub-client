@@ -3,6 +3,17 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — `4genteam evidence`: the client half of the evidence route
+
+### Added
+- `internal/clientevidence/`: the `evidence` verb — `4genteam evidence --task <id> --base <sha> [--test "<cmd>"] [--url BASE]`. It resolves both SHAs to full 40-hex commits, keeps `git diff --numstat`'s output VERBATIM as the numstat field, and runs the `--test` command (split in-process, never through a shell) to report its exit code and the failing test NAMES it recognises (`go test -v`, pytest's short summary, TAP). The payload is `base_sha`, `head_sha`, `numstat` and the test block and nothing else: no file contents and no command output ever reach the wire, which is the O3 box's privacy rule. `--url` defaults to `$AGENTHUB_URL`; the credential is `$AGENTHUB_TOKEN` as a bearer header, the same path `4genteam feedback` uses, and it is never printed.
+- `cmd/4genteam/main.go`: the verb is registered on the dispatcher (one append, the package's own `Commands()`).
+- Exit codes: `0` stored; `5` when the evidence WAS stored but the test command exited non-zero — a plain `0` would swallow the failure the submission exists to describe, and the remote-failure code would claim the submission failed when it did not; and a `409` reads as a REFUSAL naming the head_sha that already has evidence, on stderr, never as a success.
+
+### Verified
+- `go test ./internal/clientevidence/ -count=1 -v` -> 15 cases ok, including the frozen payload's exact key set, the leak-freedom assertion, the conflict-as-refusal case, and the transport-failure case that names the reason and never the token. `go build ./...` rc 0, `go vet ./internal/clientevidence/... ./cmd/4genteam/...` clean, `gofmt -l` empty, `go test ./... -count=1` -> 19 packages ok, no FAIL.
+- NOT COVERED, named rather than implied: no case talks to the real route. The server half of O3 is being built to the same frozen contract in `agenthub_go`, and this verb's HTTP seam is stubbed in every case, because a push path cannot be exercised against a cloud from the suite.
+
 ## 2026-10-10 (late night) — a refused send is audited even when the policy cannot be read
 
 ### Fixed

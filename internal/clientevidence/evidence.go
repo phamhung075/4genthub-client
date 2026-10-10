@@ -1,0 +1,449 @@
+// Package clientevidence is the `4genteam evidence` verb: the client's half of O3 (NEXT_GEN.md), the
+// write door onto /api/v2/tasks/{id}/evidence.
+//
+// IT SENDS DESCRIPTIONS, NOT CONTENTS. The route stores ONE `evidence_submitted` task event, and the
+// box's privacy rule is that the payload carries only the diff's numstat lines, the two commit SHAs and
+// the test block - never a file's contents and never a command's output. The test command's output is
+// read here, its failing test names are extracted from it, and the output itself is dropped: nothing but
+// base_sha, head_sha, numstat, command, exit_code and the names ever reaches the wire.
+//
+// IT REUSES THE CLIENT'S ONE CREDENTIAL rather than inventing a second one: $AGENTHUB_URL and
+// $AGENTHUB_TOKEN through the same bearer-header path `4genteam feedback` uses, because the route is
+// guarded exactly like the read path (GET .../events) - the ordinary authed wrapper over the caller's
+// token. There is no machine token, and the token is never printed.
+//
+// IT IS NATIVE GO, NOT A SCRIPT: git and the test command are exec'd with an ARGUMENT LIST, the body is
+// marshalled by encoding/json and sent by net/http. The --test line is split in-process (quoting is
+// honoured) instead of being handed to a shell, which is this client's no-shell-strings rule; the price
+// is named in the usage text - pipes, redirects and globs are not interpreted.
+package clientevidence
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+)
+
+// evidencePath is the ONE route this verb writes to, `{id}` being the task the evidence belongs to. It
+// is the write sibling of the read path the client already knows (GET /api/v2/tasks/{id}/events).
+const evidencePath = "/api/v2/tasks/%s/evidence"
+
+// httpTimeout is the client's HTTP convention (the same 60s internal/clientsync and
+// internal/clientfeedback use), named so a reader can see it is a constant rather than a guess.
+const httpTimeout = 60 * time.Second
+
+// exitTestFailed is this verb's own exit code for the one honest half-success: the evidence WAS stored,
+// and the test command it reports on exited non-zero. A plain 0 would swallow the failure the submission
+// exists to describe, and ExitRemote would claim the submission failed when it did not, so the code is
+// distinct and the usage text publishes it.
+const exitTestFailed = 5
+
+// shaPattern is what the wire contract accepts for base_sha and head_sha: a full 40-hex commit SHA.
+var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// evidenceUsage is what `4genteam evidence --help` prints. Like every verb's help it names the verb.
+const evidenceUsage = `usage: 4genteam evidence --task <id> --base <sha> [--test "<cmd>"] [--url BASE]
+
+Submit what a change did, as evidence on a task: one HTTP POST to /api/v2/tasks/{id}/evidence carrying
+the diff's numstat lines, the two commit SHAs, and the test run's exit code and failing test names. NO
+file contents and NO command output are sent - only those fields are stored.
+
+  --task   REQUIRED. The task id this evidence belongs to.
+  --base   REQUIRED. The commit the change is measured from. It is resolved to a full 40-hex SHA.
+  --test   Optional. The test command to run. The line is split into arguments in-process and quotes
+           are honoured, but NO SHELL is used: pipes, redirects and globs are NOT interpreted. Its exit
+           code and the failing test names found in its output are reported; the output stays local.
+           Without it the submission carries an empty command, exit 0 and no failures.
+  --url    Optional. Defaults to $AGENTHUB_URL. The route path is appended.
+
+Credential: $AGENTHUB_TOKEN, sent as a bearer token. It is never printed.
+Exit: 0 stored, 1 the request or the answer failed, 2 usage or a missing value,
+      5 stored, but the test command exited non-zero.
+`
+
+// evidenceClient is the HTTP seam, the same package-variable convention internal/clientfeedback uses: a
+// test replaces it (through evidenceClient.Transport) so the answer is exercised in-process with NO
+// network, because this is a push path and the suite cannot run it against a cloud.
+var evidenceClient = &http.Client{Timeout: httpTimeout}
+
+// gitOutput is the seam over `git`. It returns stdout VERBATIM - the numstat bytes ARE the payload, so
+// the caller must not reformat, trim or re-encode them - and wraps the command's own failure text so a
+// refusal can name what git said. A test replaces it so the verb's argv is asserted without a repository.
+var gitOutput = func(ctx context.Context, args ...string) (string, error) {
+	command := exec.CommandContext(ctx, "git", args...)
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Run(); err != nil {
+		return "", fmt.Errorf("git %s failed: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.String(), nil
+}
+
+// runTestCommand is the seam over the --test command: it returns the command's COMBINED output (stdout
+// and stderr interleaved as the terminal would show them, which is what a failing-test line is printed
+// on) and its exit code. An error means the command could not be STARTED at all, which is not a test
+// result and must not be submitted as one.
+var runTestCommand = func(ctx context.Context, argv []string) (string, int, error) {
+	command := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	var combined bytes.Buffer
+	command.Stdout, command.Stderr = &combined, &combined
+	err := command.Run()
+	if err == nil {
+		return combined.String(), 0, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return combined.String(), exit.ExitCode(), nil
+	}
+	return combined.String(), 0, err
+}
+
+// evidenceTest is the test block. It carries the command LINE as typed, the exit code, and the failing
+// test NAMES - never output text.
+type evidenceTest struct {
+	Command  string   `json:"command"`
+	ExitCode int      `json:"exit_code"`
+	Failed   []string `json:"failed"`
+}
+
+// evidenceBody is the wire payload, field for field as the route's contract fixes it. There is no field
+// for a file's contents and none for a command's output; the numstat text is `git diff --numstat`'s own
+// lines, which name files and count lines rather than quote them.
+type evidenceBody struct {
+	BaseSHA string       `json:"base_sha"`
+	HeadSHA string       `json:"head_sha"`
+	Numstat string       `json:"numstat"`
+	Test    evidenceTest `json:"test"`
+}
+
+// evidenceOptions is the parsed command line, before validation.
+type evidenceOptions struct {
+	task string
+	base string
+	test string
+	url  string
+}
+
+// Commands is what the dispatcher registers from this package: one verb, `evidence`.
+func Commands() []clientcmd.Command {
+	return []clientcmd.Command{evidenceCommand{}}
+}
+
+type evidenceCommand struct{}
+
+func (evidenceCommand) Name() string    { return "evidence" }
+func (evidenceCommand) Summary() string { return "submit evidence for a task" }
+
+// NeedsRig is false: this verb talks to the cloud and to git, never to OpenRig.
+func (evidenceCommand) NeedsRig() bool { return false }
+
+func (evidenceCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+	opts, help, err := parseEvidenceArgs(args)
+	if help {
+		_, _ = io.WriteString(stdout, evidenceUsage)
+		return clientcmd.ExitOK
+	}
+	if err != nil {
+		return evidenceUsageError(stderr, err.Error())
+	}
+	if opts.task == "" {
+		return evidenceUsageError(stderr, "--task is required")
+	}
+	if opts.base == "" {
+		return evidenceUsageError(stderr, "--base is required")
+	}
+
+	// The --test line is parsed BEFORE any git call or dial, so a typo in a quoted line costs nothing.
+	var testArgv []string
+	if opts.test != "" {
+		argv, err := splitCommand(opts.test)
+		if err != nil {
+			return evidenceUsageError(stderr, err.Error())
+		}
+		if len(argv) == 0 {
+			return evidenceUsageError(stderr, "--test names no command")
+		}
+		testArgv = argv
+	}
+
+	baseURL := opts.url
+	if baseURL == "" {
+		baseURL = os.Getenv("AGENTHUB_URL")
+	}
+	if baseURL == "" {
+		return evidenceUsageError(stderr, "no server URL: set AGENTHUB_URL or pass --url")
+	}
+	token := os.Getenv("AGENTHUB_TOKEN")
+	if token == "" {
+		return evidenceUsageError(stderr, "AGENTHUB_TOKEN is not set, so the evidence cannot be authenticated")
+	}
+
+	// Everything below is collected BEFORE the dial, and any refusal here costs no request.
+	baseSHA, err := resolveSHA(ctx, opts.base)
+	if err != nil {
+		return evidenceUsageError(stderr, fmt.Sprintf("--base %s does not name a commit: %v", opts.base, err))
+	}
+	headSHA, err := resolveSHA(ctx, "HEAD")
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam evidence: cannot resolve HEAD: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	// The range is expressed with the RESOLVED SHAs so the text is exactly what the route recomputes for
+	// the SHAs it receives, rather than a string the local refs happen to spell the same way today.
+	numstat, err := gitOutput(ctx, "diff", "--numstat", baseSHA+".."+headSHA)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam evidence: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+
+	test := evidenceTest{Command: opts.test, Failed: []string{}}
+	if len(testArgv) > 0 {
+		output, code, err := runTestCommand(ctx, testArgv)
+		if err != nil {
+			// The command never started, so there is no exit code and no honest evidence to send.
+			fmt.Fprintf(stderr, "4genteam evidence: the test command could not run: %v\n", err)
+			return clientcmd.ExitRemote
+		}
+		test.ExitCode = code
+		test.Failed = extractFailedTests(output)
+	}
+
+	return postEvidence(ctx, baseURL, token, opts.task, evidenceBody{
+		BaseSHA: baseSHA,
+		HeadSHA: headSHA,
+		Numstat: numstat,
+		Test:    test,
+	}, stdout, stderr)
+}
+
+// resolveSHA turns a ref into the full 40-hex commit SHA the wire contract requires. `^{commit}` makes
+// rev-parse follow a tag to its commit and refuse a tree or a blob, and --end-of-options keeps a ref that
+// begins with `-` from being read as a flag.
+func resolveSHA(ctx context.Context, ref string) (string, error) {
+	out, err := gitOutput(ctx, "rev-parse", "--verify", "--end-of-options", ref+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(out)
+	if !shaPattern.MatchString(sha) {
+		return "", fmt.Errorf("git resolved it to %q, which is not a full 40-hex commit SHA", sha)
+	}
+	return sha, nil
+}
+
+// parseEvidenceArgs is this verb's flag grammar, the same one every flag-taking verb here uses: every
+// flag takes a value, an unknown argument is a usage error, and -h/--help stops the parse. A flag whose
+// value is missing leaves the field empty, which the required checks then name.
+func parseEvidenceArgs(args []string) (evidenceOptions, bool, error) {
+	var opts evidenceOptions
+	i := 0
+	value := func() string {
+		if i+1 < len(args) {
+			i++
+			return args[i]
+		}
+		return ""
+	}
+	for ; i < len(args); i++ {
+		switch args[i] {
+		case "-h", "--help":
+			return opts, true, nil
+		case "--task":
+			opts.task = value()
+		case "--base":
+			opts.base = value()
+		case "--test":
+			opts.test = value()
+		case "--url":
+			opts.url = value()
+		default:
+			return opts, false, fmt.Errorf("unknown argument: %s", args[i])
+		}
+	}
+	return opts, false, nil
+}
+
+// splitCommand splits a command LINE into an argument list without a shell. Quotes are honoured ('...'
+// is literal, "..." honours a backslash escape) and the rules are the Unix ones, because the seat's own
+// shell is where the user typed the line. A command that needs a pipe, a redirect or a glob must be
+// wrapped by the caller in a shell it names itself: this verb will not hand a string to sh -c or cmd /c,
+// which is the client's no-shell-strings rule and the reason the same code can run on Windows.
+func splitCommand(line string) ([]string, error) {
+	runes := []rune(line)
+	var args []string
+	var current strings.Builder
+	var quote rune // 0 outside quotes, otherwise '\'' or '"'
+	flush := func() {
+		if current.Len() > 0 {
+			args = append(args, current.String())
+			current.Reset()
+		}
+	}
+	escaped := false
+	for _, r := range runes {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
+		switch {
+		case quote == 0 && unicode.IsSpace(r):
+			flush()
+		case r == '\'' && quote != '"':
+			if quote == '\'' {
+				quote = 0
+			} else {
+				quote = '\''
+			}
+		case r == '"' && quote != '\'':
+			if quote == '"' {
+				quote = 0
+			} else {
+				quote = '"'
+			}
+		case r == '\\' && quote != '\'':
+			escaped = true
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if escaped {
+		// A trailing backslash escapes nothing, so it is kept as itself rather than dropped.
+		current.WriteRune('\\')
+	}
+	if quote != 0 {
+		return nil, errors.New("--test has an unterminated quote")
+	}
+	flush()
+	return args, nil
+}
+
+// failedPatterns are the failing-test lines this verb recognises. Extraction is HEURISTIC by nature -
+// a command's output is free text - so the set is small and written out here instead of guessed at each
+// call site, and every match is a NAME, not a line of output:
+//
+//   - `--- FAIL: TestName (0.00s)`  the `go test -v` shape; the name is the first field.
+//   - `FAILED tests/test_x.py::test_y`  pytest's short summary; the trailing reason is not captured.
+//   - `not ok 1 - a name`  TAP.
+//
+// `go test` WITHOUT -v prints only package-level `FAIL\tpkg\t0.1s` lines, which name no test, so nothing
+// is extracted from them: the caller who wants names passes -v, and the exit code is reported either way.
+var failedPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^\s*--- FAIL:\s*(\S+)`),
+	regexp.MustCompile(`^FAILED\s+(\S+)`),
+	regexp.MustCompile(`^not ok\s+\d+\s*-\s*(.+?)\s*$`),
+}
+
+// extractFailedTests pulls the failing test names out of a command's output, in the order the command
+// printed them and once each. It never returns nil, so the wire always carries a list.
+func extractFailedTests(output string) []string {
+	seen := map[string]bool{}
+	names := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		for _, pattern := range failedPatterns {
+			match := pattern.FindStringSubmatch(line)
+			if match == nil {
+				continue
+			}
+			name := strings.TrimSpace(match[1])
+			if name == "" || seen[name] {
+				break
+			}
+			seen[name] = true
+			names = append(names, name)
+			break
+		}
+	}
+	return names
+}
+
+// postEvidence sends the submission and relays the answer honestly. A 2xx relays the created event to
+// stdout; a 409 reads as a REFUSAL naming the head_sha that already has evidence, never as a success;
+// any other non-2xx is a failure with the status named. The token is in the header and nowhere else.
+func postEvidence(ctx context.Context, baseURL, token, taskID string, body evidenceBody, stdout, stderr io.Writer) int {
+	route := strings.TrimRight(baseURL, "/") + fmt.Sprintf(evidencePath, url.PathEscape(taskID))
+	payload, err := json.Marshal(body)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam evidence: cannot encode the submission: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, route, bytes.NewReader(payload))
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam evidence: the request to %s failed: %v\n", route, err)
+		return clientcmd.ExitRemote
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := evidenceClient.Do(req)
+	if err != nil {
+		// The REASON is named, as `4genteam feedback` names it: the text carries the URL and the
+		// transport's round trip, and the credential is in the header, so it cannot be in it.
+		fmt.Fprintf(stderr, "4genteam evidence: the request to %s failed: %v\n", route, err)
+		return clientcmd.ExitRemote
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	answer, _ := io.ReadAll(resp.Body)
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
+		_, _ = stdout.Write(answer)
+		_, _ = io.WriteString(stdout, "\n")
+		if body.Test.ExitCode != 0 {
+			fmt.Fprintf(stderr, "4genteam evidence: stored, but the test command exited %d%s\n",
+				body.Test.ExitCode, failingSuffix(body.Test.Failed))
+			return exitTestFailed
+		}
+		return clientcmd.ExitOK
+	case resp.StatusCode == http.StatusConflict:
+		fmt.Fprintf(stderr, "4genteam evidence: refused (HTTP 409): head_sha %s already has evidence on this "+
+			"task, so nothing was stored; the earlier submission stands\n", body.HeadSHA)
+		relayRefusal(stderr, answer)
+		return clientcmd.ExitRemote
+	default:
+		fmt.Fprintf(stderr, "4genteam evidence: the server answered HTTP %d\n", resp.StatusCode)
+		relayRefusal(stderr, answer)
+		return clientcmd.ExitRemote
+	}
+}
+
+// relayRefusal writes the server's own words about a refusal to STDERR. It is deliberately not stdout:
+// stdout carries the stored event on success, and a caller that read a refused answer there would take
+// the refusal for a stored submission.
+func relayRefusal(stderr io.Writer, answer []byte) {
+	text := strings.TrimSpace(string(answer))
+	if text == "" {
+		return
+	}
+	_, _ = io.WriteString(stderr, "4genteam evidence: the server said: "+text+"\n")
+}
+
+// failingSuffix names the extracted failures beside the exit code, or nothing when the command's output
+// named none.
+func failingSuffix(failed []string) string {
+	if len(failed) == 0 {
+		return ""
+	}
+	return "; failing: " + strings.Join(failed, ", ")
+}
+
+// evidenceUsageError is the ONE shape of a usage refusal: a line naming what is wrong, then the one line
+// of usage, on stderr, at exit 2.
+func evidenceUsageError(stderr io.Writer, message string) int {
+	fmt.Fprintf(stderr, "4genteam evidence: %s\n", message)
+	_, _ = io.WriteString(stderr, "usage: 4genteam evidence --task <id> --base <sha> [--test \"<cmd>\"] [--url BASE]\n")
+	return clientcmd.ExitUsage
+}
