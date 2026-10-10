@@ -142,6 +142,15 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (the same sha256), as the first skill of the tree's client kind. `README.md` and the two entries
   above now name the new path.
 
+### Removed
+
+- The Python client is gone: `pyproject.toml`, `src/agenthub_client/` (11 modules and
+  `seat_feedback.sh`) and `tests/` (10 test modules and the `scan_cases.json` fixture) are deleted, and
+  `.gitignore` drops its Python-era entries (`.venv/`, `build/`, `*.egg-info/`, `__pycache__/`,
+  `.pytest_cache/`). Every verb the Python client offered is served by the Go binary, and
+  `rust/forcecompact` stays: it was always a self-contained module. The fixture the Go test owns,
+  `internal/secretscan/testdata/scan_cases.json`, is untouched.
+
 ### Fixed
 
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the three `inputs` examples pass the `--rig` the

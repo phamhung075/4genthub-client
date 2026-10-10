@@ -1,8 +1,3 @@
-.venv/
-build/
-*.egg-info/
-__pycache__/
-.pytest_cache/
 rust/*/target/
 .env
 logs/
