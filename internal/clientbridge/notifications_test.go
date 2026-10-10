@@ -32,7 +32,7 @@ func decodeFrame(t *testing.T, raw []byte) (map[string]any, map[string]any) {
 }
 
 // TestHumanDestinationAddressesTheRig pins the address form the daemon's store really uses, because
-// the whole read depends on it: human@<rig name> (measured: human@kernel, human@4genthub-min).
+// the whole read depends on it: human@<rig name> (measured against a live store, one entry per rig).
 func TestHumanDestinationAddressesTheRig(t *testing.T) {
 	if got := HumanDestination("room-a"); got != "human@room-a" {
 		t.Fatalf("HumanDestination(room-a) = %q, want human@room-a", got)

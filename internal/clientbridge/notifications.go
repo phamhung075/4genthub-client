@@ -38,7 +38,8 @@ import (
 // an ADDITIONAL offline target, so sending metadata would be a way to address someone else's inbox.
 const (
 	// humanDestinationPrefix addresses one rig's human. The daemon's own destination form is
-	// "human@<rig name>": the live store carries human@kernel and human@4genthub-min.
+	// "human@<rig name>" - measured against a live store, which carries one such destination per rig,
+	// each naming the rig it belongs to.
 	humanDestinationPrefix = "human@"
 	// notifyKind is the free-form kind the payload documents, for example 'notice'.
 	notifyKind = "notice"

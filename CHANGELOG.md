@@ -350,6 +350,10 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Fixed
 
+- Two source comments in `internal/clientbridge` no longer name the owner's own rigs. They recorded a live
+  store's destinations as `human@kernel` and `human@4genthub-min`, and this repository is public: the
+  measurement survives as what it measured - the daemon addresses one `human@<rig name>` destination per rig,
+  each naming the rig it belongs to - with no rig named. Comments only; no behaviour and no test changed.
 - `policy apply` writes only the seats whose runtime it serves (`internal/clientpolicy`): a seat of another
   runtime is refused BY NAME, and the whole set is decided before the first write. The document the verb
   renders is an omp config and the state root it resolves defaults to `~/.openrig/state/omp`, so on a mixed
