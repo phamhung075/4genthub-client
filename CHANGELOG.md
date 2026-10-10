@@ -3,6 +3,30 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — `failing` beats a live process in `doctor`'s row verification
+
+### Fixed
+- `internal/clientservices/services.go` (`verifyRow`): the recorded-failing check now sits ahead of the
+  liveness switch, as the architect ruled on 2026-10-11 (3fa2125d): the precedence is stopped -> failing ->
+  silent -> running, and `failing` beats a LIVE process. rigd counted the deaths inside its window, and a fresh
+  heartbeat does not undo a crash loop — before this, a crash-looping child read `running` for the whole
+  interval in which its heartbeat was fresh, so 7.5's exit condition ("every row is `running`") could be met
+  while the row was in fact being retried at the cap. The dead-process case is unchanged: a dead-and-failing
+  row still reads `failing`, and a dead row with no recorded failure still reads `stopped`. This was the one
+  the reviewer's gate to the rigd slice named (GATE-39e51529-rigd-phase1-go-half, minor m1), and the ruling
+  document was already in main while the code did not match it.
+
+### Tests
+- `internal/clientservices/services_test.go`: the second half of `TestFailingIsDecidableOnlyByRigd` asserted
+  the retiring reading — a live, beating child is `running` even while rigd records it as having failed. That
+  expectation was retired with the ruling that changed the semantics, and now asserts `failing` with the
+  restart count kept. It was not re-pinned to keep a green run.
+- **RED FIRST, quoted:** this seat's run before the fix — `services_test.go:215: row = {Rig:demo
+  Safeguard:compact State:running PID:77 StartedAt:2026-10-11T11:00:00Z Restarts:3 LastBeatAt:2026-10-11T11:59:59Z
+  AgeS:1}, want failing: rigd counted the deaths, and failing beats a live process`.
+- Result, this seat's own run: `gofmt -l` empty on both files; `go build ./...` rc 0; the case ok; the whole
+  `internal/clientservices` package ok.
+
 ## 2026-10-11 — `4genteam seat reseat` and `4genteam send`
 
 ### Added

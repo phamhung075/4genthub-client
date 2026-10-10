@@ -339,6 +339,18 @@ func verifyRow(env Env, safeguard, rig string) Health {
 		row.PID = beat.PID
 	}
 	live := Live(Pattern(safeguard, rig))
+	// 7.2, as ruled 2026-10-11 (architect 3fa2125d): the precedence is stopped -> failing -> silent ->
+	// running, and `failing` BEATS A LIVE PROCESS. rigd counted the deaths inside its window, and a fresh
+	// heartbeat does not undo a crash loop - so a child rigd calls failing is reported failing here even
+	// while it is momentarily alive, rather than reading `running` until the next death. The dead case
+	// keeps its own branch below, where a dead-and-failing row still reads failing.
+	if len(live) > 0 {
+		if recorded, ok := env.recorded(safeguard, rig); ok && recorded.State == Failing {
+			row.State = Failing
+			row.PID = live[0]
+			return row
+		}
+	}
 	switch {
 	case len(live) == 0:
 		// The PROCESS decides, and a dead process is stopped whatever its heartbeat says. `failing` is

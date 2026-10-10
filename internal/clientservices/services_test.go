@@ -202,13 +202,17 @@ func TestFailingIsDecidableOnlyByRigd(t *testing.T) {
 		t.Errorf("row = %+v, want the failing state and rigd's own fields", got)
 	}
 
-	// A live, beating child is RUNNING even while rigd records it as having failed before: the process and
-	// the heartbeat are judged fresh, and `failing` is what a dead-and-retrying child is.
+	// THE RULING OF 2026-10-11 (architect 3fa2125d, board row 72dac9f9, wired as qitem-20261010234706):
+	// `failing` BEATS a live process, so the precedence is stopped -> failing -> silent -> running. A child
+	// rigd has counted three deaths for inside the window reads failing even while its heartbeat is fresh:
+	// it is in a crash loop, and rigd is the only seat that can count that. The expectation that stood here
+	// before - a live, beating child is RUNNING even while rigd records it as having failed - was RETIRED
+	// with the ruling that changed it, not re-pinned to keep a green run.
 	f.live[Pattern(Compact, "demo")] = []int{77}
 	f.beat(Compact, "demo", time.Second, 77)
 	got = f.row(Compact, "demo", env)
-	if got.State != Running {
-		t.Errorf("row = %+v, want running: it is alive and beating now", got)
+	if got.State != Failing {
+		t.Errorf("row = %+v, want failing: rigd counted the deaths, and failing beats a live process", got)
 	}
 	if got.Restarts != 3 {
 		t.Errorf("row = %+v, want the restart count kept", got)
