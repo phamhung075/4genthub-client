@@ -3,6 +3,7 @@ package clientbridge
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -260,5 +261,79 @@ func TestPruneNotifiedKeepsTheNewest(t *testing.T) {
 	}
 	if _, kept := sent["room-a/old"]; kept {
 		t.Fatal("the oldest entry was kept and a newer one dropped")
+	}
+}
+
+// TestNotifyRedactsAKnownSecretBeforeItLeavesTheMachine: this path is an EGRESS, like the report's, and
+// it was the one path that copied a row's text into the cloud raw. The row here quotes a value the
+// bridge holds, and what must go out is the marker naming the VARIABLE, never the value: the row lives
+// in the local daemon's queue, the frame is stored in the cloud's notification store, and the receiving
+// route does not scan either.
+func TestNotifyRedactsAKnownSecretBeforeItLeavesTheMachine(t *testing.T) {
+	const value = "demo-secret-value-0123456789"
+	f := newFixture(t)
+	f.bridge.Known = map[string]string{"DEMO_TOKEN": value}
+	f.queueJSON = `[{"qitemId":"qitem-secret","state":"pending","destinationSession":"human@room-a",` +
+		`"sourceSession":"room-a-lead@room-a",` +
+		`"summary":"the token is ` + value + ` - rotate it"}]`
+
+	f.bridge.Cycle(context.Background(), nil)
+
+	if len(f.frames) != 1 {
+		t.Fatalf("posted %d frames, want exactly 1", len(f.frames))
+	}
+	_, data := decodeFrame(t, f.frames[0])
+	message, _ := data["message"].(string)
+	if strings.Contains(message, value) {
+		t.Fatalf("the notification carried the secret value itself: %q", message)
+	}
+	if !strings.Contains(message, "[REDACTED:DEMO_TOKEN]") {
+		t.Errorf("the marker naming the variable is missing, so nothing says what was removed: %q", message)
+	}
+	if !strings.Contains(message, "rotate it") {
+		t.Errorf("the redaction took the rest of the message with it: %q", message)
+	}
+}
+
+// TestNotifyDropsARowTheCloudWouldRefuseForever: a 4xx naming the REQUEST will be answered the same way
+// on every cycle, so posting it again is not a retry - it is the same refusal once per cycle, forever.
+// The row is recorded as handled and the note carries the status, so the drop is visible, not silent.
+func TestNotifyDropsARowTheCloudWouldRefuseForever(t *testing.T) {
+	f := newFixture(t)
+	f.queueJSON = fixtureHumanQueue
+	f.notifySteps = []step{{code: 422, answer: []byte(`{"detail":"the payload is not a notification"}`)}}
+
+	f.bridge.Cycle(context.Background(), nil)
+
+	if len(f.frames) != 1 {
+		t.Fatalf("posted %d frames, want 1 attempt", len(f.frames))
+	}
+	key := "room-a/qitem-20261010120000-aaaa1111"
+	if got := ReadNotifiedState(f.statePath)[key]; got == "" {
+		t.Fatal("a terminal refusal was not recorded, so the same 4xx would be posted on every cycle forever")
+	}
+	if !strings.Contains(f.logged(), "HTTP 422") || !strings.Contains(f.logged(), "not retried") {
+		t.Errorf("the record does not say why the row was dropped:\n%s", f.logged())
+	}
+
+	f.clock.plusSeconds(60)
+	f.bridge.Cycle(context.Background(), nil)
+	if len(f.frames) != 1 {
+		t.Fatalf("the terminally refused row was posted again: %d frames over two cycles, want 1", len(f.frames))
+	}
+}
+
+// TestNotifyTerminalTellsRetryableFromFinal pins the classification, because it is what decides whether
+// a human's message is thrown away: only an answer that names THIS request is final.
+func TestNotifyTerminalTellsRetryableFromFinal(t *testing.T) {
+	for _, status := range []int{400, 404, 409, 410, 413, 415, 422} {
+		if !notifyTerminal(status) {
+			t.Errorf("HTTP %d names the request itself, so it must be final", status)
+		}
+	}
+	for _, status := range []int{100, 200, 204, 301, 401, 403, 408, 429, 500, 502, 503} {
+		if notifyTerminal(status) {
+			t.Errorf("HTTP %d can be answered differently later, so it must stay retryable", status)
+		}
 	}
 }

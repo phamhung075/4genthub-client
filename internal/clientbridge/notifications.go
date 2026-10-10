@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
 
 // D3 - THE PRODUCER HALF OF AGENT-TO-HUMAN NOTIFICATIONS.
@@ -122,8 +123,12 @@ func HumanRowFrom(item any, rigName string) (HumanRow, bool) {
 
 // NotificationBody builds the frame for one human row. It returns false when the row carries no text
 // to show: the consumer drops a frame with an empty message, so posting one would be a silent no-op.
-func NotificationBody(row HumanRow) ([]byte, bool) {
-	text := notifyText(row)
+//
+// known is the bridge's secretscan.KnownValuesFromEnv map, and it is here because THIS PATH IS AN
+// EGRESS: the report redacts its seat detail with the same map (payload.go, secretscan.Redact), and the
+// notification was the one path that copied the row's text into the cloud's notification store raw.
+func NotificationBody(row HumanRow, known map[string]string) ([]byte, bool) {
+	text := notifyText(row, known)
 	if text == "" {
 		return nil, false
 	}
@@ -155,8 +160,14 @@ func NotificationBody(row HumanRow) ([]byte, bool) {
 }
 
 // notifyText is what the human reads: the row's summary when it has one, otherwise the first non-empty
-// line of its body, bounded to notifyMessageLimit.
-func notifyText(row HumanRow) string {
+// line of its body, REDACTED, and only then bounded to notifyMessageLimit.
+//
+// The order is load-bearing. Redact replaces a known value with a marker that names the variable, so a
+// bound applied first could cut a secret in half and leave the half it did not replace; applying it
+// after the redaction means the cut can only ever land on already-clean text. Redact fails closed - it
+// answers an empty text when it cannot finish - so a scanner failure posts nothing and the row is
+// announced once it has text again, rather than being posted raw.
+func notifyText(row HumanRow, known map[string]string) string {
 	text := strings.TrimSpace(row.Summary)
 	if text == "" {
 		for _, line := range strings.Split(row.BodyText, "\n") {
@@ -166,6 +177,7 @@ func notifyText(row HumanRow) string {
 			}
 		}
 	}
+	text, _ = secretscan.Redact(text, known)
 	if len(text) > notifyMessageLimit {
 		text = strings.TrimRight(text[:notifyMessageLimit], " ") + "..."
 	}
@@ -238,8 +250,11 @@ func (b *Bridge) humanRows(rig *clientcmd.Rig, rigName string) []HumanRow {
 // notifyHumans posts one frame for each human-addressed row that has not been posted yet.
 //
 // It NEVER fails the cycle. The report is this bridge's primary job, and a notification that could not
-// go out is retried on the next cycle - an id is recorded only after the cloud accepted it, so a
-// refused or unreachable post is not silently dropped and not silently counted as delivered.
+// go out is retried on the next cycle: an id is recorded only after the cloud ACCEPTED the frame, or
+// after it refused the frame in a way no further attempt can change (notifyTerminal) - so a transport
+// failure or a 5xx is neither silently dropped nor counted as delivered, while a row the cloud would
+// refuse identically forever is not posted again on every cycle. The record is therefore "handled",
+// not strictly "delivered", and the note beside a terminal refusal carries the status and the answer.
 func (b *Bridge) notifyHumans(rig *clientcmd.Rig) {
 	if b.Notify == nil {
 		return
@@ -257,7 +272,7 @@ func (b *Bridge) notifyHumans(rig *clientcmd.Rig) {
 			if _, sent := b.notified[key]; sent {
 				continue
 			}
-			body, ok := NotificationBody(row)
+			body, ok := NotificationBody(row, b.Known)
 			if !ok {
 				b.note("notify-text:"+key, "the row carries no text to notify with yet")
 				continue
@@ -266,6 +281,16 @@ func (b *Bridge) notifyHumans(rig *clientcmd.Rig) {
 			switch {
 			case err != nil:
 				b.note("notify", fmt.Sprintf("the notification transport did not answer: %v", err))
+			case notifyTerminal(status):
+				// The cloud will refuse THIS row identically on every cycle, so retrying it is not a
+				// retry: it is the same 4xx posted forever, once per cycle, into the record and into
+				// the cloud's log. The id is recorded like a delivered one so the sweep moves on, and
+				// the note carries the answer, which is what a reader needs to see what was dropped.
+				b.notified[key] = b.clock().UTC().Format(time.RFC3339)
+				changed = true
+				b.note("notify:"+key, fmt.Sprintf(
+					"the cloud refused the notification with HTTP %d and would refuse it again, so it is not retried: %s",
+					status, TrimForReport(answer)))
 			case status < 200 || status > 299:
 				b.note("notify:"+key, fmt.Sprintf(
 					"the cloud refused the notification with HTTP %d: %s", status, TrimForReport(answer)))
@@ -280,6 +305,26 @@ func (b *Bridge) notifyHumans(rig *clientcmd.Rig) {
 		pruneNotified(b.notified, notifyStateLimit)
 		WriteSyncState(b.StatePath, b.MachineID, b.state, b.notified, b.Note)
 	}
+}
+
+// notifyTerminal reports whether an answer means THIS request will never be accepted: a 4xx other than
+// the ones that ask for another attempt.
+//
+// The three exceptions are the point of the rule. 408 (the request timed out) and 429 (too many
+// requests) are the cloud asking for the same request again, and 401/403 name a CREDENTIAL problem:
+// that is the bridge's own token, the report path fails loudly on it, and a human's row must not be
+// thrown away in the meantime because the token was wrong for an hour - the row is delivered once the
+// token is fixed. Everything else in the 4xx range names the REQUEST, and this request will not change:
+// the same post from the same row would earn the same answer on every cycle.
+func notifyTerminal(status int) bool {
+	if status < 400 || status > 499 {
+		return false
+	}
+	switch status {
+	case 401, 403, 408, 429:
+		return false
+	}
+	return true
 }
 
 // pruneNotified keeps the newest notifyStateLimit entries. The values are RFC3339 stamps, so the
