@@ -164,7 +164,7 @@ func TestALongLineIsCutAtTheWidthButTheOtherLinesStay(t *testing.T) {
 	}
 }
 
-func TestPrettyIndentsJSONAndKeepsTheTrailerLineAsItIs(t *testing.T) {
+func TestPrettyIndentsJSONFollowedByATrailer(t *testing.T) {
 	shown := pretty(`{"a":[1,{"b":2}]}` + "\n\n" + "Wall time: 0.1 seconds")
 	if !strings.HasPrefix(shown, "{\n  \"a\": [\n    1,") {
 		t.Errorf("the JSON was not indented:\n%s", shown)
@@ -174,7 +174,7 @@ func TestPrettyIndentsJSONAndKeepsTheTrailerLineAsItIs(t *testing.T) {
 	}
 }
 
-func TestPrettyIndentsJSONCutOffByTheLogAndKeepsTheTruncationNotice(t *testing.T) {
+func TestPrettyIndentsJSONCutOffByTheLog(t *testing.T) {
 	shown := pretty(`{"a":[1,{"b":"x, {y}"},{"k":"cut` + "\n\n" + "[Some lines truncated]")
 	if !strings.Contains(shown, `"b":"x, {y}"`) {
 		t.Errorf("a comma or brace inside a string was broken as structure:\n%s", shown)
@@ -187,7 +187,7 @@ func TestPrettyIndentsJSONCutOffByTheLogAndKeepsTheTruncationNotice(t *testing.T
 	}
 }
 
-func TestPrettyLeavesProseThatIsNotJSONAlone(t *testing.T) {
+func TestPrettyLeavesProseAlone(t *testing.T) {
 	const prose = `plain {"a":1}`
 	if got := pretty(prose); got != prose {
 		t.Errorf("pretty(%q) = %q, want the prose returned unchanged", prose, got)

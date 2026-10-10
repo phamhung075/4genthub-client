@@ -202,9 +202,10 @@ const ssLtnpListing = "State  Recv-Q Send-Q Local Address:Port Peer Address:Port
 	"LISTEN 0      4096           [::]:7433          [::]:*       users:((\"openrig\",pid=5150,fd=9))\n" +
 	"LISTEN 0      4096       127.0.0.1:7434       0.0.0.0:*      users:((\"openrig\",pid=6001,fd=8))\n"
 
-// TestOpenrigDaemonPIDRunsSsLtnp pins the command openrigDaemonPID runs to list listening sockets:
-// exactly `ss -ltnp`, and the pid it picks from that text is the OpenRig process on the daemon port.
-func TestOpenrigDaemonPIDRunsSsLtnp(t *testing.T) {
+// TestOpenrigDaemonPIDParsesSsOutput pins the command openrigDaemonPID runs to list listening
+// sockets: exactly `ss -ltnp`, and the pid it picks from that text is the OpenRig process on the
+// daemon port.
+func TestOpenrigDaemonPIDParsesSsOutput(t *testing.T) {
 	original := captureCommand
 	t.Cleanup(func() { captureCommand = original })
 
