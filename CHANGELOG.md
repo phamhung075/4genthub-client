@@ -40,8 +40,13 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `4genteam sync offline-install` is implemented in Go (`internal/clientsync`): it reads a
   materialized bundle's `rig.yaml` and copies each member's pinned `policy.json`/`pinned.json` into
   `<home>/.openrig/agenthub-seats/<room>/<member>/`, which is the one place `seatcheck` looks, and
-  refuses a policy that names another seat instead of handing a seat the wrong links. `respawn` is
-  the remaining verb Python's argparse registers that this build still refuses by name with exit 3.
+  refuses a policy that names another seat instead of handing a seat the wrong links.
+- `4genteam sync respawn` is implemented in Go (`41335a4`, `internal/clientsync`): it launches a
+  fresh occupant only for a seat that holds the dead reading for `--after-seconds` (default 30s),
+  and it decides on the seat's own state rather than on `rig seat launch`'s exit code, because a
+  launch can start the occupant and still exit non-zero. A live or an unknown seat is refused
+  without launching anything. `sync watch` is the one declared verb Python's argparse registers
+  nowhere, so this build still refuses it by name with exit 3 instead of inventing a contract.
 - `skills/`: this repository's skills tree, in four kinds — `share/<skill>` for every seat of every
   room, `rooms/<room>/<skill>` for one room, `rooms/<room>/<seat>/<skill>` for one seat, and
   `client/<skill>` for an LLM running the client. A directory holding `SKILL.md` is a skill; a
@@ -51,6 +56,8 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- `docs/WATCH.md` names `--state-root` in its options table: where the session logs are read from
+  is the flag, else `$OPENRIG_STATE_ROOT`, else `~/.openrig/state/omp`.
 - `.env.sample` states the one-credential, one-file contract: `AGENTHUB_URL` and `AGENTHUB_TOKEN`
   in `~/.config/4genthub/.env`, with a variable already in the environment winning over the file.
   It carries no token value, and every key it lists is one the client reads.
