@@ -7,7 +7,7 @@ description: Continue or spawn an agent team — any OpenRig rig, any project �
 
 Two ways to run a team, and the two are not exclusive:
 
-- **An OpenRig rig** — the durable form: seats in tmux, state in the daemon, survives restarts and resumes each seat's own session. Continue one with `rig-continue.sh <rig>`; spawn a new one from a rig spec. See the two sections below.
+- **An OpenRig rig** — the durable form: seats in tmux, state in the daemon, survives restarts and resumes each seat's own session. Continue one with `4genteam continue <rig>`; spawn a new one from a rig spec. See the two sections below.
 - **An in-session Claude Code team** — the Proxy Pattern below: teammates spawned from the current session, sharing its terminal.
 
 **Only the in-session team below needs the lead to fetch each agent's configuration and inject it into the teammate's prompt** — a Claude Code teammate spawned by the `Task` tool does not inherit MCP connections. **A rig is the other case and needs none of that**: OpenRig renders each seat's own `agent.yaml` and guidance at launch, and a seat has its own MCP whenever its render carries mcp blocks — measured 2026-10-10 on `<RIG>`, where a seat resolves `mcp__agenthub_http__*` and `mcp__deepseek__*`. That is why a seat's own `AGENTS.md` tells it to drive `manage_task` itself instead of waiting for a lead to hand it configuration.
@@ -17,15 +17,17 @@ Two ways to run a team, and the two are not exclusive:
 An OpenRig rig *is* a team: seats in tmux, a snapshot in the daemon, a queue. Continuing one is one command, and nothing in it is project- or team-specific:
 
 ```bash
-~/.openrig/bin/rig-continue.sh <rig> [brief-file]
+4genteam continue <rig> [brief-file]
 ```
 
-- no arguments — lists every rig that can be continued, plus the briefs on disk
-- `<rig>` — restores it (`rig up <rig> --existing`: latest snapshot, every seat resumes its own session), then briefs its seats
-- `--no-brief` restore only; `--all` restore and brief every stopped rig that has a brief
+- no arguments — lists the rigs and the briefs on disk
+- `<rig>` — restores it from its latest snapshot (every seat resumes its own session), then briefs its seats
+- `--no-brief` restore only; `--all` restores and briefs every stopped rig that has a brief, and exits non-zero when a rig it visited is not up
 - seats are discovered from tmux at run time (`<rig>-<seat>@<rig>`, OpenRig's session naming) — no seat list is hardcoded, so a 1-seat rig and a 20-seat rig both work
-- brief resolution: explicit path, else `~/.openrig/briefs/<rig>.txt`, else nothing is sent
+- brief resolution: explicit path, else `~/.openrig/briefs/<rig>.txt`, else `~/.openrig/briefs/<rig>/<seat>.txt` for that seat alone, else nothing is sent
+- the DeepSeek peak gate runs before the restore; `--allow-peak` skips it for this run
 - log: `~/.openrig/logs/rig-continue.log`
+- the standing watcher is `4genteam watchdog <rig> --watch`: when a rig the daemon expects to be running has no tmux sessions, it runs the same restore
 
 ### Writing a brief
 
@@ -40,7 +42,7 @@ One file per rig: `~/.openrig/briefs/<rig>.txt`. It is sent verbatim to every se
 1. Write a rig spec: `pods[].members[]` with `id`, `agent_ref`, `runtime`, `model`, `cwd`, `permission_policy`, plus `edges` (`delegates_to`, `collaborates_with`, `escalates_to`). Working examples for two runtimes: `~/.openrig/agenthub-seats/<rig>/rig/rig-omp.yaml` (omp/DeepSeek) and `rig-claude.yaml` (claude-code).
 2. `rig up <spec.yaml> --cwd <project-root>`; a one-seat rig needs no spec at all: `rig create <name>`.
 3. Resize in place: `rig grow <rig-id> <members...>`, `rig add`, `rig shrink`, `rig remove`.
-4. Write `~/.openrig/briefs/<rig>.txt` and run `rig-continue.sh <rig>` to brief it — the same command as continuing an existing team.
+4. Write `~/.openrig/briefs/<rig>.txt` and run `4genteam continue <rig>` to brief it — the same command as continuing an existing team.
 
 ### Watching a team (the standing choice, 2026-10-07)
 
@@ -50,10 +52,10 @@ Always watch an omp seat team with the grid script, not with bare tiles:
 4genteam watch --rig <rig>
 ```
 
-- `4genteam` is the console script of the `agenthub_client` package (the repo root is resolved from the install, so it runs from anywhere); `4genteam up <rig>` does this wall as part of the full lifecycle. `rig-continue.sh` logs `watch wall skipped (herdr or 4genteam missing)` and carries on when either is absent.
+- `4genteam` is this repository's Go binary (`go build -o ~/.local/bin/4genteam ./cmd/4genteam`), so it runs from anywhere once it is on `PATH`; `4genteam up <rig>` opens this wall as part of the full lifecycle. `4genteam continue` logs `watch wall skipped (herdr or 4genteam missing)` and carries on when either is absent; `RIG_CONTINUE_WATCH=0` turns the wall off for a headless run.
 
 - One herdr workspace `<rig> grid`, one pane per seat, 2 columns, each pane a live feed of that seat's tool calls, reasoning (`~ think`), replies (`▸ say`) and incoming messages (`◂ in`).
-- `rig-continue.sh <rig>` already runs it at the end (skip with `RIG_CONTINUE_WATCH=0`). After `rig up` or a runtime switch run it yourself. It never talks to a seat. It closes the rig's earlier grid and lead workspaces first, so a relaunch always gives the same single wall: the seat name, model and token meter in each pane, 2 columns, `--back 40 --width 200 --lines 60 --detail`.
+- `4genteam continue <rig>` already runs it at the end (skip with `RIG_CONTINUE_WATCH=0`). After `rig up` or a runtime switch run it yourself. It never talks to a seat. It closes the rig's earlier grid and lead workspaces first, so a relaunch always gives the same single wall: the seat name, model and token meter in each pane, 2 columns, `--back 40 --width 200 --lines 60 --detail`.
 - `rig terminal open <rig>` (one raw `tmux attach` tile per seat) is the secondary view: use it for a seat's own screen, not as the default.
 - omp and claude-code seats have a session log (a claude-code seat shows its model and tokens too). A runtime with no log reader yet (Codex, agy) keeps its pane and header but shows no events.
 - Full reference: `docs/WATCH.md`.
@@ -68,7 +70,7 @@ Always watch an omp seat team with the grid script, not with bare tiles:
 
 ## When to Use
 
-- A team (rig) is down and must continue its work — any rig, any project: `rig-continue.sh <rig>`
+- A team (rig) is down and must continue its work — any rig, any project: `4genteam continue <rig>`
 - A new team is needed for a new project: "Spawning a new team" above
 - In-session parallel work across multiple files, or several agents for efficiency: Proxy Pattern below
 
@@ -138,7 +140,8 @@ IMPORTANT: Do NOT skip step 4 (user confirmation) — it is mandatory.
 | Documentation | documentation-agent | `documentation-agent` |
 | Research | deep-research-agent | `deep-research-agent` |
 
-Full list: see `.claude/agents/` (30+ agent types available)
+The agent types available are the ones your own Claude Code installation defines; this client ships no
+agent library.
 
 ### 5. Monitor
 - Wait for teammate messages

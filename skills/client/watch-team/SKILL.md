@@ -116,7 +116,7 @@ out first** — a `/tmp` copy with its `(mtime, ctime)` pair, or a stash patch. 
 uncommitted, the recovery source is the staged or dangling blob, never HEAD**, and a candidate must
 be confirmed by blob id before it is trusted.
 
-`rig-continue.sh <RIG>` already runs `watch` at the end of every restore, so a restored room comes
+`4genteam continue <RIG>` already runs `watch` at the end of every restore, so a restored room comes
 back watched; skip that with `RIG_CONTINUE_WATCH=0`.
 
 ## Rules

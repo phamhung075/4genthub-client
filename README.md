@@ -66,6 +66,11 @@ go test ./...                              # the client's own tests; no server, 
 install -m 0755 4genteam ~/.local/bin/
 ```
 
+`scripts/build.sh` does all of that in one step: `go vet`, `go test`, the build, an atomic install of
+`~/.local/bin/4genteam`, and, when the checkout has a `.env`, a copy of it over `~/.config/4genthub/.env`
+(mode 600). The file edited in the checkout is therefore the file in effect after a build; a checkout
+without a `.env` leaves the installed file alone. `--no-test` skips `go test`.
+
 The seat-side checker is a **second** binary, built from this repository's `cmd/seatcheck` and put
 where the seats find it:
 
@@ -166,7 +171,7 @@ Every key lives in `~/.config/4genthub/.env` or the environment; only the first 
 | `OFFPEAK_UTC` | pins the instant the schedule is read at (`YYYY-MM-DD HH:MM`, UTC) — for a test, or a machine whose clock you do not trust |
 | `DEEPSEEK_HOLIDAYS` | a file of `YYYY-MM-DD` dates, one per line, that bill at the off-peak rate all day |
 
-The client also respects three variables it does not own: `XDG_STATE_HOME`, which is the base of the
+The client also respects four variables it does not own: `XDG_STATE_HOME`, which is the base of the
 supervisor's log directory (`$XDG_STATE_HOME/4genthub/logs`, else `~/.local/state/4genthub/logs`),
 `PATH`, which is where it looks for `herdr`, `tmux` and `forcecompact`, and `DEEPSEEK_HOLIDAYS` and
 `OFFPEAK_UTC`, which it reads with the same names the shell gate used so a machine switching to this
@@ -307,7 +312,7 @@ what it is scoped to.
 
 | Message or symptom | Cause | Action |
 |---|---|---|
-| `AGENTHUB_URL and AGENTHUB_TOKEN must be set (in the environment or the client's env file)` | no credential configured | set both in `~/.config/4genthub/.env` |
+| `AGENTHUB_URL and AGENTHUB_TOKEN must be set (in the environment or the client's env file)`, or `AGENTHUB_URL is not set` / `AGENTHUB_TOKEN is not set` from a verb that talks to the server | no credential configured | set both in `~/.config/4genthub/.env` |
 | `a ROOM is required` | the verb needs a room and none was given | pass the room: `4genteam seat status ROOM` |
 | `error: team apply: --team DIR is required (the directory that holds team.json)` | no default team exists | pass the team directory |
 | `error: team publish-skills: --inventory FILE is required (the skill library inventory JSON)` | no default inventory exists | pass the inventory file |

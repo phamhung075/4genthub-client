@@ -153,6 +153,9 @@ explicit answer for each seat. `rig policy list` prints them:
 | `yolo` | the operator/no-guardrails posture — everything the harness allows; the launch posture is **full bypass** | `builtin:yolo` |
 | `none` | the reserved deliberate-none choice: the posture is the floor, the same as naming nothing, but the choice is visible | `none` |
 
+`rig policy list` also prints `auto`, OpenRig's own posture; it is not one of the values a 4genthub
+seat may record, so the five above are the choices to offer.
+
 A seat that does not name one gets `standard`. **Say what `yolo` means before the user picks it: a
 `yolo` seat runs unattended with no approval prompts.**
 

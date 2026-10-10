@@ -3,6 +3,17 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-10 (night) — one build step installs the binary and the checkout's .env
+
+### Added
+- `scripts/build.sh`: `go vet`, `go test`, build, an atomic install of `~/.local/bin/4genteam`
+  (built beside the target and renamed, so a running seat keeps its old inode), and, when the checkout
+  has a `.env`, a copy of it over `~/.config/4genthub/.env` at mode 600. Without a checkout `.env` the
+  installed file is left alone. The file's content is never printed.
+
+### Changed
+- `README.md`: the from-a-checkout install names `scripts/build.sh`.
+
 ## 2026-10-10 (evening) — the peak gate's verb list is five, not three
 
 The `offpeak` verb's own usage text and three documents named `up`, `compact` and `sync respawn` as the
@@ -341,6 +352,13 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Changed
 
+- A notification the cloud refuses for a reason another attempt cannot change is no longer retried forever
+  (`internal/clientbridge/notifications.go`, `notifyTerminal`). The sender recorded nothing on a non-2xx, so a
+  permanently refused row was posted again on EVERY cycle - the same 4xx, once per cycle, for as long as the bridge
+  ran. A 4xx that names the REQUEST (400, 404, 409, 410, 413, 415, 422 and the rest of that range) is now recorded
+  as handled, with the status and the cloud's answer in the note so the drop is visible; 401/403 (a credential that
+  can be fixed), 408, 429 and every 5xx stay retryable, because those can be answered differently later - a human's
+  row must not be thrown away because the token was wrong for an hour.
 - The one-binary question is answered for the client, in `README.md`'s install section: the seat checker stays
   a SECOND binary in this module rather than a `4genteam` subcommand. `install-checker` compiles
   `cmd/seatcheck` with `-ldflags -X main.installedPinsDir=<store>`, so each installed checker carries the pins
@@ -437,6 +455,19 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Fixed
 
+- The human notification is no longer the client's ONE unredacted egress (`internal/clientbridge/notifications.go`).
+  `notifyText` copied the row's summary (or its first non-empty body line) into `POST /api/v2/broadcast/notify`
+  verbatim, while the report's sibling path redacts its seat detail with the same map (`payload.go`,
+  `secretscan.Redact`), and the receiving route does not scan either - so a human-addressed row quoting a known value
+  was copied from the LOCAL daemon queue into the cloud's notification store raw. The text is now redacted with the
+  bridge's own `secretscan.KnownValuesFromEnv` map BEFORE it is bounded, so the marker that replaced a long value is
+  never the thing the bound cuts, and `Redact` fails closed (an empty text), which posts nothing rather than posting
+  the raw text. Three cases pin it: the posted message carries `[REDACTED:DEMO_TOKEN]` and not the value while the
+  rest of the sentence survives, a 422 is recorded as handled with the status in the note, and the classification
+  table (400/404/409/410/413/415/422 final; 401/403/408/429/5xx retryable). The record's own count is corrected in
+  the same commit: `fa486d9`'s "four" tests fail with the sweep call removed, MEASURED - it is FIVE
+  (`TestNotifyPostsOneFrameForAHumanRow`, `TestNotifyRunsEvenWhenTheCycleSkipsItsReport`,
+  `TestNotifyDoesNotPostTheSameRowTwice`, `TestNotifyStateSurvivesARestart`, `TestNotifyRetriesARefusedPost`).
 - Bare `4genteam continue` printed `Usage: usage: 4genteam continue ...`: the listing ran `continueUsage`
   through its own `Usage: %s` while that constant already opens with `usage: `. The listing now prints the
   shell's own line once, from a constant of its own (`continueListingUsage`, the shape
