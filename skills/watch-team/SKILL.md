@@ -50,18 +50,23 @@ pane and header with no events, and a stopped seat has no pane at all.
 | Option | Effect |
 |---|---|
 | `--rig <RIG>` | the room to watch |
+| `--state-root <DIR>` | the omp state root the seats' session logs are read from (`watch`, `grid` and `feed`) |
 | `--cols N` | grid columns (default 2) |
 | `--back N` | events replayed per seat at startup (default 40; 3 for `feed`) |
 | `--width N` | characters kept per line (default 200; 170 for `feed`) |
 | `--lines N` | lines shown of each call, result or message (default 60) |
 | `--detail` | reasoning and messages too; on for `grid` and `watch`, off for `feed` |
 
+The state root resolves as the flag, else `$OPENRIG_STATE_ROOT`, else `~/.openrig/state/omp` (from
+the real home). A root that is not there is refused by one message naming the path it tried, before
+any pane opens.
+
 ## Type to a seat
 
 ```bash
-4genteam inputs open                # a "<SEAT> > input" pane under every seat pane
-4genteam inputs open --seat <SEAT>  # only that seat
-4genteam inputs hide
+4genteam inputs open --rig <RIG>                # a "<SEAT> > input" pane under every seat pane
+4genteam inputs open --rig <RIG> --seat <SEAT>  # only that seat
+4genteam inputs hide --rig <RIG>
 ```
 
 A line typed there is sent with `rig send`, so it takes the same route as any other message.
