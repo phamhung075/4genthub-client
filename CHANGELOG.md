@@ -62,6 +62,13 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   directory without one is a seat folder. Thirteen skills come across from the main repository's
   `.agents/skills` (its `.claude/skills` entry is a symlink to it), de-privatised and corrected for the
   Go client; `README.md` and `docs/AGENT-SETUP.md` describe the tree and how a skill reaches a seat.
+- `internal/clientskills`: the client delivers the skills it owns. The tree is found at `--skills-root`,
+  else `$OPENRIG_CLIENT_SKILLS`, else `skills/` beside the binary; a seat receives `share/`, then its
+  room's room-level skills, then its own seat-level skills — so a more specific copy replaces a shared
+  name — and never another room's, another seat's or `client/`'s. Installing copies each skill whole
+  into the seat's own skills path (`<agent dir>/skills/<id>/`, the directory its agent spec already
+  points at) and declares the ids in that spec's `resources.skills` and in every profile's
+  `uses.skills`, because OpenRig projects only the skills a profile selects.
 
 ### Changed
 
