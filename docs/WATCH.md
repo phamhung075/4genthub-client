@@ -32,9 +32,8 @@ layout lives in the client, not in saved terminal state, so it cannot drift.
 
 A pane exists for every seat the room is running (they come from the rig's live tmux sessions).
 The feed reads a seat's newest session log — the omp state directory under
-`~/.openrig/state/omp/` first (the root `--state-root` resolves; see Options), else the seat's
-Claude Code project log. A runtime the client has no log reader for (`codex`, `agy`) keeps its pane
-and its header and shows no events.
+`~/.openrig/state/omp/` first, else the seat's Claude Code project log. A runtime the client has no
+log reader for (`codex`, `agy`) keeps its pane and its header and shows no events.
 
 ## What a line means
 
@@ -64,18 +63,11 @@ startup share one time.
 | Option | Effect |
 |---|---|
 | `--rig <RIG>` | the room to watch; always pass it |
-| `--state-root <DIR>` | the omp state root the seats' session logs are read from (`watch`, `grid` and `feed`; `inputs` and `input` take it but do not read it) |
 | `--cols N` | columns in the grid (default 2) |
 | `--back N` | events replayed per seat when a pane starts (default 40; 3 for `feed`). A pane holds only what was printed since it started, so raise this to see older work |
 | `--width N` | characters kept of each line (default 200; 170 for `feed`) |
 | `--lines N` | lines shown of each call, result or message (default 60) |
 | `--detail` | also show the reasoning, what the agent says and what it is told; on for `grid` and `watch`, off for `feed` |
-
-The state root resolves in the order the client implements: `--state-root`, else
-`$OPENRIG_STATE_ROOT`, else the client's own default, `~/.openrig/state/omp` (taken from the real
-home, so it is the same inside a seat and outside one). A root that is not there, or is not a
-directory, is refused with one message naming the path it tried — and `watch` and `grid` check it
-before they open a pane, so a wrong root does not leave a wall of panes printing the same refusal.
 
 ## Type to a seat from the grid
 
