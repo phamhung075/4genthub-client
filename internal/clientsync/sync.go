@@ -71,6 +71,8 @@ func (syncCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		return RunInstallCheckerVerb(ctx, args[1:], stdout, stderr)
 	case "offline-install":
 		return RunOfflineInstallVerb(ctx, args[1:], stdout, stderr)
+	case "respawn":
+		return RunRespawnVerb(ctx, args[1:], stdout, stderr)
 	}
 	want := args[0]
 	for _, verb := range syncVerbs {
