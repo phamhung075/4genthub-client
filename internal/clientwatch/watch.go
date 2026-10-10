@@ -9,9 +9,10 @@
 //
 //   - `--rig` is REQUIRED. The Python defaulted it to the owner's own rig name, and the mission
 //     forbids an owner default; the doc already says "there is no default room".
-//   - the state root comes from `--state-root` or the environment, and a machine without it (or
-//     without herdr) exits non-zero with ONE message naming what is missing, instead of failing on a
-//     missing owner path.
+//   - the state root is `--state-root`, else $OPENRIG_STATE_ROOT, else the machine's own
+//     ~/.openrig/state/omp (clientenv.DefaultStateRoot) - the first place docs/WATCH.md says the feed
+//     looks - and a machine where that root is not there, or is without herdr, exits non-zero with ONE
+//     message naming the path it tried, instead of failing on a missing owner path.
 //   - every external process goes through ONE injectable seam (`execCommand`), so the tests need no
 //     herdr, no tmux, no rig and no seat, and the refusals are testable by name.
 //   - the pane commands run this binary rather than a Python interpreter and module.
@@ -28,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 // Commands is what the dispatcher registers from this package: the umbrella `watch` plus the four
@@ -83,16 +85,21 @@ func detailFlag(detail bool) string {
 	return ""
 }
 
-// resolveStateRoot is `--state-root`, else $OPENRIG_STATE_ROOT, else the client's own OpenRig state
-// root. A root that is not a directory is the caller's to fix, and the message says which path.
+// defaultStateRoot is the third clause: where OpenRig keeps its per-seat state on THIS machine
+// (clientenv.DefaultStateRoot, resolved from the real home, so it is the same inside a seat and out).
+// It is a variable only so a test can replace it: resolving the real home in a test would make the
+// result depend on the machine running it, which the offline test rule forbids.
+var defaultStateRoot = clientenv.DefaultStateRoot
+
+// resolveStateRoot is `--state-root`, else $OPENRIG_STATE_ROOT, else clientenv.DefaultStateRoot().
+// A root that is not a directory is the caller's to fix, and the message says which path it tried.
 func resolveStateRoot(flagValue string) (string, error) {
 	root := flagValue
 	if root == "" {
 		root = os.Getenv(stateRootEnv)
 	}
 	if root == "" {
-		return "", unavailableError(fmt.Sprintf(
-			"the omp state root is not set: pass --state-root DIR or set %s", stateRootEnv))
+		root = defaultStateRoot()
 	}
 	info, err := os.Stat(root)
 	if err != nil {

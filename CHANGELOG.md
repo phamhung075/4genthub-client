@@ -27,9 +27,9 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The `team` and `watch` verb groups are registered in the binary's dispatcher (`b311b86`).
 - `4genteam watch`, `grid`, `feed`, `inputs` and `input` are implemented in Go (`5fd1216`,
   `internal/clientwatch`), with `docs/WATCH.md` as the contract: `--rig` is required, the state root
-  comes from `--state-root` or `$OPENRIG_STATE_ROOT`, and a machine without herdr or without a
-  readable state root exits non-zero with one message. The input panes send with `rig send`, never a
-  raw tmux attach.
+  is `--state-root`, else `$OPENRIG_STATE_ROOT`, else the machine's own `~/.openrig/state/omp`, and a
+  machine without herdr or without a readable state root exits non-zero with one message. The input
+  panes send with `rig send`, never a raw tmux attach.
 - The supervisor's witnessed-compaction path is tested (`internal/clientlifecycle`): a new
   compaction record sends the seat the resume text, and an unwitnessed one is reported and retried
   rather than assumed.
@@ -47,6 +47,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- `4genteam watch`, `grid` and `feed` now resolve the state root exactly as the doc comment and
+  `docs/WATCH.md` promised: `--state-root`, else `$OPENRIG_STATE_ROOT`, else the machine's own
+  `~/.openrig/state/omp` (`clientenv.DefaultStateRoot()`). The third clause was documented but
+  missing, so the feed refused on a machine where the doc says it reads. The usage text now states the
+  resolved path rather than only the variable name, and a root that is named but not there is refused
+  by its path whichever clause named it.
 - `4genteam sync --help` prints the verb group's usage and exits 0; it used to be read as an
   unknown verb and exited 2 (`1e23ca2`).
 - `4genteam bridge install-service` renders the client's OWN environment file

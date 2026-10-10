@@ -86,7 +86,10 @@ var verbUsages = map[string]verbUsage{
 	},
 }
 
-const commonFlags = `
+// commonFlags states the path --state-root resolves to rather than only naming the variable: the third
+// clause is a machine path, so the usage text has to show the path this machine will actually read.
+func commonFlags() string {
+	return `
 options:
   --rig RIG       the room to watch; required, there is no default room
   --back N        events replayed per seat when a pane starts (default 3 for feed, 40 otherwise)
@@ -96,8 +99,9 @@ options:
                   (on for grid and watch, off for feed)
   --cols N        grid columns (grid and watch only; default 2)
   --state-root DIR  the omp state root the session logs are read from
-                    (default: $OPENRIG_STATE_ROOT)
+                    (--state-root, else $OPENRIG_STATE_ROOT, else ` + defaultStateRoot() + `)
 `
+}
 
 func printVerbUsage(w io.Writer, verb string) {
 	usage, known := verbUsages[verb]
@@ -106,7 +110,7 @@ func printVerbUsage(w io.Writer, verb string) {
 	}
 	fmt.Fprintf(w, "%s\n\n%s\n", usage.line, usage.notes)
 	if verb != "input" {
-		fmt.Fprint(w, commonFlags)
+		fmt.Fprint(w, commonFlags())
 	}
 	if verb == "feed" || verb == "inputs" {
 		fmt.Fprint(w, "  --seat SEAT     limit to this seat (repeatable)\n")

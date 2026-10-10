@@ -287,22 +287,77 @@ func TestAMachineWithoutHerdrRefusesByName(t *testing.T) {
 	}
 }
 
-// The state root comes from a flag or the environment, never a hard-coded owner path.
-func TestAMachineWithoutTheStateRootRefusesByName(t *testing.T) {
+// The state root is `--state-root`, else $OPENRIG_STATE_ROOT, else the machine's own default - the
+// third clause docs/WATCH.md promises. The default is the seam, so this stays offline: a test that
+// resolved the real home would depend on the machine running it.
+func TestTheStateRootFallsBackToTheMachineDefault(t *testing.T) {
 	newFakeExec(t)
+	root := t.TempDir()
+	restore := defaultStateRoot
+	defaultStateRoot = func() string { return root }
+	defer func() { defaultStateRoot = restore }()
 	t.Setenv(stateRootEnv, "")
-	code, _, errOut := runVerbT(t, "feed", "--rig", "r")
-	if code != 3 {
-		t.Fatalf("exit %d, want 3", code)
-	}
-	if !strings.Contains(errOut, "state root") || !strings.Contains(errOut, stateRootEnv) {
-		t.Errorf("the refusal did not name the state root and its variable: %q", errOut)
-	}
 
+	resolved, err := resolveStateRoot("")
+	if err != nil || resolved != root {
+		t.Fatalf("resolveStateRoot = %q, %v; want the default %q", resolved, err, root)
+	}
+}
+
+// The order the usage text states: the flag wins over the environment, and the environment over the
+// default.
+func TestTheStateRootOrderIsFlagThenEnvironmentThenDefault(t *testing.T) {
+	flagRoot, envRoot, defRoot := t.TempDir(), t.TempDir(), t.TempDir()
+	restore := defaultStateRoot
+	defaultStateRoot = func() string { return defRoot }
+	defer func() { defaultStateRoot = restore }()
+
+	t.Setenv(stateRootEnv, envRoot)
+	if got, err := resolveStateRoot(flagRoot); err != nil || got != flagRoot {
+		t.Errorf("with a flag and the environment both set, got %q, %v; want the flag %q",
+			got, err, flagRoot)
+	}
+	if got, err := resolveStateRoot(""); err != nil || got != envRoot {
+		t.Errorf("with only the environment set, got %q, %v; want the environment %q", got, err, envRoot)
+	}
+	t.Setenv(stateRootEnv, "")
+	if got, err := resolveStateRoot(""); err != nil || got != defRoot {
+		t.Errorf("with neither set, got %q, %v; want the default %q", got, err, defRoot)
+	}
+}
+
+// The usage text has to state the path the third clause resolves to, not only the variable's name: the
+// default is a machine path, and a reader has to see which one will be read.
+func TestTheUsageStatesTheResolvedStateRoot(t *testing.T) {
+	root := t.TempDir()
+	restore := defaultStateRoot
+	defaultStateRoot = func() string { return root }
+	defer func() { defaultStateRoot = restore }()
+
+	var usage strings.Builder
+	printVerbUsage(&usage, "feed")
+	if !strings.Contains(usage.String(), root) {
+		t.Errorf("the usage does not state the resolved state root %q:\n%s", root, usage.String())
+	}
+}
+
+// A root that is named but not there is refused BY ITS PATH, whichever clause named it.
+func TestAMissingStateRootIsRefusedByItsPath(t *testing.T) {
+	newFakeExec(t)
 	missing := filepath.Join(t.TempDir(), "absent")
-	code, _, errOut = runVerbT(t, "feed", "--rig", "r", "--state-root", missing)
+
+	code, _, errOut := runVerbT(t, "feed", "--rig", "r", "--state-root", missing)
 	if code != 3 || !strings.Contains(errOut, missing) {
 		t.Errorf("a missing root named %q at exit %d, want the path and 3", errOut, code)
+	}
+
+	restore := defaultStateRoot
+	defaultStateRoot = func() string { return missing }
+	defer func() { defaultStateRoot = restore }()
+	t.Setenv(stateRootEnv, "")
+	code, _, errOut = runVerbT(t, "feed", "--rig", "r")
+	if code != 3 || !strings.Contains(errOut, missing) {
+		t.Errorf("a missing DEFAULT root named %q at exit %d, want the path and 3", errOut, code)
 	}
 }
 
