@@ -26,10 +26,12 @@ func TestSyncAnswersHelp(t *testing.T) {
 }
 
 // TestSyncStillRefusesAnUnportedVerbAndATypo: help is help, but a real invocation of a verb that has
-// not moved still refuses by name, and a typo is still the caller's error.
+// not moved still refuses by name, and a typo is still the caller's error. `watch` is the one verb
+// Python's argparse does not register anywhere, so it is the refusal that stays; every other sync
+// verb (`rig`, `bundle`, `switch`, `respawn` and the rest) is ported now.
 func TestSyncStillRefusesAnUnportedVerbAndATypo(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := (syncCommand{}).Run(context.Background(), nil, []string{"rig"}, &out, &errOut); code != clientcmd.ExitUnavailable {
+	if code := (syncCommand{}).Run(context.Background(), nil, []string{"watch"}, &out, &errOut); code != clientcmd.ExitUnavailable {
 		t.Errorf("an unported verb exited %d, want %d", code, clientcmd.ExitUnavailable)
 	}
 	if !strings.Contains(errOut.String(), "not ported") {
