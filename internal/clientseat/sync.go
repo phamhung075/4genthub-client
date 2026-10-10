@@ -287,13 +287,13 @@ func relaunch(rig, seat string) error {
 	return nil
 }
 
-// sessionComesUp is true when the tmux session exists within 60 seconds.
+// sessionComesUp is true when the tmux session exists within 3 minutes.
 func sessionComesUp(session string) bool {
 	tmux, err := exec.LookPath("tmux")
 	if err != nil {
 		return false
 	}
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 90; i++ {
 		if exec.Command(tmux, "has-session", "-t", session).Run() == nil {
 			return true
 		}

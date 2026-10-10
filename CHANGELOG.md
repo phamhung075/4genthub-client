@@ -62,7 +62,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `From NAME:` because `rig send` does not carry the sender outside a seat shell, and it reaches `rig`
   as one argument, so no shell expands backticks in it.
 - `internal/clientseat/sync.go`: a `rig launch` that times out after rig's 5 s ("outcome UNKNOWN") counts as done
-  when the seat's tmux session comes up within 60 s. The launch had landed and the client had stopped on it.
+  when the seat's tmux session comes up within 3 minutes. The launch had landed and the client had stopped on it.
 - `internal/clientseat/reseat_test.go`: order and quiet gating, a seat that is not quiet stays running,
   an unknown seat is refused before any seat is touched.
 
