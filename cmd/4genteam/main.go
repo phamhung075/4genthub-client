@@ -30,6 +30,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
+	"github.com/phamhung075/4genthub-client/internal/clientrestore"
 	"github.com/phamhung075/4genthub-client/internal/clientseat"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientteam"
@@ -102,6 +103,7 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientteam.Commands()...)
 	registry = append(registry, clientwatch.Commands()...)
 	registry = append(registry, clientfeedback.Commands()...)
+	registry = append(registry, clientrestore.Commands()...)
 	return append(registry,
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])", false),
 	)

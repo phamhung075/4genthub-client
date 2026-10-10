@@ -223,6 +223,33 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   answers to it, that an unreadable room is not a refusal, and that `offpeak set` is the only way to change the
   setting — never an editor, `sed` or a shell redirect into the file that holds the credential.
 
+- `4genteam continue` and `4genteam watchdog` are implemented in Go (`internal/clientrestore`, PORTED FROM
+  `~/.openrig/bin/rig-continue.sh` and `~/.openrig/bin/rig-watchdog.sh`, which stay where they are). `continue`
+  restores a stopped rig from its latest snapshot and briefs every seat from `~/.openrig/briefs/<rig>.txt`, with
+  `briefs/<rig>/<seat>.txt` replacing the shared text for that seat; with no argument it lists the rigs and the
+  briefs on disk, and `--all` walks every rig that has a brief, one rig's failure never stopping the others.
+  `watchdog` reports (`--check`, `<rig>`), watches (`<rig> --watch [SECONDS] [HEARTBEAT_POLLS]`, `--all --watch`),
+  restores a rig whose tmux sessions have vanished only after TWO consecutive dead polls, and self-tests its
+  decision rule (`--self-test`). Both keep the scripts' log paths (`~/.openrig/logs/rig-continue.log`,
+  `rig-watchdog.log`) and their line shape, and `continue` keeps `RIG_CONTINUE_WATCH=0` and the wall step.
+  FOUR THINGS DIFFER ON PURPOSE: the watchdog counts running seats with `encoding/json` instead of piping
+  `rig ps --json` through `python3`; both verbs run the DeepSeek peak gate before a restore - the same gate
+  `up` and `compact` obey, now exported as `clientlifecycle.PeakGate` SO THERE IS ONE DECISION and not a
+  second copy of it - so a resumed room can no longer start peak-rate work (a rig whose seats are already
+  live is not gated, because nothing is starting); an argument a verb does not know is refused by name
+  instead of being read as a brief path; and `--check` exits 2 when ANY rig came back dead - the shell
+  exited with the LAST rig's status, so a dead rig that was not last was invisible to a caller reading the
+  exit code - while a `--check` on a machine with no rig tool refuses in one message rather than reporting
+  every rig as deliberately stopped from a reading it could not take. The watchdog's restore calls
+  `continue`'s own restore function rather than the script, so the two cannot drift apart.
+- The restore pair's tests (`internal/clientrestore/continue_test.go`, `watchdog_test.go`, 0 network, rig, seat,
+  tmux or real home): the live-rig skip and the dead-rig restore with the seat count read AFTER it, the per-seat
+  brief overriding the shared one, `--no-brief`, the abort when no seats came up, `--all` over several rigs, the
+  gate refusing BEFORE the restore at a pinned peak instant (and `--allow-peak` letting the same room through,
+  and a live rig never being gated), the watchdog's two-miss rule with its counter reset, its heartbeat cadence,
+  its server-identity transition lines, an unreadable `rig ps` counting as zero expected seats, and that a rig
+  name that merely CONTAINS the rig's name is not one of its seats.
+
 ### Changed
 
 - The bridge carries TWO transports instead of one (`internal/clientbridge/bridge.go`, `commands.go`): the report's and,

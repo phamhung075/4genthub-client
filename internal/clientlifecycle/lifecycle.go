@@ -173,7 +173,7 @@ func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Wr
 	// THE GATE RUNS BEFORE THE RESTORE, and after the daemon only because the room's models are read from
 	// the daemon. So a refusal starts the daemon and nothing else: no seat is resumed, which is the step
 	// that would have started DeepSeek work at the peak rate.
-	if code := peakGate(rig, name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
+	if code := PeakGate(rig, name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	ensureRig(rig, name, stderr)
@@ -235,8 +235,10 @@ var rigNodes = func(rig *clientcmd.Rig, name string) []map[string]any {
 	return nodes
 }
 
-// peakGate is the DeepSeek peak gate for every verb here that starts or resumes a room's seats. The
-// models are in the room's node records - the reading `rig ps --json --nodes --rig NAME` already gives
+// PeakGate is the DeepSeek peak gate for every verb in the client that starts or resumes a room's seats
+// - `up` and `compact` here, and the restore verbs in clientrestore, which is why it is exported: the
+// decision must come from ONE reading of the room's node records, not from a second copy per package.
+// The models are in the room's node records - the reading `rig ps --json --nodes --rig NAME` already gives
 // the restore - so the gate costs one local daemon call and no cloud round trip.
 //
 // It answers the exit code its verb should return: ExitOK to continue, ExitUnavailable when the setting
@@ -246,7 +248,7 @@ var rigNodes = func(rig *clientcmd.Rig, name string) []map[string]any {
 // A rig tool it cannot resolve is NOT a refusal: the reading is impossible, so there is nothing to
 // decide, and the verb's own platform matrix - or its supervisor's start - says so in its own words.
 // Guessing "peak" from a missing reading would block a room the client knows nothing about.
-func peakGate(rig *clientcmd.Rig, name, verb string, allowPeak bool, stderr io.Writer) int {
+func PeakGate(rig *clientcmd.Rig, name, verb string, allowPeak bool, stderr io.Writer) int {
 	if rig == nil {
 		tool, err := clientcmd.RequireRig()
 		if err != nil {
@@ -362,7 +364,7 @@ func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, st
 	}
 	// No rig was resolved for this verb by the dispatcher, so the gate resolves one itself; with no rig
 	// on the machine there is nothing to read and the supervisor's own start reports the failure.
-	if code := peakGate(nil, name, "compact", allowPeak, stderr); code != clientcmd.ExitOK {
+	if code := PeakGate(nil, name, "compact", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	if !StartSupervisor(name, stdout, stderr) {

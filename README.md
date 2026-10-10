@@ -123,6 +123,8 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `inputs` | open or hide an input pane under each seat pane |
 | `input` | read lines and send each to one seat |
 | `feedback` | report friction to the owner |
+| `continue` | restore a stopped rig from its latest snapshot and brief its seats; no argument lists the rigs and the briefs, `--all` walks every rig that has one |
+| `watchdog` | notice when a rig's tmux seats have vanished and restore it: `--check` reports, `--watch SECONDS` restores after two dead polls, `--self-test` exercises the rule |
 | `seatcheck` | the seat-side checker (also reachable as `seatcheck` via argv[0]) |
 | `version` | the client's own version |
 
