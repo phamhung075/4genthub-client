@@ -113,7 +113,7 @@ fix: ask for a key, and never paste one into a message.
 | `rig daemon status` says the daemon is not running | the daemon is stopped | `rig daemon start` |
 | `rig ps` shows no node for the room | the room was never materialized on this machine | `4genteam sync rig <ROOM>`, then `rig up <spec>` (step 2.5) |
 | the watch view does not open | herdr or tmux is missing | `herdr --version`, `tmux -V`; stop and tell the user |
-| `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `4genteam up`, `compact` or `sync respawn` | the room holds a seat on a `deepseek/` model, and `OFFPEAK_ONLY` is on (the default) so the client will not start or resume it inside a peak window (01:00-04:00 and 06:00-10:00 UTC, Monday-Friday) | not a fault. Start it at the peak rate with `--allow-peak`, or `4genteam offpeak set off` to allow it from now on, or wait for the off-peak instant the message names. `4genteam offpeak` reports the state, `4genteam offpeak status` the setting |
+| `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `4genteam up`, `compact`, `continue`, `watchdog` or `sync respawn` | the room holds a seat on a `deepseek/` model, and `OFFPEAK_ONLY` is on (the default) so the client will not start or resume it inside a peak window (01:00-04:00 and 06:00-10:00 UTC, Monday-Friday) | not a fault. Start it at the peak rate with `--allow-peak`, or `4genteam offpeak set off` to allow it from now on, or wait for the off-peak instant the message names. `4genteam offpeak` reports the state, `4genteam offpeak status` the setting |
 | a seat exits at once after launch | its runtime is not installed, or its runtime and model disagree | read the seat's log and report the missing piece to the user; do not switch the model to make it start |
 | `team apply` refuses a version | a version must be a concrete `x.y.z`, and the value lives in `team.json` — `team apply` has no `--version` option | fix `modules[].version` in `team.json`; `latest` and other aliases are rejected. `--version` belongs to `team import-project` and `team publish-skills` |
 
@@ -326,12 +326,12 @@ status bridge, then the compaction supervisor, opens the watch view, opens the O
 over to herdr. Its positional is the **rig** name — the room name unless the user asked for a
 different one (`4genteam up` takes no room argument).
 
-`4genteam up`, `4genteam compact` and `sync respawn` are the three verbs that start or resume seats,
-so each of them runs the DeepSeek peak gate before it does: with `OFFPEAK_ONLY` on (the default), a
-room holding a seat on a `deepseek/` model is refused at peak (exit 3) with nothing resumed, and the
-message names the seat, its model and when off-peak resumes. A room with no such seat, or an
-unreadable room, is never refused. See [README.md](../README.md#deepseek-peak-billing) for the
-schedule, `4genteam offpeak` and the two flags.
+`4genteam up`, `4genteam compact`, `4genteam continue`, `4genteam watchdog` and `sync respawn` are
+the five verbs that start or resume seats, so each of them runs the DeepSeek peak gate before it does:
+with `OFFPEAK_ONLY` on (the default), a room holding a seat on a `deepseek/` model is refused at peak
+(exit 3) with nothing resumed, and the message names the seat, its model and when off-peak resumes. A
+room with no such seat, or an unreadable room, is never refused. See
+[README.md](../README.md#deepseek-peak-billing) for the schedule, `4genteam offpeak` and the two flags.
 
 To watch the room work — the seat grid and the lead's own window — see
 [docs/WATCH.md](WATCH.md).

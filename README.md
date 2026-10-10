@@ -192,10 +192,10 @@ code is the answer, so it doubles as a gate:
 4genteam offpeak --quiet && start-the-expensive-work
 ```
 
-The setting gates the three verbs that **start or resume** DeepSeek seats — `up`, `compact` and
-`sync respawn` — judged on the model each seat's own record carries. With `OFFPEAK_ONLY` on (the
-default) they refuse at peak with exit 3, naming the seat, its model and when off-peak resumes, and
-nothing is resumed or launched:
+The setting gates the five verbs that **start or resume** a seat — `up`, `compact`, `continue`,
+`watchdog` and `sync respawn` — judged on the model each seat's own record carries. With
+`OFFPEAK_ONLY` on (the default) they refuse at peak with exit 3, naming the seat, its model and when
+off-peak resumes, and nothing is resumed or launched:
 
 ```
 4genteam up: 1 seat(s) run a DeepSeek model (room-alpha.dev: deepseek/deepseek-flash) and DeepSeek
@@ -204,11 +204,12 @@ Refusing to start or resume them at the peak rate: pass --allow-peak (or set OFF
 now, or wait and the gate opens by itself
 ```
 
-`--allow-peak` is the ONE flag those verbs take: it skips the check for one run and wins over the
-setting in the environment or the env file. An argument they do not know is refused by name rather
-than read as the rig name. A room with no `deepseek/` seat is never refused, and neither is one whose
-seats cannot be read — a reading that fails is not a refusal, and the verb's own error says what is
-wrong.
+`--allow-peak` is the one flag this check adds: it skips the check for one run and wins over the
+setting in the environment or the env file, and each verb keeps its own arguments beside it. An
+argument a verb does not know is refused by name rather than read as the rig name. A room with no
+`deepseek/` seat is never refused, and neither is one whose seats cannot be read — a reading that
+fails is not a refusal, and the verb's own error says what is wrong. A verb with nothing to start or
+resume is not gated either: `continue` on an already live room briefs its seats and restores nothing.
 
 The same procedure packaged for an agent that runs the client itself is
 [skills/client/offpeak-gate/SKILL.md](skills/client/offpeak-gate/SKILL.md).
@@ -318,7 +319,7 @@ what it is scoped to.
 | `… is not a symlink: refusing to replace a file this client did not create` | a real `.env` sits in the room directory | move it aside or point it at the key file |
 | a supervisor is still running after `4genteam stop ROOM` | `stop` and `status` find one by the argv fragment `compact-run --rig ROOM`, and this one was started by an older client whose argv does not carry it | stop it where it was started, and do not run `4genteam compact ROOM` beside it, which would start a second supervisor for that room |
 | the supervisor never compacts | the runtime reports no context size | give those seats a short-session rule instead |
-| `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `up`, `compact` or `sync respawn` | the room holds a `deepseek/` seat and `OFFPEAK_ONLY` is on (the default), so the client refuses to start or resume it inside a peak window | nothing is broken: pass `--allow-peak` to run it now at the peak rate, set `OFFPEAK_ONLY=0` in the env file to allow it from now on, or wait for the next off-peak window the message names |
+| `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `up`, `compact`, `continue`, `watchdog` or `sync respawn` | the room holds a `deepseek/` seat and `OFFPEAK_ONLY` is on (the default), so the client refuses to start or resume it inside a peak window | nothing is broken: pass `--allow-peak` to run it now at the peak rate, set `OFFPEAK_ONLY=0` in the env file to allow it from now on, or wait for the next off-peak window the message names |
 | `4genteam: unknown command <name>` | the verb does not exist | run `4genteam --help` for the list |
 
 ## Rules for an agent working in this repository

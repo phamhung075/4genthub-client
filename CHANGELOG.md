@@ -3,6 +3,31 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-10 (evening) — the peak gate's verb list is five, not three
+
+The `offpeak` verb's own usage text and three documents named `up`, `compact` and `sync respawn` as the
+verbs the DeepSeek peak gate covers. The tree gates five. `internal/clientlifecycle.PeakGate` is called
+from `lifecycle.go:176` (`up`) and `:367` (`compact`), and from the one restore path,
+`internal/clientrestore/restore.go:204`, which `continue` reaches at `continue.go:171` and `:212` and
+`watchdog` at `watchdog.go:264`; `sync respawn` runs the same check inline at `respawnverb.go:153-161`,
+against the node records the daemon already serves for that restore. The two newer verbs' own usage
+lines said so, so the client contradicted itself in its own help.
+
+Corrected in five places, no behaviour change: `internal/clientoffpeak/command.go:32` (the `offpeak`
+usage text), `README.md` (the gate's paragraph and its failure-map row), `docs/AGENT-SETUP.md` (the
+failure-map row and the `up` section), and `skills/client/offpeak-gate/SKILL.md` (its description and
+its refusal section). No test pinned the sentence, and none changed.
+
+One more correction in the same passage: `--allow-peak` was called "the ONE flag those verbs take",
+which is false for the three verbs that carry arguments of their own — `continue` takes a brief file or
+`--no-brief`, `watchdog` takes `--check`, `--watch` and `--self-test`, `sync respawn` takes
+`--after-seconds` and `--reason`. The text now says it is the one flag this check adds, and the skill
+names those arguments.
+
+The exit code the page quotes is confirmed at its source: `clientcmd.ExitUnavailable = 3`
+(`internal/clientcmd/command.go:29`), which is what `PeakGate` returns on a refusal, and
+`ExitUsage = 2` for a clock or setting it cannot read.
+
 ## 2026-10-10 (later) — the class-(ii) reason list, corrected against the tree
 
 **The change the sign-off below was made subject to is done** (row `3c94814d`). The 25 rows it names are

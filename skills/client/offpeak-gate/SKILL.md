@@ -1,6 +1,6 @@
 ---
 name: offpeak-gate
-description: DeepSeek peak billing through the 4genthub client — read the schedule with `4genteam offpeak`, understand the exit-3 refusal from `up`, `compact` and `sync respawn`, and change the OFFPEAK_ONLY setting with `offpeak set`. Use when a room's start is refused "at PEAK", when an operator asks whether it is off-peak now, or when a DeepSeek room must be started inside a peak window.
+description: DeepSeek peak billing through the 4genthub client — read the schedule with `4genteam offpeak`, understand the exit-3 refusal from `up`, `compact`, `continue`, `watchdog` and `sync respawn`, and change the OFFPEAK_ONLY setting with `offpeak set`. Use when a room's start is refused "at PEAK", when an operator asks whether it is off-peak now, or when a DeepSeek room must be started inside a peak window.
 ---
 
 # The DeepSeek peak gate
@@ -39,8 +39,10 @@ do not `export` a token while you are there.
 
 ## The refusal, and what to do about it
 
-`4genteam up RIG`, `4genteam compact RIG` and `4genteam sync respawn ROOM SEAT` are the three verbs
-that start or resume seats, so each runs the gate first. The refusal looks like this and exits **3**:
+`4genteam up RIG`, `4genteam compact RIG`, `4genteam continue RIG`, `4genteam watchdog RIG` and
+`4genteam sync respawn ROOM SEAT` are the five verbs that start or resume seats, so each runs the gate
+first. `continue` restores a stopped room and briefs its seats, and `watchdog` restores one whose tmux
+sessions vanished. The refusal looks like this and exits **3**:
 
 ```
 4genteam up: 1 seat(s) run a DeepSeek model (room-alpha.dev: deepseek/deepseek-flash) and DeepSeek
@@ -58,8 +60,10 @@ The three legitimate responses, in the order to prefer them:
 3. **`4genteam offpeak set off`**: allow DeepSeek starts at peak from now on. Use it only when the
    operator wants that as the machine's standing policy; say that you are changing a standing setting.
 
-`--allow-peak` may sit before or after the verb's own arguments, and it is the ONLY flag those verbs
-take: an argument they do not know is refused by name, and so is a second argument after the rig name.
+`--allow-peak` may sit before or after the verb's own arguments, and it is the only flag this gate
+adds: each verb keeps the arguments of its own usage (`continue` also takes a brief file or
+`--no-brief`; `watchdog` takes `--check`, `--watch` and `--self-test`; `sync respawn` takes
+`--after-seconds` and `--reason`), and an argument a verb does not know is refused by name.
 
 ## What is NOT a refusal
 

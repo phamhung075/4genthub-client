@@ -29,9 +29,10 @@ Exit 0 = off-peak, 1 = peak, so the verb is usable as a gate:   offpeak --quiet 
 status prints the OFFPEAK_ONLY setting, where it came from, and the current state. set writes the
 setting to the client's one env file and prints nothing else from it.
 
-The setting gates the verbs that start or resume DeepSeek seats - up, compact and sync respawn. With it
-ON (the default) those verbs refuse at peak, naming when off-peak resumes; ` + FlagAllowPeak + ` turns
-the check off for one run, and wins over the setting in the environment or the env file.
+The setting gates the verbs that start or resume DeepSeek seats - up, compact, continue, watchdog and
+sync respawn. With it ON (the default) those verbs refuse at peak, naming when off-peak resumes;
+` + FlagAllowPeak + ` turns the check off for one run, and wins over the setting in the environment or
+the env file.
 `
 
 // Commands is what the dispatcher registers from this package: one top-level verb.
