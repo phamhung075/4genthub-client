@@ -46,6 +46,13 @@ func (c bridgeCommand) Run(ctx context.Context, rig *clientcmd.Rig, args []strin
 	case "once":
 		return bridgeOnce(ctx, rig, args[1:], stdout, stderr)
 	case "install-service":
+		// Help comes BEFORE the answer: this sub-verb's answer is the systemd unit, so without this the
+		// one argument that asks what a verb is printed the unit instead - and a sweep that asked only
+		// for non-empty stdout could not see it. run and once do the same inside their flag parsers.
+		if clientcmd.HelpRequested(args[1:]) {
+			bridgeUsage(stdout)
+			return clientcmd.ExitOK
+		}
 		return bridgeInstallService(stdout, stderr)
 	case "help", "-h", "--help":
 		bridgeUsage(stdout)

@@ -350,6 +350,12 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Fixed
 
+- `bridge install-service --help` answers its usage instead of printing the systemd unit. The unit is this
+  sub-verb's ANSWER, so `--help` got the unit, exit 0 and no stderr - and the help sweep added with
+  `8cf6a34` asked only that stdout be non-empty, which is exactly why it passed. Help now comes first, as it
+  already did inside `bridge run` and `bridge once`; without `--help` the unit still prints, so the gate
+  moved rather than loosened. The sweep now asserts that each shape prints a USAGE (`usage:` or the bridge
+  group's header) and, for this one, that the unit is absent.
 - `team publish-skills` refuses an inventory that carries no `generated_from` at all, naming the file it
   read (`internal/clientteam/publish.go`). The pin guard read an absent pin as "nothing to check" and fell
   through to the digest check, so an inventory whose provenance nobody can name published silently - the

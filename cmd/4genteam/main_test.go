@@ -212,8 +212,8 @@ func TestHelpIsAnsweredBeforeThePlatformMatrix(t *testing.T) {
 			t.Errorf("%v: exit code = %d, want %d (stderr %q)", args, code, clientcmd.ExitOK, errOut.String())
 			continue
 		}
-		if out.Len() == 0 {
-			t.Errorf("%v: stdout is empty: the verb's own help was not answered", args)
+		if !strings.Contains(out.String(), "usage:") && !strings.HasPrefix(out.String(), "4genteam bridge <subcommand>") {
+			t.Errorf("%v: stdout is not a usage: %q", args, out.String())
 		}
 		if errOut.Len() != 0 {
 			t.Errorf("%v: stderr = %q, want nothing beside the help", args, errOut.String())
@@ -227,6 +227,18 @@ func TestHelpIsAnsweredBeforeThePlatformMatrix(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "usage: 4genteam up RIG") {
 		t.Errorf("up --help printed %q, want up's own usage line", out.String())
+	}
+
+	// The same for the shape that used to answer with something else entirely: install-service has an
+	// ANSWER of its own - the systemd unit - so a non-empty stdout check passed while `--help` printed
+	// the unit. Help comes before the answer; the unit is still what prints without --help.
+	out.Reset()
+	errOut.Reset()
+	if code := run([]string{"bridge", "install-service", "--help"}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("bridge install-service --help exited %d, want %d", code, clientcmd.ExitOK)
+	}
+	if !strings.HasPrefix(out.String(), "4genteam bridge <subcommand>") || strings.Contains(out.String(), "[Unit]") {
+		t.Errorf("bridge install-service --help printed %q, want the bridge's usage and not the unit", out.String())
 	}
 
 	// The refusal is NOT softened: the same verbs without --help still fail on the matrix, naming the

@@ -58,6 +58,33 @@ func TestBridgeSubVerbsAnswerHelp(t *testing.T) {
 	}
 }
 
+// TestBridgeInstallServiceAnswersHelpNotTheUnit: the sweep in cmd/4genteam asked only for NON-EMPTY
+// stdout, and install-service has an answer of its own - the systemd unit - so `install-service --help`
+// printed the unit, exited 0, and passed. Help comes before the answer, as it does in run and once, and
+// WITHOUT --help the unit is still what prints: the gate moved, it was not removed.
+func TestBridgeInstallServiceAnswersHelpNotTheUnit(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := (bridgeCommand{}).Run(context.Background(), nil, []string{"install-service", "--help"}, &out, &errOut)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("install-service --help exited %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut.String())
+	}
+	if !strings.Contains(out.String(), "4genteam bridge <subcommand>") {
+		t.Errorf("install-service --help printed %q, want the bridge's own usage", out.String())
+	}
+	if strings.Contains(out.String(), "[Unit]") {
+		t.Error("install-service --help printed the systemd unit: help must come before the answer")
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := (bridgeCommand{}).Run(context.Background(), nil, []string{"install-service"}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("install-service exited %d (stderr %q)", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "[Unit]") {
+		t.Errorf("install-service printed %q, want the systemd unit", out.String())
+	}
+}
+
 // test_the_path_defaults_do_not_follow_home pins the Python test of that name: the pins dir and the
 // state path resolve from the ACCOUNT home, so a decoy $HOME - what OpenRig gives a seat - does not move
 // either of them.
