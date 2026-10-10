@@ -50,7 +50,7 @@ type SeatHash struct {
 
 // Commands is what the dispatcher registers from this package.
 func Commands() []clientcmd.Command {
-	return []clientcmd.Command{seatCommand{}}
+	return []clientcmd.Command{seatCommand{}, sendCommand{}}
 }
 
 type seatCommand struct{}
@@ -61,11 +61,11 @@ func (seatCommand) NeedsRig() bool  { return false }
 
 func (seatCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "4genteam seat: pick a verb: status, sync, watch")
+		fmt.Fprintln(stderr, "4genteam seat: pick a verb: status, sync, watch, reseat")
 		return clientcmd.ExitUsage
 	}
 	if args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "usage: 4genteam seat (status ROOM | sync ROOM | watch ROOM) [--out DIR] [--seat NAME]...")
+		fmt.Fprintln(stdout, "usage: 4genteam seat (status ROOM | sync ROOM | watch ROOM) [--out DIR] [--seat NAME]...\n       4genteam seat reseat RIG --seat NAME [--seat NAME]...")
 		fmt.Fprintln(stdout, "\nstatus compares each seat's local pin with the cloud's hash; sync adopts the newer snapshot")
 		fmt.Fprintln(stdout, "through this client's own `sync rig` and, with --relaunch quiet, restarts what changed; watch")
 		fmt.Fprintln(stdout, "repeats sync until you stop it. Every sub-verb answers --help.")
@@ -78,8 +78,10 @@ func (seatCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdou
 		return runSync(args[1:], stdout, stderr)
 	case "watch":
 		return runWatch(args[1:], stdout, stderr)
+	case "reseat":
+		return runReseat(args[1:], stdout, stderr)
 	}
-	fmt.Fprintf(stderr, "4genteam seat: unknown verb %q; the verbs are status, sync, watch\n", args[0])
+	fmt.Fprintf(stderr, "4genteam seat: unknown verb %q; the verbs are status, sync, watch, reseat\n", args[0])
 	return clientcmd.ExitUsage
 }
 

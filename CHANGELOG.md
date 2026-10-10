@@ -3,6 +3,20 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — `4genteam seat reseat` and `4genteam send`
+
+### Added
+- `internal/clientseat/reseat.go`: `seat reseat RIG --seat NAME...` restarts each named seat at its own
+  quiet point, through the same quiet wait and relaunch as `seat sync --relaunch quiet`. `seat sync` only
+  restarts seats whose pin changed, so a seat holding an old skill or a deleted cwd while its pin was
+  current was never restarted and nothing in the client could do it. Unknown seats are refused before
+  anything runs, and the DeepSeek peak gate applies (`--allow-peak` skips it).
+- `send RIG SEAT [--from NAME] MESSAGE`: one signed message to one seat. The text starts with
+  `From NAME:` because `rig send` does not carry the sender outside a seat shell, and it reaches `rig`
+  as one argument, so no shell expands backticks in it.
+- `internal/clientseat/reseat_test.go`: order and quiet gating, a seat that is not quiet stays running,
+  an unknown seat is refused before any seat is touched.
+
 ## 2026-10-11 — the post-compact resume passes the off-peak gate like every other automatic wake
 
 ### Fixed
