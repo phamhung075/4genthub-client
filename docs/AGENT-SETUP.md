@@ -190,6 +190,27 @@ Both push module versions. `4genteam team drift-check` then reports stored skill
 file has changed under the roots it resolves them against. The published modules are what
 `seat_overlays` in step 2.2 attaches to seats.
 
+A repository that keeps skills of its own arranges them in four kinds, and the path says which is
+which:
+
+| Path | Who gets the skill |
+|---|---|
+| `skills/share/<skill>/SKILL.md` | every seat of every room |
+| `skills/rooms/<room>/<skill>/SKILL.md` | every seat of that one room |
+| `skills/rooms/<room>/<seat>/<skill>/SKILL.md` | that one seat |
+| `skills/client/<skill>/SKILL.md` | an LLM running the client itself, not a seat |
+
+The reader finds a skill by one rule: **a directory holding `SKILL.md` is a skill, and a directory
+without one is a seat folder.** So `skills/rooms/<room>/<name>` is a room-level skill when it holds
+`SKILL.md` and the seat folder `<name>` when it does not. A shared or client skill stays generic — no
+rig, seat, host or personal path in it.
+
+Two facts about the publish route, because they decide which tree to point it at: `team
+import-project` reads a **project's** own tree at `.claude/skills`, one directory per skill, each
+holding `SKILL.md`, and refuses a directory that has none — so it publishes a flat tree, not a
+four-kind one. A skill reaches a seat as `skills/<slug>/SKILL.md` in the seat's own spec, written
+when its render is built, whoever published the module.
+
 ### 2.2 Write `<TEAM-DIR>/team.json`
 
 One file names the whole room. Ask the user for `<TEAM-DIR>` (a directory you may create), and

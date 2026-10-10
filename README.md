@@ -11,6 +11,25 @@ Setting a machine up, and then building a room and its seats, is in
 [skills/client/watch-team/SKILL.md](skills/client/watch-team/SKILL.md), which any project can copy into
 its own skills path.
 
+## The skills tree
+
+`skills/` holds this repository's skills in four kinds, and the path says which is which:
+
+| Path | Kind | Who gets it |
+|---|---|---|
+| `skills/share/<skill>/SKILL.md` | shared | every seat of every room |
+| `skills/rooms/<room>/<skill>/SKILL.md` | room | every seat of that one room |
+| `skills/rooms/<room>/<seat>/<skill>/SKILL.md` | seat | that one seat |
+| `skills/client/<skill>/SKILL.md` | client | an LLM that runs `4genteam` itself, not a seat |
+
+The loader reads the tree by one rule: **a directory holding `SKILL.md` is a skill, and a directory
+without one is a seat folder.** So `skills/rooms/<room>/<name>` is a room-level skill when it holds
+`SKILL.md`, and the seat folder `<name>` when it does not. A shared or client skill reads generic — no
+rig, seat, host or personal path; a room or seat skill may name its own room or seat, because that is
+what it is scoped to.
+
+`docs/AGENT-SETUP.md` describes how a skill gets to a seat.
+
 ## What it is
 
 A command-line client, `4genteam`, for one machine. It:

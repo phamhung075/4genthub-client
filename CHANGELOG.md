@@ -42,6 +42,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `<home>/.openrig/agenthub-seats/<room>/<member>/`, which is the one place `seatcheck` looks, and
   refuses a policy that names another seat instead of handing a seat the wrong links. `respawn` is
   the remaining verb Python's argparse registers that this build still refuses by name with exit 3.
+- `skills/`: this repository's skills tree, in four kinds — `share/<skill>` for every seat of every
+  room, `rooms/<room>/<skill>` for one room, `rooms/<room>/<seat>/<skill>` for one seat, and
+  `client/<skill>` for an LLM running the client. A directory holding `SKILL.md` is a skill; a
+  directory without one is a seat folder. Thirteen skills come across from the main repository's
+  `.agents/skills` (its `.claude/skills` entry is a symlink to it), de-privatised and corrected for the
+  Go client; `README.md` and `docs/AGENT-SETUP.md` describe the tree and how a skill reaches a seat.
 
 ### Changed
 
