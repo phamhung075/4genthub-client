@@ -92,6 +92,9 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the `--seat` row is the exhaustive set now —
+  `feed` and `inputs` take it repeatably as a filter, and `input` takes it once as the seat to send
+  to, where it is required — so the row no longer names a set one verb short.
 - `docs/AGENT-SETUP.md`: the install-target passage names the profile half too — the same render that
   fills `resources.skills` also lists each id in the default profile's `uses.skills`, so a pool entry
   no profile uses is inert exactly as a file no spec declares is.
