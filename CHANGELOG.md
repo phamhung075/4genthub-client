@@ -107,8 +107,8 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   fills `resources.skills` also lists each id in the default profile's `uses.skills`, so a pool entry
   no profile uses is inert exactly as a file no spec declares is.
 - `docs/AGENT-SETUP.md` names `HERDR_ENV`: `4genteam up` ends by launching `herdr` and stops before
-  that when the variable is set to anything, which is the escape its own refusal prints on a machine
-  with no `herdr` on `PATH` — and which no file in this repository documented until now.
+  that when the variable holds a non-empty value, which is the escape its own refusal prints on a
+  machine with no `herdr` on `PATH` — and which no file in this repository documented until now.
 - The usage errors speak this client's own dialect instead of Python's argparse (`9bf0c9d`): one form per
   kind — `missing argument: <name>`, `unknown argument: <flag>`, `<flag> needs a value` — in the six verbs
   that parse their own arguments (`sync rig`, `bundle`, `switch`, `respawn`, `offline-install`,
@@ -169,3 +169,16 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the source (`internal/clientenv`) and on the live path per verb: `sync rig` installs under the
   variable's root, `compact-run` reads it with no flag, `policy apply` writes under it, and the flag
   still wins.
+- The seat store is resolved the way the state root is: ONE implementation in `internal/clientenv`
+  (`DefaultSeatStore()`, `ResolveSeatStore()`), the account home's `.openrig/agenthub-seats`, so it is
+  the same store inside a seat and out. It used to be read under `$HOME` in three packages, and a seat
+  runs with `HOME` pointed at its own state directory - so the same command resolved a different store
+  per seat, and the watch verbs then refused a room that exists, because the store they looked in had no
+  room in it. It also fell back to a RELATIVE `.openrig/agenthub-seats` when the home could not be read,
+  which made the store depend on the working directory. Both are gone: a store that cannot be resolved
+  refuses with one message naming the reason and both escapes, and every verb that takes a store shares
+  that refusal - `sync pull|status|bundle|messages|rig|install-checker`, `bridge`, `seat` and the watch
+  verbs. `clientbridge`'s path defaults and `clientseat`'s `~` expansion stopped following `$HOME` with
+  it, and the per-package copies of the default went away.
+- `4genteam sync pull` refuses a room or seat name that is not `[a-zA-Z0-9][a-zA-Z0-9_-]*` before any
+  network call, so a name like `../../evil` can no longer name a path outside the store.

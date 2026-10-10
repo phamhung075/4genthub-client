@@ -50,9 +50,9 @@ error is not, and is one of the two things to take back to the user.
 
 Stop here and name the missing piece if any check fails. A seat needs tmux to have a terminal, and
 the watch grid needs herdr; both are installed, not worked around. `4genteam up` ends by launching
-`herdr`, and stops before that when `HERDR_ENV` is set to anything; with no `herdr` on `PATH` it
-prints `4genteam up: herdr is not on PATH; the watch view needs it (set HERDR_ENV to skip this step)`
-and exits non-zero.
+`herdr`, and stops before that when `HERDR_ENV` is set to a non-empty value; with no `herdr` on
+`PATH` it prints `4genteam up: herdr is not on PATH; the watch view needs it (set HERDR_ENV to skip
+this step)` and exits non-zero.
 
 ### 1.3 One credential, one file
 
