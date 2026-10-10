@@ -92,6 +92,9 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- `docs/AGENT-SETUP.md`: the install-target passage names the profile half too — the same render that
+  fills `resources.skills` also lists each id in the default profile's `uses.skills`, so a pool entry
+  no profile uses is inert exactly as a file no spec declares is.
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md` (both tables, so the mirrors stay mirrors):
   the options gain `--seat` — `feed` and `inputs` only, repeatable — and `--cols` is stated as `grid`
   and `watch` only, matching the help text the code prints; `--state-root` is confirmed at the tip.

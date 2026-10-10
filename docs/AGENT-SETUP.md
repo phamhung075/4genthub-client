@@ -213,8 +213,10 @@ four-kind one.
 **Where a skill lands, and what makes it count: the seat's own spec.** Publishing puts the file in
 place; the install is the seat spec naming it. The render declares every skill under
 `resources.skills[]` with the module's `id` and the `path` it is delivered at (`skills/<slug>`), and
-that declaration is what the runtime loads from. A copy on disk that the spec does not declare is
-inert, so an install has two halves: the file at the spec's path, and the `id` in the spec that
+that declaration is what the runtime loads from — and it lists the same ids in the profile's
+`uses.skills` (`profiles.default.uses.skills`, built in the same loop), which is the half that
+activates them. A copy on disk that the spec does not declare is inert, and so is a pool entry no
+profile uses: an install has two halves, the file at the spec's path and the `id` in the spec that
 names it.
 
 ### 2.2 Write `<TEAM-DIR>/team.json`
