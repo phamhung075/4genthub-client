@@ -45,8 +45,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   fresh occupant only for a seat that holds the dead reading for `--after-seconds` (default 30s),
   and it decides on the seat's own state rather than on `rig seat launch`'s exit code, because a
   launch can start the occupant and still exit non-zero. A live or an unknown seat is refused
-  without launching anything. `sync watch` is the one declared verb Python's argparse registers
-  nowhere, so this build still refuses it by name with exit 3 instead of inventing a contract.
+  without launching anything.
 - `4genteam feedback` is implemented in Go (`e0a9b98`, `internal/clientfeedback`): the friction
   channel's second door is native now - the flags are parsed in-process, the body is marshalled by
   `encoding/json` and sent in one POST to `/api/v2/openrig/feedback`, so no `.sh` file, no `python3`
@@ -87,6 +86,9 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- `docs/WATCH.md` and `skills/client/watch-team/SKILL.md` (both tables, so the mirrors stay mirrors):
+  the options gain `--seat` — `feed` and `inputs` only, repeatable — and `--cols` is stated as `grid`
+  and `watch` only, matching the help text the code prints; `--state-root` is confirmed at the tip.
 - `docs/AGENT-SETUP.md` names the install target for a published skill: the per-agent skills
   directory the seat spec's `resources.skills[].path` points at, with the module's `id` declared in
   that spec, because a copy alone is inert — the runtime loads what the spec declares.
