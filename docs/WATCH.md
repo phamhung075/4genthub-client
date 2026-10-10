@@ -63,6 +63,7 @@ startup share one time.
 | Option | Effect |
 |---|---|
 | `--rig <RIG>` | the room to watch; always pass it |
+| `--state-root DIR` | the omp state root the session logs are read from: the flag, else `$OPENRIG_STATE_ROOT`, else `~/.openrig/state/omp` |
 | `--cols N` | columns in the grid (default 2) |
 | `--back N` | events replayed per seat when a pane starts (default 40; 3 for `feed`). A pane holds only what was printed since it started, so raise this to see older work |
 | `--width N` | characters kept of each line (default 200; 170 for `feed`) |
