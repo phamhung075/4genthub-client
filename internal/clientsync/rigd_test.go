@@ -430,6 +430,80 @@ func TestWithheldEventsStillAdvanceTheCursor(t *testing.T) {
 	}
 }
 
+// The withheld copy's two promises, which nothing held before this test (the rigd gate's coverage gap,
+// qitem-20261010234730). 4.4 says the raw event may exist in exactly one place once it is withheld -
+// <seat store>/rigd-withheld/<session>/<ts>.json, mode 0600, under a directory only its owner may enter -
+// and that it is kept seven days. Both belong to the write path, and neither was asserted: the case above
+// checks that the directory is not empty and stops there. The mode is the promise that the raw bytes are
+// not readable by anyone else on the machine; the window is the promise that a redactor which has started
+// withholding cannot fill the disk forever. A test that let either drift would let the protection fall
+// over without a word.
+func TestTheWithheldCopyIsPrivateAndKeptSevenDays(t *testing.T) {
+	store := t.TempDir()
+	original := seatStore
+	seatStore = func(string) (string, error) { return store, nil }
+	t.Cleanup(func() { seatStore = original })
+
+	h := newHarness(t)
+	stream := &sessionStream{key: "dev-alice@room-a"}
+	dir := filepath.Join(store, "rigd-withheld", safeFileName(stream.key))
+
+	// A withheld event writes the copy, in a directory this user alone can enter.
+	h.d.writeWithheld(stream, `{"type":"tool_result","id":"tu1"}`)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("the withheld copy directory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("the withheld copy holds %d files, want 1", len(entries))
+	}
+	written := filepath.Join(dir, entries[0].Name())
+	info, err := os.Stat(written)
+	if err != nil {
+		t.Fatalf("the withheld copy: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("the withheld copy is mode %04o, want 0600: the raw event must not be readable by anyone else", perm)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("the withheld copy directory: %v", err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o700 {
+		t.Errorf("the withheld directory is mode %04o, want 0700", perm)
+	}
+
+	// The prune runs on the write path, because writing is the only moment this process touches the
+	// directory. Two copies an hour either side of the window, named in the writer's own timestamp shape so
+	// that age is what decides them rather than their names.
+	copyAged := func(name string, age time.Duration) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(`{"type":"tool_result"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		at := h.d.Now().Add(-age)
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	inside := copyAged("20261010T120000.000000000Z.json", withheldKeepDays*24*time.Hour-time.Hour)
+	past := copyAged("20261003T120000.000000000Z.json", withheldKeepDays*24*time.Hour+time.Hour)
+
+	h.d.writeWithheld(stream, `{"type":"tool_result","id":"tu2"}`)
+
+	if _, err := os.Stat(past); !os.IsNotExist(err) {
+		t.Errorf("a copy an hour past %d days survived the write path (stat err = %v): the window is what keeps a withholding redactor from filling the disk", withheldKeepDays, err)
+	}
+	if _, err := os.Stat(inside); err != nil {
+		t.Errorf("a copy an hour inside %d days was pruned: %v", withheldKeepDays, err)
+	}
+
+	// The cutoff instant itself is deliberately not asserted: it is computed from d.Now(), so pinning it to
+	// the nanosecond would fail on a clock change rather than on a behaviour change. An hour on each side is
+	// what a reader of 4.4 can check, and it fails the same way if the comparison is ever reversed.
+}
+
 // Case 4b (4.4's last paragraph): the five-minute backstop is about a session whose EVERY event is withheld.
 // One bad line among many is the ordinary case the per-event rule exists for, and it must not take a
 // healthy session's stream down; a batch that could be uploaded again clears the window.

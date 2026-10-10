@@ -3,6 +3,27 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — the withheld copy's mode and its seven-day window are asserted
+
+### Tests
+- `internal/clientsync/rigd_test.go`: `TestTheWithheldCopyIsPrivateAndKeptSevenDays` covers the two promises 4.4
+  makes about the withheld raw copy — `<seat store>/rigd-withheld/<session>/<ts>.json` mode 0600 under a
+  directory only its owner may enter, kept seven days (qitem-20261010234730, the coverage gap the rigd gate
+  named). The case above it checked that the directory was non-empty and stopped there, so neither the mode
+  (file 0600, directory 0700) nor the prune (a copy an hour past `withheldKeepDays` is gone after the next
+  write; a copy an hour inside it survives) had a test at all.
+- This is a coverage test, not a bug fix: `writeWithheld` and `pruneWithheld` already hold both properties, so
+  there is no RED state to show. Both halves were instead INDUCED to fail by mutating the production lines and
+  reverting them, because an assertion nobody has seen fail is an assertion nobody knows bites:
+  mode loosened to `0o644` → `the withheld copy is mode 0644, want 0600: the raw event must not be readable by
+  anyone else`; the cutoff comparison reversed → `a copy an hour past 7 days survived the write path` and `a
+  copy an hour inside 7 days was pruned`. `git diff` on `rigd.go` after the reverts is empty.
+- The cutoff instant itself is deliberately not asserted: it is computed from `d.Now()`, so pinning it to the
+  nanosecond would fail on a clock change rather than on a behaviour change. An hour either side fails the same
+  way if the comparison is reversed, which is what the induction shows.
+- Result, this seat's own run: `gofmt -l` empty on both files; `go build ./...` rc 0; the case ok; the whole
+  `internal/clientsync` package ok 1.139s.
+
 ## 2026-10-11 — `failing` beats a live process in `doctor`'s row verification
 
 ### Fixed
