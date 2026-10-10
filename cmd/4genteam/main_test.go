@@ -16,6 +16,19 @@ func rigMissing(t *testing.T) {
 	t.Cleanup(func() { clientcmd.LookPath = previous })
 }
 
+// rigPresent is rigMissing's other half, and it exists because a test that leaves the seam at the real
+// exec.LookPath does not test the dispatcher, it tests the HOST: `4genteam` with no arguments reaches
+// `up`'s own argument check only when rig is on PATH, and stops at the platform matrix when it is not.
+// A masked clone at b01a211 with no rig on PATH took the second answer and failed this package, which is
+// the mission's own rule - tests need no network, rig or seat - broken in the one place a reader would
+// not look for it. The stub is a PATH string: RequireRig only looks the tool up, it does not run it.
+func rigPresent(t *testing.T) {
+	t.Helper()
+	previous := clientcmd.LookPath
+	clientcmd.LookPath = func(string) (string, error) { return "/stub/bin/rig", nil }
+	t.Cleanup(func() { clientcmd.LookPath = previous })
+}
+
 // TestUnportedCommandRefusesRatherThanStubbing closes the hole a stub would leave: a command that
 // exists in the Python client and not yet here must say exactly that and exit non-zero. A command that
 // answered an empty success would be the "looks complete and is not" shape in a new place.
@@ -103,7 +116,14 @@ func TestBridgeIsRefusedByThePlatformMatrixBeforeItIsRefusedAsUnported(t *testin
 
 // TestUsageAndVersionAreTheOnlyFreeCommands: no arguments means `up` (which then needs a rig), an
 // unknown command is a usage error, and the two commands that need nothing at all succeed.
+//
+// THE RIG SEAM IS PINNED IN BOTH DIRECTIONS, because the no-argument answer depends on it: with rig on
+// PATH the dispatcher reaches `up`'s own argument check, and with rig absent it stops at the platform
+// matrix. Leaving the seam alone here read the HOST instead - a masked clone at b01a211 with no rig on
+// PATH got the matrix's answer and this assertion failed, on exactly the machine the client must stay
+// honest on. Both answers are now asserted rather than one assumed.
 func TestUsageAndVersionAreTheOnlyFreeCommands(t *testing.T) {
+	rigPresent(t)
 	var out, errOut bytes.Buffer
 	if code := run(nil, &out, &errOut); code != clientcmd.ExitUsage {
 		t.Errorf("no arguments: exit code = %d, want %d", code, clientcmd.ExitUsage)
@@ -112,6 +132,22 @@ func TestUsageAndVersionAreTheOnlyFreeCommands(t *testing.T) {
 	// the argument it is missing - not the command list it would have printed before.
 	if !strings.Contains(errOut.String(), "4genteam up:") || !strings.Contains(errOut.String(), "no default rig") {
 		t.Errorf("no arguments: stderr = %q, want up's required-rig error", errOut.String())
+	}
+
+	// THE OTHER HALF: the same invocation on a machine that has never had OpenRig. `up` cannot run at
+	// all there, so the argument it is missing is not the useful answer - the platform matrix's one
+	// message, naming rig and what to do instead, is.
+	out.Reset()
+	errOut.Reset()
+	rigMissing(t)
+	if code := run(nil, &out, &errOut); code != clientcmd.ExitUnavailable {
+		t.Errorf("no arguments, no rig: exit code = %d, want %d", code, clientcmd.ExitUnavailable)
+	}
+	if !strings.Contains(errOut.String(), "4genteam up:") || !strings.Contains(errOut.String(), "rig is not on PATH") {
+		t.Errorf("no arguments, no rig: stderr = %q, want the platform matrix's reason", errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("no arguments, no rig: stdout = %q, want nothing", out.String())
 	}
 
 	out.Reset()

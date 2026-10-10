@@ -295,6 +295,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- `cmd/4genteam`'s free-commands test no longer reads the HOST: it pins `clientcmd.LookPath` with the
+  new `rigPresent` helper (mirroring `rigMissing`) and asserts BOTH answers to the no-argument
+  invocation - `up`'s own missing-rig-name error with rig on PATH, and the platform matrix's one
+  message with rig absent. It left the seam alone and so asserted whichever answer the machine
+  happened to give; a masked clone at `b01a211` with no `rig` on PATH failed the package on exactly
+  the machine the client must stay honest on. The suite is 17/17 with `rig` off the child's PATH.
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the three `inputs` examples pass the `--rig` the
   verb requires.
 - `4genteam watch`, `grid` and `feed` now resolve the state root exactly as the doc comment and
