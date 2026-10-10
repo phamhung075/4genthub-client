@@ -24,6 +24,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   plus the one env file (`internal/clientenv`) and the seat-log reader the supervisor and the watch
   view need. Every verb that takes a rig requires it, the seat-role table is data from the team
   file, and the log directory is the XDG state location instead of the checkout.
+- The `team` and `watch` verb groups are registered in the binary's dispatcher (`b311b86`).
+- `4genteam watch`, `grid`, `feed`, `inputs` and `input` are implemented in Go (`5fd1216`,
+  `internal/clientwatch`), with `docs/WATCH.md` as the contract: `--rig` is required, the state root
+  comes from `--state-root` or `$OPENRIG_STATE_ROOT`, and a machine without herdr or without a
+  readable state root exits non-zero with one message. The input panes send with `rig send`, never a
+  raw tmux attach.
 - The supervisor's witnessed-compaction path is tested (`internal/clientlifecycle`): a new
   compaction record sends the seat the resume text, and an unwitnessed one is reported and retried
   rather than assumed.
