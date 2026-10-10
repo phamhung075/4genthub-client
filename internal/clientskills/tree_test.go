@@ -167,6 +167,59 @@ func TestARoomWithNoRoomTreeStillGetsShare(t *testing.T) {
 	requireNames(t, got, "plain")
 }
 
+// The shapes the tree that actually ships has, measured rather than assumed: `git ls-tree HEAD` carries
+// ZERO paths under skills/rooms, while the checkout on disk HAS an empty skills/rooms/ directory - git
+// cannot carry an empty directory, so the live tree is not the shape a fresh clone has. Empty must read
+// as ABSENT: Require accepts the root (share/ is the check, not rooms/), Resolve returns the shared
+// skills alone with no error, and nothing is written into the tree. rooms/ is empty BY DECISION - the
+// classification found zero room-level and zero seat-level skills among the shipped skills - so a seat
+// that failed on it would fail on the tree the client itself ships.
+func TestAnEmptyRoomsDirectoryReadsAsAbsent(t *testing.T) {
+	build := func(t *testing.T) Tree {
+		t.Helper()
+		return skillTree(t, map[string]string{"share/plain/SKILL.md": "# plain"})
+	}
+	t.Run("no rooms/ at all", func(t *testing.T) {
+		tree := build(t)
+		if err := tree.Require(); err != nil {
+			t.Fatalf("Require refused a share-only tree: %v", err)
+		}
+		got, err := tree.Resolve("alpha", "dev")
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		requireNames(t, got, "plain")
+		if _, err := os.Stat(filepath.Join(tree.Root, RoomsDir)); !os.IsNotExist(err) {
+			t.Errorf("stat rooms/ = %v, want it still absent: the resolver must not create it", err)
+		}
+	})
+	t.Run("rooms/ exists and holds nothing", func(t *testing.T) {
+		tree := build(t)
+		if err := os.Mkdir(filepath.Join(tree.Root, RoomsDir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := tree.Require(); err != nil {
+			t.Fatalf("Require refused a tree whose rooms/ is empty: %v", err)
+		}
+		got, err := tree.Resolve("alpha", "dev")
+		if err != nil {
+			t.Fatalf("resolve with an empty rooms/: %v", err)
+		}
+		requireNames(t, got, "plain")
+	})
+	t.Run("rooms/<room>/ exists and holds nothing", func(t *testing.T) {
+		tree := build(t)
+		if err := os.MkdirAll(filepath.Join(tree.Root, RoomsDir, "alpha"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, err := tree.Resolve("alpha", "dev")
+		if err != nil {
+			t.Fatalf("resolve with an empty rooms/<room>/: %v", err)
+		}
+		requireNames(t, got, "plain")
+	})
+}
+
 // The two malformed shapes are refused by name rather than skipped: a directory in share/ that is not a
 // skill, and a directory inside the seat's own folder that is not a skill.
 func TestADirectoryInShareWithoutTheMarkerIsRefused(t *testing.T) {
