@@ -3,6 +3,53 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — `4genteam rigd`: one long-running process supervises the rig's safeguards, and `doctor` names the one that is down
+
+**What it is.** `rigd` is the always-on half the rig never had: one process per machine that keeps the
+compaction supervisor, the rig watchdog and the connector bridge alive, reports their state, and refuses to
+let `up` continue when one of them did not come up. It is a verb of the client binary, per
+`rigd-boundaries.md` section 1 — it extends `internal/clientsync/connector.go`; it is not a second program.
+
+**The supervision.** `internal/clientlifecycle/rigd.go` builds the child list from the listed rigs — one
+compaction run and one watchdog per rig, ONE bridge per machine, each with the silence threshold of section
+7.4 (30 s supervisor, 180 s watchdog, 360 s bridge, 75 s rigd, overridable by the flags it launched with) —
+spawns them through the existing `spawnChild`/`awaitStart` seam, adopts a live child instead of duplicating
+it, restarts a dead one with 1 s doubling to 120 s, and marks a safeguard `failing` after three deaths
+inside ten minutes while still retrying at the cap. The old
+`continuing without a running compaction supervisor` escape hatch is gone: `compact` no longer spawns
+anything, it records the room and refuses with exit 3 when rigd is down.
+`StartSupervisor`/`StopSupervisor` are deleted for the same reason — starting and stopping are rigd's now.
+
+**The health report.** `internal/clientservices` holds the one process table (`Pattern`), the four states
+(`running`, `silent`, `stopped`, `failing`), the heartbeat layout of section 7.2 (a temp-then-rename
+`{pid,at}` per safeguard, plus rigd's own beat on every pass), the 7.5 state line, and the precedence rule
+that decides them: the process table first, and the heartbeat only when the process is live. The facts a
+pgrep and a heartbeat cannot answer — restarts, `started_at`, `failing` — are persisted in
+`<seat store>/rigd.json`, mode 0600.
+
+**The verb.** `4genteam doctor [RIG] [--json]` is read-only (its test records that spawn, signal and nodes
+are never called), walks every listed room when no rig is named, prints the tail of `alerts.log`, exits 3
+naming each down row on stderr, and exits 0 only when every row is running.
+
+**Transitions.** A safeguard changing state is published to the socket and appended to `alerts.log` with
+its UTC stamp — latest-wins, so a flap cannot bury the current state.
+
+**Tests.** 30 cases across `clientservices`, `clientlifecycle/rigd.go` and `clientlifecycle/doctor.go`: the
+7.4 threshold table and its 3× derivation, process-over-heartbeat precedence in all five shapes, the
+strictly-past boundary, backoff asserted as start instants, three deaths inside ten minutes, adoption, one
+heartbeat per compaction Step, the `rigd.json` mode and once-only `AddRig`, and the two `up` refusals (a
+missing credential named without its value; the safeguards that did not come up named before the view
+opens). **The acceptance carries its own falsification rather than an assertion:**
+`TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses` writes the down fixture and asserts exit 3 with the
+exact line `<rig> <safeguard>: <state>, age <n>s`, and
+`TestEverySafeguardRunningIsExitOKAndARunningRow` runs the SAME fixture with the safeguard alive and beating
+and asserts exit 0 — a doctor that simply refused everything fails the second.
+
+**Verified by the seat that committed it, not relayed:** `gofmt -l` empty on all 24 touched files;
+`go build ./...` rc 0; `go vet ./internal/clientservices/ ./internal/clientlifecycle/` rc 0;
+`go test -count=1 ./...` in this module — **20 packages ok, 0 FAIL**. The red-first inductions are the
+worker's record; the reviewer's gate re-runs them.
+
 ## 2026-10-11 — `4genteam team prune`: remove the seats a team no longer defines
 
 ### Added

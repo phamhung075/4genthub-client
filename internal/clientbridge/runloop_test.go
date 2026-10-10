@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
 
@@ -73,6 +74,9 @@ type fixture struct {
 	notifySteps []step
 	dir         string
 	statePath   string
+	// beats records every heartbeat seam call the cycles under test made, so a test can assert the
+	// bridge beat without writing into the machine's own log directory.
+	beats []string
 }
 
 // newFixture builds the bridge every test below drives: fixture local tools, a scripted transport, a
@@ -80,6 +84,15 @@ type fixture struct {
 func newFixture(t *testing.T, steps ...step) *fixture {
 	t.Helper()
 	f := &fixture{rigJSON: fixtureNodes, steps: steps}
+	// Every cycle of the bridge now beats. The seam is replaced here, for every test that builds its
+	// bridge through this fixture, so no test writes into the machine's own log directory; the beat is
+	// recorded so a test can assert it happened.
+	previousBeat := clientservices.WriteHeartbeat
+	clientservices.WriteHeartbeat = func(safeguard, rig string) error {
+		f.beats = append(f.beats, safeguard+"/"+rig)
+		return nil
+	}
+	t.Cleanup(func() { clientservices.WriteHeartbeat = previousBeat })
 	dir := t.TempDir()
 	f.dir, f.statePath = dir, filepath.Join(dir, "sync.json")
 	f.bridge = NewBridge("pc-1", time.Duration(DefaultInterval*float64(time.Second)), f.send, f.notify,
@@ -171,6 +184,23 @@ func TestCycleSendsOnChangeAndOnHeartbeat(t *testing.T) {
 	f.cycle()
 	if len(f.bodies) != 3 {
 		t.Errorf("the heartbeat did not send an unchanged report: %d reports, want 3", len(f.bodies))
+	}
+}
+
+// A cycle beats ONCE, as its first act, even when it finds nothing to send and returns early: a bridge
+// that stopped between beats and a machine with no news must not look the same.
+func TestCycleWritesOneHeartbeatPerCycle(t *testing.T) {
+	f := newFixture(t)
+	f.cycle()
+	f.cycle() // the unchanged payload is not resent: this one returns early and must still have beaten
+
+	if len(f.beats) != 2 {
+		t.Fatalf("heartbeats = %d (%v), want one per cycle (2)", len(f.beats), f.beats)
+	}
+	for _, beat := range f.beats {
+		if beat != "bridge/" {
+			t.Errorf("heartbeat = %q, want bridge/ (the bridge is one per machine, so no rig)", beat)
+		}
 	}
 }
 

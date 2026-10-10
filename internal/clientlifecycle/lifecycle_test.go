@@ -6,10 +6,10 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 // helpOf runs one verb with --help and returns what it printed.
@@ -48,28 +48,72 @@ func TestHelpIsHelpForEveryLifecycleVerb(t *testing.T) {
 	}
 }
 
+// stubHeartbeat replaces the heartbeat write for the test and restores it afterwards, so a Step that
+// beats cannot write into the machine's own log directory. The recorder is returned for a test that wants
+// to assert the beat happened.
+func stubHeartbeat(t *testing.T) *[]string {
+	t.Helper()
+	var calls []string
+	previous := clientservices.WriteHeartbeat
+	clientservices.WriteHeartbeat = func(safeguard, rig string) error {
+		calls = append(calls, safeguard+"/"+rig)
+		return nil
+	}
+	t.Cleanup(func() { clientservices.WriteHeartbeat = previous })
+	return &calls
+}
+
 // restoreAll puts every seam back after a test that replaces it.
 func restoreAll(t *testing.T) {
 	t.Helper()
+	stubHeartbeat(t)
 	daemon, rigStep := ensureDaemon, ensureRig
-	force, bridge := ensureForcecompact, startBridge
+	force, record := ensureForcecompact, recordRigFor
+	authority, wait := startAuthority, waitSafeguards
 	ui, watch, herdr := openUI, runWatchView, runHerdr
 	spawn, grace := spawnChild, SupervisorStartGrace
 	stop, nodes := stopPattern, rigNodes
 	lookPath := clientcmd.LookPath
+	rows, authorityUp := rowsFor, rigdRunning
 	t.Cleanup(func() {
 		ensureDaemon, ensureRig = daemon, rigStep
-		ensureForcecompact, startBridge = force, bridge
+		ensureForcecompact, recordRigFor = force, record
+		startAuthority, waitSafeguards = authority, wait
 		openUI, runWatchView, runHerdr = ui, watch, herdr
 		spawnChild, SupervisorStartGrace = spawn, grace
 		stopPattern, rigNodes = stop, nodes
 		clientcmd.LookPath = lookPath
+		rowsFor, rigdRunning = rows, authorityUp
 	})
 	// A test in this package runs with the peak gate reading NO nodes and with a rig tool that resolves:
 	// the gate then decides nothing, and no test here reaches the machine's own daemon, rig or clock. A
 	// test about the gate replaces rigNodes with the reading it wants to be judged on.
 	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return nil }
 	clientcmd.LookPath = func(string) (string, error) { return "/usr/local/bin/rig", nil }
+	// NO TEST WRITES rigd.json. The seams that would - recording the room and starting the authority -
+	// are replaced with recorders here, so a `up` test can assert the ORDER without touching the machine's
+	// own state file.
+	recordRigFor = func(string, io.Writer) bool { return true }
+	startAuthority = func(io.Writer, io.Writer) bool { return true }
+	waitSafeguards = func(string) ([]clientservices.Health, bool) {
+		return []clientservices.Health{{Safeguard: clientservices.Rigd, State: clientservices.Running}}, true
+	}
+}
+
+// TestLogDirIsTheClientservicesComputation: the lifecycle log directory is clientservices.LogDir, so the
+// supervisor's log, the bridge's log, the heartbeat files and alerts.log cannot land in two places.
+func TestLogDirIsTheClientservicesComputation(t *testing.T) {
+	previous := clientservices.LogDir
+	clientservices.LogDir = func() (string, error) { return "/tmp/clientservices-logs", nil }
+	t.Cleanup(func() { clientservices.LogDir = previous })
+
+	dir, err := LogDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != "/tmp/clientservices-logs" {
+		t.Errorf("LogDir() = %q, want the clientservices seam's answer", dir)
+	}
 }
 
 // TestHelpAfterAVerbNeverRunsALifecycleAction is the other half of the same fault, asserted as the
@@ -82,7 +126,8 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 		ran = append(ran, "spawn")
 		return diedChild{}, nil
 	}
-	startBridge = func(io.Writer, io.Writer) {}
+	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
+	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
 	openUI = func(*clientcmd.Rig, io.Writer) {}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
@@ -99,41 +144,46 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 	}
 }
 
-// TestUpInitialisesEveryServiceInOrder is the Python test of the same name: the daemon, the rig, the
-// forcecompact check, the bridge, the supervisor, the watch view, the UI, then herdr.
+// TestUpInitialisesEveryServiceInOrder is the Python test of the same name, restated for 7.1: the daemon,
+// the rig, the forcecompact check, the room recorded as meant-to-run, rigd (the single restart authority),
+// the same health check `doctor` makes, the watch view, the UI, then herdr.
+//
+// THE BRIDGE AND THE SUPERVISOR ARE NOT IN THIS LIST ANY MORE, and that is the ruling: `up` starts rigd,
+// and rigd starts them. A start path here would be a second mechanism for one safeguard.
 func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	var ran []string
 	restoreAll(t)
+	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
+	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
 	ensureDaemon = func(*clientcmd.Rig, io.Writer) error { ran = append(ran, "ensureDaemon"); return nil }
 	ensureRig = func(*clientcmd.Rig, string, io.Writer) { ran = append(ran, "ensureRig") }
 	ensureForcecompact = func(io.Writer) { ran = append(ran, "ensureForcecompact") }
-	startBridge = func(io.Writer, io.Writer) { ran = append(ran, "startBridge") }
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	spawnChild = func([]string, string) (supervisorChild, error) {
-		ran = append(ran, "startSupervisor")
-		return survivedChild{release}, nil
+	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
+	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startRigd"); return true }
+	waitSafeguards = func(string) ([]clientservices.Health, bool) {
+		ran = append(ran, "waitSafeguards")
+		return []clientservices.Health{{Safeguard: clientservices.Rigd, State: clientservices.Running}}, true
 	}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	openUI = func(*clientcmd.Rig, io.Writer) { ran = append(ran, "openUI") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
-	SupervisorStartGrace = time.Millisecond
 	t.Setenv("HERDR_ENV", "")
 
 	var out, errOut bytes.Buffer
 	if code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"my-rig"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up returned %d (stderr: %q)", code, errOut.String())
 	}
-	want := []string{"ensureDaemon", "ensureRig", "ensureForcecompact", "startBridge", "startSupervisor", "watch", "openUI", "herdr"}
+	want := []string{"ensureDaemon", "ensureRig", "ensureForcecompact", "recordRig", "startRigd", "waitSafeguards", "watch", "openUI", "herdr"}
 	if strings.Join(ran, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", ran, want)
 	}
 }
 
-// TestStopSignalsTheSupervisorAndTheBridgeForTheNamedRig: `stop` is the other half of `up`'s contract,
-// and it has to name what it signals. Asserted as the PATTERNS rather than by signalling them - a test
-// that ran the real thing would stop this machine's services.
-func TestStopSignalsTheSupervisorAndTheBridgeForTheNamedRig(t *testing.T) {
+// TestStopSignalsRigdAndSaysTheStopIsMachineWide: `stop` is the other half of `up`'s contract, and 7.1
+// makes it stop rigd - which stops its children - rather than picking safeguards out one by one. Asserted
+// as the PATTERN rather than by signalling it: a test that ran the real thing would stop this machine's
+// services.
+func TestStopSignalsRigdAndSaysTheStopIsMachineWide(t *testing.T) {
 	var patterns []string
 	restoreAll(t)
 	stopPattern = func(pattern string) bool {
@@ -145,12 +195,12 @@ func TestStopSignalsTheSupervisorAndTheBridgeForTheNamedRig(t *testing.T) {
 	if code := (stopCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"my-rig"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("stop returned %d (stderr %q)", code, errOut.String())
 	}
-	want := []string{SupervisorPattern("my-rig"), BridgePattern}
+	want := []string{clientservices.Pattern(clientservices.Rigd, "")}
 	if strings.Join(patterns, "|") != strings.Join(want, "|") {
 		t.Errorf("signalled %v, want %v", patterns, want)
 	}
-	if !strings.Contains(out.String(), "compact supervisor: stopped") {
-		t.Errorf("stdout = %q, want it to report the supervisor it stopped", out.String())
+	if !strings.Contains(out.String(), "rigd: stopped") {
+		t.Errorf("stdout = %q, want it to report rigd stopped", out.String())
 	}
 
 	// No rig means no guess, and nothing may be signalled while the verb decides that.
@@ -185,41 +235,79 @@ func (c survivedChild) Wait() error {
 	return nil
 }
 
-// TestAStartThatDiesImmediatelyPrintsNoPidAndDoesNotReturnZero is the half that matters: a failed start
-// must not read as a successful one.
-func TestAStartThatDiesImmediatelyPrintsNoPidAndDoesNotReturnZero(t *testing.T) {
+// TestCompactSpawnsNothingAndRefusesWithoutTheAuthority is 7.1's removed path, asserted from both sides:
+// `compact` must not start a supervisor (rigd does), and with no rigd running it must SAY so instead of
+// returning 0 - which is exactly the silence the owner's incident was made of.
+func TestCompactSpawnsNothingAndRefusesWithoutTheAuthority(t *testing.T) {
+	var spawned []string
 	restoreAll(t)
-	spawnChild = func([]string, string) (supervisorChild, error) { return diedChild{}, nil }
-	SupervisorStartGrace = time.Millisecond
+	spawnChild = func(args []string, _ string) (supervisorChild, error) {
+		spawned = append(spawned, strings.Join(args, " "))
+		return diedChild{}, nil
+	}
+	rigdRunning = func() int { return 0 }
 
 	var out, errOut bytes.Buffer
 	code := (compactCommand{}).Run(context.Background(), nil, []string{"some-rig"}, &out, &errOut)
-	if code == clientcmd.ExitOK {
-		t.Fatalf("a start whose child died immediately returned %d", code)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("compact with no rigd returned %d, want %d", code, clientcmd.ExitUnavailable)
 	}
-	if strings.Contains(out.String(), "pid") {
-		t.Errorf("a failed start printed a pid: %q", out.String())
+	if len(spawned) != 0 {
+		t.Errorf("compact spawned %v, and rigd is the only restart authority", spawned)
 	}
-	if !strings.Contains(errOut.String(), "exited immediately") {
-		t.Errorf("the failure was not named on stderr: %q", errOut.String())
+	if !strings.Contains(errOut.String(), "rigd is not running") || !strings.Contains(errOut.String(), "4genteam up some-rig") {
+		t.Errorf("the refusal did not name rigd and the repair verb: %q", errOut.String())
 	}
 }
 
-// TestAStartThatSurvivesStillReportsItsPid is the control: the fix must not break the successful path.
-func TestAStartThatSurvivesStillReportsItsPid(t *testing.T) {
+// TestCompactReportsTheRowWhenTheAuthorityRuns is the control: with rigd alive, `compact` is a read that
+// reports the supervisor's row rather than a start.
+func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
+	var spawned []string
 	restoreAll(t)
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	spawnChild = func([]string, string) (supervisorChild, error) { return survivedChild{release}, nil }
-	SupervisorStartGrace = time.Millisecond
+	spawnChild = func(args []string, _ string) (supervisorChild, error) {
+		spawned = append(spawned, strings.Join(args, " "))
+		return diedChild{}, nil
+	}
+	rigdRunning = func() int { return 4242 }
+	rowsFor = func(string) []clientservices.Health {
+		return []clientservices.Health{
+			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Running, PID: 99, AgeS: 3},
+			{Rig: "some-rig", Safeguard: clientservices.Watchdog, State: clientservices.Silent, AgeS: 400},
+		}
+	}
 
 	var out, errOut bytes.Buffer
 	code := (compactCommand{}).Run(context.Background(), nil, []string{"some-rig"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
-		t.Fatalf("a healthy start returned %d (stderr: %q)", code, errOut.String())
+		t.Fatalf("compact with a running supervisor returned %d (stderr: %q)", code, errOut.String())
 	}
-	if !strings.Contains(out.String(), "pid 4243") {
-		t.Errorf("a healthy start did not report its pid: %q", out.String())
+	if len(spawned) != 0 {
+		t.Errorf("compact spawned %v, and rigd is the only restart authority", spawned)
+	}
+	if !strings.Contains(out.String(), "compact supervisor: running") {
+		t.Errorf("stdout = %q, want the supervisor reported as running", out.String())
+	}
+}
+
+// TestCompactNamesTheRowWhenTheSupervisorIsNotRunning: rigd alive, its child down - the row is named on
+// stderr in the same words `doctor` uses.
+func TestCompactNamesTheRowWhenTheSupervisorIsNotRunning(t *testing.T) {
+	restoreAll(t)
+	rigdRunning = func() int { return 4242 }
+	rowsFor = func(string) []clientservices.Health {
+		return []clientservices.Health{
+			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
+		}
+	}
+
+	var out, errOut bytes.Buffer
+	code := (compactCommand{}).Run(context.Background(), nil, []string{"some-rig"}, &out, &errOut)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("compact with a stopped supervisor returned %d, want %d", code, clientcmd.ExitUnavailable)
+	}
+	if !strings.Contains(errOut.String(), "some-rig compact: stopped, age 31s") {
+		t.Errorf("stderr = %q, want the row named in doctor's own words", errOut.String())
 	}
 }
 

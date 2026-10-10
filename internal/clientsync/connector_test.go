@@ -12,25 +12,41 @@ import (
 )
 
 // The seat identity travels as a pair or not at all: a client that cannot name its seat still
-// registers its session, and the server is never handed a room it would have to complete itself.
+// registers its session, and the server is never handed a room it would have to complete itself. The
+// state and the source 2.2 adds travel with it, and a transport that knows neither leaves them out
+// rather than asserting one.
 func TestSessionFrameCarriesTheSeatPairOrNeither(t *testing.T) {
-	frame := sessionFrame("dev-alice@room-a", "dev-alice@room-a", "room-a", "alice")
+	frame := sessionFrame(SessionRegistration{
+		Key: "dev-alice@room-a", Name: "dev-alice@room-a", Room: "room-a", Seat: "alice",
+		State: SessionRunning, Source: SourceTranscript,
+	})
 	if frame["room"] != "room-a" || frame["seat"] != "alice" {
 		t.Errorf("frame = %v, want room and seat beside the key", frame)
 	}
 	if frame["session_key"] != "dev-alice@room-a" || frame["name"] != "dev-alice@room-a" {
 		t.Errorf("frame = %v, want the session key and name always", frame)
 	}
+	if frame["state"] != SessionRunning || frame["source"] != SourceTranscript {
+		t.Errorf("frame = %v, want the state and the source", frame)
+	}
 	for _, c := range []struct{ what, room, seat string }{
 		{"a room without a seat", "room-a", ""},
 		{"a seat without a room", "", "alice"},
 	} {
-		half := sessionFrame("k", "n", c.room, c.seat)
+		half := sessionFrame(SessionRegistration{Key: "k", Name: "n", Room: c.room, Seat: c.seat})
 		if _, ok := half["room"]; ok {
 			t.Errorf("%s: frame carried a room: %v", c.what, half)
 		}
 		if _, ok := half["seat"]; ok {
 			t.Errorf("%s: frame carried a seat: %v", c.what, half)
+		}
+	}
+	// A caller that knows no state sends none: `seat_state` on the Sessions page distinguishes a
+	// reported stop from no report at all, so an empty field is not a default to fill in.
+	quiet := sessionFrame(SessionRegistration{Key: "k", Name: "n"})
+	for _, field := range []string{"state", "source"} {
+		if _, ok := quiet[field]; ok {
+			t.Errorf("a registration with no %s still carried one: %v", field, quiet)
 		}
 	}
 }

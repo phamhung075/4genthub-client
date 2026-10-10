@@ -15,6 +15,9 @@ import (
 // operator's env file - the Python suite's the_documented_limits fixture does the same thing.
 func withDocumentedLimits(t *testing.T) {
 	t.Helper()
+	// Every Step test goes through this helper, so the heartbeat seam is installed here too: a Step that
+	// beats must not write into the machine's own log directory.
+	stubHeartbeat(t)
 	compact, warn, hard := seatlog.CompactLimit, seatlog.WarnLimit, seatlog.HardLimit
 	t.Cleanup(func() { seatlog.CompactLimit, seatlog.WarnLimit, seatlog.HardLimit = compact, warn, hard })
 	seatlog.CompactLimit, seatlog.WarnLimit, seatlog.HardLimit = 150_000, 250_000, 300_000

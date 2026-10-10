@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
 
@@ -95,6 +96,10 @@ func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *
 // Step is one pass over the rig's live seats. The order is compact.py's step(), and the three states it
 // remembers per seat are what keep a notice from being repeated and a compaction from being demanded
 // again inside the cooldown.
+//
+// EVERY PASS BEATS, at the end, whatever the pass did. That is the whole point of the heartbeat (7.2): this
+// loop logs only when it ACTS, so on a quiet rig a healthy supervisor writes nothing and its log age
+// cannot tell a dead supervisor from an idle one - which is the incident the report exists for.
 func (s *Supervisor) Step() {
 	now := s.Now()
 	for _, seat := range s.Seats(s.Rig) {
@@ -177,6 +182,12 @@ func (s *Supervisor) Step() {
 			}
 			s.Log(fmt.Sprintf("%s: quiet %.0fs at %s, sent /compact%s", seat, silent, seatlog.Kilo(used), note))
 		}
+	}
+	// The heartbeat, through clientservices: one write per pass, so a live-but-hung supervisor reads
+	// `silent` and a supervisor that died reads `stopped` (7.2). A failure to write is reported here and
+	// nowhere else - the report will say what it says.
+	if err := clientservices.WriteHeartbeat(clientservices.Compact, s.Rig); err != nil {
+		s.Log("cannot write the heartbeat: " + err.Error())
 	}
 }
 
@@ -396,6 +407,10 @@ func (c *execChild) Wait() error {
 
 // awaitStart waits out the start grace: true when the child is still running, false with the child's
 // own error when it exited inside the window.
+//
+// IT IS THE START OF EVERY DETACHED CHILD THIS CLIENT STARTS - rigd itself from `up`, and rigd's own
+// children from the supervision loop - which is why it takes any supervisorChild rather than a specific
+// caller's child.
 func awaitStart(child supervisorChild) (bool, error) {
 	done := make(chan error, 1)
 	go func() { done <- child.Wait() }()
@@ -404,46 +419,6 @@ func awaitStart(child supervisorChild) (bool, error) {
 		return false, err
 	case <-time.After(SupervisorStartGrace):
 		return true, nil
-	}
-}
-
-// StartSupervisor starts the supervisor detached and reports whether it SURVIVED the start. A child that
-// exits immediately is a FAILED start: this verb is the documented way to restart the supervisor, so
-// reporting a pid for a child that is already dead would say it restarted when it did not.
-func StartSupervisor(name string, stdout, stderr io.Writer) bool {
-	StopSupervisor(name, true, stdout, stderr)
-	logPath, err := LogPath(name)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam: %v\n", err)
-		return false
-	}
-	child, err := spawnChild([]string{"compact-run", "--rig", name}, logPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam: could not start the compaction supervisor: %v\n", err)
-		return false
-	}
-	survived, err := awaitStart(child)
-	if !survived {
-		fmt.Fprintf(stderr,
-			"4genteam: the compaction supervisor exited immediately (status %d); nothing is supervising this rig. "+
-				"Its output is in %s\n", exitStatus(err), logPath)
-		return false
-	}
-	fmt.Fprintf(stdout, "compact supervisor: pid %d, log %s\n", child.Pid(), logPath)
-	return true
-}
-
-// StopSupervisor kills the supervisor for a rig. quiet is for the restart path, where "was not running"
-// is not news.
-func StopSupervisor(name string, quiet bool, stdout, stderr io.Writer) {
-	stopped := stopPattern(SupervisorPattern(name))
-	if quiet {
-		return
-	}
-	if stopped {
-		fmt.Fprintln(stdout, "compact supervisor: stopped")
-	} else {
-		fmt.Fprintln(stdout, "compact supervisor: was not running")
 	}
 }
 

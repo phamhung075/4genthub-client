@@ -12,7 +12,12 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
+
+// beats records every heartbeat the watchdog seam wrote in the current test; isolate installs the
+// recorder and clears it, so a test asserts the beats without touching the machine's log directory.
+var beats []string
 
 // isolate points the package's home at a temporary directory and stubs every seam the watchdog can reach:
 // no real home, no tmux, no rig. It restores them when the test ends. Everything a test sets AFTER calling
@@ -22,6 +27,14 @@ func isolate(t *testing.T) string {
 	home := t.TempDir()
 	oldHome, oldTmux, oldIdent := realHome, tmuxRead, tmuxServerIdentity
 	oldNodes, oldSleep, oldLimit, oldLook := watchdogNodesJSON, watchSleep, watchPollLimit, clientcmd.LookPath
+	// Every poll of the watch loop now beats. The seam is replaced here, so no test writes into the
+	// machine's own log directory; the beat is recorded for the focused test that asserts it.
+	oldBeat := clientservices.WriteHeartbeat
+	beats = nil
+	clientservices.WriteHeartbeat = func(safeguard, rig string) error {
+		beats = append(beats, safeguard+"/"+rig)
+		return nil
+	}
 	realHome = func() (string, error) { return home, nil }
 	tmuxRead = func() (string, error) { return "", nil }
 	tmuxServerIdentity = func() string { return "1 2" }
@@ -31,6 +44,7 @@ func isolate(t *testing.T) string {
 	t.Cleanup(func() {
 		realHome, tmuxRead, tmuxServerIdentity = oldHome, oldTmux, oldIdent
 		watchdogNodesJSON, watchSleep, watchPollLimit, clientcmd.LookPath = oldNodes, oldSleep, oldLimit, oldLook
+		clientservices.WriteHeartbeat = oldBeat
 	})
 	return home
 }
@@ -248,6 +262,25 @@ func TestWatchHeartbeatOnlyEveryNPolls(t *testing.T) {
 	}
 	if !strings.Contains(out, "watching every 60s (two consecutive misses required before acting; heartbeat every 120s)") {
 		t.Errorf("missing the watching banner:\n%s", out)
+	}
+}
+
+// TestWatchWritesOneHeartbeatPerPoll: every poll beats, not only the polls the operator's log line names,
+// so a stopped watchdog and a quiet rig cannot look the same.
+func TestWatchWritesOneHeartbeatPerPoll(t *testing.T) {
+	isolate(t)
+	drivePolls([]string{"alive"})
+	watchPollLimit = 3
+	w := testWatcher(&bytes.Buffer{})
+	w.watch("demo", time.Minute, defaultWatchBeat)
+
+	if len(beats) != 3 {
+		t.Fatalf("heartbeats = %d (%v), want one per poll (3)", len(beats), beats)
+	}
+	for _, beat := range beats {
+		if beat != "watchdog/demo" {
+			t.Errorf("heartbeat = %q, want watchdog/demo (the rig-scoped heartbeat file)", beat)
+		}
 	}
 }
 

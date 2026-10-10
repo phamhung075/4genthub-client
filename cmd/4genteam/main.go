@@ -116,7 +116,9 @@ func main() {
 	if path, err := clientenv.DefaultPath(); err == nil {
 		_ = clientenv.Load(path)
 	}
-	clientlifecycle.EnsureBridge(os.Args[1:], os.Stderr)
+	// NO VERB STARTS A SAFEGUARD AS A SIDE EFFECT. `EnsureBridge` used to start the status bridge from any
+	// cloud-reading verb; 7.1 made rigd the SINGLE RESTART AUTHORITY, so the bridge is rigd's child and a
+	// second start path would be a second mechanism - and a bridge rigd does not supervise.
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 

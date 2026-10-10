@@ -1,0 +1,176 @@
+// The two files rigd keeps that are NOT heartbeats: its local state file, rigd.json, and the alert log
+// the operator reads with `doctor`.
+package clientservices
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
+)
+
+// RigdState is rigd's local state file, `<seat store>/rigd.json`, mode 0600. 7.1 rules its `rigs` list -
+// the rooms that are meant to run, which `up` appends to and `down` removes from - and 7.2's row carries
+// two fields no external observer can compute, so rigd records its supervision of each safeguard here
+// too. `doctor` and `status --json` read them and compute everything else themselves; a row whose
+// safeguard rigd never started simply carries no restarts and no started_at.
+type RigdState struct {
+	// Rigs is the list a report walks: one compaction supervisor and one watchdog per rig.
+	Rigs []string `json:"rigs"`
+	// Safeguards are the rows rigd recorded as it supervised its children. Only the fields pgrep and a
+	// heartbeat cannot answer are read back from here (restarts, started_at, failing).
+	Safeguards []Health `json:"safeguards"`
+}
+
+// RigdStatePath is the state file's location. It is a variable so a test drives a temp store instead of
+// the machine's own seat store.
+var RigdStatePath = defaultRigdStatePath
+
+// defaultRigdStatePath is `<seat store>/rigd.json`, the path 7.1 and 3.2 name.
+func defaultRigdStatePath() (string, error) {
+	store, err := clientenv.ResolveSeatStore("")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(store, "rigd.json"), nil
+}
+
+// ReadRigdState reads the state file. A missing or unreadable file answers the empty state rather than
+// an error: a machine whose rigd has never run has no rooms, and `doctor` must be able to say so.
+func ReadRigdState() RigdState {
+	path, err := RigdStatePath()
+	if err != nil {
+		return RigdState{}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return RigdState{}
+	}
+	var state RigdState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return RigdState{}
+	}
+	return state
+}
+
+// WriteRigdState writes the state file atomically and with mode 0600, because this is the file a later
+// phase will carry the machine's command consent in (3.2) and a world-readable consent file is not one.
+func WriteRigdState(state RigdState) error {
+	path, err := RigdStatePath()
+	if err != nil {
+		return err
+	}
+	body, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".rigd.json-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = temp.Close()
+		_ = os.Remove(temp.Name())
+	}()
+	if _, err := temp.Write(append(body, '\n')); err != nil {
+		return err
+	}
+	if err := temp.Chmod(0o600); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temp.Name(), path)
+}
+
+// AddRig records a room as one rigd supervises, once: `up` is idempotent, and a rig listed twice would
+// be reported twice.
+func AddRig(state RigdState, rig string) RigdState {
+	if strings.TrimSpace(rig) == "" {
+		return state
+	}
+	for _, listed := range state.Rigs {
+		if listed == rig {
+			return state
+		}
+	}
+	state.Rigs = append(state.Rigs, rig)
+	return state
+}
+
+// RemoveRig drops a room from the list. A room that is not listed is stopped on purpose (7.9), so this
+// is what `down` does to it.
+func RemoveRig(state RigdState, rig string) RigdState {
+	kept := make([]string, 0, len(state.Rigs))
+	for _, listed := range state.Rigs {
+		if listed != rig {
+			kept = append(kept, listed)
+		}
+	}
+	state.Rigs = kept
+	return state
+}
+
+// AlertsTail is how many lines of alerts.log `doctor` prints. The alert itself is the last line, so the
+// tail is for the reading and the exit code for the decision.
+const AlertsTail = 10
+
+// AlertsLogPath is where every safeguard transition is appended: <LogDir>/alerts.log. It is the one
+// surface that reaches an operator without the cloud, and 7.3 states plainly that it reaches nobody
+// until someone runs `doctor` - the alert itself still travels on the next `ready`.
+func AlertsLogPath() (string, error) {
+	dir, err := LogDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "alerts.log"), nil
+}
+
+// AppendAlert adds one line to alerts.log. A failure to write is returned rather than swallowed: rigd
+// reports it in its own log, because an alert that silently failed to land is the incident again.
+func AppendAlert(line string) error {
+	path, err := AlertsLogPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	if _, err := file.WriteString(line + "\n"); err != nil {
+		return err
+	}
+	return nil
+}
+
+// TailAlerts is the last lines of alerts.log, for `doctor`. A missing file is an empty tail and not an
+// error: an alert log nobody has written to yet is exactly what a fresh machine has.
+func TailAlerts() []string {
+	path, err := AlertsLogPath()
+	if err != nil {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	text := strings.TrimRight(string(raw), "\n")
+	if text == "" {
+		return nil
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > AlertsTail {
+		lines = lines[len(lines)-AlertsTail:]
+	}
+	return lines
+}

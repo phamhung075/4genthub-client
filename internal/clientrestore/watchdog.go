@@ -15,6 +15,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 // exitDead is the one-shot `<rig>` verdict: the daemon expects running seats and tmux has none, and the
@@ -304,6 +305,12 @@ func (w *watcher) watch(rigName string, interval time.Duration, beat int) {
 		polls++
 		if beat > 0 && polls%beat == 0 {
 			w.log.printf("%s: heartbeat — alive, daemon expects %d, tmux has %d, no misses", rigName, exp, live)
+		}
+		// Every poll beats, not only every `beat` polls: a stopped watchdog and a quiet rig must not
+		// look the same, and the operator's log line above is not a heartbeat file. A failed write is
+		// reported through the same log rather than swallowed, one line per poll that failed.
+		if err := clientservices.WriteHeartbeat(clientservices.Watchdog, rigName); err != nil {
+			w.log.printf("%s: heartbeat write failed: %v", rigName, err)
 		}
 		watchSleep(interval)
 	}

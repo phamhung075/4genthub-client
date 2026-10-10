@@ -26,6 +26,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
 
@@ -82,6 +83,8 @@ func Commands() []clientcmd.Command {
 		logCommand{},
 		uiCommand{},
 		compactRunCommand{},
+		doctorCommand{},
+		rigdCommand{},
 	}
 }
 
@@ -130,11 +133,16 @@ func requireRig(verb string, args []string, stderr io.Writer) (string, bool) {
 
 // The steps `up` runs, in order. Each is a variable so a test can assert the order without a daemon, a
 // rig, herdr or a UI: the Python test replaces the same functions.
+//
+// startBridge IS GONE FROM THIS LIST, and that is 7.1's removed path: `up` starts rigd, and rigd starts
+// the bridge. Two start paths for one safeguard would be two mechanisms.
 var (
 	ensureDaemon       = ensureDaemonImpl
 	ensureRig          = ensureRigImpl
 	ensureForcecompact = ensureForcecompactImpl
-	startBridge        = startBridgeImpl
+	recordRigFor       = recordRig
+	startAuthority     = startRigd
+	waitSafeguards     = waitForSafeguards
 	openUI             = openUIImpl
 	runWatchView       = runWatchViewImpl
 	runHerdr           = runHerdrImpl
@@ -144,7 +152,7 @@ type upCommand struct{}
 
 func (upCommand) Name() string { return "up" }
 func (upCommand) Summary() string {
-	return "start the local stack for a rig: daemon, seats, bridge, supervisor, UI"
+	return "start the local stack for a rig: daemon, seats, rigd (which starts the bridge and the supervisor), UI"
 }
 func (upCommand) NeedsRig() bool { return true }
 
@@ -178,10 +186,33 @@ func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Wr
 	}
 	ensureRig(rig, name, stderr)
 	ensureForcecompact(stderr)
-	startBridge(stdout, stderr)
-	if !StartSupervisor(name, stdout, stderr) {
-		fmt.Fprintln(stderr, "4genteam: continuing without a running compaction supervisor (see above)")
+
+	// 7.5: a bridge refused for a missing AGENTHUB_URL or AGENTHUB_TOKEN is a FAILED `up`. The check runs
+	// HERE, before rigd is started, because the alternative is a bridge that dies at once and a message
+	// about a process instead of about the variable that is missing. The value is never printed.
+	if missing := missingCloudEnv(); len(missing) > 0 {
+		return refuseMissingCloudEnv("up", missing, stderr)
 	}
+
+	// The room is recorded as one that is meant to run (7.1), and then the single restart authority is
+	// started. From here on rigd owns the compaction supervisor, the watchdog and the bridge; `up` starts
+	// nothing else for them.
+	if !recordRigFor(name, stderr) {
+		return clientcmd.ExitUnavailable
+	}
+	if !startAuthority(stdout, stderr) {
+		return ExitStartFailed
+	}
+
+	// 7.5: the SAME check `doctor` makes, run after rigd's start grace and BEFORE the watch view, the UI
+	// and herdr. A safeguard that did not come up is named here, with the line a reader will see in
+	// `doctor`, rather than discovered hours later on a quiet rig.
+	rows, ok := waitSafeguards(name)
+	if !ok {
+		reportDown(rows, stderr)
+		return clientcmd.ExitUnavailable
+	}
+
 	runWatchView(name, stderr)
 	openUI(rig, stderr)
 	if os.Getenv("HERDR_ENV") == "" {
@@ -283,30 +314,6 @@ func ensureForcecompactImpl(stderr io.Writer) {
 	fmt.Fprintf(stderr, "4genteam: run once: sudo setcap cap_sys_ptrace+ep %s\n", helper)
 }
 
-func startBridgeImpl(stdout, stderr io.Writer) {
-	if os.Getenv("AGENTHUB_URL") == "" || os.Getenv("AGENTHUB_TOKEN") == "" {
-		fmt.Fprintln(stderr, "4genteam: AGENTHUB_URL and AGENTHUB_TOKEN must be set (in the environment or the client's env file)")
-		return
-	}
-	stopPattern(BridgePattern)
-	logPath, err := BridgeLogPath()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam: %v\n", err)
-		return
-	}
-	child, err := spawnChild([]string{"bridge", "run"}, logPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam: could not start the bridge: %v\n", err)
-		return
-	}
-	survived, err := awaitStart(child)
-	if survived {
-		fmt.Fprintf(stdout, "bridge: pid %d, log %s\n", child.Pid(), logPath)
-		return
-	}
-	fmt.Fprintf(stderr, "4genteam: the bridge exited immediately (status %d); see %s\n", exitStatus(err), logPath)
-}
-
 func openUIImpl(rig *clientcmd.Rig, stderr io.Writer) {
 	if _, err := rig.Run(context.Background(), "ui", "open"); err != nil {
 		fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: rig daemon status)")
@@ -344,15 +351,17 @@ type compactCommand struct{}
 
 func (compactCommand) Name() string { return "compact" }
 func (compactCommand) Summary() string {
-	return "(re)start the compaction supervisor for a rig, detached"
+	return "record a rig as one meant to run and report its compaction supervisor's row (rigd owns the restart)"
 }
 func (compactCommand) NeedsRig() bool { return false }
 
 func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, compactUsage,
-			"(Re)start the compaction supervisor, detached. A start whose child dies at once returns non-zero.\n"+
-				"The DeepSeek peak gate applies here too, because this supervisor is what keeps a room working: with "+
+			"Record RIG as a room that is meant to run, and report its compaction supervisor's row.\n"+
+				"7.1 made rigd the single restart authority, so this verb SPAWNS NOTHING: the supervisor is rigd's\n"+
+				"child, it is restarted with backoff when it dies, and the repair verb is `up`.\n"+
+				"The DeepSeek peak gate still applies here, unchanged: with "+
 				clientoffpeak.ModeEnv+" on (the default) a room whose seats run a deepseek/ model is refused at peak, and "+
 				clientoffpeak.FlagAllowPeak+" skips the check for this run.")
 		return clientcmd.ExitOK
@@ -363,50 +372,96 @@ func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, st
 		return clientcmd.ExitUsage
 	}
 	// No rig was resolved for this verb by the dispatcher, so the gate resolves one itself; with no rig
-	// on the machine there is nothing to read and the supervisor's own start reports the failure.
+	// on the machine there is nothing to read and the refusal says so.
 	if code := PeakGate(nil, name, "compact", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
-	if !StartSupervisor(name, stdout, stderr) {
-		return ExitStartFailed
+	if !recordRigFor(name, stderr) {
+		return clientcmd.ExitUnavailable
 	}
+	// WITH NO AUTHORITY THERE IS NO SUPERVISOR, and saying so is this verb's whole job now: it is exactly
+	// the silence the owner's incident was made of.
+	if rigdRunning() == 0 {
+		fmt.Fprintf(stderr, "4genteam compact: rigd is not running, and the compaction supervisor is rigd's child now - start it with `4genteam up %s`.\n", name)
+		return clientcmd.ExitUnavailable
+	}
+	rows := clientservices.NotRunning(rowsFor(name))
+	for _, row := range rows {
+		if row.Safeguard == clientservices.Compact {
+			fmt.Fprintln(stderr, clientservices.StateLine(row))
+			return clientcmd.ExitUnavailable
+		}
+	}
+	fmt.Fprintln(stdout, "compact supervisor: running (supervised by rigd)")
 	return clientcmd.ExitOK
 }
 
 type stopCommand struct{}
 
-func (stopCommand) Name() string    { return "stop" }
-func (stopCommand) Summary() string { return "stop the compaction supervisor and the status bridge" }
-func (stopCommand) NeedsRig() bool  { return false }
+func (stopCommand) Name() string { return "stop" }
+func (stopCommand) Summary() string {
+	return "stop rigd and its children (a machine-wide stop: compact, watchdog, bridge)"
+}
+func (stopCommand) NeedsRig() bool { return false }
 
 func (stopCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		printHelp(stdout, stopUsage, "Stop the compaction supervisor and the status bridge for a rig.")
+		printHelp(stdout, stopUsage,
+			"Stop rigd. Its children - the compaction supervisors, the watchdogs and the bridge - stop with it,\n"+
+				"because rigd is the single restart authority and a killed rigd must not leave orphans behind.\n"+
+				"The stop is MACHINE-WIDE: it is not room intent, and the room stays in rigd.json's list.")
 		return clientcmd.ExitOK
 	}
 	name, ok := requireRig("stop", args, stderr)
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	StopSupervisor(name, false, stdout, stderr)
-	stopPattern(BridgePattern)
+	stopRigd(name, stdout)
 	return clientcmd.ExitOK
 }
 
 type statusCommand struct{}
 
-func (statusCommand) Name() string    { return "status" }
-func (statusCommand) Summary() string { return "the supervisor's process and the last log lines" }
-func (statusCommand) NeedsRig() bool  { return false }
+func (statusCommand) Name() string { return "status" }
+func (statusCommand) Summary() string {
+	return "the safeguard rows (--json too) and the supervisor's last log lines"
+}
+func (statusCommand) NeedsRig() bool { return false }
 
 func (statusCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		printHelp(stdout, statusUsage, "The compaction supervisor's process, or 'not running', and the last five lines of its log.")
+		printHelp(stdout, statusUsage,
+			"One line per safeguard row for the rig, then the compaction supervisor's process and the last five\n"+
+				"lines of its log (shown for reading only: the supervisor logs only when it acts, so its log age is\n"+
+				"never evidence of anything). With --json the rows are printed as JSON.\n\n"+
+				"This verb only reads. `doctor` is the one that exits non-zero and names what is down.")
 		return clientcmd.ExitOK
 	}
-	name, ok := requireRig("status", args, stderr)
+	asJSON := false
+	var rest []string
+	for _, arg := range args {
+		if arg == "--json" {
+			asJSON = true
+			continue
+		}
+		rest = append(rest, arg)
+	}
+	name, ok := requireRig("status", rest, stderr)
 	if !ok {
 		return clientcmd.ExitUsage
+	}
+	rows := rowsFor(name)
+	if asJSON {
+		body, err := json.MarshalIndent(rows, "", "  ")
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam status: cannot print the rows: %v\n", err)
+			return clientcmd.ExitUnavailable
+		}
+		fmt.Fprintln(stdout, string(body))
+		return clientcmd.ExitOK
+	}
+	for _, row := range rows {
+		fmt.Fprintln(stdout, clientservices.StateLine(row))
 	}
 	SupervisorStatus(name, stdout, stderr)
 	return clientcmd.ExitOK

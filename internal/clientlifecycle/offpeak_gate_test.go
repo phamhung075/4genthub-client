@@ -10,6 +10,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 // deepSeekRoomNode is a room whose seat runs a DeepSeek model: the case the peak gate exists for, since
@@ -43,10 +44,17 @@ func stubWholeUp(t *testing.T) *[]string {
 	ensureDaemon = func(*clientcmd.Rig, io.Writer) error { *ran = append(*ran, "ensureDaemon"); return nil }
 	ensureRig = func(*clientcmd.Rig, string, io.Writer) { *ran = append(*ran, "ensureRig") }
 	ensureForcecompact = func(io.Writer) {}
-	startBridge = func(io.Writer, io.Writer) {}
-	release := make(chan struct{})
-	t.Cleanup(func() { close(release) })
-	spawnChild = func([]string, string) (supervisorChild, error) { return survivedChild{release}, nil }
+	// The room recorded and the authority started are the steps after the gate; a test about the gate
+	// asserts whether the RESUME ran, so these two are stubbed to no-ops that cannot touch this machine.
+	recordRigFor = func(string, io.Writer) bool { return true }
+	startAuthority = func(io.Writer, io.Writer) bool { return true }
+	waitSafeguards = func(string) ([]clientservices.Health, bool) {
+		return []clientservices.Health{{Safeguard: clientservices.Rigd, State: clientservices.Running}}, true
+	}
+	// The gate passes only for a `up` that may report, so the credentials the missing-env refusal would
+	// otherwise catch are set here and never printed.
+	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
+	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
 	runWatchView = func(string, io.Writer) { *ran = append(*ran, "watch") }
 	openUI = func(*clientcmd.Rig, io.Writer) {}
 	runHerdr = func(io.Writer, io.Writer) int { return clientcmd.ExitOK }
@@ -200,9 +208,11 @@ func TestCompactRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	}
 }
 
-// TestCompactStartsTheSupervisorWhenTheCheckIsOff is the control: the same room, off-peak or with the
-// check turned off, still gets its supervisor.
-func TestCompactStartsTheSupervisorWhenTheCheckIsOff(t *testing.T) {
+// TestCompactProceedsWhenTheCheckIsOff is the control: the same room, off-peak or with the check turned
+// off, still passes the gate. What the verb DOES afterwards changed with 7.1 - it records the room and
+// reports the row instead of starting a supervisor - so this asserts the gate's decision alone: no
+// refusal, and nothing spawned.
+func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 	for _, c := range []struct {
 		name  string
 		pin   string
@@ -213,14 +223,16 @@ func TestCompactStartsTheSupervisorWhenTheCheckIsOff(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			restoreAll(t)
-			release := make(chan struct{})
-			t.Cleanup(func() { close(release) })
 			var spawned bool
 			spawnChild = func([]string, string) (supervisorChild, error) {
 				spawned = true
-				return survivedChild{release}, nil
+				return diedChild{}, nil
 			}
 			SupervisorStartGrace = time.Millisecond
+			rigdRunning = func() int { return 4242 }
+			rowsFor = func(string) []clientservices.Health {
+				return []clientservices.Health{{Rig: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}
+			}
 			rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
 			gateEnv(t, c.pin)
 
@@ -230,8 +242,8 @@ func TestCompactStartsTheSupervisorWhenTheCheckIsOff(t *testing.T) {
 			if code != clientcmd.ExitOK {
 				t.Fatalf("exit %d, want 0 (stderr %q)", code, errOut.String())
 			}
-			if !spawned {
-				t.Error("the supervisor was not started")
+			if spawned {
+				t.Error("compact spawned a supervisor, and rigd is the only restart authority")
 			}
 		})
 	}

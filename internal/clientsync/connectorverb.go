@@ -134,12 +134,18 @@ func RunConnectorVerb(ctx context.Context, args []string, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "sync connector: hello failed: %v\n", err)
 		return clientcmd.ExitRemote
 	}
-	sessionID, err := conn.RegisterSession(session, session, room, seat)
+	// ONE SHOT, AND HONEST ABOUT IT: this verb registers the session with the state it can see and the
+	// transcript source, and sends no cursor - it is not tailing anything, so claiming a position in the
+	// source would make the cloud resume a stream nobody keeps. The long-running `rigd` is the tail.
+	ack, err := conn.RegisterSession(SessionRegistration{
+		Key: session, Name: session, Room: room, Seat: seat,
+		State: SessionRunning, Source: SourceTranscript,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "sync connector: session registration failed: %v\n", err)
 		return clientcmd.ExitRemote
 	}
-	lastSeq, err := conn.AppendEvents(session, events)
+	eventsAck, err := conn.AppendEvents(session, events, "")
 	if err != nil {
 		fmt.Fprintf(stderr, "sync connector: appending events failed: %v\n", err)
 		return clientcmd.ExitRemote
@@ -148,8 +154,8 @@ func RunConnectorVerb(ctx context.Context, args []string, stdout, stderr io.Writ
 	// The report is the acceptance's own nouns: which connector, which session, which session id the
 	// cloud assigned, how many events, and the resume point. Never the token.
 	fmt.Fprintf(stdout, "connector %s\n", connectorID)
-	fmt.Fprintf(stdout, "session %s -> %s\n", session, sessionID)
-	fmt.Fprintf(stdout, "events %d, last_seq %d\n", len(events), lastSeq)
+	fmt.Fprintf(stdout, "session %s -> %s\n", session, ack.SessionID)
+	fmt.Fprintf(stdout, "events %d, last_seq %d\n", len(events), eventsAck.LastSeq)
 	return 0
 }
 
@@ -166,6 +172,9 @@ type sessionCandidate struct {
 	identifiers []string
 	rigName     string
 	member      string
+	// state is the node's status reduced to 2.2's two values: the `session` frame carries it, and a
+	// seat that leaves the node list is sent once with `stopped`.
+	state string
 }
 
 // answersTo reports whether a verb naming this session means this entry: --session may carry the
@@ -230,6 +239,7 @@ func parseRigPsSessions(out string) ([]sessionCandidate, error) {
 			identifiers: sessionIdentifiers(entry),
 			rigName:     sessionRigName(entry),
 			member:      sessionMember(entry),
+			state:       sessionState(entry),
 		}
 		if len(c.identifiers) == 0 {
 			continue
@@ -287,6 +297,26 @@ func sessionRigName(entry map[string]any) string {
 		if value, ok := entry[key].(string); ok && value != "" {
 			return value
 		}
+	}
+	return ""
+}
+
+// sessionStateKeys are the keys a node record may carry its status under, most authoritative first.
+var sessionStateKeys = []string{"sessionStatus", "session_status", "status"}
+
+// sessionState is the node's status as one of 2.2's two session states. ONLY `running` is running: a
+// `detached` or `stopped` node is not a live session, and the Sessions page's `seat_state` distinguishes
+// a reported stop (stopped) from no report at all (null), so a guess here would erase that difference.
+func sessionState(entry map[string]any) string {
+	for _, key := range sessionStateKeys {
+		value, ok := entry[key].(string)
+		if !ok || value == "" {
+			continue
+		}
+		if value == SessionRunning {
+			return SessionRunning
+		}
+		return SessionStopped
 	}
 	return ""
 }

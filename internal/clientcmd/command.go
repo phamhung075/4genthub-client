@@ -18,6 +18,13 @@ import (
 	"strings"
 )
 
+// Version is the CLIENT's own version. It lives here because TWO callers need the same string and
+// neither may be the authority for the other: the binary prints it (`4genteam version`) and the connector
+// puts it in every `hello` frame, where the cloud records which client an upload came from. It is
+// deliberately NOT the server's release identity - config.ReleaseVersion marks what the server deploys,
+// while this marks the binary on somebody's machine.
+const Version = "0.1.0"
+
 // Exit codes the dispatcher and every command share.
 const (
 	ExitOK = 0

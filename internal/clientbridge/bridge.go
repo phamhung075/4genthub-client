@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 // The wire contract, in the Python bridge's own numbers.
@@ -272,6 +273,11 @@ func (b *Bridge) ApplyVerdicts(body []byte) {
 // fails loud and actionable, because a rejected credential never recovers by retrying and a bridge
 // that cannot report must say so instead of looping quietly.
 func (b *Bridge) Cycle(ctx context.Context, rig *clientcmd.Rig) time.Duration {
+	// The beat is the FIRST thing the cycle does, before any early return: a cycle that finds nothing
+	// to send, or that fails, still proves the bridge is alive. The bridge is one per machine, so no rig.
+	if err := clientservices.WriteHeartbeat(clientservices.Bridge, ""); err != nil {
+		b.note("heartbeat", fmt.Sprintf("heartbeat write failed: %v", err))
+	}
 	payload := b.BuildPayload(rig)
 	for where, record := range b.LocalRecord(payload.Seats) {
 		if record.SinceLastInSync == "changed" {

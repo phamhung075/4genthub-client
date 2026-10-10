@@ -11,31 +11,23 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
-// SupervisorPattern is the argv fragment that identifies this client's compaction supervisor. The
-// Python matched "agenthub_client.compact --rig <rig>", a Python module name; the Go supervisor is this
-// binary's own `compact-run`, so this is what `status` finds and `stop` kills.
-func SupervisorPattern(rig string) string { return "compact-run --rig " + rig }
-
-// BridgePattern identifies the status bridge's process: a regular expression anchored to the start of
-// the command line, so a shell or editor whose text merely contains "bridge run" is neither mistaken
-// for the bridge nor killed as one.
-const BridgePattern = `^[^ ]*4genteam bridge run`
-
-// LogDir is where the lifecycle verbs keep their logs.
-func LogDir() (string, error) {
-	home, err := clientenv.RealHome()
-	if err != nil {
-		return "", err
-	}
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		base = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(base, "4genthub", "logs"), nil
+// SupervisorPattern is the argv fragment that identifies this client's compaction supervisor, read from
+// the ONE pattern table the health report also uses (clientservices.Pattern): `status` and the report must
+// never be able to disagree about which process is the supervisor, which two definitions of the same
+// command line eventually would. The Python matched "agenthub_client.compact --rig <rig>", a Python module
+// name; the Go supervisor is this binary's own `compact-run`.
+func SupervisorPattern(rig string) string {
+	return clientservices.Pattern(clientservices.Compact, rig)
 }
+
+// LogDir is where the lifecycle verbs keep their logs. It DELEGATES to clientservices.LogDir because the
+// log directory has ONE computation in the client: the supervisor's log, the bridge's log, the heartbeat
+// files and alerts.log must not be able to land in two places, which is what a second copy of the XDG
+// rule here would eventually do.
+func LogDir() (string, error) { return clientservices.LogDir() }
 
 // LogPath is the supervisor's log for one rig.
 func LogPath(rig string) (string, error) {
