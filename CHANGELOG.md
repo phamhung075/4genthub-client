@@ -48,6 +48,17 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Result, this seat's own run: `gofmt -l` empty on both files; `go build ./...` rc 0; the case ok; the whole
   `internal/clientservices` package ok.
 
+## 2026-10-11 — a relaunched omp seat gets the skills `sync rig` built for it
+
+### Fixed
+- `internal/clientseat/skills.go`: an omp seat reads skills from `<state root>/<seat session>/agent/skills` and
+  nothing copied the store's `rig/agents/<seat>/skills` there, so a restarted fe-dev answered "No such skill" for
+  `seat-worktree` while the skill sat in the store. `relaunch` (so `seat reseat` and `seat sync --relaunch quiet`)
+  now replaces that directory with the store copy before it kills the session. It replaces and does not merge, so a
+  skill the client tree no longer carries leaves the seat. A seat with no agent directory (claude-code) is left
+  alone, and an omp seat whose store has no skills is refused.
+- `internal/clientseat/skills_test.go`: replace not merge, non-omp seat untouched, refusal on a missing store copy.
+
 ## 2026-10-11 — `4genteam seat reseat` and `4genteam send`
 
 ### Added

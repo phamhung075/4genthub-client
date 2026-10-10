@@ -258,6 +258,9 @@ func secondsSinceLastWrite(stateRoot, rig, seat string) float64 {
 // now pinned to.
 func relaunch(rig, seat string) error {
 	session := rig + "-" + seat + "@" + rig
+	if err := deliverSkillsDefault(rig, seat); err != nil {
+		return err
+	}
 	if tmux, err := exec.LookPath("tmux"); err == nil {
 		_ = exec.Command(tmux, "kill-session", "-t", session).Run()
 	}
