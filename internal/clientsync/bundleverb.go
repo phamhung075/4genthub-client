@@ -143,7 +143,10 @@ func bundleCreate(parsed bundleArgs, stdout, stderr io.Writer) int {
 		return clientcmd.ExitUsage
 	}
 
-	store, err := resolveSeatStore("")
+	// seatStore directly, not resolveSeatStore: `sync bundle` takes no store flag of its own - its
+	// --out-dir is where the bundle is written - so its refusal keeps the shared reason alone rather than
+	// naming a flag the verb does not accept.
+	store, err := seatStore("")
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
 		return clientcmd.ExitUsage

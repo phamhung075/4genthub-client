@@ -13,11 +13,19 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// resolveSeatStore is the ONE resolution the sync verbs use: the --out flag when given, else the
-// machine's store under the account home (clientenv.ResolveSeatStore). It is a var so a test can point
-// the store at a scratch tree: the store no longer follows $HOME, so t.Setenv("HOME", ...) can no longer
-// redirect it, exactly as the Python tests monkeypatch DEFAULT_OUT rather than the environment.
-var resolveSeatStore = clientenv.ResolveSeatStore
+// seatStore is the machine's store: clientenv.ResolveSeatStore, the account home's .openrig/agenthub-seats.
+// It is a var so a test can point the store at a scratch tree - the store no longer follows $HOME, so
+// t.Setenv("HOME", ...) cannot redirect it, exactly as the Python tests monkeypatch DEFAULT_OUT - and so a
+// test can drive the machine that cannot resolve one.
+var seatStore = clientenv.ResolveSeatStore
+
+// resolveSeatStore is the sync verbs' resolution: the machine's store, with the escape named in the refusal
+// because every verb here that resolves a store takes --out. `sync bundle` is the exception and calls
+// seatStore directly: its --out-dir is where the bundle is written, not the store.
+func resolveSeatStore(flagValue string) (string, error) {
+	store, err := seatStore(flagValue)
+	return store, clientenv.SeatStoreRefusal(err, clientenv.SeatStoreOutFlag)
+}
 
 // RequireEnv ports agenthub_client/src/agenthub_client/seat_sync.py's require_env: an unset or empty variable is a usage error with
 // the Python's message ("<name> is not set"), NOT a silent default - which is why the URL and the token

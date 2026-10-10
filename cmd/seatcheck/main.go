@@ -15,12 +15,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/commpolicy"
 )
 
@@ -52,11 +52,6 @@ var intents = map[string]commpolicy.Intent{
 	"notice":     commpolicy.IntentNotice,
 }
 
-// defaultPinsDir is where scripts/openrig_seat_sync.py writes the pinned seat directories
-// (its DEFAULT_OUT), relative to the home directory. It is not a flag: the seat this guard
-// constrains must not choose where its policy and audit trail live.
-const defaultPinsDir = ".openrig/agenthub-seats"
-
 // Exit codes of send, besides 0 (delivered) and the usage/policy error 2.
 const (
 	exitAuditFailed    = 1
@@ -83,27 +78,16 @@ var (
 // client's own default resolves on a machine with no override.
 var installedPinsDir = ""
 
+// defaultPins is where the pinned seat directories live: the CLIENT's own store, through the one
+// implementation that clientenv owns - the account home's .openrig/agenthub-seats, never $HOME, so the
+// guard and the client cannot disagree about where a policy was installed. This used to be a second copy
+// of that resolution inside the same module, which is the kind of duplication that let a week-stale
+// binary pass as current.
 func defaultPins() (string, error) {
 	if installedPinsDir != "" {
 		return installedPinsDir, nil
 	}
-	home, err := realHome()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, defaultPinsDir), nil
-}
-
-// realHome is the account's home directory from the passwd entry, NOT the HOME variable: a seat
-// is launched with HOME pointed at its own state directory, so resolving from the environment
-// makes the store a function of who invokes the guard - the seat would look somewhere the
-// client never writes, and a policy that was installed would read as never installed. This is
-// the same resolution as real_home() in scripts/openrig_seat_policy.py, one language over.
-func realHome() (string, error) {
-	if u, err := user.Current(); err == nil && u.HomeDir != "" {
-		return u.HomeDir, nil
-	}
-	return os.UserHomeDir()
+	return clientenv.ResolveSeatStore("")
 }
 
 func runSend(args []string, stdout, stderr io.Writer) int {

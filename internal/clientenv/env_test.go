@@ -145,3 +145,30 @@ func TestAResolvableHomeGivesTheSeatStore(t *testing.T) {
 		t.Errorf("ResolveSeatStore = %q, %v; want the machine default", store, err)
 	}
 }
+
+// The refusal names the escape only where the verb really accepts one. The shared reason must stay
+// flag-free - the bridge and `sync bundle` show it as it is - and SeatStoreOutFlag is what a verb with
+// --out shows, with the code preserved so the exit status does not depend on the form.
+func TestTheSeatStoreRefusalNamesTheEscapeOnlyWhenTheVerbHasOne(t *testing.T) {
+	reason := &clientcmd.CodedError{Message: SeatStoreMessage, Code: clientcmd.ExitUsage}
+
+	if strings.Contains(SeatStoreMessage, "--out") {
+		t.Errorf("the shared reason advertises a flag two callers do not accept: %q", SeatStoreMessage)
+	}
+	if alone := SeatStoreRefusal(reason, ""); alone == nil || alone.Error() != SeatStoreMessage {
+		t.Errorf("with no flag the refusal is %v, want the reason alone", alone)
+	}
+	withFlag := SeatStoreRefusal(reason, SeatStoreOutFlag)
+	if withFlag == nil || !strings.Contains(withFlag.Error(), SeatStoreOutFlag) {
+		t.Fatalf("the refusal does not name the flag the verb accepts: %v", withFlag)
+	}
+	if !strings.Contains(withFlag.Error(), SeatStoreMessage) {
+		t.Errorf("the refusal dropped the reason: %v", withFlag)
+	}
+	if code := clientcmd.CodeOf(withFlag, clientcmd.ExitRemote); code != clientcmd.ExitUsage {
+		t.Errorf("the refusal exits %d, want %d", code, clientcmd.ExitUsage)
+	}
+	if SeatStoreRefusal(nil, SeatStoreOutFlag) != nil {
+		t.Error("a nil error grew an escape")
+	}
+}

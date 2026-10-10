@@ -9,6 +9,7 @@ package clientenv
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -91,6 +92,27 @@ func ResolveStateRoot(flagValue string) (string, error) {
 // reason rather than guessing, because a relative path would make the store depend on the working
 // directory - the dependency this client forbids everywhere.
 const SeatStoreMessage = "the seat store cannot be resolved on this machine: the account home directory is not readable"
+
+// SeatStoreOutFlag is the escape a verb can offer in that refusal when it really accepts one: --out DIR
+// carries the store. It is NOT part of SeatStoreMessage, because two callers have no such flag - the
+// bridge resolves no store flag at all, and `sync bundle --out-dir` is where the bundle is written - and a
+// verb that advertises a flag it does not accept is worse than one that says less.
+const SeatStoreOutFlag = "--out DIR"
+
+// SeatStoreRefusal is the refusal with the escape named, and the ONE rule behind it: a verb that takes the
+// flag passes SeatStoreOutFlag, a verb that does not passes "" and keeps the reason alone. The composition
+// lives here so both forms are testable without a machine that cannot resolve a home; the error keeps its
+// code, so the exit status does not depend on which form a verb shows.
+func SeatStoreRefusal(err error, outFlag string) error {
+	if err == nil || outFlag == "" {
+		return err
+	}
+	var coded *clientcmd.CodedError
+	if errors.As(err, &coded) {
+		return &clientcmd.CodedError{Message: coded.Message + ", or pass " + outFlag, Code: coded.Code}
+	}
+	return fmt.Errorf("%w, or pass %s", err, outFlag)
+}
 
 // DefaultSeatStore is where this client keeps the adopted snapshots and their pins. It lives here rather
 // than in a verb package because several verbs default to it, and because it is a MACHINE-level location:

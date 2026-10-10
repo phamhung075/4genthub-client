@@ -155,6 +155,9 @@ func parseOptions(verb string, args []string, withRig, withInterval bool, stdout
 	}
 	store, err := clientenv.ResolveSeatStore(*out)
 	if err != nil {
+		// Every `seat` verb takes --out, so the refusal names it: the rule lives in clientenv, which is
+		// why the bridge (no such flag) shows the reason alone.
+		err = clientenv.SeatStoreRefusal(err, clientenv.SeatStoreOutFlag)
 		fmt.Fprintf(stderr, "4genteam seat %s: %v\n", verb, err)
 		return options{}, clientcmd.ExitUsage, false
 	}

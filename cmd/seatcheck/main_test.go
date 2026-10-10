@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/commpolicy"
 )
 
@@ -171,6 +172,24 @@ func TestSendPolicyMissingOrCorruptFailsClosed(t *testing.T) {
 				t.Fatalf("audit = %+v, want none", records)
 			}
 		})
+	}
+}
+
+// The guard and the client resolve the store through ONE implementation - the whole point of the
+// consolidation. This holds on any machine: both answer the account home s store, and a machine with no
+// readable home refuses in both places.
+func TestDefaultPinsIsTheClientsStore(t *testing.T) {
+	saved := installedPinsDir
+	installedPinsDir = ""
+	t.Cleanup(func() { installedPinsDir = saved })
+
+	got, gotErr := defaultPins()
+	want, wantErr := clientenv.ResolveSeatStore("")
+	if (gotErr == nil) != (wantErr == nil) {
+		t.Fatalf("defaultPins = %q, %v; clientenv.ResolveSeatStore = %q, %v", got, gotErr, want, wantErr)
+	}
+	if gotErr == nil && got != want {
+		t.Fatalf("the guard resolves %q where the client resolves %q", got, want)
 	}
 }
 

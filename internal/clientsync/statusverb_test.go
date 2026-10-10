@@ -195,3 +195,26 @@ func TestTheStoreAndStateRootDoNotFollowHome(t *testing.T) {
 		t.Errorf("a resolved path is under the decoy home: store=%q root=%q", store, root)
 	}
 }
+
+// Every sync verb that resolves a store here takes --out, so its refusal names the flag. The machine
+// cannot resolve a home on demand, so the seam supplies the failure and the composition under test is
+// the real one.
+func TestTheStoreRefusalNamesTheOutFlagTheSyncVerbsTake(t *testing.T) {
+	original := seatStore
+	seatStore = func(string) (string, error) {
+		return "", &clientcmd.CodedError{Message: clientenv.SeatStoreMessage, Code: clientcmd.ExitUsage}
+	}
+	t.Cleanup(func() { seatStore = original })
+
+	var out, errOut bytes.Buffer
+	code := RunStatusVerb(context.Background(), []string{"room1"}, &out, &errOut)
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit %d, want %d: %s", code, clientcmd.ExitUsage, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), clientenv.SeatStoreOutFlag) {
+		t.Errorf("the refusal does not name the flag the verb accepts: %q", errOut.String())
+	}
+	if !strings.Contains(errOut.String(), clientenv.SeatStoreMessage) {
+		t.Errorf("the refusal dropped the reason: %q", errOut.String())
+	}
+}

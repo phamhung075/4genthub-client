@@ -212,3 +212,11 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   drifted apart by exactly that exit code, so the difference is a wrapper decision with a test pinning it
   now. The test-only seam that pointed the default at a scratch tree went with the duplicate, and the
   tests assert agreement with the shared resolver instead.
+- The seat store's refusal names the escape where the verb really has one: `--out DIR` is offered by
+  `sync pull|status|messages|rig|install-checker` and by `seat`, while the reason alone stays on `bridge`,
+  on `sync bundle` (its `--out-dir` is where the bundle is written, not the store) and on the watch verbs -
+  so no verb advertises a flag it does not accept. The rule is one function in `internal/clientenv`
+  (`SeatStoreRefusal`), which preserves the exit code and is pinned on both forms.
+- `cmd/seatcheck` stops carrying its own copy of the home and store resolution: the guard takes the
+  client's (`clientenv.ResolveSeatStore`), so the two cannot disagree about where a seat's policy was
+  installed - the duplication that let a week-stale installed binary read as current.

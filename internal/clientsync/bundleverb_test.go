@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 // bundleHashLong is the Python's HASH_LONG; the bundle name carries its first eight characters.
@@ -26,15 +27,41 @@ const bundleRigYAML = "version: \"0.2\"\n" +
 	"        agent_ref: local:agents/seat1\n"
 
 // bundleStoreHome points the seat store at a scratch root and returns it. The store no longer follows
-// $HOME (a seat runs with HOME at its own state directory), so this overrides the resolution seam rather
-// than the environment; the Python tests monkeypatch DEFAULT_OUT for the same reason.
+// $HOME (a seat runs with HOME at its own state directory), so this overrides the machine's store seam
+// rather than the environment; the Python tests monkeypatch DEFAULT_OUT for the same reason.
 func bundleStoreHome(t *testing.T) string {
 	t.Helper()
 	store := filepath.Join(t.TempDir(), ".openrig", "agenthub-seats")
-	original := resolveSeatStore
-	resolveSeatStore = func(string) (string, error) { return store, nil }
-	t.Cleanup(func() { resolveSeatStore = original })
+	original := seatStore
+	seatStore = func(string) (string, error) { return store, nil }
+	t.Cleanup(func() { seatStore = original })
 	return store
+}
+
+// A verb with no store flag keeps the reason alone: `sync bundle` takes --out-dir, which is where the
+// bundle is written, so its refusal must not advertise a --out it does not accept.
+func TestSyncBundleDoesNotAdvertiseAStoreFlagItLacks(t *testing.T) {
+	original := seatStore
+	seatStore = func(string) (string, error) {
+		return "", &clientcmd.CodedError{Message: clientenv.SeatStoreMessage, Code: clientcmd.ExitUsage}
+	}
+	t.Cleanup(func() { seatStore = original })
+
+	var stdout, stderr bytes.Buffer
+	code := RunBundleVerb(context.Background(), []string{
+		"room1", "seat1",
+		"--rig-yaml", filepath.Join(t.TempDir(), "rig.yaml"),
+		"--rig-root", t.TempDir(),
+	}, &stdout, &stderr)
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit %d, want %d: %s", code, clientcmd.ExitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), clientenv.SeatStoreMessage) {
+		t.Errorf("the refusal dropped the reason: %q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "--out") {
+		t.Errorf("the refusal advertises a flag this verb does not take: %q", stderr.String())
+	}
 }
 
 // bundleWritePin writes the lock the verb must use - the PINNED hash, not the cloud's.
