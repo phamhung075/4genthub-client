@@ -106,6 +106,11 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `docs/AGENT-SETUP.md`: the install-target passage names the profile half too — the same render that
   fills `resources.skills` also lists each id in the default profile's `uses.skills`, so a pool entry
   no profile uses is inert exactly as a file no spec declares is.
+- The usage errors speak this client's own dialect instead of Python's argparse (`9bf0c9d`): one form per
+  kind — `missing argument: <name>`, `unknown argument: <flag>`, `<flag> needs a value` — in the six verbs
+  that parse their own arguments (`sync rig`, `bundle`, `switch`, `respawn`, `offline-install`,
+  `install-checker`). The behaviour is unchanged: a non-zero exit, offline, naming the offending argument.
+  A table test pins the exit code and the name, never the sentence.
 - A machine whose real home cannot be resolved now REFUSES the state root instead of answering a
   relative `.openrig/state/omp` (`42132ff`): `clientenv.DefaultStateRoot` returns no path at all and the
   new `clientenv.ResolveStateRoot` refuses with one message naming both escapes (`--state-root DIR` or
