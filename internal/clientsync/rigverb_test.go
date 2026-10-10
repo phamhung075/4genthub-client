@@ -214,15 +214,17 @@ func rigVerbTest(t *testing.T) *rigVerbFixture {
 	t.Setenv(clientskills.RootEnv, f.skillsRoot)
 
 	origRequire, origLaunch := rigRequireChecker, rigLaunchStateRoot
-	origPolicy, origRoot, origEnv := rigPolicyTable, rigDefaultStateRoot, rigEnvSource
+	origPolicy, origEnv := rigPolicyTable, rigEnvSource
 	t.Cleanup(func() {
 		rigRequireChecker, rigLaunchStateRoot = origRequire, origLaunch
-		rigPolicyTable, rigDefaultStateRoot, rigEnvSource = origPolicy, origRoot, origEnv
+		rigPolicyTable, rigEnvSource = origPolicy, origEnv
 	})
 	rigRequireChecker = func(string, io.Writer) error { return nil }
 	rigLaunchStateRoot = func(string) string { return "" }
 	rigPolicyTable = func(string) (map[string]string, bool) { return nil, false }
-	rigDefaultStateRoot = func() string { return f.ompRoot }
+	// The state root comes from the shared resolver, so the scratch tree is named the way a user names
+	// one: $OPENRIG_STATE_ROOT. That is the clause rig used to ignore.
+	t.Setenv(clientenv.StateRootEnv, f.ompRoot)
 	rigEnvSource = func() (string, error) { return f.keyFile, nil }
 	return f
 }
@@ -509,24 +511,6 @@ func TestRigNamesASeatWhoseSkillsItCannotDeclare(t *testing.T) {
 		t.Errorf("stderr does not name the seat and the missing spec: %q", stderr)
 	}
 	rigNotExist(t, filepath.Join(f.rigDir("room1"), "agents", "seat1", "skills"))
-}
-
-// A machine whose home cannot be resolved refuses the rig rather than materializing one whose state tree
-// sits relative to where it was run from.
-func TestRigRefusesAStateRootItCannotResolve(t *testing.T) {
-	f := rigVerbTest(t)
-	rigDefaultStateRoot = func() string { return "" }
-	f.cloud.setSeat("room1", "seat1", rigHashA, nil, nil)
-
-	code, _, stderr := f.run("room1", "--out", f.out)
-
-	if code != clientcmd.ExitUsage {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, stderr)
-	}
-	if !strings.Contains(stderr, "--state-root") || !strings.Contains(stderr, clientenv.StateRootEnv) {
-		t.Errorf("the refusal does not name the flag and the variable: %q", stderr)
-	}
-	rigNotExist(t, f.rigDir("room1"))
 }
 
 // test_rig_writes_yaml_verbatim_and_materializes_each_seat_with_its_policy.
@@ -1523,6 +1507,27 @@ func TestRigInstallsUnderTheStateRootItIsGiven(t *testing.T) {
 	}
 	if !strings.Contains(stderr, installed) {
 		t.Errorf("stderr = %q, want the install path", stderr)
+	}
+	rigNotExist(t, filepath.Join(f.ompAgentDir("main", "seat1", "room1"), ".mcp.json"))
+}
+
+// test_rig_installs_under_the_state_root_the_variable_names: $OPENRIG_STATE_ROOT is the second clause of
+// the one resolver, so a room installs under it with no flag. The old rig ignored the variable and wrote
+// the machine's tree while every refusal told the user to set exactly that variable.
+func TestRigInstallsUnderTheStateRootTheVariableNames(t *testing.T) {
+	f := rigVerbTest(t)
+	f.ompRig(true, true, false, true)
+	chosen := filepath.Join(t.TempDir(), "chosen")
+	t.Setenv(clientenv.StateRootEnv, chosen)
+
+	code, _, stderr := f.run("room1", "--out", f.out)
+
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr)
+	}
+	installed := filepath.Join(chosen, rigSessionName("main", "seat1", "room1"), "agent", ".mcp.json")
+	if info, err := os.Stat(installed); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("nothing installed under the variable's root: %v", err)
 	}
 	rigNotExist(t, filepath.Join(f.ompAgentDir("main", "seat1", "room1"), ".mcp.json"))
 }

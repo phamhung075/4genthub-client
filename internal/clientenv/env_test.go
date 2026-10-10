@@ -103,3 +103,15 @@ func TestTheStateRootPrefersTheFlagThenTheEnvironment(t *testing.T) {
 		t.Errorf("with only the variable set: %q, %v; want /from/environment", root, err)
 	}
 }
+
+// The machine default is still the third clause, and it is the real home's tree - never a relative path.
+func TestAResolvableHomeGivesTheMachineDefault(t *testing.T) {
+	restore := realHome
+	realHome = func() (string, error) { return "/home/someone", nil }
+	defer func() { realHome = restore }()
+	t.Setenv(StateRootEnv, "")
+
+	if root, err := ResolveStateRoot(""); err != nil || root != "/home/someone/.openrig/state/omp" {
+		t.Errorf("ResolveStateRoot = %q, %v; want the machine default", root, err)
+	}
+}

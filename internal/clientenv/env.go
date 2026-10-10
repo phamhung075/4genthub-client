@@ -67,10 +67,13 @@ func DefaultStateRoot() string {
 // rather than guesses, so it has to be reachable without breaking the machine running the test.
 var realHome = RealHome
 
-// ResolveStateRoot is the resolution the verbs share: the flag when it is given, else
-// $OPENRIG_STATE_ROOT, else this machine's own default. It REFUSES when all three are empty, with
-// StateRootMessage - a machine with no resolvable home and no override gets one message naming both
-// escapes rather than a path that depends on where the client was run from.
+// ResolveStateRoot is the ONE resolution every verb uses: the flag when it is given, else
+// $OPENRIG_STATE_ROOT, else this machine's own default. It REFUSES when all three are empty, naming both
+// escapes - a machine with no resolvable home and no override gets that message rather than a path that
+// depends on where the client was run from.
+//
+// The clauses live here and not per verb because a verb that resolved its own root and then told the
+// user to set $OPENRIG_STATE_ROOT while ignoring it reads the wrong tree silently.
 func ResolveStateRoot(flagValue string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil

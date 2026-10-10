@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 // helpOf runs one verb with --help and returns what it printed.
@@ -262,7 +263,34 @@ func TestANonNumericQuietValueRefusesAndNamesIt(t *testing.T) {
 	}
 }
 
+// test_compact_run_reads_the_documented_state_root_variable: the flag used to default straight to the
+// machine's own root, so whoever set $OPENRIG_STATE_ROOT got the machine tree while the refusal in these
+// verbs told them to set exactly that variable. The variable is the second clause for compact-run too.
+func TestCompactRunReadsTheStateRootVariable(t *testing.T) {
+	var errOut bytes.Buffer
+	chosen := t.TempDir()
+	t.Setenv(clientenv.StateRootEnv, chosen)
+
+	options, ok := ParseCompactRunOptions([]string{"--rig", "my-rig", "--once"}, &errOut)
+	if !ok {
+		t.Fatalf("a set variable was refused: %s", errOut.String())
+	}
+	if options.StateRoot != chosen {
+		t.Errorf("StateRoot = %q, want the variable's %q", options.StateRoot, chosen)
+	}
+
+	// The flag still wins over the variable.
+	options, ok = ParseCompactRunOptions([]string{"--rig", "my-rig", "--once", "--state-root", "/from/flag"}, &errOut)
+	if !ok {
+		t.Fatalf("the flag was refused: %s", errOut.String())
+	}
+	if options.StateRoot != "/from/flag" {
+		t.Errorf("StateRoot = %q, want /from/flag", options.StateRoot)
+	}
+}
+
 // TestCompactRunRequiresARig: the Python's --rig defaulted to the owner's rig.
+// test_compact_run_requires_a_rig.
 func TestCompactRunRequiresARig(t *testing.T) {
 	var errOut bytes.Buffer
 	if _, ok := ParseCompactRunOptions([]string{"--once"}, &errOut); ok {

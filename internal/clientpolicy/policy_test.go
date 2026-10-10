@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 // writeTeam is the file the roles now come from: the rig's own definition, not a compiled table.
@@ -289,6 +290,23 @@ func TestApplyWritesEverySeatIsIdempotentAndCheckReportsDrift(t *testing.T) {
 	out.Reset()
 	if code := runApply(append(append([]string{}, args...), "--check"), &out, &errOut); code != ExitDrift {
 		t.Errorf("--check on a broken rule = %d, want %d", code, ExitDrift)
+	}
+}
+
+// The variable is the second clause for policy apply too: it used to name a root in its refusal and then
+// ignore it, which wrote the machine's tree silently.
+func TestApplyReadsTheStateRootVariable(t *testing.T) {
+	team := testTeam(t)
+	root := t.TempDir()
+	seedState(t, root, team)
+	t.Setenv(clientenv.StateRootEnv, root)
+
+	var out, errOut bytes.Buffer
+	if code := runApply([]string{"--rig", "my-rig", "--team", writeTeam(t)}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("apply = %d\nstderr: %s", code, errOut.String())
+	}
+	if _, err := os.Stat(ConfigPath(root, "my-rig", "writer")); err != nil {
+		t.Errorf("nothing written under the variable's root: %v", err)
 	}
 }
 

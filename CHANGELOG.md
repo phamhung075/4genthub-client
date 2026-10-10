@@ -155,3 +155,14 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `4genteam bridge install-service` renders the client's OWN environment file
   (`clientenv.DefaultPath()`, `~/.config/4genthub/.env`) instead of a Python-era name nothing ever
   wrote, so the installed systemd unit and the running bridge read the same file by construction.
+- One resolver decides the state root for every verb that takes one: `sync rig`, `compact-run` and
+  `policy apply` now call `clientenv.ResolveStateRoot` like `seat sync|watch` already did, so
+  `$OPENRIG_STATE_ROOT` is honored by all of them. The defect was that these three named the variable
+  in their refusal and then ignored it: whoever set it got the machine's tree with no error, which is
+  the wrong tree read or written silently. The order is unchanged — the flag, else the variable, else
+  this machine's own default — and nothing resolvable still refuses with the one message naming both
+  escapes. The verb-local state-root seams went with it: `rigDefaultStateRoot`, the `rig` flag-presence
+  field, and `compact-run`'s flag default that pre-empted the resolution. Tested clause by clause at
+  the source (`internal/clientenv`) and on the live path per verb: `sync rig` installs under the
+  variable's root, `compact-run` reads it with no flag, `policy apply` writes under it, and the flag
+  still wins.

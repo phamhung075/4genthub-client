@@ -455,7 +455,7 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 	quietFlag := flags.Int("quiet", quiet, "seconds of log silence that mean the job is finished")
 	every := flags.Int("every", 10, "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
-	stateRoot := flags.String("state-root", clientenv.DefaultStateRoot(), "where OpenRig keeps its per-seat state")
+	stateRoot := flags.String("state-root", "", "where OpenRig keeps its per-seat state: the flag, else $OPENRIG_STATE_ROOT, else this machine's own")
 	forcecompact := flags.String("forcecompact", ForcecompactPath(), "the forcecompact helper, when this machine has one")
 	if err := flags.Parse(args); err != nil {
 		return options, false
@@ -464,8 +464,9 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 		fmt.Fprintf(stderr, "4genteam compact-run: --rig is required - there is no default rig. %s\n", compactRunUsage)
 		return options, false
 	}
-	if *stateRoot == "" {
-		fmt.Fprintf(stderr, "4genteam compact-run: %s\n", clientenv.StateRootMessage)
+	root, err := clientenv.ResolveStateRoot(*stateRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam compact-run: %v\n", err)
 		return options, false
 	}
 	options = CompactRunOptions{
@@ -473,7 +474,7 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 		Quiet:        *quietFlag,
 		Every:        *every,
 		Once:         *once,
-		StateRoot:    *stateRoot,
+		StateRoot:    root,
 		Forcecompact: *forcecompact,
 	}
 	return options, true

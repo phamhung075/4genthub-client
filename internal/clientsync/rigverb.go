@@ -142,10 +142,6 @@ func rigCheckChecker(out string, note io.Writer) error {
 	}
 }
 
-// rigDefaultStateRoot is the omp state root the Python called OMP_STATE_ROOT. A var so a test points
-// it at a scratch tree instead of writing under the operator's live state root.
-var rigDefaultStateRoot = clientenv.DefaultStateRoot
-
 // rigEnvSource is the ONE env file a provider/model room links to. The Python linked a private
 // product key path; here the source is the client's single env file.
 var rigEnvSource = func() (string, error) { return clientenv.DefaultPath() }
@@ -290,13 +286,12 @@ func RunRigVerb(ctx context.Context, args []string, stdout, stderr io.Writer) in
 
 // rigArgs is the parsed `rig` subparser.
 type rigArgs struct {
-	room          string
-	hasRoom       bool
-	out           string
-	stateRoot     string
-	haveStateRoot bool
-	skillsRoot    string
-	update        bool
+	room       string
+	hasRoom    bool
+	out        string
+	stateRoot  string
+	skillsRoot string
+	update     bool
 }
 
 // rigParseArgs is the Python's subparser for `rig`: a positional room, `--out`, `--update` and
@@ -321,10 +316,8 @@ func rigParseArgs(args []string) (rigArgs, error) {
 			}
 			i++
 			parsed.stateRoot = args[i]
-			parsed.haveStateRoot = true
 		case strings.HasPrefix(arg, "--state-root="):
 			parsed.stateRoot = strings.TrimPrefix(arg, "--state-root=")
-			parsed.haveStateRoot = true
 		case arg == "--skills-root":
 			if i+1 >= len(args) {
 				return parsed, errors.New("--skills-root needs a value")
@@ -387,15 +380,14 @@ func rigRun(ctx context.Context, args rigArgs, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	stateRoot := rigDefaultStateRoot()
-	if args.haveStateRoot {
-		stateRoot = expandHome(args.stateRoot)
+	// The state root comes from the ONE resolver every verb uses, so the clauses cannot drift: the flag,
+	// else $OPENRIG_STATE_ROOT, else this machine's own default. Nothing resolvable refuses rather than
+	// materializing a rig whose state tree sits relative to where this was run from.
+	stateRoot, err := clientenv.ResolveStateRoot(args.stateRoot)
+	if err != nil {
+		return err
 	}
-	if stateRoot == "" {
-		// No flag and no resolvable home: refuse rather than materialize a rig whose state tree sits
-		// relative to wherever this was run from.
-		return &clientcmd.CodedError{Message: clientenv.StateRootMessage, Code: clientcmd.ExitUsage}
-	}
+	stateRoot = expandHome(stateRoot)
 	if err := rigRefuseAnotherRoot(room, spec.YAML, stateRoot); err != nil {
 		return err
 	}
