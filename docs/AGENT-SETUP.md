@@ -205,6 +205,16 @@ without one is a seat folder.** So `skills/rooms/<room>/<name>` is a room-level 
 `SKILL.md` and the seat folder `<name>` when it does not. A shared or client skill stays generic — no
 rig, seat, host or personal path in it.
 
+**The client also delivers this tree itself.** `4genteam sync rig ROOM` is the step that writes each
+seat's agent directory, so it is also the step that gives a seat the skills it resolves to: it copies
+them into that seat's skills path (`<out>/<room>/rig/agents/<seat>/skills/<skill>/`) and declares the
+ids in that seat's `agent.yaml` — `resources.skills[]` and each profile's `uses.skills` — because the
+declaration is what the runtime loads from, exactly as below. The tree is found at `--skills-root`,
+else `$OPENRIG_CLIENT_SKILLS`, else `skills/` beside the binary, and a tree that is not there is
+refused by name rather than skipped. This route needs no cloud module and no overlay: a seat receives
+`share/`, then its room's room-level skills, then its own seat-level skills, and nothing from another
+room, another seat or `client/`.
+
 Two facts about the publish route, because they decide which tree to point it at: `team
 import-project` reads a **project's** own tree at `.claude/skills`, one directory per skill, each
 holding `SKILL.md`, and refuses a directory that has none — so it publishes a flat tree, not a

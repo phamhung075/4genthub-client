@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
+	"github.com/phamhung075/4genthub-client/internal/clientskills"
 )
 
 var (
@@ -181,13 +183,14 @@ func rigAnySlice[T any](items []T) []any {
 // --- the fixture --------------------------------------------------------------------------------
 
 type rigVerbFixture struct {
-	t       *testing.T
-	cloud   *rigVerbCloud
-	out     string
-	ompRoot string
-	keyFile string
-	stdout  *bytes.Buffer
-	stderr  *bytes.Buffer
+	t          *testing.T
+	cloud      *rigVerbCloud
+	out        string
+	ompRoot    string
+	keyFile    string
+	skillsRoot string
+	stdout     *bytes.Buffer
+	stderr     *bytes.Buffer
 }
 
 func rigVerbTest(t *testing.T) *rigVerbFixture {
@@ -201,6 +204,13 @@ func rigVerbTest(t *testing.T) *rigVerbFixture {
 	f.out = t.TempDir()
 	f.ompRoot = filepath.Join(t.TempDir(), "ompstate")
 	f.keyFile = filepath.Join(t.TempDir(), "provider-env")
+	// The client's own skill tree is required by `rig`, so every case here starts with one: an empty
+	// share/ resolves no skill for any seat, which is what a case that is not about skills wants.
+	f.skillsRoot = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(f.skillsRoot, "share"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(clientskills.RootEnv, f.skillsRoot)
 
 	origRequire, origLaunch := rigRequireChecker, rigLaunchStateRoot
 	origPolicy, origRoot, origEnv := rigPolicyTable, rigDefaultStateRoot, rigEnvSource
@@ -322,6 +332,183 @@ func rigPolicyDocumentFor(seat, role string) string {
 }
 
 // --- the tests ----------------------------------------------------------------------------------
+
+// requests is the paths the cloud was asked for, copied under the lock.
+func (c *rigVerbCloud) requests() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.gets...)
+}
+
+// --- the client's own skills reach the seat they belong to -----------------------------------------
+
+// rigAgentSpec is a seat's agent spec as this machine carries one, with a profile that ALREADY selects
+// a skill, so the delivery is shown to add to a selection rather than replace it.
+const rigAgentSpec = `name: seat1
+version: "1.0.0"
+profiles:
+  default:
+    uses:
+      skills:
+        - keep-me
+`
+
+// rigSkillsTree writes the four kinds the loader knows: a shared skill (with a second file beside its
+// SKILL.md, so the copy is proven whole), one room's room-level skill, one skill of each of that room's
+// two seats, another room's skill, and the client's own.
+func rigSkillsTree(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"share/shared/SKILL.md":               "# Shared\n",
+		"share/shared/reference.md":           "beside the skill file\n",
+		"rooms/room1/room-level/SKILL.md":     "# Room\n",
+		"rooms/room1/seat1/seat-one/SKILL.md": "# Seat one\n",
+		"rooms/room1/seat2/seat-two/SKILL.md": "# Seat two\n",
+		"rooms/room2/other-room/SKILL.md":     "# Other room\n",
+		"client/client-only/SKILL.md":         "# Client\n",
+	}
+	for relative, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	return root
+}
+
+// rigSkillNames lists the skill directories under a seat's skills path.
+func rigSkillNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	names := []string{}
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+// The delivery half, end to end: a seat receives share/, its room's room-level skills and its OWN
+// seat-level skills - never another room's, another seat's or client/'s - the skill is copied whole,
+// and the seat's agent spec declares every id it received, in the resources pool and in the selection
+// its profile already carried.
+func TestRigDeliversTheClientsOwnSkillsAndNothingElse(t *testing.T) {
+	f := rigVerbTest(t)
+	root := rigSkillsTree(t)
+	yamlText := "name: room1\npods:\n  - id: main\n    members:\n" +
+		"      - id: seat1\n        agent_ref: local:agents/seat1\n" +
+		"      - id: seat2\n        agent_ref: local:agents/seat2\n"
+	f.cloud.setRigspec("room1", yamlText, []map[string]any{
+		{"seat": "seat1", "hash": rigHashA}, {"seat": "seat2", "hash": rigHashB},
+	})
+	files := []map[string]any{
+		{"path": "agent.yaml", "content": rigAgentSpec},
+		{"path": "docs/readme.md", "content": "hello"},
+	}
+	f.cloud.setSeat("room1", "seat1", rigHashA, files, nil)
+	f.cloud.setSeat("room1", "seat2", rigHashB, files, nil)
+
+	code, _, stderr := f.run("room1", "--out", f.out, "--skills-root", root)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want nothing: each seat here has a spec to declare its skills in", stderr)
+	}
+
+	agents := filepath.Join(f.rigDir("room1"), "agents")
+	for seat, want := range map[string][]string{
+		"seat1": {"room-level", "seat-one", "shared"},
+		"seat2": {"room-level", "seat-two", "shared"},
+	} {
+		if got := rigSkillNames(t, filepath.Join(agents, seat, "skills")); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s received %v, want %v", seat, got, want)
+		}
+	}
+	// The copy is whole: a file beside SKILL.md travels with it.
+	if got := readFile(t, filepath.Join(agents, "seat1", "skills", "shared", "reference.md")); got != "beside the skill file\n" {
+		t.Errorf("skills/shared/reference.md = %q, want the file beside SKILL.md", got)
+	}
+
+	document := rigParseYAML(t, filepath.Join(agents, "seat1", "agent.yaml"))
+	pool := map[string]string{}
+	resources, _ := document["resources"].(map[string]any)
+	rows, _ := resources["skills"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		id, _ := entry["id"].(string)
+		path, _ := entry["path"].(string)
+		pool[id] = path
+	}
+	wantPool := map[string]string{
+		"shared": "skills/shared", "room-level": "skills/room-level", "seat-one": "skills/seat-one",
+	}
+	if !reflect.DeepEqual(pool, wantPool) {
+		t.Errorf("resources.skills = %v, want %v", pool, wantPool)
+	}
+	profiles, _ := document["profiles"].(map[string]any)
+	block, _ := profiles["default"].(map[string]any)
+	uses, _ := block["uses"].(map[string]any)
+	selected := []string{}
+	list, _ := uses["skills"].([]any)
+	for _, item := range list {
+		if name, ok := item.(string); ok {
+			selected = append(selected, name)
+		}
+	}
+	// The selection the seat already had survives, and the delivered ids follow it.
+	if want := []string{"keep-me", "room-level", "seat-one", "shared"}; !reflect.DeepEqual(selected, want) {
+		t.Errorf("uses.skills = %v, want %v", selected, want)
+	}
+	// Nothing from another room, another seat of THIS room, or the client's own kind.
+	for _, absent := range []string{"other-room", "seat-two", "client-only"} {
+		rigNotExist(t, filepath.Join(agents, "seat1", "skills", absent))
+	}
+}
+
+// A tree that is not there is refused by name BEFORE the room is fetched: the delivery is why this verb
+// reads a tree at all, so a rig built without one would look delivered and carry nothing.
+func TestRigRefusesAMissingSkillsTreeBeforeItFetches(t *testing.T) {
+	f := rigVerbTest(t)
+	f.cloud.setSeat("room1", "seat1", rigHashA, nil, nil)
+
+	code, _, stderr := f.run("room1", "--out", f.out, "--skills-root", t.TempDir())
+
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "--skills-root") || !strings.Contains(stderr, clientskills.RootEnv) {
+		t.Errorf("the refusal does not name the flag and the variable: %q", stderr)
+	}
+	if requests := f.cloud.requests(); len(requests) != 0 {
+		t.Errorf("the cloud was asked for %v, want nothing: a missing tree is the caller's error", requests)
+	}
+	rigNotExist(t, f.rigDir("room1"))
+}
+
+// A seat whose render carries no agent spec cannot be told about a skill, so it receives none and is
+// NAMED: files nothing loads are dead weight, and a quiet skip would read as delivered.
+func TestRigNamesASeatWhoseSkillsItCannotDeclare(t *testing.T) {
+	f := rigVerbTest(t)
+	root := rigSkillsTree(t)
+	f.cloud.setSeat("room1", "seat1", rigHashA, nil, nil)
+
+	code, _, stderr := f.run("room1", "--out", f.out, "--skills-root", root)
+
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "carries no agent.yaml") || !strings.Contains(stderr, "room1/seat1") {
+		t.Errorf("stderr does not name the seat and the missing spec: %q", stderr)
+	}
+	rigNotExist(t, filepath.Join(f.rigDir("room1"), "agents", "seat1", "skills"))
+}
 
 // test_rig_writes_yaml_verbatim_and_materializes_each_seat_with_its_policy.
 func TestRigWritesYAMLAndMaterializesEachSeatWithItsPolicy(t *testing.T) {

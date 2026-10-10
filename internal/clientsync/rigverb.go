@@ -17,6 +17,15 @@
 //     the seam a governed rig is supplied through; with no table a rig is left alone silently, which
 //     is exactly what the Python does for a rig outside its table.
 //
+// THE CLIENT'S OWN SKILL TREE IS DELIVERED BY THIS VERB. `sync rig` is the step that writes each
+// seat's agent directory, so it is also the step that gives a seat the skills this client owns: the
+// tree is found at --skills-root, else $OPENRIG_CLIENT_SKILLS, else skills/ beside this binary, and a
+// tree that is not there is REFUSED by name rather than skipped, because delivering it is the reason
+// this verb reads one. For each seat internal/clientskills resolves the skills that seat receives
+// (share/, then its room's room-level skills, then its own seat-level ones, and never another room's,
+// another seat's or client/'s), installs them into <agent dir>/skills/, and declares the ids in the
+// seat's agent spec - OpenRig loads a skill only when a profile selects it, so the copy alone is inert.
+//
 // WHAT IS REUSED RATHER THAN RESTATED: ReadRigspec and ValidateName (rig.go), PullSeat (pull.go),
 // SafeRelative and ValidateHash (seatfiles.go), RequireEnv and DefaultSeatStore (statusverb.go),
 // CheckerBinary/CheckerName/resolveChecker/describeFound/checkerLink and placeAgent/removePath
@@ -42,6 +51,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientskills"
 )
 
 const (
@@ -62,20 +72,30 @@ const (
 )
 
 // rigUsage is what `4genteam sync rig --help` prints.
-const rigUsage = `usage: 4genteam sync rig ROOM [--out DIR] [--update] [--state-root DIR]
+const rigUsage = `usage: 4genteam sync rig ROOM [--out DIR] [--update] [--state-root DIR] [--skills-root DIR]
 
 Materialize a whole room: fetch the room's rigspec, pull every listed seat with the same pinning
 rules as ` + "`sync pull`" + `, then build:
 
   <out>/<room>/rig/rig.yaml       the server's spec with each member's cwd and permission policy set
-  <out>/<room>/rig/agents/<seat>  a copy of that seat's pinned snapshot, with its pinned policy
+  <out>/<room>/rig/agents/<seat>  a copy of that seat's pinned snapshot, with its pinned policy, the
+                                  skills this client owns for that seat, and the spec declaring them
   <out>/<room>/.env               a link to the client's one env file, for a member with a
                                   provider/model model
+
+The skills tree is at --skills-root, else $OPENRIG_CLIENT_SKILLS, else skills/ beside this binary, and
+a tree that is not there is refused by name: each seat receives share/, then its room's room-level
+skills, then its own seat-level skills, and never another room's, another seat's or client/'s.
 
 The rig directory is built in a staging directory and swapped in only after every seat is pinned, so
 a failed run leaves a previous rig directory untouched, and everything the build did not write is
 carried over and named on stderr. Print only ` + "`rig:<path to rig.yaml>`" + ` on stdout.
 `
+
+// rigAgentSpecFile is the agent spec in a seat's agent directory: the document that lists the skills a
+// profile selects, and therefore the file the skill delivery edits. A skill OpenRig is not told about
+// is not loaded, which is why the delivery declares what it copies.
+const rigAgentSpecFile = "agent.yaml"
 
 // rigInstall is one resolved omp render write: the rendered file, its destination, and the mode
 // ("verbatim" or "merge").
@@ -214,10 +234,41 @@ var rigMaterializeAgent = func(source, seatDir, target string) error {
 	return nil
 }
 
+// rigDeliverSkills gives one seat the skills this client owns, in the seat's freshly materialized
+// agent directory. It returns false - and writes nothing - for a seat that receives skills but has no
+// agent spec to declare them in, because a copy OpenRig is not told about is dead weight in the seat's
+// tree; the caller names that seat. A seat the tree resolves nothing for is not a failure: it simply
+// receives nothing, and no empty skills/ directory is left in its agent directory.
+func rigDeliverSkills(tree clientskills.Tree, room, seat, agentDir string) (bool, error) {
+	// Resolve once here, and again inside Install: a few directory reads, and the price of leaving a
+	// seat with nothing to receive untouched. Install and Declare are the package's, not re-implemented.
+	skills, err := tree.Resolve(room, seat)
+	if err != nil {
+		return false, err
+	}
+	if len(skills) == 0 {
+		return true, nil
+	}
+	spec := filepath.Join(agentDir, rigAgentSpecFile)
+	if info, err := os.Stat(spec); err != nil || info.IsDir() {
+		return false, nil
+	}
+	ids, err := clientskills.Install(tree, room, seat, agentDir)
+	if err != nil {
+		return false, err
+	}
+	if _, err := clientskills.Declare(spec, ids); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // --- the verb ---------------------------------------------------------------------------------------
 
 // RunRigVerb is `sync rig ROOM`: validate, fetch the rigspec, pull every seat, build the rig in a
 // staging directory and swap it in, then install the render's omp documents and the per-seat policy.
+// The build also delivers the skills this client owns, which is why the tree is resolved before the
+// first fetch.
 func RunRigVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {
@@ -244,6 +295,7 @@ type rigArgs struct {
 	out           string
 	stateRoot     string
 	haveStateRoot bool
+	skillsRoot    string
 	update        bool
 }
 
@@ -273,6 +325,14 @@ func rigParseArgs(args []string) (rigArgs, error) {
 		case strings.HasPrefix(arg, "--state-root="):
 			parsed.stateRoot = strings.TrimPrefix(arg, "--state-root=")
 			parsed.haveStateRoot = true
+		case arg == "--skills-root":
+			if i+1 >= len(args) {
+				return parsed, errors.New("argument --skills-root: expected one argument")
+			}
+			i++
+			parsed.skillsRoot = args[i]
+		case strings.HasPrefix(arg, "--skills-root="):
+			parsed.skillsRoot = strings.TrimPrefix(arg, "--skills-root=")
 		case strings.HasPrefix(arg, "-") && arg != "-":
 			return parsed, fmt.Errorf("unrecognized arguments: %s", arg)
 		default:
@@ -296,6 +356,15 @@ func rigParseArgs(args []string) (rigArgs, error) {
 func rigRun(ctx context.Context, args rigArgs, stdout, stderr io.Writer) error {
 	room, err := ValidateName("room", args.room)
 	if err != nil {
+		return err
+	}
+	// The skills this client owns are delivered by this verb, so the tree is resolved BEFORE a single
+	// fetch or write: a tree that is not there is the caller's error (exit 2) and must not cost a pull.
+	tree, err := clientskills.Locate(args.skillsRoot)
+	if err != nil {
+		return err
+	}
+	if err := tree.Require(); err != nil {
 		return err
 	}
 	out, err := filepath.Abs(expandHome(args.out))
@@ -354,10 +423,18 @@ func rigRun(ctx context.Context, args rigArgs, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	kept, err := rigBuild(staging, rigDir, spec.YAML, roomDir, out, room, spec.Seats, pinned)
+	kept, undelivered, err := rigBuild(staging, rigDir, spec.YAML, roomDir, out, room, spec.Seats, pinned, tree)
 	if err != nil {
 		removeAllQuiet(staging)
 		return err
+	}
+
+	for _, seat := range undelivered {
+		fmt.Fprintf(stderr,
+			"warning: %s carries no %s, so %s/%s received none of the skills this client owns: a "+
+				"skill reaches a seat only when its agent spec declares it, and this seat's render "+
+				"carries no spec to declare one in.\n",
+			filepath.Join(rigDir, "agents", seat), rigAgentSpecFile, room, seat)
 	}
 
 	if len(kept) > 0 {
@@ -431,27 +508,39 @@ func rigRun(ctx context.Context, args rigArgs, stdout, stderr io.Writer) error {
 	return nil
 }
 
-// rigBuild writes the launch spec, materializes each seat's agent directory, and swaps the staging
-// directory onto the live rig directory. The caller removes the staging directory if it fails.
-func rigBuild(staging, rigDir, yamlText, roomDir, out, room string, seats []RigspecSeat, pinned map[string]string) ([]string, error) {
+// rigBuild writes the launch spec, materializes each seat's agent directory - with the skills this
+// client owns installed and declared in that seat's spec - and swaps the staging directory onto the
+// live rig directory. The caller removes the staging directory if it fails. The seats it could not
+// deliver skills to are returned rather than printed: the caller knows the post-swap path to name.
+func rigBuild(staging, rigDir, yamlText, roomDir, out, room string, seats []RigspecSeat, pinned map[string]string, tree clientskills.Tree) ([]string, []string, error) {
 	specText, err := rigLaunchSpec(yamlText, roomDir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := os.WriteFile(filepath.Join(staging, "rig.yaml"), []byte(specText), 0o644); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	agents := filepath.Join(staging, "agents")
 	if err := os.Mkdir(agents, 0o755); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var undelivered []string
 	for _, seat := range seats {
+		agentDir := filepath.Join(agents, seat.Seat)
 		if err := rigMaterializeAgent(pinned[seat.Seat],
-			filepath.Join(out, room, seat.Seat), filepath.Join(agents, seat.Seat)); err != nil {
-			return nil, err
+			filepath.Join(out, room, seat.Seat), agentDir); err != nil {
+			return nil, nil, err
+		}
+		delivered, err := rigDeliverSkills(tree, room, seat.Seat, agentDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !delivered {
+			undelivered = append(undelivered, seat.Seat)
 		}
 	}
-	return rigSwapDir(staging, rigDir)
+	kept, err := rigSwapDir(staging, rigDir)
+	return kept, undelivered, err
 }
 
 // --- spec reading and the launch spec -----------------------------------------------------------------
