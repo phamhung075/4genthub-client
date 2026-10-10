@@ -19,8 +19,10 @@ import (
 // binary's own `compact-run`, so this is what `status` finds and `stop` kills.
 func SupervisorPattern(rig string) string { return "compact-run --rig " + rig }
 
-// BridgePattern identifies the status bridge's process.
-const BridgePattern = "bridge run"
+// BridgePattern identifies the status bridge's process: a regular expression anchored to the start of
+// the command line, so a shell or editor whose text merely contains "bridge run" is neither mistaken
+// for the bridge nor killed as one.
+const BridgePattern = `^[^ ]*4genteam bridge run`
 
 // LogDir is where the lifecycle verbs keep their logs.
 func LogDir() (string, error) {

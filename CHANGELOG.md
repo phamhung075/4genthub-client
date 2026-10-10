@@ -3,6 +3,23 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-10 (late night) — the client starts its own bridge
+
+### Added
+- `internal/clientlifecycle/ensure_bridge.go`: `EnsureBridge`, called from `main` before every verb. When
+  `AGENTHUB_URL` and `AGENTHUB_TOKEN` are set and no `4genteam bridge run` process exists, it starts the
+  bridge detached (log `bridge.log`), so a machine reports to the cloud whenever the client is in use and
+  no service or question about one is needed. Skipped for `help`, `version`, `bridge`, `stop`, `up` (which
+  starts its own) and `seatcheck` (runs on every seat tool call). A failed start prints one stderr line and
+  never fails the verb. Tests: the verb table and the no-credentials case.
+
+### Fixed
+- `BridgePattern` was the bare text `bridge run`, which `pgrep -f` and `pkill -f` matched against ANY command
+  line containing it (a shell, an editor): `stop` and `up` could kill an unrelated process, and a presence
+  check read as running. It is now `^[^ ]*4genteam bridge run`, anchored to the process's own command line.
+  Measured: with the bare text the first live run started nothing; anchored, the first verb starts one
+  bridge and a second verb starts none.
+
 ## 2026-10-10 (night) — one build step installs the binary and the checkout's .env
 
 ### Added

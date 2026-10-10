@@ -114,6 +114,7 @@ func main() {
 	if path, err := clientenv.DefaultPath(); err == nil {
 		_ = clientenv.Load(path)
 	}
+	clientlifecycle.EnsureBridge(os.Args[1:], os.Stderr)
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
