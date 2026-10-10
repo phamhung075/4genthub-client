@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
 
@@ -186,19 +187,28 @@ func bridgeInstallService(stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge install-service: cannot resolve this binary: %v\n", err)
 		return clientcmd.ExitRemote
 	}
+	// The unit reads THE SAME file the client reads, named by the same code, so the service and the
+	// runtime cannot drift apart. The phase-1 move carried a PYTHON-ERA file name here - one that
+	// nothing ever writes - so an installed unit came up with no credentials while still looking
+	// healthy, which is worse than refusing to install.
+	envFile, err := clientenv.DefaultPath()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge install-service: cannot resolve the client's env file: %v\n", err)
+		return clientcmd.ExitRemote
+	}
 	_, _ = fmt.Fprintf(stdout, `[Unit]
 Description=4genthub OpenRig status bridge
 After=network-online.target
 
 [Service]
-EnvironmentFile=%%h/.config/agenthub-bridge.env
+EnvironmentFile=%s
 ExecStart=%s bridge run
 Restart=on-failure
 RestartSec=10
 
 [Install]
 WantedBy=default.target
-`, binary)
+`, envFile, binary)
 	return clientcmd.ExitOK
 }
 

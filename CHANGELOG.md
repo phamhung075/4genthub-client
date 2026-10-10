@@ -38,3 +38,6 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - `4genteam sync --help` prints the verb group's usage and exits 0; it used to be read as an
   unknown verb and exited 2 (`1e23ca2`).
+- `4genteam bridge install-service` renders the client's OWN environment file
+  (`clientenv.DefaultPath()`, `~/.config/4genthub/.env`) instead of a Python-era name nothing ever
+  wrote, so the installed systemd unit and the running bridge read the same file by construction.
