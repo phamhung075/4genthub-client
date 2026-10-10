@@ -95,7 +95,7 @@ def test_payload_shape_state_and_runtime_mapping(tmp_path):
         tmp_path, fake_runner(rig_output(), herdr_output()), lambda b: (200, b"")
     )
     payload = bridge.build_payload()
-    assert set(payload) == {"machine_id", "reported_at", "seats", "agents"}
+    assert set(payload) == {"machine_id", "reported_at", "seats", "agents", "edges"}
     coder, reviewer = payload["seats"]
     assert (coder["room"], coder["seat"], coder["state"], coder["runtime"]) == (
         "eng",
@@ -889,3 +889,44 @@ def test_once_print_carries_the_local_view_and_not_the_reported_payload(
         "pc-1", 20.0, lambda b: (200, b""), pins_dir=tmp_path
     ).build_payload()
     assert "local_record" not in payload
+
+
+EXPORT_YAML = """version: "0.2"
+name: eng
+pods:
+  - id: dev
+    members:
+      - id: coder
+      - id: reviewer
+    edges:
+      - {kind: delegates_to, from: coder, to: reviewer}
+      - {kind: escalates_to, from: reviewer, to: coder}
+      - {kind: delegates_to, from: coder, to: reviewer}
+      - {kind: telepathy, from: coder, to: reviewer}
+      - {kind: delegates_to, from: coder, to: coder}
+      - {kind: delegates_to, from: "bad name", to: coder}
+edges: []
+Exported to /dev/stdout
+"""
+
+
+def test_parse_rig_edges_ignores_the_trailing_status_line():
+    assert bridge_mod.parse_rig_edges(EXPORT_YAML)[:2] == [
+        ("coder", "reviewer", "delegates_to"),
+        ("reviewer", "coder", "escalates_to"),
+    ]
+
+
+def test_edges_are_reported_per_room_and_the_server_refusable_ones_are_dropped(tmp_path):
+    def runner(argv):
+        if argv[:2] == ["rig", "export"]:
+            return EXPORT_YAML
+        if argv[0] == "rig":
+            return rig_output()
+        raise FileNotFoundError(argv[0])
+
+    payload = make_bridge(tmp_path, runner, lambda b: (200, b"")).build_payload()
+    assert payload["edges"] == [
+        {"room": "eng", "from": "coder", "to": "reviewer", "kind": "delegates_to"},
+        {"room": "eng", "from": "reviewer", "to": "coder", "kind": "escalates_to"},
+    ]

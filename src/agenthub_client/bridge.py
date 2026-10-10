@@ -79,6 +79,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 from . import scrub as openrig_scrub
 from . import seat_policy as openrig_seat_policy
 
@@ -118,6 +120,14 @@ PANE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9:_-]{0,31}")
 SEAT_STATES = {"running", "idle", "blocked", "stopped", "unknown"}
 RUNTIMES = {"claude-code", "codex", "agy", "omp", "terminal", "unknown"}
 AGENT_STATUSES = {"idle", "working", "blocked", "done", "unknown"}
+# OpenRig's five edge kinds; the server's commpolicy.ValidKind is the other copy of this list.
+EDGE_KINDS = {
+    "delegates_to",
+    "spawned_by",
+    "can_observe",
+    "collaborates_with",
+    "escalates_to",
+}
 
 Runner = Callable[[list[str]], str]
 # A sender returns the status AND the response body: the report answer carries the per-seat
@@ -293,6 +303,47 @@ def parse_rig_nodes(output: str) -> list:
     if not isinstance(items, list):
         raise ValueError("unexpected rig ps JSON shape")
     return items
+
+
+def parse_rig_edges(output: str) -> list[tuple[str, str, str]]:
+    """The (from, to, kind) of every pod edge in one `rig export` spec.
+
+    The CLI ends its output with an `Exported to <path>` status line that is not YAML.
+    """
+    spec = yaml.safe_load(output.partition("\nExported to ")[0])
+    pods = _dict(spec).get("pods")
+    if not isinstance(pods, list):
+        raise ValueError("unexpected rig export YAML shape")
+    return [
+        (_str(edge.get("from")), _str(edge.get("to")), _str(edge.get("kind")))
+        for pod in pods
+        for edge in _dict(pod).get("edges") or []
+        if isinstance(edge, dict)
+    ]
+
+
+def build_edges(rigs: dict[str, str], read_edges: Callable[[str], list]) -> list[dict]:
+    """The reported topology: one entry per distinct, valid, directed link of every rig.
+
+    The server refuses the WHOLE report for one bad edge (an unknown kind, a self edge, a
+    repeated link), which reads as the machine going offline, so a bad edge is dropped here.
+    """
+    edges: list[dict] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for rig_id, room in rigs.items():
+        for src, dst, kind in read_edges(rig_id):
+            key = (room, src, dst, kind)
+            if (
+                kind in EDGE_KINDS
+                and src != dst
+                and _valid(NAME_RE, room)
+                and _valid(NAME_RE, src)
+                and _valid(NAME_RE, dst)
+                and key not in seen
+            ):
+                seen.add(key)
+                edges.append({"room": room, "from": src, "to": dst, "kind": kind})
+    return edges
 
 
 def parse_herdr_agents(output: str) -> list:
@@ -545,6 +596,17 @@ class Bridge:
             "reported_at": utc_now(),
             "seats": seats,
             "agents": build_agents(raw_agents),
+            "edges": build_edges(
+                {
+                    _str(_dict(n).get("rigId")): _str(_dict(n).get("rigName"))
+                    for n in nodes
+                },
+                lambda rig_id: self._read(
+                    f"edges {rig_id}",
+                    ["rig", "export", rig_id, "-o", "/dev/stdout"],
+                    parse_rig_edges,
+                ),
+            ),
         }
 
     def _state_key(self, room: str, seat: str) -> str:
