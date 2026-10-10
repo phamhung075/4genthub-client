@@ -28,6 +28,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientfeedback"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
+	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
 	"github.com/phamhung075/4genthub-client/internal/clientseat"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
@@ -95,6 +96,7 @@ func refuse(stderr io.Writer, name, owner string) int {
 func commands() []clientcmd.Command {
 	registry := append(clientsync.Commands(), clientbridge.Commands()...)
 	registry = append(registry, clientlifecycle.Commands()...)
+	registry = append(registry, clientoffpeak.Commands()...)
 	registry = append(registry, clientseat.Commands()...)
 	registry = append(registry, clientpolicy.Commands()...)
 	registry = append(registry, clientteam.Commands()...)

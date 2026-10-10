@@ -55,14 +55,21 @@ func restoreAll(t *testing.T) {
 	force, bridge := ensureForcecompact, startBridge
 	ui, watch, herdr := openUI, runWatchView, runHerdr
 	spawn, grace := spawnChild, SupervisorStartGrace
-	stop := stopPattern
+	stop, nodes := stopPattern, rigNodes
+	lookPath := clientcmd.LookPath
 	t.Cleanup(func() {
 		ensureDaemon, ensureRig = daemon, rigStep
 		ensureForcecompact, startBridge = force, bridge
 		openUI, runWatchView, runHerdr = ui, watch, herdr
 		spawnChild, SupervisorStartGrace = spawn, grace
-		stopPattern = stop
+		stopPattern, rigNodes = stop, nodes
+		clientcmd.LookPath = lookPath
 	})
+	// A test in this package runs with the peak gate reading NO nodes and with a rig tool that resolves:
+	// the gate then decides nothing, and no test here reaches the machine's own daemon, rig or clock. A
+	// test about the gate replaces rigNodes with the reading it wants to be judged on.
+	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return nil }
+	clientcmd.LookPath = func(string) (string, error) { return "/usr/local/bin/rig", nil }
 }
 
 // TestHelpAfterAVerbNeverRunsALifecycleAction is the other half of the same fault, asserted as the

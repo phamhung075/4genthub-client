@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 )
 
 const (
@@ -24,11 +26,15 @@ const (
 	defaultRespawnReason = "agent died outside `rig seat stop` (respawn)"
 )
 
-const respawnUsage = `usage: 4genteam sync respawn ROOM SEAT [--after-seconds SECONDS] [--reason TEXT]
+const respawnUsage = `usage: 4genteam sync respawn ROOM SEAT [--after-seconds SECONDS] [--reason TEXT] ` + clientoffpeak.ModeFlagUsage + `
 
 Respawn a seat whose agent died outside ` + "`rig seat stop`" + `. The seat must READ dead for
 --after-seconds (default 30s) before anything is launched, because a seat that has just started reads
 the same way until its runtime hook attaches.
+
+A respawn LAUNCHES a fresh occupant, so the DeepSeek peak gate applies here: with ` + clientoffpeak.ModeEnv + `
+on (the default) a seat whose model is deepseek/ is not launched at peak, and the refusal names when
+off-peak resumes. ` + clientoffpeak.FlagAnyTime + ` skips the check for this run.
 `
 
 // rigResult is one `rig` invocation for its output. A non-zero exit is NOT thrown away: `rig seat
@@ -67,12 +73,17 @@ func RunRespawnVerb(_ context.Context, args []string, stdout, stderr io.Writer) 
 			return clientcmd.ExitOK
 		}
 	}
-	room, seat, after, reason, err := parseRespawnArgs(args)
+	mode, rest, err := clientoffpeak.ModeFromFlags(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	return respawn(room, seat, after, reason, stdout, stderr)
+	room, seat, after, reason, err := parseRespawnArgs(rest)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	return respawn(room, seat, after, reason, mode, stdout, stderr)
 }
 
 func parseRespawnArgs(args []string) (room, seat string, after float64, reason string, err error) {
@@ -120,7 +131,7 @@ func parseRespawnArgs(args []string) (room, seat string, after float64, reason s
 	return positionals[0], positionals[1], after, reason, nil
 }
 
-func respawn(room, seat string, after float64, reason string, stdout, stderr io.Writer) int {
+func respawn(room, seat string, after float64, reason string, mode *clientoffpeak.Mode, stdout, stderr io.Writer) int {
 	room, err := ValidateName("room", room)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
@@ -141,6 +152,18 @@ func respawn(room, seat string, after float64, reason string, stdout, stderr io.
 		if node == nil {
 			fmt.Fprintf(stderr, "4genteam sync respawn: OpenRig lists no node %s.%s\n", room, seat)
 			return clientcmd.ExitUsage
+		}
+		// THE PEAK GATE, on the seat this verb is about to LAUNCH, and before the dead-reading wait: a
+		// respawn is a start, so at peak a DeepSeek seat is not launched by default, and a refusal must not
+		// make the caller wait --after-seconds first. The seat's own record carries its model.
+		proceed, message, err := clientoffpeak.Check(mode, []map[string]any{node}, os.Getenv)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
+			return clientcmd.ExitUsage
+		}
+		if !proceed {
+			fmt.Fprintf(stderr, "4genteam sync respawn: %s\n", message)
+			return clientcmd.ExitUnavailable
 		}
 		if !agentIsGone(node) {
 			fmt.Fprintf(stderr,
