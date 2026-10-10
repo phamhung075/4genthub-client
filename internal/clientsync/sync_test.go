@@ -53,3 +53,44 @@ func TestSyncRejectsAVerbItDoesNotDeclare(t *testing.T) {
 		}
 	}
 }
+
+// The usage errors speak this client's own dialect, not Python's argparse: each one exits 2 AND names
+// the argument it is about. What is pinned is the exit code and the name - never the sentence - so a
+// verb may rephrase ("missing argument: room") without breaking this, while a return to argparse's
+// "the following arguments are required" or "unrecognized arguments" fails it.
+func TestUsageErrorsNameTheOffendingArgument(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"rig with no room", []string{"rig"}, "room"},
+		{"rig with an unknown flag", []string{"rig", "room1", "--nope"}, "--nope"},
+		{"rig with a flag and no value", []string{"rig", "room1", "--out"}, "--out"},
+		{"bundle with one positional", []string{"bundle", "room1"}, "room, seat"},
+		{"bundle with an unknown flag",
+			[]string{"bundle", "room1", "seat1", "--rig-yaml", "y", "--rig-root", "r", "--nope"}, "--nope"},
+		{"switch with one positional", []string{"switch", "room1"}, "room, seat"},
+		{"respawn with one positional", []string{"respawn", "room1"}, "room, seat"},
+		{"offline-install with no target", []string{"offline-install"}, "target"},
+		{"install-checker with no --go-dir", []string{"install-checker"}, "--go-dir"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			code := (syncCommand{}).Run(context.Background(), nil, testCase.args, &out, &errOut)
+			if code != clientcmd.ExitUsage {
+				t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
+			}
+			message := errOut.String()
+			if !strings.Contains(message, testCase.want) {
+				t.Errorf("the refusal does not name %q: %q", testCase.want, message)
+			}
+			for _, argparse := range []string{"arguments are required", "unrecognized", "expected one argument"} {
+				if strings.Contains(message, argparse) {
+					t.Errorf("the refusal still speaks argparse (%q): %q", argparse, message)
+				}
+			}
+		})
+	}
+}

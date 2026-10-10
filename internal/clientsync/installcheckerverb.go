@@ -293,7 +293,7 @@ func parseInstallCheckerArgs(args []string) (goDir, out string, err error) {
 		switch arg := args[i]; {
 		case arg == "--go-dir" || arg == "--out":
 			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("argument %s: expected one argument", arg)
+				return "", "", fmt.Errorf("%s needs a value", arg)
 			}
 			i++
 			if arg == "--go-dir" {
@@ -306,11 +306,11 @@ func parseInstallCheckerArgs(args []string) (goDir, out string, err error) {
 		case strings.HasPrefix(arg, "--out="):
 			out = strings.TrimPrefix(arg, "--out=")
 		default:
-			return "", "", fmt.Errorf("unrecognized arguments: %s", arg)
+			return "", "", fmt.Errorf("unknown argument: %s", arg)
 		}
 	}
 	if goDir == "" {
-		return "", "", errors.New("the following arguments are required: --go-dir")
+		return "", "", errors.New("missing argument: --go-dir")
 	}
 	return goDir, out, nil
 }

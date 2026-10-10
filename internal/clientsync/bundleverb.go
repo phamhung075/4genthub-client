@@ -79,7 +79,7 @@ func bundleParseArgs(args []string) (bundleArgs, error) {
 	var positionals []string
 	needValue := func(flag string, index int) error {
 		if index+1 >= len(args) {
-			return usageError("argument " + flag + ": expected one argument")
+			return usageError(flag + " needs a value")
 		}
 		return nil
 	}
@@ -111,20 +111,20 @@ func bundleParseArgs(args []string) (bundleArgs, error) {
 		case strings.HasPrefix(arg, "--out-dir="):
 			parsed.outDir = strings.TrimPrefix(arg, "--out-dir=")
 		case strings.HasPrefix(arg, "-") && arg != "-":
-			return parsed, usageError("unrecognized arguments: " + arg)
+			return parsed, usageError("unknown argument: " + arg)
 		default:
 			positionals = append(positionals, arg)
 		}
 	}
 	if len(positionals) != 2 {
-		return parsed, usageError("the following arguments are required: room, seat")
+		return parsed, usageError("missing argument: room, seat")
 	}
 	parsed.room, parsed.seat = positionals[0], positionals[1]
 	if parsed.rigYAML == "" {
-		return parsed, usageError("the following arguments are required: --rig-yaml")
+		return parsed, usageError("missing argument: --rig-yaml")
 	}
 	if parsed.rigRoot == "" {
-		return parsed, usageError("the following arguments are required: --rig-root")
+		return parsed, usageError("missing argument: --rig-root")
 	}
 	return parsed, nil
 }

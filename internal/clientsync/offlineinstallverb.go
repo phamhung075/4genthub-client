@@ -59,23 +59,23 @@ func parseOfflineInstallArgs(args []string) (target, home string, err error) {
 		switch arg := args[i]; {
 		case arg == "--home":
 			if i+1 >= len(args) {
-				return "", "", errors.New("argument --home: expected one argument")
+				return "", "", errors.New("--home needs a value")
 			}
 			i++
 			home = args[i]
 		case strings.HasPrefix(arg, "--home="):
 			home = strings.TrimPrefix(arg, "--home=")
 		case strings.HasPrefix(arg, "-") && arg != "-":
-			return "", "", fmt.Errorf("unrecognized arguments: %s", arg)
+			return "", "", fmt.Errorf("unknown argument: %s", arg)
 		default:
 			if target != "" {
-				return "", "", fmt.Errorf("unrecognized arguments: %s", arg)
+				return "", "", fmt.Errorf("unknown argument: %s", arg)
 			}
 			target = arg
 		}
 	}
 	if target == "" {
-		return "", "", errors.New("the following arguments are required: target")
+		return "", "", errors.New("missing argument: target")
 	}
 	return target, home, nil
 }

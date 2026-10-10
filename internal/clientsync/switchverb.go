@@ -99,7 +99,7 @@ func switchParseArgs(args []string) (switchArgs, error) {
 	var positionals []string
 	needValue := func(flag string, index int) error {
 		if index+1 >= len(args) {
-			return usageError("argument " + flag + ": expected one argument")
+			return usageError(flag + " needs a value")
 		}
 		return nil
 	}
@@ -139,13 +139,13 @@ func switchParseArgs(args []string) (switchArgs, error) {
 		case strings.HasPrefix(arg, "--reason="):
 			parsed.reason = strings.TrimPrefix(arg, "--reason=")
 		case strings.HasPrefix(arg, "-") && arg != "-":
-			return parsed, usageError("unrecognized arguments: " + arg)
+			return parsed, usageError("unknown argument: " + arg)
 		default:
 			positionals = append(positionals, arg)
 		}
 	}
 	if len(positionals) != 2 {
-		return parsed, usageError("the following arguments are required: room, seat")
+		return parsed, usageError("missing argument: room, seat")
 	}
 	parsed.room, parsed.seat = positionals[0], positionals[1]
 	if parsed.applySet {

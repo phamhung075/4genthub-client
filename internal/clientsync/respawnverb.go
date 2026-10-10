@@ -80,7 +80,7 @@ func parseRespawnArgs(args []string) (room, seat string, after float64, reason s
 	after, reason = defaultRespawnAfterSeconds, defaultRespawnReason
 	needValue := func(flag string, index int) error {
 		if index+1 >= len(args) {
-			return fmt.Errorf("argument %s: expected one argument", flag)
+			return fmt.Errorf("%s needs a value", flag)
 		}
 		return nil
 	}
@@ -109,13 +109,13 @@ func parseRespawnArgs(args []string) (room, seat string, after float64, reason s
 		case strings.HasPrefix(arg, "--reason="):
 			reason = strings.TrimPrefix(arg, "--reason=")
 		case strings.HasPrefix(arg, "-") && arg != "-":
-			return "", "", 0, "", fmt.Errorf("unrecognized arguments: %s", arg)
+			return "", "", 0, "", fmt.Errorf("unknown argument: %s", arg)
 		default:
 			positionals = append(positionals, arg)
 		}
 	}
 	if len(positionals) != 2 {
-		return "", "", 0, "", errors.New("the following arguments are required: room, seat")
+		return "", "", 0, "", errors.New("missing argument: room, seat")
 	}
 	return positionals[0], positionals[1], after, reason, nil
 }

@@ -307,7 +307,7 @@ func rigParseArgs(args []string) (rigArgs, error) {
 		switch arg := args[i]; {
 		case arg == "--out":
 			if i+1 >= len(args) {
-				return parsed, errors.New("argument --out: expected one argument")
+				return parsed, errors.New("--out needs a value")
 			}
 			i++
 			parsed.out = args[i]
@@ -317,7 +317,7 @@ func rigParseArgs(args []string) (rigArgs, error) {
 			parsed.update = true
 		case arg == "--state-root":
 			if i+1 >= len(args) {
-				return parsed, errors.New("argument --state-root: expected one argument")
+				return parsed, errors.New("--state-root needs a value")
 			}
 			i++
 			parsed.stateRoot = args[i]
@@ -327,26 +327,26 @@ func rigParseArgs(args []string) (rigArgs, error) {
 			parsed.haveStateRoot = true
 		case arg == "--skills-root":
 			if i+1 >= len(args) {
-				return parsed, errors.New("argument --skills-root: expected one argument")
+				return parsed, errors.New("--skills-root needs a value")
 			}
 			i++
 			parsed.skillsRoot = args[i]
 		case strings.HasPrefix(arg, "--skills-root="):
 			parsed.skillsRoot = strings.TrimPrefix(arg, "--skills-root=")
 		case strings.HasPrefix(arg, "-") && arg != "-":
-			return parsed, fmt.Errorf("unrecognized arguments: %s", arg)
+			return parsed, fmt.Errorf("unknown argument: %s", arg)
 		default:
 			// An EMPTY positional is still a positional: argparse hands it to validate_name, which
 			// refuses it as an invalid room name rather than as a missing argument.
 			if parsed.hasRoom {
-				return parsed, fmt.Errorf("unrecognized arguments: %s", arg)
+				return parsed, fmt.Errorf("unknown argument: %s", arg)
 			}
 			parsed.room = arg
 			parsed.hasRoom = true
 		}
 	}
 	if !parsed.hasRoom {
-		return parsed, errors.New("the following arguments are required: room")
+		return parsed, errors.New("missing argument: room")
 	}
 	return parsed, nil
 }
