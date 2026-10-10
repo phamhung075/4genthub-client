@@ -52,14 +52,14 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Fixed
 
 - `docs/WATCH.md` and `skills/watch-team/SKILL.md`: the three `inputs` examples pass the `--rig` the
-  verb requires, and both files document `--state-root` and `$OPENRIG_STATE_ROOT` with the order they
-  resolve in.
+  verb requires.
 - `4genteam watch`, `grid` and `feed` now resolve the state root exactly as the doc comment and
   `docs/WATCH.md` promised: `--state-root`, else `$OPENRIG_STATE_ROOT`, else the machine's own
   `~/.openrig/state/omp` (`clientenv.DefaultStateRoot()`). The third clause was documented but
   missing, so the feed refused on a machine where the doc says it reads. The usage text now states the
-  resolved path rather than only the variable name, and a root that is named but not there is refused
-  by its path whichever clause named it.
+  home-relative default (`~/.openrig/state/omp`) rather than only the variable name - the resolution
+  stays absolute - and a root that is named but not there is refused by its path whichever clause
+  named it.
 - `4genteam sync --help` prints the verb group's usage and exits 0; it used to be read as an
   unknown verb and exited 2 (`1e23ca2`).
 - `4genteam bridge install-service` renders the client's OWN environment file

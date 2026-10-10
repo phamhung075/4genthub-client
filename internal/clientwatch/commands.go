@@ -86,8 +86,15 @@ var verbUsages = map[string]verbUsage{
 	},
 }
 
+// stateRootInHelp is how the usage text names the third clause: the home-RELATIVE form, never the
+// resolved absolute path. Help text carrying /home/<user>/... would name the machine's user, differ per
+// machine and make the output brittle in a test; only the RESOLUTION is absolute. This is the same
+// wording docs/WATCH.md:34 and skills/watch-team/SKILL.md:60 use for that clause.
+const stateRootInHelp = "~/.openrig/state/omp"
+
 // commonFlags states the path --state-root resolves to rather than only naming the variable: the third
-// clause is a machine path, so the usage text has to show the path this machine will actually read.
+// clause is a machine path, so the usage text has to say which one will be read - in its home-relative
+// form, because the absolute path belongs to the resolution, not to the help.
 func commonFlags() string {
 	return `
 options:
@@ -99,7 +106,7 @@ options:
                   (on for grid and watch, off for feed)
   --cols N        grid columns (grid and watch only; default 2)
   --state-root DIR  the omp state root the session logs are read from
-                    (--state-root, else $OPENRIG_STATE_ROOT, else ` + defaultStateRoot() + `)
+                    (--state-root, else $OPENRIG_STATE_ROOT, else ` + stateRootInHelp + `)
 `
 }
 

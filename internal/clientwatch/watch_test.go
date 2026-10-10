@@ -326,18 +326,20 @@ func TestTheStateRootOrderIsFlagThenEnvironmentThenDefault(t *testing.T) {
 	}
 }
 
-// The usage text has to state the path the third clause resolves to, not only the variable's name: the
-// default is a machine path, and a reader has to see which one will be read.
-func TestTheUsageStatesTheResolvedStateRoot(t *testing.T) {
-	root := t.TempDir()
-	restore := defaultStateRoot
-	defaultStateRoot = func() string { return root }
-	defer func() { defaultStateRoot = restore }()
-
+// The usage text has to state the third clause, and it has to state it HOME-RELATIVE: help output that
+// carried the resolved absolute path would name the machine's user and differ per machine. Both halves
+// are checked here and neither needs a real home.
+func TestTheUsageStatesTheStateRootHomeRelative(t *testing.T) {
 	var usage strings.Builder
 	printVerbUsage(&usage, "feed")
-	if !strings.Contains(usage.String(), root) {
-		t.Errorf("the usage does not state the resolved state root %q:\n%s", root, usage.String())
+	if !strings.Contains(usage.String(), "~/.openrig/state/omp") {
+		t.Errorf("the usage does not state the default state root:\n%s", usage.String())
+	}
+	if strings.Contains(usage.String(), "/home/") {
+		t.Errorf("the usage carries an absolute user-home path:\n%s", usage.String())
+	}
+	if strings.Contains(usage.String(), defaultStateRoot()) {
+		t.Errorf("the usage prints the resolved path instead of the home-relative form:\n%s", usage.String())
 	}
 }
 
