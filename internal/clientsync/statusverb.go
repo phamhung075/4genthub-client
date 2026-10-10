@@ -63,6 +63,13 @@ func lockPresent(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// statusUsage is what `4genteam sync status --help` prints.
+const statusUsage = `usage: 4genteam sync status ROOM [--seat SEAT ...] [--out DIR]
+
+Compare each of the room's seats' LOCAL pin with the hash the cloud serves, and report the ones that
+are behind. Reading only: nothing is written and nothing is pulled.
+`
+
 // RunStatusVerb is `sync status <room>`: the arguments, the two halves, the table and the exit code.
 //
 // THE ERROR CODE MAPPING IS THE PYTHON MAIN'S, NOT THE HELPER'S, and that is the detail a port gets
@@ -70,7 +77,12 @@ func lockPresent(path string) bool {
 // anything that is not EXIT_USAGE (2) to EXIT_FAILED (3). So a cloud that cannot be read exits 3 here,
 // not 1 - clientcmd.CodeOf would return the helper's own code, which is right for the bridge (it does
 // report ExitRemote) and wrong for this verb.
+
 func RunStatusVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if clientcmd.HelpRequested(args) {
+		_, _ = io.WriteString(stdout, statusUsage)
+		return clientcmd.ExitOK
+	}
 	room, out, wanted, err := parseStatusArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())

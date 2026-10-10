@@ -30,6 +30,21 @@ func lineCount(s string) int {
 	return len(strings.Split(trimmed, "\n"))
 }
 
+// TestHelpRequestedIsHelpWhereverItAppears: ONE function decides what help is, so a verb that parses
+// its own flags cannot treat --help as an unknown flag - which is the defect this replaced.
+func TestHelpRequestedIsHelpWhereverItAppears(t *testing.T) {
+	for _, args := range [][]string{{"-h"}, {"--help"}, {"room", "--help"}, {"--help", "room"}, {"--out", "x", "-h"}} {
+		if !HelpRequested(args) {
+			t.Errorf("HelpRequested(%v) = false, want true", args)
+		}
+	}
+	for _, args := range [][]string{nil, {}, {"room", "seat"}, {"--update"}, {"-"}} {
+		if HelpRequested(args) {
+			t.Errorf("HelpRequested(%v) = true, want false", args)
+		}
+	}
+}
+
 // TestRequireRigRefusesWithOneMessage is the platform matrix's refusal, asserted by SHAPE: an error,
 // one line, the reason named. The dispatcher turns it into a non-zero exit with no partial work.
 func TestRequireRigRefusesWithOneMessage(t *testing.T) {

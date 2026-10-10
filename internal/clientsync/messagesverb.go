@@ -85,6 +85,10 @@ func messagesLedgerPath(out, room, seat string) string {
 
 // RunMessagesVerb drives the pull-deliver-ack loop and returns a process exit code.
 func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if clientcmd.HelpRequested(args) {
+		_, _ = io.WriteString(stdout, messagesUsage)
+		return clientcmd.ExitOK
+	}
 	room, seat, session, out, limit, dryRun, err := parseMessagesArgs(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync messages: %v\n%s\n", err, messagesUsage)

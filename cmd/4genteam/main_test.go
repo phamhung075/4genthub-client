@@ -21,15 +21,15 @@ func rigMissing(t *testing.T) {
 // answered an empty success would be the "looks complete and is not" shape in a new place.
 //
 // THE TABLE IS ONLY THE COMMANDS STILL UNPORTED, and an entry leaves it the moment its verb becomes
-// real: `sync status` was here until 64f8ecde and `sync pull` until the pull commit, and both now have
-// their ported behaviour pinned by TestPortedVerbsRefuseOnTheEnvironment below. What remains here is what
-// the client still refuses by name - the other sync verbs among them - which is what this test exists to
-// keep honest.
+// real: `sync status` was here until 64f8ecde, `sync pull` until the pull commit, and `feedback`,
+// `sync bundle` and `sync watch` all left the same way - `watch` because Python never registered that
+// verb under sync at all, so the name is gone rather than promised. `seatcheck` is the one name that
+// remains, because the checker is its own binary rather than a verb this client implements, and that is
+// what this test exists to keep honest.
 func TestUnportedCommandRefusesRatherThanStubbing(t *testing.T) {
 	rigMissing(t)
 	for _, args := range [][]string{
 		{"seatcheck", "send", "x", "y"},
-		{"sync", "watch"},
 	} {
 		var out, errOut bytes.Buffer
 		if code := run(args, &out, &errOut); code != clientcmd.ExitUnavailable {
@@ -41,6 +41,18 @@ func TestUnportedCommandRefusesRatherThanStubbing(t *testing.T) {
 		if out.Len() != 0 {
 			t.Errorf("%v: stdout = %q, want nothing: a refused command does no partial work", args, out.String())
 		}
+	}
+}
+
+// TestAPendingVerbAnswersHelpToo: `seatcheck` refuses as a command, but the one argument that asks
+// what it is must not be the one that errors.
+func TestAPendingVerbAnswersHelpToo(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run([]string{"seatcheck", "--help"}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("seatcheck --help exited %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut.String())
+	}
+	if !strings.Contains(out.String(), "seatcheck") {
+		t.Errorf("the help did not name the checker: %q", out.String())
 	}
 }
 

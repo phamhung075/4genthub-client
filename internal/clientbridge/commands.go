@@ -111,6 +111,10 @@ func HostMachineID() string {
 }
 
 func bridgeRun(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer, onceOnly bool) int {
+	if clientcmd.HelpRequested(args) {
+		bridgeUsage(stdout)
+		return clientcmd.ExitOK
+	}
 	values, switches, err := bridgeFlags(args,
 		map[string]bool{"interval": true, "machine-id": true}, map[string]bool{"once": true})
 	if err != nil {
@@ -144,6 +148,10 @@ func bridgeRun(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, s
 // the instrument the parity test uses against the Python bridge: the dump carries local_record, the
 // report does not, and the difference is exactly the four-versus-five fields.
 func bridgeOnce(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+	if clientcmd.HelpRequested(args) {
+		bridgeUsage(stdout)
+		return clientcmd.ExitOK
+	}
 	values, switches, err := bridgeFlags(args, map[string]bool{"machine-id": true}, map[string]bool{"print": true})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)

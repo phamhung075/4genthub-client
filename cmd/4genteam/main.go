@@ -55,13 +55,31 @@ func (c pendingCommand) NeedsRig() bool  { return c.needsRig }
 // wrong tool. The client does not implement `seatcheck`, but the checker itself is already Go, so
 // naming the Python client as the authority for it would be false as well as unhelpful. The branch
 // this replaces keyed on a `bridge` command that is no longer registered at all, so it could not run.
-func (c pendingCommand) Run(_ context.Context, _ *clientcmd.Rig, _ []string, _, stderr io.Writer) int {
+func (c pendingCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+	// HELP IS HELP FOR EVERY VERB, the two that refuse included: without this, `--help` would be the
+	// one argument that errors on a verb whose whole job is to say where the real one lives.
+	if clientcmd.HelpRequested(args) {
+		_, _ = io.WriteString(stdout, pendingUsage(c.name))
+		return clientcmd.ExitOK
+	}
 	owner := "the Python client is still the authority for it"
 	if c.name == "seatcheck" {
 		owner = "run the seatcheck binary instead (it is already Go: cmd/seatcheck, built and linked as " +
 			"`seatcheck` by `4genteam sync install-checker`)"
 	}
 	return refuse(stderr, c.name, owner)
+}
+
+// pendingUsage is the help a verb this build does not implement still owes: help is help for every
+// verb, so a name that refuses must still say what it is and where the real implementation lives.
+func pendingUsage(name string) string {
+	if name == "seatcheck" {
+		return "usage: 4genteam seatcheck <send|audit-scan> [args]\n\n" +
+			"The checker is its own binary (cmd/seatcheck). This name refuses instead of forwarding, so " +
+			"nothing is half-implemented here; run `seatcheck send --to <seat> --intent <intent> -- " +
+			"<text>` or `seatcheck audit-scan --file <path>`.\n"
+	}
+	return "usage: 4genteam " + name + " [args]\n"
 }
 
 func refuse(stderr io.Writer, name, owner string) int {

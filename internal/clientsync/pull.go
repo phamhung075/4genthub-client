@@ -111,11 +111,23 @@ func WriteJSONAtomic(path string, payload any) error {
 	return nil
 }
 
+// pullUsage is what `4genteam sync pull --help` prints.
+const pullUsage = `usage: 4genteam sync pull ROOM SEAT [--out DIR] [--update]
+
+Pull one seat's resolved snapshot and move its pin to what was written. The pin is a HASH: a pull
+never falls back to a different snapshot, and a newer one is only adopted with --update.
+`
+
 // RunPullVerb is `sync pull <room> <seat>`: two positionals, --out with the seat-store default, and
 // --update to adopt a newer snapshot instead of only being told about it. On success it prints exactly
 // "path:<dir>" - the directory now pinned - which is the line the Python prints and the one a caller
 // reads to find the materialized snapshot.
+
 func RunPullVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if clientcmd.HelpRequested(args) {
+		_, _ = io.WriteString(stdout, pullUsage)
+		return clientcmd.ExitOK
+	}
 	room, seat, out, update, err := parsePullArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())

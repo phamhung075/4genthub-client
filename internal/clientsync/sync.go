@@ -23,18 +23,16 @@ func Commands() []clientcmd.Command {
 	return []clientcmd.Command{syncCommand{}}
 }
 
-// syncVerbs are the verbs this package answers under `sync`. Each is ported test-for-test; until one
-// is, it REFUSES BY NAME rather than answering something plausible, which is the same rule the
-// platform matrix follows. The list carries EVERY verb Python's argparse registers, so a verb the
-// build cannot do is refused by name instead of reading as a verb that does not exist - the difference
-// between "not ported yet" and "you typed it wrong". `watch` is the one declared verb with no Python
-// spec at all: Python's watch is a top-level verb, so what it answers here is this client's own
-// contract rather than a port. See the phase report.
+// syncVerbs are the verbs this group answers under `sync`, and EVERY one of them is implemented here:
+// the list exists so `--help` can name them, not as a promise this build cannot keep. It carries every
+// verb Python's argparse registers (pull, rig, bundle, offline-install, respawn, install-checker,
+// switch) plus the four this client's own contract adds (status, messages, connector, and the
+// pull-deliver loop those two share). Python never registered a `watch` under sync - its watch is the
+// top-level view of a room - so no such verb is declared here either.
 var syncVerbs = []string{
 	"status", "pull", "messages", "connector",
 	"rig", "bundle", "switch",
 	"install-checker", "offline-install", "respawn",
-	"watch",
 }
 
 type syncCommand struct{}
@@ -80,18 +78,10 @@ func (syncCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 	case "rig":
 		return RunRigVerb(ctx, args[1:], stdout, stderr)
 	}
-	want := args[0]
-	for _, verb := range syncVerbs {
-		if verb != want {
-			continue
-		}
-		fmt.Fprintf(stderr,
-			"4genteam sync %s: not ported into the Go client yet, so the client package's seat_sync "+
-				"module (agenthub_client/src/agenthub_client/seat_sync.py) is still the authority for it. "+
-				"This build refuses rather than doing something weaker.\n", want)
-		return clientcmd.ExitUnavailable
-	}
-	fmt.Fprintf(stderr, "4genteam sync: unknown verb %q; the verbs are %s\n", want, verbList())
+	// Every verb this group declares has a case above, so a name that reaches here is not a verb of
+	// this client at all: a usage error, not a promise this build cannot keep. TestEveryDeclaredVerb-
+	// AnswersHelp fails if a name is ever added to syncVerbs without its case.
+	fmt.Fprintf(stderr, "4genteam sync: unknown verb %q; the verbs are %s\n", args[0], verbList())
 	return clientcmd.ExitUsage
 }
 
@@ -115,5 +105,6 @@ func printUsage(w io.Writer) {
 	}
 	_, _ = io.WriteString(w, "\nstatus, pull and messages read the cloud and the local pins; rig materializes a room's seats;\n"+
 		"bundle, switch, respawn, offline-install and install-checker move or manage what was pulled.\n"+
-		"A verb that is not ported into this build refuses by name rather than doing something weaker.\n")
+		"Every verb this group declares is implemented here. A verb that is not declared is a usage error,\n"+
+		"never a promise this build cannot keep.\n")
 }

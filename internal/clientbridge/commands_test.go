@@ -2,6 +2,7 @@ package clientbridge
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 
@@ -37,5 +38,21 @@ func TestInstallServiceNamesTheClientsOwnEnvFile(t *testing.T) {
 	}
 	if !strings.Contains(unit, " bridge run\n") {
 		t.Errorf("the unit does not start this binary's own bridge sub-verb:\n%s", unit)
+	}
+}
+
+// TestBridgeSubVerbsAnswerHelp: `bridge run` and `bridge once` parse their own flags, so before the
+// central helper `--help` was an unknown flag and exited 2 - the one argument that asks what a verb is
+// was the one that errored.
+func TestBridgeSubVerbsAnswerHelp(t *testing.T) {
+	for _, args := range [][]string{{"run", "--help"}, {"once", "-h"}} {
+		var out, errOut bytes.Buffer
+		code := (bridgeCommand{}).Run(context.Background(), nil, args, &out, &errOut)
+		if code != clientcmd.ExitOK {
+			t.Errorf("bridge %v exited %d, want %d (stderr %q)", args, code, clientcmd.ExitOK, errOut.String())
+		}
+		if !strings.Contains(out.String(), "4genteam bridge") {
+			t.Errorf("bridge %v help did not name the group: %q", args, out.String())
+		}
 	}
 }

@@ -92,6 +92,19 @@ type Command interface {
 	Run(ctx context.Context, rig *Rig, args []string, stdout, stderr io.Writer) int
 }
 
+// HelpRequested reports whether an argument list asks for help. EVERY verb funnels `--help` through
+// this, so help is help wherever the flag sits in the argument list - which is what the Python's
+// argparse did, and what a verb that parses its own flags otherwise loses to an unknown-flag error.
+// The mission's rule is that every verb answers --help, and this is the one place that is decided.
+func HelpRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
 // Seams the tests replace. A package-level variable rather than an interface added for testing, which
 // is the repo's rule; the platform matrix is untestable without these two.
 var (
