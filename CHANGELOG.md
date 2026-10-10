@@ -106,6 +106,9 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `docs/AGENT-SETUP.md`: the install-target passage names the profile half too — the same render that
   fills `resources.skills` also lists each id in the default profile's `uses.skills`, so a pool entry
   no profile uses is inert exactly as a file no spec declares is.
+- `docs/AGENT-SETUP.md` names `HERDR_ENV`: `4genteam up` ends by launching `herdr` and stops before
+  that when the variable is set to anything, which is the escape its own refusal prints on a machine
+  with no `herdr` on `PATH` — and which no file in this repository documented until now.
 - The usage errors speak this client's own dialect instead of Python's argparse (`9bf0c9d`): one form per
   kind — `missing argument: <name>`, `unknown argument: <flag>`, `<flag> needs a value` — in the six verbs
   that parse their own arguments (`sync rig`, `bundle`, `switch`, `respawn`, `offline-install`,
