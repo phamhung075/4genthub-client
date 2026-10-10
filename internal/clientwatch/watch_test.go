@@ -571,6 +571,23 @@ func TestSeatLogPrefersOmpStateThenClaude(t *testing.T) {
 	_ = fake
 }
 
+// Mirrors test_seat_model_is_the_last_model_in_the_log_tail: the model the header shows is the one that
+// answered last. The reading is the LAST match in the log (and in its tail on a large log), never the
+// first, so a seat that switched models reads as the new one.
+func TestTheSeatModelIsTheLastOneInTheLogTail(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "session.jsonl")
+	contents := `{"message":{"model":"old"}}` + "\n" + `{"message":{"model":"claude-opus-5-5"}}` + "\n"
+	if err := os.WriteFile(log, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := seatModel(log); got != "claude-opus-5-5" {
+		t.Errorf("seatModel = %q, want the LAST model in the tail, not the first", got)
+	}
+	if got := seatModel(""); got != "" {
+		t.Errorf("seatModel of no log = %q, want empty", got)
+	}
+}
+
 // installBareSeam swaps the exec seam for one that fails every call, for the tests that only look at
 // argument handling.
 func installBareSeam(t *testing.T) {

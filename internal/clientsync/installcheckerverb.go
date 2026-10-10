@@ -136,9 +136,11 @@ func openrigDaemonPort() string {
 	return match[1]
 }
 
-// procEnvPath is the PATH of process pid from /proc/<pid>/environ, or "" when unreadable.
+// procEnvPath is the PATH of process pid from <rigProcRoot>/<pid>/environ, or "" when unreadable.
+// rigProcRoot is the package's process-table seam, so a test reads a scratch tree instead of this
+// box's /proc; its default is "/proc", so the behaviour on a real machine is unchanged.
 func procEnvPath(pid int) string {
-	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "environ"))
+	raw, err := os.ReadFile(filepath.Join(rigProcRoot, strconv.Itoa(pid), "environ"))
 	if err != nil {
 		return ""
 	}
