@@ -25,8 +25,17 @@ func Commands() []clientcmd.Command {
 
 // syncVerbs are the verbs this package answers under `sync`. Each is ported test-for-test; until one
 // is, it REFUSES BY NAME rather than answering something plausible, which is the same rule the
-// platform matrix follows.
-var syncVerbs = []string{"status", "pull", "messages", "rig", "bundle", "switch", "watch", "connector"}
+// platform matrix follows. The list carries EVERY verb Python's argparse registers, so a verb the
+// build cannot do is refused by name instead of reading as a verb that does not exist - the difference
+// between "not ported yet" and "you typed it wrong". `watch` is the one declared verb with no Python
+// spec at all: Python's watch is a top-level verb, so what it answers here is this client's own
+// contract rather than a port. See the phase report.
+var syncVerbs = []string{
+	"status", "pull", "messages", "connector",
+	"rig", "bundle", "switch",
+	"install-checker", "offline-install", "respawn",
+	"watch",
+}
 
 type syncCommand struct{}
 
@@ -58,6 +67,8 @@ func (syncCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		return RunMessagesVerb(ctx, args[1:], stdout, stderr)
 	case "connector":
 		return RunConnectorVerb(ctx, args[1:], stdout, stderr)
+	case "install-checker":
+		return RunInstallCheckerVerb(ctx, args[1:], stdout, stderr)
 	}
 	want := args[0]
 	for _, verb := range syncVerbs {

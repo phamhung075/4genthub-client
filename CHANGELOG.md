@@ -33,6 +33,11 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - The supervisor's witnessed-compaction path is tested (`internal/clientlifecycle`): a new
   compaction record sends the seat the resume text, and an unwitnessed one is reported and retried
   rather than assumed.
+- `4genteam sync install-checker` is implemented in Go (`internal/clientsync`): it builds
+  `cmd/seatcheck` with the pinned store compiled in, installs it at `<out>/bin/seatcheck`, links it
+  where seats resolve it with a relative symlink, and refuses when the NAME still does not resolve
+  rather than leaving behind a binary nothing can call. Every verb Python's argparse registers is now
+  either ported or refuses by name with exit 3 (`offline-install` and `respawn` still refuse).
 
 ### Changed
 
