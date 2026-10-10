@@ -100,7 +100,7 @@ rules you accept.
 | `4genteam team apply --team DIR` | create the room, seats, links and overlays defined in `DIR/team.json` |
 | `4genteam team import-project` | push the current project's `.mcp.json` servers and `.claude/skills` as modules |
 | `4genteam team publish-skills --inventory FILE` | push a skill inventory |
-| `4genteam bridge register\|run\|once\|install-service` | report this machine's seat status |
+| `4genteam bridge run\|once\|install-service` | report this machine's seat status |
 | `4genteam watch --rig ROOM` | herdr grid, one pane per seat, plus a lead window |
 | `4genteam feedback` | send friction to the server when a runtime has no MCP |
 
@@ -114,8 +114,7 @@ All variables are optional except the first two. They go in `.env` or the enviro
 | Variable | Meaning |
 |---|---|
 | `AGENTHUB_URL` | the server, for example `https://api.4genthub.com` |
-| `AGENTHUB_TOKEN` | your key; read by `sync`, `team`, `seat` and `bridge register` |
-| `AGENTHUB_MACHINE_TOKEN` | this machine's own token, issued by `4genteam bridge register`; the only credential `bridge run` uses |
+| `AGENTHUB_TOKEN` | your key; the one credential, read by `sync`, `team`, `seat` and `bridge` |
 | `OPENRIG_URL`, `OPENRIG_PORT` | the OpenRig daemon (default `http://127.0.0.1:7433`) |
 | `COMPACT_LIMIT_TOKENS` | context size above which a seat is compacted at the next quiet moment (150000) |
 | `COMPACT_WARN_TOKENS` | urgent size, compacted without waiting for quiet (250000) |

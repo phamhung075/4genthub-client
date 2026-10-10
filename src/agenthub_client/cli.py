@@ -16,7 +16,7 @@ Tools, each the command line of one module (``4genteam <tool> --help``). EVERY v
     seat     seat_client   status / sync / watch of a room's seats
     policy   seat_policy   per-seat policy: show, apply
     team     team_setup    create the team in the cloud: apply, import-project, publish-skills, drift-check
-    bridge   bridge        this machine's status to the cloud: register, run, once, install-service
+    bridge   bridge        this machine's status to the cloud: run, once, install-service
     watch    watch         herdr view: watch (grid + lead window), grid, feed, inputs
     feedback seat_feedback.sh  what went wrong, to the friction channel - the door for a runtime with no MCP
     compact-run            the supervisor loop in the foreground (what ``compact`` starts)
@@ -113,21 +113,21 @@ BRIDGE_PATTERN = "agenthub_client.bridge run"
 
 
 def bridge_env() -> dict[str, str] | None:
-    """The environment the bridge needs, read from the file `bridge register` wrote (what the systemd unit loads)."""
+    """The environment the bridge needs, read from the file the systemd unit loads."""
     try:
         lines = bridge.DEFAULT_ENV_FILE.read_text().splitlines()
     except OSError:
         return None
     pairs = (line.split("=", 1) for line in lines if "=" in line and not line.lstrip().startswith("#"))
     env = {k.strip(): v.strip().strip("\"'") for k, v in pairs}
-    return env if env.get("AGENTHUB_URL") and env.get("AGENTHUB_MACHINE_TOKEN") else None
+    return env if env.get("AGENTHUB_URL") and env.get("AGENTHUB_TOKEN") else None
 
 
 def start_bridge() -> bool:
     """Run the status bridge detached, so the 4genthub frontend sees every seat and rig of this PC."""
     env = bridge_env()
     if env is None:
-        print("4genteam: no machine token: run `4genteam bridge register` once (needs AGENTHUB_URL and AGENTHUB_TOKEN)", file=sys.stderr)
+        print("4genteam: AGENTHUB_URL and AGENTHUB_TOKEN missing from the bridge env file", file=sys.stderr)
         return False
     subprocess.run(["pkill", "-f", BRIDGE_PATTERN])
     paths.LOG_DIR.mkdir(parents=True, exist_ok=True)

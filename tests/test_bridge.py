@@ -512,9 +512,7 @@ def test_the_path_defaults_do_not_follow_home(monkeypatch, tmp_path):
 
 def test_usage_errors_exit_2(monkeypatch):
     monkeypatch.delenv("AGENTHUB_URL", raising=False)
-    # `run` reads the machine token, never the user token: one variable must not mean two
-    # credentials (owner ruling, 2026-10-05).
-    monkeypatch.delenv("AGENTHUB_MACHINE_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTHUB_TOKEN", raising=False)
     with pytest.raises(SystemExit) as err:
         bridge_mod.main(["run", "--once"])
     assert err.value.code == 2
@@ -599,122 +597,33 @@ def test_run_loop_backoff_stops_at_the_cap(tmp_path):
     assert stop.waits == [20.0, 40.0, 80.0, 120.0, 120.0, 120.0, 120.0, 120.0]
 
 
-MACHINE_TOKEN = "mt-machine-token-value"
-
-
-def test_sender_reads_the_machine_token_not_the_user_token(
-    server, tmp_path, monkeypatch
-):
+def test_sender_reads_the_user_token(server, tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTHUB_URL", f"http://127.0.0.1:{server.server_port}")
     monkeypatch.setenv("AGENTHUB_TOKEN", "user-token")
-    monkeypatch.setenv("AGENTHUB_MACHINE_TOKEN", MACHINE_TOKEN)
     bridge = make_bridge(
         tmp_path, fake_runner(rig_output(), None), bridge_mod.sender_from_env()
     )
     bridge.cycle()
     _, auth, _ = server.requests[0]
-    assert (
-        auth == "Bearer " + MACHINE_TOKEN
-    ), "run must send the machine token, not the user token"
+    assert auth == "Bearer user-token"
 
 
-def test_sender_without_the_machine_token_exits_2_naming_it(monkeypatch, capsys):
+def test_sender_without_the_user_token_exits_2_naming_it(monkeypatch, capsys):
     monkeypatch.setenv("AGENTHUB_URL", "http://127.0.0.1:1")
-    monkeypatch.setenv("AGENTHUB_TOKEN", "user-token")
-    monkeypatch.delenv("AGENTHUB_MACHINE_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTHUB_TOKEN", raising=False)
     with pytest.raises(SystemExit) as err:
         bridge_mod.sender_from_env()
     assert err.value.code == 2
-    assert "AGENTHUB_MACHINE_TOKEN" in capsys.readouterr().err
+    assert "AGENTHUB_TOKEN" in capsys.readouterr().err
 
 
-def test_401_names_the_register_step(tmp_path, capsys):
+def test_401_names_the_user_token(tmp_path, capsys):
     bridge = make_bridge(
         tmp_path, fake_runner(rig_output(), None), lambda body: (401, b"")
     )
     bridge.cycle()
     err = capsys.readouterr().err
-    assert "401" in err and "4genteam bridge register" in err
-
-
-def test_register_writes_env_file_0600_and_never_prints_the_token(
-    server, tmp_path, monkeypatch, capsys
-):
-    server.status = 200
-    server.body = json.dumps(
-        {"success": True, "machine_id": "pc-1", "token": MACHINE_TOKEN}
-    ).encode()
-    env_file = tmp_path / "agenthub-bridge.env"
-    monkeypatch.setenv("AGENTHUB_URL", f"http://127.0.0.1:{server.server_port}")
-    monkeypatch.setenv("AGENTHUB_TOKEN", "user-token-xyz")
-
-    code = bridge_mod.main(
-        ["register", "--machine-id", "pc-1", "--env-file", str(env_file)]
-    )
-
-    assert code == 0
-    printed = capsys.readouterr()
-    assert MACHINE_TOKEN not in printed.out and MACHINE_TOKEN not in printed.err
-    assert "pc-1" in printed.out
-    text = env_file.read_text(encoding="utf-8")
-    assert f"AGENTHUB_MACHINE_TOKEN={MACHINE_TOKEN}" in text
-    assert f"AGENTHUB_URL=http://127.0.0.1:{server.server_port}" in text
-    assert (env_file.stat().st_mode & 0o777) == 0o600
-    path, auth, body = server.requests[0]
-    assert path == "/api/v2/openrig/machines"
-    assert auth == "Bearer user-token-xyz"
-    assert json.loads(body) == {"machine_id": "pc-1"}
-
-
-def test_register_preserves_other_env_lines_and_replaces_the_token(
-    server, tmp_path, monkeypatch
-):
-    server.status = 200
-    server.body = json.dumps({"token": MACHINE_TOKEN}).encode()
-    env_file = tmp_path / "agenthub-bridge.env"
-    env_file.write_text(
-        "SOMETHING_ELSE=keep\nAGENTHUB_MACHINE_TOKEN=old\n", encoding="utf-8"
-    )
-    monkeypatch.setenv("AGENTHUB_URL", f"http://127.0.0.1:{server.server_port}")
-    monkeypatch.setenv("AGENTHUB_TOKEN", "u")
-
-    assert (
-        bridge_mod.main(
-            ["register", "--machine-id", "pc-1", "--env-file", str(env_file)]
-        )
-        == 0
-    )
-
-    text = env_file.read_text(encoding="utf-8")
-    assert "SOMETHING_ELSE=keep" in text
-    assert text.count("AGENTHUB_MACHINE_TOKEN=") == 1
-    assert "AGENTHUB_MACHINE_TOKEN=old" not in text
-
-
-def test_register_refused_is_loud_and_writes_nothing(
-    server, tmp_path, monkeypatch, capsys
-):
-    server.status = 401
-    env_file = tmp_path / "agenthub-bridge.env"
-    monkeypatch.setenv("AGENTHUB_URL", f"http://127.0.0.1:{server.server_port}")
-    monkeypatch.setenv("AGENTHUB_TOKEN", "u")
-
-    code = bridge_mod.main(
-        ["register", "--machine-id", "pc-1", "--env-file", str(env_file)]
-    )
-
-    assert code == bridge_mod.EXIT_REMOTE
-    assert "HTTP 401" in capsys.readouterr().err
-    assert not env_file.exists()
-
-
-def test_register_without_the_user_token_is_a_usage_error(monkeypatch, capsys):
-    monkeypatch.setenv("AGENTHUB_URL", "http://127.0.0.1:1")
-    monkeypatch.delenv("AGENTHUB_TOKEN", raising=False)
-    assert (
-        bridge_mod.main(["register", "--machine-id", "pc-1"]) == bridge_mod.EXIT_USAGE
-    )
-    assert "AGENTHUB_TOKEN" in capsys.readouterr().err
+    assert "401" in err and "AGENTHUB_TOKEN" in err
 
 
 # --- the recorded last-in-sync expected hash: drift the operator can see on this machine -----
