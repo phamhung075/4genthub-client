@@ -393,6 +393,60 @@ func TestAllWithNoBriefsSaysSo(t *testing.T) {
 	}
 }
 
+// TestAllReportsARigItCouldNotBringUp: the shell's `|| true` inside the loop is kept - the rigs after a
+// failure are still visited - but the run no longer ends 0 whatever happened, so a caller reading only the
+// exit code can tell a run that resumed every room from one that did not. The rig that could not come up
+// is named in the log, which is the record a reader has after the fact.
+func TestAllReportsARigItCouldNotBringUp(t *testing.T) {
+	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w.brief("rig-a.txt", "A text\n")
+	w.brief("rig-b.txt", "B text\n") // no seat of rig-b is up, so its restore cannot end with a live room
+
+	code, _, _ := w.run("continue", "--all")
+	if code != ExitRestoreFailed {
+		t.Fatalf("exit = %d, want %d", code, ExitRestoreFailed)
+	}
+	if !strings.Contains(w.log(), "rig-b: no seats up, aborting for this rig") {
+		t.Errorf("the log does not say rig-b could not be brought up:\n%s", w.log())
+	}
+	if !strings.Contains(w.log(), "--all: 1 of 2 rigs are not up: rig-b") {
+		t.Errorf("the summary does not name rig-b:\n%s", w.log())
+	}
+	if !strings.Contains(w.log(), "rig-a: already live, skipping restore") {
+		t.Errorf("the first rig was not visited before the failing one:\n%s", w.log())
+	}
+	if len(w.sends) != 1 || !strings.Contains(w.sends[0], "A text") {
+		t.Errorf("briefs = %q, want the live rig's own", w.sends)
+	}
+}
+
+// TestAllCountsARefusedRig: a peak refusal is deliberate, not a failure - but the run visited that room and
+// left it stopped, so it is not a run that brought everything up either. Exit non-zero, the room named, and
+// nothing started for it: --allow-peak is how a caller asks for the peak-hour restore.
+func TestAllCountsARefusedRig(t *testing.T) {
+	bothDeepSeek := `[{"logicalId":"rig-a.dev","canonicalSessionName":"rig-a-dev@rig-a","rigName":"rig-a",` +
+		`"model":"deepseek/deepseek-flash","sessionStatus":"stopped"},` +
+		`{"logicalId":"rig-b.dev","canonicalSessionName":"rig-b-dev@rig-b","rigName":"rig-b",` +
+		`"model":"deepseek/deepseek-flash","sessionStatus":"stopped"}]`
+	w := newWorld(t, staticSessions(), bothDeepSeek)
+	gateEnv(t, "2026-10-08 07:00") // Thursday 07:00Z: inside the 06:00-10:00 peak block
+	w.brief("rig-a.txt", "A text\n")
+	w.brief("rig-b.txt", "B text\n")
+
+	code, _, _ := w.run("continue", "--all")
+	if code != ExitRestoreFailed {
+		t.Fatalf("exit = %d, want %d", code, ExitRestoreFailed)
+	}
+	if !strings.Contains(w.log(), "--all: 2 of 2 rigs are not up: rig-a, rig-b") {
+		t.Errorf("the summary does not name both refused rigs:\n%s", w.log())
+	}
+	for _, call := range w.calls() {
+		if strings.Contains(call, "up ") {
+			t.Errorf("a refused rig was restored anyway: %q", call)
+		}
+	}
+}
+
 // TestAnArgumentTheVerbDoesNotKnowIsRefusedByName: the client's rule. The shell silently read an unknown
 // second argument as a brief PATH and ignored everything after it, so a caller who mistyped got a restore
 // with a briefing that never happened.
@@ -481,10 +535,15 @@ func TestTheListingNeedsNoRigTool(t *testing.T) {
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
-	for _, want := range []string{"Rigs that can be continued:", "rig is not on PATH", "briefs on disk:", "  rig-a", "Usage: " + continueUsage} {
+	for _, want := range []string{"Rigs that can be continued:", "rig is not on PATH", "briefs on disk:", "  rig-a", continueListingUsage} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the listing is missing %q:\n%s", want, out)
 		}
+	}
+	// The usage line is printed once: the shell's own, not continueUsage behind a "Usage: " prefix, which
+	// already carries one of its own.
+	if strings.Contains(out, "Usage: usage:") {
+		t.Errorf("the listing repeats the prefix:\n%s", out)
 	}
 }
 

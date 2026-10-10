@@ -259,7 +259,7 @@ func (w *watcher) check(rigName, action string) int {
 		w.log.printf("%s: DEAD — daemon expects %d running seats, tmux has 0. Re-run with --watch to restore.", rigName, exp)
 		return exitDead
 	}
-	w.log.printf("%s: DEAD — daemon expects %d running seats, tmux has 0. Restoring via rig-continue.sh.", rigName, exp)
+	w.log.printf("%s: DEAD — daemon expects %d running seats, tmux has 0. Restoring via continue's restore.", rigName, exp)
 	w.daemonUp()
 	if code := w.gate(rigName, "watchdog", w.allowPeak, w.stderr); code != clientcmd.ExitOK {
 		// The gate logged its own refusal; nothing is started, so there is nothing else to report.

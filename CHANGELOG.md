@@ -288,7 +288,8 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   `~/.openrig/bin/rig-continue.sh` and `~/.openrig/bin/rig-watchdog.sh`, which stay where they are). `continue`
   restores a stopped rig from its latest snapshot and briefs every seat from `~/.openrig/briefs/<rig>.txt`, with
   `briefs/<rig>/<seat>.txt` replacing the shared text for that seat; with no argument it lists the rigs and the
-  briefs on disk, and `--all` walks every rig that has a brief, one rig's failure never stopping the others.
+  briefs on disk, and `--all` walks every rig that has a brief, one rig's failure never stopping the others,
+  exiting non-zero when at least one visited rig is not up.
   `watchdog` reports (`--check`, `<rig>`), watches (`<rig> --watch [SECONDS] [HEARTBEAT_POLLS]`, `--all --watch`),
   restores a rig whose tmux sessions have vanished only after TWO consecutive dead polls, and self-tests its
   decision rule (`--self-test`). Both keep the scripts' log paths (`~/.openrig/logs/rig-continue.log`,
@@ -305,7 +306,9 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   `continue`'s own restore function rather than the script, so the two cannot drift apart.
 - The restore pair's tests (`internal/clientrestore/continue_test.go`, `watchdog_test.go`, 0 network, rig, seat,
   tmux or real home): the live-rig skip and the dead-rig restore with the seat count read AFTER it, the per-seat
-  brief overriding the shared one, `--no-brief`, the abort when no seats came up, `--all` over several rigs, the
+  brief overriding the shared one, `--no-brief`, the abort when no seats came up, `--all` over several rigs and
+  its report when one of them is not up - a failed restore and a peak refusal both counted, with the rigs after
+  it still visited - the
   gate refusing BEFORE the restore at a pinned peak instant (and `--allow-peak` letting the same room through,
   and a live rig never being gated), the watchdog's two-miss rule with its counter reset, its heartbeat cadence,
   its server-identity transition lines, an unreadable `rig ps` counting as zero expected seats, and that a rig
@@ -313,6 +316,19 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Changed
 
+- `continue --all` reports what happened instead of ending 0 whatever did (`internal/clientrestore/continue.go`).
+  Every rig that has a brief is still visited after one of them fails - the shell's `|| true` inside the loop,
+  kept, because a room that is not on DeepSeek must be restored while a refused or broken one is not - but the
+  run now ends non-zero (`ExitRestoreFailed`, 1) when at least one visited rig is not up, whether its restore
+  failed or the peak gate refused it, and logs `--all: N of M rigs are not up: <rigs>`. The shell ended 0
+  however many rigs failed, so a caller reading only the exit code could not tell a run that resumed every room
+  from one that resumed none - the invisibility `watchdog --check` was fixed for, answered here the same way
+  (`watchdog --all --check`). A refusal is deliberate rather than a failure, but it is still a room this run
+  left stopped, so it counts; `--allow-peak` is how a caller asks for the peak-hour restore.
+- The watchdog's restore line names the truth (`internal/clientrestore/watchdog.go`): `Restoring via continue's
+  restore.` The ported watchdog calls `continue`'s own restore function, not the script, and the line named
+  `rig-continue.sh` - a script this binary never invokes and never ships. Its stamp and shape are unchanged, so
+  the log still reads as one file with the script's, and the pinned line in `watchdog_test.go` moved with it.
 - The bridge carries TWO transports instead of one (`internal/clientbridge/bridge.go`, `commands.go`): the report's and,
   new, the notification path's. Both are built from the same `AGENTHUB_URL`/`AGENTHUB_TOKEN` by one helper and differ
   only in the endpoint, and both are required at startup for the same reason — a bridge that cannot report must not
@@ -387,6 +403,11 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Fixed
 
+- Bare `4genteam continue` printed `Usage: usage: 4genteam continue ...`: the listing ran `continueUsage`
+  through its own `Usage: %s` while that constant already opens with `usage: `. The listing now prints the
+  shell's own line once, from a constant of its own (`continueListingUsage`, the shape
+  `watchdogListingUsage` already used), and the listing's test asserts the line and that the doubled prefix
+  is gone - the old assertion pinned the doubled string by building it the same way the code did.
 - `bridge install-service --help` answers its usage instead of printing the systemd unit. The unit is this
   sub-verb's ANSWER, so `--help` got the unit, exit 0 and no stderr - and the help sweep added with
   `8cf6a34` asked only that stdout be non-empty, which is exactly why it passed. Help now comes first, as it

@@ -19,6 +19,12 @@ const ExitRestoreFailed = 1
 
 const continueUsage = "usage: 4genteam continue [RIG [BRIEF|--no-brief] | --all] " + clientoffpeak.ModeFlagUsage
 
+// continueListingUsage is the shell's own no-argument usage line, kept in its shape (the script printed
+// it with its own name twice, rig-continue.sh:96, so this prints this binary's name and the verb). It is a
+// constant of its own rather than continueUsage inside a "Usage: %s", because continueUsage already opens
+// with "usage: " and the pair would print "Usage: usage: ...".
+const continueListingUsage = "Usage: 4genteam continue <rig> [brief-file|--no-brief]   |   4genteam continue --all"
+
 type continueCommand struct{}
 
 func (continueCommand) Name() string { return "continue" }
@@ -39,7 +45,8 @@ func (continueCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, s
 				"seat its brief. The rig is the parameter: its seats are discovered from tmux at run time.\n\n"+
 				"  BRIEF  a file whose text every seat gets; default <home>/.openrig/briefs/<rig>.txt\n"+
 				"         <home>/.openrig/briefs/<rig>/<seat>.txt replaces it for that seat\n"+
-				"  --all  every stopped rig that has a brief\n"+
+				"  --all  every stopped rig that has a brief; the run exits non-zero when a rig it visited is\n"+
+				"         not up (its restore failed, or the peak gate refused it)\n"+
 				"  no argument  list the rigs and the briefs on disk\n\n"+
 				"The DeepSeek peak gate runs BEFORE a restore: with "+clientoffpeak.ModeEnv+" on (the default) a\n"+
 				"room whose seats run a deepseek/ model is refused at peak, and "+clientoffpeak.FlagAllowPeak+
@@ -172,8 +179,11 @@ func continueOne(restore *restorer, rigName, brief string, allowPeak bool, stder
 }
 
 // continueAll is the shell's --all: every rig that has a brief, one at a time, and one rig's failure does
-// not stop the others - which is why the shell ran `|| true` and why the exit code here is a report of
-// nothing rather than of the last rig.
+// not stop the others - the shell's `|| true` inside the loop, kept, because a rig that is not on DeepSeek
+// must still be restored while a refused or broken one is not. What the shell did NOT do is let the loop
+// decide the exit code: it ended 0 however many rigs failed, so a caller reading only the code could not
+// tell a run that resumed every room from one that resumed none. The run visits every rig and then
+// reports, the same shape `watchdog --all --check` uses.
 func continueAll(allowPeak bool, log *teeLog, stderr io.Writer) int {
 	dir, err := briefDir()
 	if err != nil {
@@ -195,17 +205,25 @@ func continueAll(allowPeak bool, log *teeLog, stderr io.Writer) int {
 		return clientcmd.ExitUnavailable
 	}
 	restore.daemonUp()
+	var notUp []string
 	for _, brief := range briefs {
 		rigName := strings.TrimSuffix(filepath.Base(brief), ".txt")
 		if len(rigSessions(rigName, sessionNames())) == 0 {
-			code := restore.gate(rigName, "continue", allowPeak, stderr)
-			if code != clientcmd.ExitOK {
+			if code := restore.gate(rigName, "continue", allowPeak, stderr); code != clientcmd.ExitOK {
 				// A refusal for one rig is not a reason to skip the others: the room it refused stays
-				// stopped, and a room that is not on DeepSeek is restored normally.
+				// stopped, and a room that is not on DeepSeek is restored normally. It is still a rig this
+				// run did not bring up, so it is named in the report below.
+				notUp = append(notUp, rigName)
 				continue
 			}
 		}
-		restore.restore(rigName, brief)
+		if !restore.restore(rigName, brief) {
+			notUp = append(notUp, rigName)
+		}
+	}
+	if len(notUp) > 0 {
+		log.printf("--all: %d of %d rigs are not up: %s", len(notUp), len(briefs), strings.Join(notUp, ", "))
+		return ExitRestoreFailed
 	}
 	return clientcmd.ExitOK
 }
@@ -251,7 +269,7 @@ func list(stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  %s\n", strings.TrimSuffix(filepath.Base(brief), ".txt"))
 	}
 	fmt.Fprintln(stdout)
-	fmt.Fprintf(stdout, "Usage: %s\n", continueUsage)
+	fmt.Fprintln(stdout, continueListingUsage)
 	return clientcmd.ExitOK
 }
 

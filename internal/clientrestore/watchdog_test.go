@@ -200,7 +200,7 @@ func TestWatchTwoMissesRestoreOnce(t *testing.T) {
 	for _, want := range []string{
 		"demo: MISS 1/2 (daemon expects 1, tmux has 0)",
 		"demo: MISS 2/2 (daemon expects 1, tmux has 0)",
-		"demo: DEAD — daemon expects 1 running seats, tmux has 0. Restoring via rig-continue.sh.",
+		"demo: DEAD — daemon expects 1 running seats, tmux has 0. Restoring via continue's restore.",
 		"demo: restore invoked; tmux now has 0",
 	} {
 		if !strings.Contains(out, want) {
