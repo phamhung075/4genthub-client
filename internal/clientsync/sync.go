@@ -107,4 +107,10 @@ func printUsage(w io.Writer) {
 		"bundle, switch, respawn, offline-install and install-checker move or manage what was pulled.\n"+
 		"Every verb this group declares is implemented here. A verb that is not declared is a usage error,\n"+
 		"never a promise this build cannot keep.\n")
+	// The Python's argparse epilog printed this, and test_help_states_offline_use_is_manual asserts
+	// both sentences, so it is ported: offline use is the operator's own choice, and the client never
+	// reaches for a bundle by itself. "script" became "client" because there is no script to speak of.
+	_, _ = io.WriteString(w, "\nOffline use is an explicit operator choice: after `bundle` produces a `.rigbundle`,\n"+
+		"run it yourself with `rig up <bundle> --target <dir>`. This client never falls back\n"+
+		"to a bundle automatically.\n")
 }

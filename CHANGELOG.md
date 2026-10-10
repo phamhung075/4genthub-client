@@ -272,3 +272,8 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   showed one - `curl -sS` prints its own diagnostic before the script's line - so a compiled
   replacement that printed the line alone told the operator less than the door it replaced. The verb's
   client is a seam now, so the reason is asserted verbatim in the suite with no network.
+- `4genteam sync --help` states that offline use is the operator's own choice and where the bundle is
+  run (`rig up <bundle> --target <dir>`), and that the client never falls back to a bundle by itself.
+  Python's argparse printed that as the sync parser's epilog, and the Go help had dropped it, which left
+  `tests/test_seat_sync.py::test_help_states_offline_use_is_manual` with no Go witness. The sentence is
+  ported, and the Go test carries the row's name so the instrument pairs it by name.
