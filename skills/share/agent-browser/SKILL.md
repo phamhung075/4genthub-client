@@ -12,6 +12,13 @@ metadata:
       pointer section was added near the end of the body to surface the sibling
       LOCAL-INSIGHTS.md companion file. See OPENRIG.md for the full OpenRig
       relationship to this skill.
+      (2026-10-10) The "Deep-Dive Documentation" and "Ready-to-Use Templates" tables
+      near the end were de-linked to plain file names and the three-line
+      ./templates/... invocation block was removed: the ten files those links
+      pointed at were never vendored, so every one of them dead-ended for a reader.
+      No prose in the body was rewritten. See OPENRIG.md's modification table and
+      internal/clientskills/links_test.go, which now fails on any local link in a
+      shipped skill document that does not resolve.
 ---
 
 # Browser Automation with agent-browser
@@ -398,29 +405,32 @@ Priority (lowest to highest): `~/.agent-browser/config.json` < `./agent-browser.
 
 ## Deep-Dive Documentation
 
-| Reference | When to Use |
+**Not vendored in this directory.** The files both tables below name are upstream files that this
+skill's `add-supplementary-files` vendoring did not copy in — this directory ships `SKILL.md`,
+`OPENRIG.md` and `LOCAL-INSIGHTS.md` only — so they are named as files, not linked, and reading one
+will not find it here. The upstream project is named in `OPENRIG.md` (`vendored_from`), and the
+corrections this tree has tested live in `LOCAL-INSIGHTS.md`.
+
+| Upstream reference | When to Use |
 |-----------|-------------|
-| [references/commands.md](references/commands.md) | Full command reference with all options |
-| [references/snapshot-refs.md](references/snapshot-refs.md) | Ref lifecycle, invalidation rules, troubleshooting |
-| [references/session-management.md](references/session-management.md) | Parallel sessions, state persistence, concurrent scraping |
-| [references/authentication.md](references/authentication.md) | Login flows, OAuth, 2FA handling, state reuse |
-| [references/video-recording.md](references/video-recording.md) | Recording workflows for debugging and documentation |
-| [references/profiling.md](references/profiling.md) | Chrome DevTools profiling for performance analysis |
-| [references/proxy-support.md](references/proxy-support.md) | Proxy configuration, geo-testing, rotating proxies |
+| `references/commands.md` | Full command reference with all options |
+| `references/snapshot-refs.md` | Ref lifecycle, invalidation rules, troubleshooting |
+| `references/session-management.md` | Parallel sessions, state persistence, concurrent scraping |
+| `references/authentication.md` | Login flows, OAuth, 2FA handling, state reuse |
+| `references/video-recording.md` | Recording workflows for debugging and documentation |
+| `references/profiling.md` | Chrome DevTools profiling for performance analysis |
+| `references/proxy-support.md` | Proxy configuration, geo-testing, rotating proxies |
 
 ## Ready-to-Use Templates
 
-| Template | Description |
-|----------|-------------|
-| [templates/form-automation.sh](templates/form-automation.sh) | Form filling with validation |
-| [templates/authenticated-session.sh](templates/authenticated-session.sh) | Login once, reuse state |
-| [templates/capture-workflow.sh](templates/capture-workflow.sh) | Content extraction with screenshots |
+**Also upstream-only, and not runnable from this directory:** the three template scripts are upstream
+files this vendoring does not include, so no path here invokes them.
 
-```bash
-./templates/form-automation.sh https://example.com/form
-./templates/authenticated-session.sh https://app.example.com/login
-./templates/capture-workflow.sh https://example.com ./output
-```
+| Upstream template | Description |
+|----------|-------------|
+| `templates/form-automation.sh` | Form filling with validation |
+| `templates/authenticated-session.sh` | Login once, reuse state |
+| `templates/capture-workflow.sh` | Content extraction with screenshots |
 
 ## Local Dev Insights
 

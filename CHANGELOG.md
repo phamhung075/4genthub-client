@@ -3,6 +3,32 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-10 (late night) — the shipped agent-browser skill stops linking files it never shipped
+
+### Fixed
+- `skills/share/agent-browser/SKILL.md`: the ten local links in the "Deep-Dive Documentation" and
+  "Ready-to-Use Templates" tables pointed at `references/*.md` and `templates/*.sh` that this
+  repository never vendored — no commit in its history ever tracked one — so every seat that received
+  the skill dead-ended on the first `read`, and the `./templates/...` block told a seat to execute
+  three paths that do not exist. The rows are plain file names now, both tables say the files are
+  upstream-only, and the invocation block is deleted. No body prose was rewritten. Finding 5 of
+  `GATE-49e8d433-post-hoc-six` measured the ten; this entry is the fix half.
+
+### Added
+- `internal/clientskills/links_test.go`: `TestShippedSkillLinksResolve` — every local link in every
+  shipped `SKILL.md` and in the companions beside it (`OPENRIG.md`, `LOCAL-INSIGHTS.md`) must resolve
+  against its own directory. It fails on exactly the ten links above before this change and passes
+  after it. Its header states the scope and the three exclusions (fenced code blocks, fill-in template
+  documents, off-site targets), because a check whose scope is unstated is read as "everything
+  resolves" — and 12 of this tree's 35 local link-shaped targets are placeholders inside template
+  documents rather than links to files a skill promises to ship.
+
+### Changed
+- `skills/share/agent-browser/OPENRIG.md`: a modification-table row for the repair, and the
+  vendoring-completeness statement — `add-supplementary-files` adds to an upstream body rather than
+  completing its file set, so this canonical example ships the supplementary half and not every path
+  its body names. Its frontmatter records the divergence.
+
 ## 2026-10-10 (late night) — the client starts its own bridge
 
 ### Added

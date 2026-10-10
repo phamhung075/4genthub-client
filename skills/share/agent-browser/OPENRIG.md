@@ -22,9 +22,10 @@ This is the canonical example of the **add-supplementary-files** pattern (see `w
 | Surface | What changed | Why |
 |---|---|---|
 | `SKILL.md` body | A short "## Local Dev Insights" section was added near the end with an `**IMPORTANT:** Read LOCAL-INSIGHTS.md` pointer. | Without the pointer, agents loading the skill wouldn't know the companion file exists. The pointer is the only structural modification needed for the supplementary pattern to be discoverable. |
+| `SKILL.md` tables (2026-10-10) | The seven `references/*.md` rows and the three `templates/*.sh` rows became plain file names instead of markdown links, both tables gained a line saying those files are not vendored here, and the three-line `./templates/...` invocation block was deleted. | Ten links pointed at files this vendoring never copied in, so every reader dead-ended on the first `read` and the templates block told a seat to execute paths that do not exist (finding 5 of `GATE-49e8d433-post-hoc-six`, reviewer seat, 2026-10-10). No body prose was rewritten: the names and their "when to use" text still say which upstream docs exist. `internal/clientskills/links_test.go` now fails on any local link in a shipped `SKILL.md` or companion that does not resolve. |
 | `LOCAL-INSIGHTS.md` (new sibling, ~189 lines) | Field-tested gotchas, command-compatibility matrices, corrections discovered through hands-on use that the upstream skill doesn't cover. | E.g., not all `get` subcommands accept `@refs` — `get text @e1` works but `get html @e1` fails silently. The compatibility matrix saves agents from the most common confusion class. |
 
-Nothing else in `SKILL.md` diverges from upstream content as of the last upstream check.
+**Vendoring completeness (measured 2026-10-10):** `add-supplementary-files` adds to an upstream body; it does not complete the upstream file set, and here it did not. The upstream `references/` and `templates/` directories were never vendored — no commit in this repository's history ever tracked one — so the pattern's canonical example shows the *supplementary* half of the pattern and not a working copy of every path its body names. Nothing else in `SKILL.md` diverges from upstream content as of the last upstream check, apart from the 2026-10-10 link repair in the table above.
 
 ## Companion files
 
