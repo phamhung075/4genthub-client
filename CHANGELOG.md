@@ -3,6 +3,25 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-10 — the Python client is gone: the reviewer's sign-off, and the help surface above it
+
+**The deletion is signed.** `1eca7de` (Python sources, `tests/`, `pyproject.toml`, `build/`) is signed by
+the reviewer against the owner's four conditions: every verb is in Go and its help diffed (a 43-shape help
+sweep answers every shape); every Python test has a Go mirror or a recorded reason — 201 mirrors and one
+no-mirror row — subject to the correction that 25 of the class-(ii) "not ported" reasons state something
+the tree does not do (work list: row `3c94814d`; artifacts `PORT-MAP.md` §(c) and
+`P6-TEST-DISPOSITION.md`); a fresh archive of the tip holds no Python (`0 *.py`, `0 pyproject.toml`, no
+`build/`) and `go build`, `go vet` and `go test ./...` (16/16 packages) pass in it; verdict
+`GATE-3b2feacd-P6-signoff-2026-10-10.md` plus `GATE-3b2feacd-ADDENDUM-1-reason-count-corrected-2026-10-10.md`,
+both in the room directory.
+
+**The tip above it is gated too.** `8cf6a34` — a verb answers its own help before the platform matrix — is
+APPROVE WITH CHANGES: the six shapes that refused now answer, the gate is moved rather than removed (the
+same verbs without `--help` still exit 3, naming what the machine lacks), and 43 of 43 shapes answer. The
+one change owed: `bridge install-service --help` prints the systemd unit rather than usage
+(`internal/clientbridge/commands.go:48`), and the new test asserts only that stdout is non-empty, so it
+cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
+
 ## Unreleased
 
 ### Added
