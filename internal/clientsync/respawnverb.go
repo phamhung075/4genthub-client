@@ -34,7 +34,7 @@ the same way until its runtime hook attaches.
 
 A respawn LAUNCHES a fresh occupant, so the DeepSeek peak gate applies here: with ` + clientoffpeak.ModeEnv + `
 on (the default) a seat whose model is deepseek/ is not launched at peak, and the refusal names when
-off-peak resumes. ` + clientoffpeak.FlagAnyTime + ` skips the check for this run.
+off-peak resumes. ` + clientoffpeak.FlagAllowPeak + ` skips the check for this run.
 `
 
 // rigResult is one `rig` invocation for its output. A non-zero exit is NOT thrown away: `rig seat
@@ -73,17 +73,13 @@ func RunRespawnVerb(_ context.Context, args []string, stdout, stderr io.Writer) 
 			return clientcmd.ExitOK
 		}
 	}
-	mode, rest, err := clientoffpeak.ModeFromFlags(args)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
-		return clientcmd.ExitUsage
-	}
+	allowPeak, rest := clientoffpeak.ModeFromFlags(args)
 	room, seat, after, reason, err := parseRespawnArgs(rest)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	return respawn(room, seat, after, reason, mode, stdout, stderr)
+	return respawn(room, seat, after, reason, allowPeak, stdout, stderr)
 }
 
 func parseRespawnArgs(args []string) (room, seat string, after float64, reason string, err error) {
@@ -131,7 +127,7 @@ func parseRespawnArgs(args []string) (room, seat string, after float64, reason s
 	return positionals[0], positionals[1], after, reason, nil
 }
 
-func respawn(room, seat string, after float64, reason string, mode *clientoffpeak.Mode, stdout, stderr io.Writer) int {
+func respawn(room, seat string, after float64, reason string, allowPeak bool, stdout, stderr io.Writer) int {
 	room, err := ValidateName("room", room)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
@@ -156,7 +152,7 @@ func respawn(room, seat string, after float64, reason string, mode *clientoffpea
 		// THE PEAK GATE, on the seat this verb is about to LAUNCH, and before the dead-reading wait: a
 		// respawn is a start, so at peak a DeepSeek seat is not launched by default, and a refusal must not
 		// make the caller wait --after-seconds first. The seat's own record carries its model.
-		proceed, message, err := clientoffpeak.Check(mode, []map[string]any{node}, os.Getenv)
+		proceed, message, err := clientoffpeak.Check(allowPeak, []map[string]any{node}, os.Getenv)
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 			return clientcmd.ExitUsage

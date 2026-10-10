@@ -14,13 +14,13 @@ const (
 	// OffpeakOnly is the default: DeepSeek seats start or resume off-peak only, and a peak start is
 	// refused with the time off-peak resumes.
 	OffpeakOnly Mode = iota
-	// AnyTime runs at any hour and skips the check entirely - no reading, no message, no refusal.
-	AnyTime
+	// AllowPeak runs at any hour and skips the check entirely - no reading, no message, no refusal.
+	AllowPeak
 )
 
 func (m Mode) String() string {
-	if m == AnyTime {
-		return "any-time"
+	if m == AllowPeak {
+		return "allow-peak"
 	}
 	return "offpeak-only"
 }
@@ -40,15 +40,13 @@ const (
 	ValueOff = "0"
 )
 
-// ModeFlags are the two arguments that set the mode for one run. They exist beside the variable so a
-// one-off run does not need an edit to a file the operator shares with everything else.
-const (
-	FlagOffpeakOnly = "--offpeak-only"
-	FlagAnyTime     = "--any-time"
-)
+// FlagAllowPeak is the ONE argument that turns the gate off for a single run, and the name the order
+// fixed: a gated verb refuses at peak "unless --allow-peak is passed". It exists beside the variable so
+// a one-off start does not need an edit to a file the operator shares with everything else.
+const FlagAllowPeak = "--allow-peak"
 
-// ModeFlagUsage is how every gated verb's usage names the pair.
-const ModeFlagUsage = "[--offpeak-only|--any-time]"
+// ModeFlagUsage is how every gated verb's usage names it.
+const ModeFlagUsage = "[" + FlagAllowPeak + "]"
 
 // ParseMode reads the setting's value: the words an operator writes in a file, and the ones the flags
 // use. A value that is neither is an error, never a silent default - a typo must not be able to read as
@@ -58,7 +56,7 @@ func ParseMode(value string) (Mode, error) {
 	case "1", "on", "true", "yes":
 		return OffpeakOnly, nil
 	case "0", "off", "false", "no":
-		return AnyTime, nil
+		return AllowPeak, nil
 	}
 	return DefaultMode, fmt.Errorf("%q is not on or off: use %s/%s or %s/%s",
 		value, ValueOn, "on", ValueOff, "off")
@@ -67,12 +65,9 @@ func ParseMode(value string) (Mode, error) {
 // ResolveMode decides which policy applies: the flag when it was given, else ModeEnv, else the default.
 // It also answers WHERE the value came from, because a refusal has to say which knob turned the gate on
 // and `offpeak status` prints the same words.
-func ResolveMode(flag *Mode, getenv func(string) string) (Mode, string, error) {
-	if flag != nil {
-		if *flag == AnyTime {
-			return AnyTime, "the " + FlagAnyTime + " flag", nil
-		}
-		return OffpeakOnly, "the " + FlagOffpeakOnly + " flag", nil
+func ResolveMode(allowPeak bool, getenv func(string) string) (Mode, string, error) {
+	if allowPeak {
+		return AllowPeak, "the " + FlagAllowPeak + " flag", nil
 	}
 	value := strings.TrimSpace(getenv(ModeEnv))
 	if value == "" {
@@ -89,12 +84,12 @@ func ResolveMode(flag *Mode, getenv func(string) string) (Mode, string, error) {
 // and - ONLY when the mode asks for a check - the schedule for now. It exists so the gated verbs cannot
 // drift on the two rules that matter: the flag beats the environment, and a check that is OFF never
 // reads the clock, so a malformed OFFPEAK_UTC cannot break a run that does not consult it.
-func VerdictFor(flag *Mode, getenv func(string) string) (Mode, Verdict, error) {
-	mode, _, err := ResolveMode(flag, getenv)
+func VerdictFor(allowPeak bool, getenv func(string) string) (Mode, Verdict, error) {
+	mode, _, err := ResolveMode(allowPeak, getenv)
 	if err != nil {
 		return mode, Verdict{}, err
 	}
-	if mode == AnyTime {
+	if mode == AllowPeak {
 		return mode, Verdict{}, nil
 	}
 	verdict, err := NowFrom(getenv)
@@ -111,12 +106,12 @@ func VerdictFor(flag *Mode, getenv func(string) string) (Mode, Verdict, error) {
 //
 // It takes the reading rather than making it, so each verb keeps its own rig seam and none of them
 // learns to read `rig ps` a second time.
-func Check(mode *Mode, nodes []map[string]any, getenv func(string) string) (proceed bool, message string, err error) {
-	resolved, verdict, err := VerdictFor(mode, getenv)
+func Check(allowPeak bool, nodes []map[string]any, getenv func(string) string) (proceed bool, message string, err error) {
+	resolved, verdict, err := VerdictFor(allowPeak, getenv)
 	if err != nil {
 		return false, "", err
 	}
-	if resolved == AnyTime {
+	if resolved == AllowPeak {
 		return true, "", nil
 	}
 	if decision := Decide(resolved, SeatsFromNodes(nodes), verdict); decision.Refuse {
@@ -125,36 +120,20 @@ func Check(mode *Mode, nodes []map[string]any, getenv func(string) string) (proc
 	return true, "", nil
 }
 
-// ModeFlag reports whether an argument is one of the two mode flags, and which mode it names.
-func ModeFlag(arg string) (Mode, bool) {
-	switch arg {
-	case FlagOffpeakOnly:
-		return OffpeakOnly, true
-	case FlagAnyTime:
-		return AnyTime, true
-	}
-	return 0, false
-}
-
-// ModeFromFlags takes the mode flags out of an argument list and returns the rest, so a gated verb can
-// accept them wherever they sit - before or after its own positional, as the Python's argparse did.
-// TWO of them is a usage error rather than last-one-wins: a caller who wrote both meant neither, and
-// guessing would decide the money question for them.
-func ModeFromFlags(args []string) (*Mode, []string, error) {
-	var mode *Mode
-	rest := make([]string, 0, len(args))
+// ModeFromFlags takes that flag out of an argument list and returns the rest, so a gated verb accepts it
+// wherever it sits - before or after its own positional, as the Python's argparse did. It cannot fail:
+// there is one flag with one meaning, so naming it twice is the same request twice. A flag this package
+// does NOT own is handed back with the rest, for the verb to refuse or to read for itself.
+func ModeFromFlags(args []string) (allowPeak bool, rest []string) {
+	rest = make([]string, 0, len(args))
 	for _, arg := range args {
-		if named, ok := ModeFlag(arg); ok {
-			if mode != nil && *mode != named {
-				return nil, nil, fmt.Errorf("%s and %s cannot both be given", FlagOffpeakOnly, FlagAnyTime)
-			}
-			value := named
-			mode = &value
+		if arg == FlagAllowPeak {
+			allowPeak = true
 			continue
 		}
 		rest = append(rest, arg)
 	}
-	return mode, rest, nil
+	return allowPeak, rest
 }
 
 // Seat is one seat a caller is about to start or resume.
@@ -211,7 +190,7 @@ type Decision struct {
 // It does not know or care whether the seats are running. The verbs that call it either restore a room
 // or launch a seat, so "this room holds a DeepSeek seat" is already the whole question they ask.
 func Decide(mode Mode, seats []Seat, verdict Verdict) Decision {
-	if mode == AnyTime {
+	if mode == AllowPeak {
 		return Decision{}
 	}
 	deepseek := DeepSeekSeats(seats)
@@ -234,6 +213,6 @@ func Decide(mode Mode, seats []Seat, verdict Verdict) Decision {
 				"Refusing to start or resume them at the peak rate: pass %s (or set %s=%s) to run now, "+
 				"or wait and the gate opens by itself",
 			len(deepseek), strings.Join(named, ", "), verdict.Reason, next,
-			FlagAnyTime, ModeEnv, ValueOff),
+			FlagAllowPeak, ModeEnv, ValueOff),
 	}
 }

@@ -21,8 +21,8 @@ func TestParseModeRefusesAValueThatIsNotASwitch(t *testing.T) {
 	}
 	for _, value := range []string{"0", "off", "OFF", "false", "no"} {
 		mode, err := ParseMode(value)
-		if err != nil || mode != AnyTime {
-			t.Errorf("ParseMode(%q) = %v, %v; want any-time", value, mode, err)
+		if err != nil || mode != AllowPeak {
+			t.Errorf("ParseMode(%q) = %v, %v; want allow-peak", value, mode, err)
 		}
 	}
 	for _, value := range []string{"ture", "maybe", "2", "-"} {
@@ -33,21 +33,20 @@ func TestParseModeRefusesAValueThatIsNotASwitch(t *testing.T) {
 }
 
 // TestTheFlagBeatsTheEnvironmentWhichBeatsTheDefault is the precedence the order asked for, asserted on
-// all four combinations plus the default.
+// all three states: the flag, the variable, and the default that applies when neither is given.
 func TestTheFlagBeatsTheEnvironmentWhichBeatsTheDefault(t *testing.T) {
-	anyTime, offpeak := AnyTime, OffpeakOnly
 	cases := []struct {
 		name       string
-		flag       *Mode
+		flag       bool
 		env        string
 		want       Mode
 		wantSource string
 	}{
-		{"nothing set", nil, "", OffpeakOnly, "the default (" + ModeEnv + " is not set)"},
-		{"the environment turns it off", nil, "0", AnyTime, ModeEnv + "=0 in the environment or the client's env file"},
-		{"the environment says on in words", nil, "on", OffpeakOnly, ModeEnv + "=on in the environment or the client's env file"},
-		{"--any-time beats an env that says on", &anyTime, "1", AnyTime, "the " + FlagAnyTime + " flag"},
-		{"--offpeak-only beats an env that says off", &offpeak, "0", OffpeakOnly, "the " + FlagOffpeakOnly + " flag"},
+		{"nothing set", false, "", OffpeakOnly, "the default (" + ModeEnv + " is not set)"},
+		{"the environment turns it off", false, "0", AllowPeak, ModeEnv + "=0 in the environment or the client's env file"},
+		{"the environment says on in words", false, "on", OffpeakOnly, ModeEnv + "=on in the environment or the client's env file"},
+		{FlagAllowPeak + " beats an env that says on", true, "1", AllowPeak, "the " + FlagAllowPeak + " flag"},
+		{FlagAllowPeak + " is the same answer an env that says off gives", true, "0", AllowPeak, "the " + FlagAllowPeak + " flag"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -66,7 +65,7 @@ func TestTheFlagBeatsTheEnvironmentWhichBeatsTheDefault(t *testing.T) {
 }
 
 func TestAnUnreadableSettingIsAnErrorNamingTheVariable(t *testing.T) {
-	_, _, err := ResolveMode(nil, envOf(map[string]string{ModeEnv: "nah"}))
+	_, _, err := ResolveMode(false, envOf(map[string]string{ModeEnv: "nah"}))
 	if err == nil {
 		t.Fatal("OFFPEAK_ONLY=nah was accepted")
 	}
@@ -77,27 +76,48 @@ func TestAnUnreadableSettingIsAnErrorNamingTheVariable(t *testing.T) {
 	}
 }
 
-// TestModeFromFlagsTakesThePairAnywhereAndRefusesBoth: the flags may sit before or after the verb's own
-// positional (the Python's argparse allowed either), and a caller who wrote BOTH meant neither.
-func TestModeFromFlagsTakesThePairAnywhereAndRefusesBoth(t *testing.T) {
-	mode, rest, err := ModeFromFlags([]string{"my-room", FlagAnyTime})
-	if err != nil || mode == nil || *mode != AnyTime {
-		t.Fatalf("mode = %v, rest = %v, err = %v", mode, rest, err)
+// TestModeFromFlagsTakesTheFlagAnywhereAndLeavesTheRest: the flag may sit before or after the verb's own
+// positional (the Python's argparse allowed either), and the arguments this package does not own are
+// handed back untouched. Naming it twice is the same request twice, not an error.
+func TestModeFromFlagsTakesTheFlagAnywhereAndLeavesTheRest(t *testing.T) {
+	allowPeak, rest := ModeFromFlags([]string{"my-room", FlagAllowPeak})
+	if !allowPeak {
+		t.Error("the flag after the positional was not seen")
 	}
 	if len(rest) != 1 || rest[0] != "my-room" {
 		t.Errorf("rest = %v, want the positional alone", rest)
 	}
 
-	mode, rest, err = ModeFromFlags([]string{FlagOffpeakOnly, "my-room", "--after-seconds", "5"})
-	if err != nil || mode == nil || *mode != OffpeakOnly {
-		t.Fatalf("mode = %v, err = %v", mode, err)
+	allowPeak, rest = ModeFromFlags([]string{FlagAllowPeak, "my-room", "--after-seconds", "5"})
+	if !allowPeak {
+		t.Error("the flag before the positional was not seen")
 	}
 	if strings.Join(rest, " ") != "my-room --after-seconds 5" {
 		t.Errorf("rest = %v, want the flags this package does not own left alone", rest)
 	}
 
-	if _, _, err := ModeFromFlags([]string{FlagOffpeakOnly, FlagAnyTime}); err == nil {
-		t.Error("both flags were accepted; the pair must refuse rather than pick one")
+	if allowPeak, rest = ModeFromFlags([]string{FlagAllowPeak, FlagAllowPeak}); !allowPeak || len(rest) != 0 {
+		t.Errorf("allowPeak = %v, rest = %v; twice is the same request twice", allowPeak, rest)
+	}
+
+	if allowPeak, rest = ModeFromFlags([]string{"my-room"}); allowPeak || len(rest) != 1 {
+		t.Errorf("allowPeak = %v, rest = %v; with no flag the setting decides", allowPeak, rest)
+	}
+}
+
+// TestTheOldFlagNameIsNotAFlag: `--any-time` was this package's own invention and the order fixed the
+// name `--allow-peak`, so the old spelling must not be swallowed - it is handed to the verb, which
+// refuses it as an unknown argument rather than reading it as a rig name.
+func TestTheOldFlagNameIsNotAFlag(t *testing.T) {
+	allowPeak, rest := ModeFromFlags([]string{"--any-time", "my-room"})
+	if allowPeak {
+		t.Error("--any-time is still recognised as the mode flag")
+	}
+	if strings.Join(rest, " ") != "--any-time my-room" {
+		t.Errorf("rest = %v, want the old flag handed back to the verb", rest)
+	}
+	if allowPeak, rest = ModeFromFlags([]string{FlagAllowPeak}); !allowPeak || len(rest) != 0 {
+		t.Errorf("allowPeak = %v, rest = %v for %s", allowPeak, rest, FlagAllowPeak)
 	}
 }
 
@@ -135,22 +155,21 @@ func offPeakFriday() Verdict {
 func TestCheckRefusesOnlyWhenTheSettingIsOnTheRoomIsDeepSeekAndItIsPeak(t *testing.T) {
 	deepseekNode := map[string]any{"logicalId": "room.alpha", "model": "deepseek/deepseek-flash"}
 	localNode := map[string]any{"logicalId": "room.beta", "model": "claude-code/sonnet"}
-	anyTime, offpeak := AnyTime, OffpeakOnly
 
 	cases := []struct {
-		name    string
-		mode    *Mode
-		env     map[string]string
-		nodes   []map[string]any
-		refused bool
+		name      string
+		allowPeak bool
+		env       map[string]string
+		nodes     []map[string]any
+		refused   bool
 	}{
-		{"peak, deepseek, setting on", &offpeak, nil, []map[string]any{deepseekNode}, true},
-		{"peak, deepseek, setting off", &anyTime, nil, []map[string]any{deepseekNode}, false},
-		{"peak, deepseek, env off", nil, map[string]string{ModeEnv: "0"}, []map[string]any{deepseekNode}, false},
-		{"peak, deepseek, default (on)", nil, nil, []map[string]any{deepseekNode}, true},
-		{"off-peak, deepseek, setting on", &offpeak, map[string]string{PinEnv: "2026-10-09 05:00"}, []map[string]any{deepseekNode}, false},
-		{"peak, no deepseek seat", &offpeak, nil, []map[string]any{localNode}, false},
-		{"peak, no seats at all", &offpeak, nil, nil, false},
+		{"peak, deepseek, the default (on)", false, nil, []map[string]any{deepseekNode}, true},
+		{"peak, deepseek, the setting says on", false, map[string]string{ModeEnv: "1"}, []map[string]any{deepseekNode}, true},
+		{"peak, deepseek, " + FlagAllowPeak, true, nil, []map[string]any{deepseekNode}, false},
+		{"peak, deepseek, the setting says off", false, map[string]string{ModeEnv: "0"}, []map[string]any{deepseekNode}, false},
+		{"off-peak, deepseek, the default (on)", false, map[string]string{PinEnv: "2026-10-09 05:00"}, []map[string]any{deepseekNode}, false},
+		{"peak, no deepseek seat", false, nil, []map[string]any{localNode}, false},
+		{"peak, no seats at all", false, nil, nil, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -161,7 +180,7 @@ func TestCheckRefusesOnlyWhenTheSettingIsOnTheRoomIsDeepSeekAndItIsPeak(t *testi
 			if _, ok := env[PinEnv]; !ok {
 				env[PinEnv] = "2026-10-09 02:00"
 			}
-			proceed, message, err := Check(c.mode, c.nodes, envOf(env))
+			proceed, message, err := Check(c.allowPeak, c.nodes, envOf(env))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,7 +188,7 @@ func TestCheckRefusesOnlyWhenTheSettingIsOnTheRoomIsDeepSeekAndItIsPeak(t *testi
 				t.Fatalf("refused = %v, want %v (message %q)", refused, c.refused, message)
 			}
 			if c.refused {
-				for _, want := range []string{"deepseek/deepseek-flash", "room.alpha", "PEAK", "04:00 UTC", FlagAnyTime, ModeEnv + "=" + ValueOff} {
+				for _, want := range []string{"deepseek/deepseek-flash", "room.alpha", "PEAK", "04:00 UTC", FlagAllowPeak, ModeEnv + "=" + ValueOff} {
 					if !strings.Contains(message, want) {
 						t.Errorf("refusal %q does not name %q", message, want)
 					}
@@ -181,11 +200,11 @@ func TestCheckRefusesOnlyWhenTheSettingIsOnTheRoomIsDeepSeekAndItIsPeak(t *testi
 	}
 }
 
-// TestACheckThatIsOffDoesNotReadTheClock: --any-time means no check, so a pinned instant the check would
-// never use cannot fail the run - the same reason the verbs resolve the mode before consulting the panel.
+// TestACheckThatIsOffDoesNotReadTheClock: --allow-peak means no check, so a pinned instant the check
+// would never use cannot fail the run - the same reason the verbs resolve the mode before consulting the
+// panel.
 func TestACheckThatIsOffDoesNotReadTheClock(t *testing.T) {
-	anyTime := AnyTime
-	proceed, _, err := Check(&anyTime, []map[string]any{{"logicalId": "room.a", "model": "deepseek/x"}},
+	proceed, _, err := Check(true, []map[string]any{{"logicalId": "room.a", "model": "deepseek/x"}},
 		envOf(map[string]string{PinEnv: "not an instant"}))
 	if err != nil || !proceed {
 		t.Errorf("proceed = %v, err = %v; a check that is off must not read the clock", proceed, err)
@@ -193,7 +212,7 @@ func TestACheckThatIsOffDoesNotReadTheClock(t *testing.T) {
 }
 
 func TestAPinnedClockThatCannotBeReadIsAnError(t *testing.T) {
-	if _, _, err := Check(nil, nil, envOf(map[string]string{PinEnv: "whenever"})); err == nil {
+	if _, _, err := Check(false, nil, envOf(map[string]string{PinEnv: "whenever"})); err == nil {
 		t.Error("the gate accepted an unreadable pin")
 	}
 }

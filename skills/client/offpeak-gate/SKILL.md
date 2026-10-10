@@ -45,7 +45,7 @@ that start or resume seats, so each runs the gate first. The refusal looks like 
 ```
 4genteam up: 1 seat(s) run a DeepSeek model (room-alpha.dev: deepseek/deepseek-flash) and DeepSeek
 bills at PEAK right now - PEAK: 01:00-04:00 UTC (Mon-Fri), next: 04:00 UTC (off-peak resumes).
-Refusing to start or resume them at the peak rate: pass --any-time (or set OFFPEAK_ONLY=0) to run
+Refusing to start or resume them at the peak rate: pass --allow-peak (or set OFFPEAK_ONLY=0) to run
 now, or wait and the gate opens by itself
 ```
 
@@ -53,13 +53,13 @@ The three legitimate responses, in the order to prefer them:
 
 1. **Wait.** Off-peak arrives at the instant the message names; the gate then opens by itself with no
    action. If the work can wait, say so and stop — this costs nothing and is the default for a reason.
-2. **`--any-time`** on that one command: run now, at the peak rate, without changing anything for
+2. **`--allow-peak`** on that one command: run now, at the peak rate, without changing anything for
    later. Use it when the operator asked for the work now and accepted the price.
 3. **`4genteam offpeak set off`**: allow DeepSeek starts at peak from now on. Use it only when the
    operator wants that as the machine's standing policy; say that you are changing a standing setting.
 
-`--offpeak-only` is the opposite override, for a shell whose environment turned the gate off. Passing
-both flags is a usage error. The flags may sit before or after the verb's own arguments.
+`--allow-peak` may sit before or after the verb's own arguments, and it is the ONLY flag those verbs
+take: an argument they do not know is refused by name, and so is a second argument after the rig name.
 
 ## What is NOT a refusal
 

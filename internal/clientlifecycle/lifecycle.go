@@ -112,6 +112,19 @@ func requireRig(verb string, args []string, stderr io.Writer) (string, bool) {
 		fmt.Fprintf(stderr, "4genteam %s: a rig name is required - there is no default rig. %s\n", verb, usageFor(verb))
 		return "", false
 	}
+	// A flag this verb does not take is refused rather than read as a rig name: `up --some-flag` used to
+	// mean a room called "--some-flag", whose failure arrived much later and much less clearly.
+	if strings.HasPrefix(args[0], "-") && args[0] != "-" {
+		fmt.Fprintf(stderr, "4genteam %s: unknown argument %s. %s\n", verb, args[0], usageFor(verb))
+		return "", false
+	}
+	// And a SECOND argument is refused too: these verbs take one rig name, so an argument that was
+	// silently dropped is a caller believing something happened that did not.
+	if len(args) > 1 {
+		fmt.Fprintf(stderr, "4genteam %s: unexpected argument %s - this verb takes one rig name. %s\n",
+			verb, args[1], usageFor(verb))
+		return "", false
+	}
 	return args[0], true
 }
 
@@ -140,23 +153,19 @@ func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdou
 		printHelp(stdout, upUsage,
 			"OpenRig daemon, the rig's seats, the status bridge, the compaction supervisor and the OpenRig UI, in that order.\n"+
 				"The DeepSeek peak gate runs BEFORE the seats are restored: with "+clientoffpeak.ModeEnv+" on (the default) a "+
-				"room whose seats run a deepseek/ model is refused at peak, and "+clientoffpeak.FlagAnyTime+" skips the check "+
+				"room whose seats run a deepseek/ model is refused at peak, and "+clientoffpeak.FlagAllowPeak+" skips the check "+
 				"for this run.")
 		return clientcmd.ExitOK
 	}
-	mode, rest, err := clientoffpeak.ModeFromFlags(args)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam up: %v\n%s\n", err, upUsage)
-		return clientcmd.ExitUsage
-	}
+	allowPeak, rest := clientoffpeak.ModeFromFlags(args)
 	name, ok := requireRig("up", rest, stderr)
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	return runUp(rig, name, mode, stdout, stderr)
+	return runUp(rig, name, allowPeak, stdout, stderr)
 }
 
-func runUp(rig *clientcmd.Rig, name string, mode *clientoffpeak.Mode, stdout, stderr io.Writer) int {
+func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Writer) int {
 	if err := ensureDaemon(rig, stderr); err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
 		return clientcmd.ExitRemote
@@ -164,7 +173,7 @@ func runUp(rig *clientcmd.Rig, name string, mode *clientoffpeak.Mode, stdout, st
 	// THE GATE RUNS BEFORE THE RESTORE, and after the daemon only because the room's models are read from
 	// the daemon. So a refusal starts the daemon and nothing else: no seat is resumed, which is the step
 	// that would have started DeepSeek work at the peak rate.
-	if code := peakGate(rig, name, "up", mode, stderr); code != clientcmd.ExitOK {
+	if code := peakGate(rig, name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	ensureRig(rig, name, stderr)
@@ -237,7 +246,7 @@ var rigNodes = func(rig *clientcmd.Rig, name string) []map[string]any {
 // A rig tool it cannot resolve is NOT a refusal: the reading is impossible, so there is nothing to
 // decide, and the verb's own platform matrix - or its supervisor's start - says so in its own words.
 // Guessing "peak" from a missing reading would block a room the client knows nothing about.
-func peakGate(rig *clientcmd.Rig, name, verb string, modeFlag *clientoffpeak.Mode, stderr io.Writer) int {
+func peakGate(rig *clientcmd.Rig, name, verb string, allowPeak bool, stderr io.Writer) int {
 	if rig == nil {
 		tool, err := clientcmd.RequireRig()
 		if err != nil {
@@ -245,7 +254,7 @@ func peakGate(rig *clientcmd.Rig, name, verb string, modeFlag *clientoffpeak.Mod
 		}
 		rig = tool
 	}
-	proceed, message, err := clientoffpeak.Check(modeFlag, rigNodes(rig, name), os.Getenv)
+	proceed, message, err := clientoffpeak.Check(allowPeak, rigNodes(rig, name), os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam %s: %v\n", verb, err)
 		return clientcmd.ExitUsage
@@ -343,21 +352,17 @@ func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, st
 			"(Re)start the compaction supervisor, detached. A start whose child dies at once returns non-zero.\n"+
 				"The DeepSeek peak gate applies here too, because this supervisor is what keeps a room working: with "+
 				clientoffpeak.ModeEnv+" on (the default) a room whose seats run a deepseek/ model is refused at peak, and "+
-				clientoffpeak.FlagAnyTime+" skips the check for this run.")
+				clientoffpeak.FlagAllowPeak+" skips the check for this run.")
 		return clientcmd.ExitOK
 	}
-	mode, rest, err := clientoffpeak.ModeFromFlags(args)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam compact: %v\n%s\n", err, compactUsage)
-		return clientcmd.ExitUsage
-	}
+	allowPeak, rest := clientoffpeak.ModeFromFlags(args)
 	name, ok := requireRig("compact", rest, stderr)
 	if !ok {
 		return clientcmd.ExitUsage
 	}
 	// No rig was resolved for this verb by the dispatcher, so the gate resolves one itself; with no rig
 	// on the machine there is nothing to read and the supervisor's own start reports the failure.
-	if code := peakGate(nil, name, "compact", mode, stderr); code != clientcmd.ExitOK {
+	if code := peakGate(nil, name, "compact", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	if !StartSupervisor(name, stdout, stderr) {

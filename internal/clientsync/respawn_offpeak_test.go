@@ -46,7 +46,7 @@ func TestRespawnRefusesADeepSeekSeatAtPeakBeforeAnyWait(t *testing.T) {
 		"room1.alpha",
 		"deepseek/deepseek-flash",
 		"PEAK: 01:00-04:00 UTC",
-		clientoffpeak.FlagAnyTime,
+		clientoffpeak.FlagAllowPeak,
 		clientoffpeak.ModeEnv + "=" + clientoffpeak.ValueOff,
 	} {
 		if !strings.Contains(stderr.String(), want) {
@@ -68,7 +68,7 @@ func TestRespawnLaunchesADeepSeekSeatWhenTheCheckIsOff(t *testing.T) {
 		extra   []string
 	}{
 		{"off-peak", "2026-10-09 05:00", "", nil},
-		{"peak, --any-time", "2026-10-09 02:00", "", []string{clientoffpeak.FlagAnyTime}},
+		{"peak, --any-time", "2026-10-09 02:00", "", []string{clientoffpeak.FlagAllowPeak}},
 		{"peak, the setting is off", "2026-10-09 02:00", clientoffpeak.ValueOff, nil},
 	}
 	for _, c := range cases {
@@ -119,19 +119,20 @@ func TestRespawnStillRespawnsALocalSeatAtPeak(t *testing.T) {
 	}
 }
 
-// TestRespawnRefusesBothModeFlags: the pair is a caller error in this verb too.
-func TestRespawnRefusesBothModeFlags(t *testing.T) {
+// TestRespawnRefusesAFlagItDoesNotTake: the gate has ONE flag, and this verb's parser already refuses an
+// argument it does not know, so the name this package used to invent is a caller error rather than a
+// silent no-op.
+func TestRespawnRefusesAFlagItDoesNotTake(t *testing.T) {
 	stub := &rigStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
 	stubRig(t, stub)
 
 	var stdout, stderr bytes.Buffer
-	code := RunRespawnVerb(context.Background(), []string{"room1", "alpha",
-		clientoffpeak.FlagOffpeakOnly, clientoffpeak.FlagAnyTime}, &stdout, &stderr)
+	code := RunRespawnVerb(context.Background(), []string{"room1", "alpha", "--any-time"}, &stdout, &stderr)
 	if code != clientcmd.ExitUsage {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), clientoffpeak.FlagAnyTime) {
-		t.Errorf("the refusal did not name the flags: %q", stderr.String())
+	if !strings.Contains(stderr.String(), "--any-time") {
+		t.Errorf("the refusal did not name the argument: %q", stderr.String())
 	}
 	if got := launched(stub); got != nil {
 		t.Errorf("it launched anyway: %v", got)
@@ -146,7 +147,7 @@ func TestRespawnHelpNamesTheGate(t *testing.T) {
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0", code)
 	}
-	for _, want := range []string{clientoffpeak.FlagAnyTime, clientoffpeak.ModeEnv} {
+	for _, want := range []string{clientoffpeak.FlagAllowPeak, clientoffpeak.ModeEnv} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("the usage does not name %q:\n%s", want, stdout.String())
 		}

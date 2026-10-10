@@ -30,8 +30,8 @@ status prints the OFFPEAK_ONLY setting, where it came from, and the current stat
 setting to the client's one env file and prints nothing else from it.
 
 The setting gates the verbs that start or resume DeepSeek seats - up, compact and sync respawn. With it
-ON (the default) those verbs refuse at peak, naming when off-peak resumes; --any-time turns the check
-off for one run, and wins over the setting in the environment or the env file.
+ON (the default) those verbs refuse at peak, naming when off-peak resumes; ` + FlagAllowPeak + ` turns
+the check off for one run, and wins over the setting in the environment or the env file.
 `
 
 // Commands is what the dispatcher registers from this package: one top-level verb.
@@ -146,7 +146,7 @@ func render(verdict Verdict, quiet, asJSON bool, out io.Writer) error {
 }
 
 func runStatus(stdout, stderr io.Writer) int {
-	mode, source, err := ResolveMode(nil, os.Getenv)
+	mode, source, err := ResolveMode(false, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam offpeak status: %v\n", err)
 		return clientcmd.ExitUsage
@@ -187,7 +187,7 @@ func runSet(args []string, stdout, stderr io.Writer) int {
 		return clientcmd.ExitUnavailable
 	}
 	value := ValueOn
-	if mode == AnyTime {
+	if mode == AllowPeak {
 		value = ValueOff
 	}
 	if err := clientenv.Set(path, ModeEnv, value); err != nil {
@@ -205,7 +205,7 @@ func runSet(args []string, stdout, stderr io.Writer) int {
 }
 
 func onOff(mode Mode) string {
-	if mode == AnyTime {
+	if mode == AllowPeak {
 		return "off"
 	}
 	return "on"
@@ -214,7 +214,7 @@ func onOff(mode Mode) string {
 // gateSentence says what the setting MEANS right now, which is the question `offpeak status` exists to
 // answer in one line.
 func gateSentence(mode Mode, verdict Verdict) string {
-	if mode == AnyTime {
+	if mode == AllowPeak {
 		return "off - this client starts or resumes a seat on a deepseek/ model at any hour"
 	}
 	if verdict.Peak {

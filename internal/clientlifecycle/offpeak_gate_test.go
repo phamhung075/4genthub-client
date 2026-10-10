@@ -77,7 +77,7 @@ func TestUpRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 		"deepseek/deepseek-flash",
 		"PEAK: 01:00-04:00 UTC",
 		"04:00 UTC (off-peak resumes)",
-		clientoffpeak.FlagAnyTime,
+		clientoffpeak.FlagAllowPeak,
 		clientoffpeak.ModeEnv + "=" + clientoffpeak.ValueOff,
 	} {
 		if !strings.Contains(errOut.String(), want) {
@@ -102,10 +102,9 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 	}{
 		{"off-peak", "2026-10-09 05:00", "", nil, clientcmd.ExitOK},
 		{"weekend", "2026-10-10 12:00", "", nil, clientcmd.ExitOK},
-		{"peak, --any-time", "2026-10-09 02:00", "", []string{clientoffpeak.FlagAnyTime}, clientcmd.ExitOK},
+		{"peak, " + clientoffpeak.FlagAllowPeak, "2026-10-09 02:00", "", []string{clientoffpeak.FlagAllowPeak}, clientcmd.ExitOK},
 		{"peak, the setting is off", "2026-10-09 02:00", clientoffpeak.ValueOff, nil, clientcmd.ExitOK},
-		{"peak, the setting is off but --offpeak-only", "2026-10-09 02:00", clientoffpeak.ValueOff,
-			[]string{clientoffpeak.FlagOffpeakOnly}, clientcmd.ExitUnavailable},
+		{"off-peak, " + clientoffpeak.FlagAllowPeak, "2026-10-09 05:00", "", []string{clientoffpeak.FlagAllowPeak}, clientcmd.ExitOK},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -130,21 +129,46 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 	}
 }
 
-// TestUpRefusesBothModeFlagsAsACallerError: a caller who wrote both meant neither, and guessing one of
-// them could start DeepSeek work the operator asked not to start.
-func TestUpRefusesBothModeFlagsAsACallerError(t *testing.T) {
+// TestUpRefusesAFlagItDoesNotTake: the gate has ONE flag, so an argument this verb does not know is a
+// caller error naming it - whether it sits where the rig name goes or after it, because the failure
+// shape this replaced was a verb that quietly ignored the extra argument.
+func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 	restoreAll(t)
+	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
+	gateEnv(t, "2026-10-09 02:00")
+
+	for _, args := range [][]string{
+		{"room-alpha", "--any-time"},
+		{"--any-time", "room-alpha"},
+		{"room-alpha", clientoffpeak.FlagAllowPeak, clientoffpeak.FlagAllowPeak, "extra"},
+	} {
+		var out, errOut bytes.Buffer
+		code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, args, &out, &errOut)
+		if code != clientcmd.ExitUsage {
+			t.Fatalf("%v: exit %d, want %d (stderr %q)", args, code, clientcmd.ExitUsage, errOut.String())
+		}
+		if !strings.Contains(errOut.String(), "--any-time") && strings.Contains(strings.Join(args, " "), "--any-time") {
+			t.Errorf("%v: the refusal did not name the argument: %q", args, errOut.String())
+		}
+	}
+}
+
+// TestUpTakesTheOneFlagTwice is the same rule from the other side: the flag this verb DOES take may sit
+// anywhere, and naming it twice is the same request twice rather than a caller error.
+func TestUpTakesTheOneFlagTwice(t *testing.T) {
+	restoreAll(t)
+	ran := stubWholeUp(t)
 	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{},
-		[]string{"room-alpha", clientoffpeak.FlagOffpeakOnly, clientoffpeak.FlagAnyTime}, &out, &errOut)
-	if code != clientcmd.ExitUsage {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
+		[]string{clientoffpeak.FlagAllowPeak, "room-alpha", clientoffpeak.FlagAllowPeak}, &out, &errOut)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want 0 (stderr %q)", code, errOut.String())
 	}
-	if !strings.Contains(errOut.String(), clientoffpeak.FlagOffpeakOnly) {
-		t.Errorf("the refusal did not name the flags: %q", errOut.String())
+	if !strings.Contains(strings.Join(*ran, ","), "ensureRig") {
+		t.Errorf("steps = %v, want the resume to have run", *ran)
 	}
 }
 
@@ -169,7 +193,7 @@ func TestCompactRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	if spawned {
 		t.Error("the supervisor was started anyway")
 	}
-	for _, want := range []string{"room-alpha.dev", "deepseek/deepseek-flash", clientoffpeak.FlagAnyTime} {
+	for _, want := range []string{"room-alpha.dev", "deepseek/deepseek-flash", clientoffpeak.FlagAllowPeak} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("the refusal does not name %q:\n%s", want, errOut.String())
 		}
@@ -185,7 +209,7 @@ func TestCompactStartsTheSupervisorWhenTheCheckIsOff(t *testing.T) {
 		extra []string
 	}{
 		{"off-peak", "2026-10-09 05:00", nil},
-		{"--any-time at peak", "2026-10-09 02:00", []string{clientoffpeak.FlagAnyTime}},
+		{clientoffpeak.FlagAllowPeak + " at peak", "2026-10-09 02:00", []string{clientoffpeak.FlagAllowPeak}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			restoreAll(t)
