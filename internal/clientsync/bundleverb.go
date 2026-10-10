@@ -1,0 +1,313 @@
+// The `sync bundle` verb: build a .rigbundle from the snapshot a seat is PINNED to, and say at BUILD
+// time what the bundle does not contain.
+//
+// The pin is the whole point. `rig bundle create` is asked for the rig root and the output, but the
+// seat's resolved snapshot comes from the lock this client wrote - the same hash a running seat was
+// launched from - so the bundle the operator ships and the seat that is running are the same artifact.
+//
+// A bundle copies `<rig-root>/agents/<agent>/` verbatim, and seatcheck reads a seat's policy from the
+// pin that directory is supposed to hold. When the rig root carries no usable pin the artifact still
+// passes its own integrity check, and the first sign of trouble is offline-install refusing it later -
+// so the build WARNS here, on stderr, and never refuses.
+package clientsync
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"gopkg.in/yaml.v3"
+)
+
+const bundleUsage = `usage: 4genteam sync bundle ROOM SEAT --rig-yaml PATH --rig-root DIR [--out-dir DIR]
+
+Build a .rigbundle from the snapshot ROOM/SEAT is pinned to, then print its path. The pinned hash is
+the one used, so the bundle and the running seat are the same artifact.
+`
+
+// errBundleRigNotFound is the ONE sentinel for "no rig on PATH": the seam below returns it, and the verb
+// turns it into the Python's message rather than leaking a lookpath error.
+var errBundleRigNotFound = errors.New("`rig` executable not found on PATH")
+
+// bundleRunRig is the one place this file starts `rig`, with an ARGUMENT LIST (the first element is the
+// program). A var so a test drives the verb without a rig; a non-zero exit arrives as *exec.ExitError
+// and is read for its code, never discarded.
+var bundleRunRig = func(argv []string) error {
+	path, err := exec.LookPath(argv[0])
+	if err != nil {
+		return errBundleRigNotFound
+	}
+	return exec.Command(path, argv[1:]...).Run()
+}
+
+// bundleArgs is the parsed command line.
+type bundleArgs struct {
+	room    string
+	seat    string
+	rigYAML string
+	rigRoot string
+	outDir  string
+}
+
+// RunBundleVerb is `sync bundle ROOM SEAT --rig-yaml PATH --rig-root DIR [--out-dir DIR]`.
+func RunBundleVerb(_ context.Context, args []string, stdout, stderr io.Writer) int {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			_, _ = io.WriteString(stdout, bundleUsage)
+			return clientcmd.ExitOK
+		}
+	}
+	parsed, err := bundleParseArgs(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	return bundleCreate(parsed, stdout, stderr)
+}
+
+// bundleParseArgs is the Python's subparser for `bundle`: two positionals, --rig-yaml and --rig-root
+// REQUIRED, and --out-dir optional (default: the current directory).
+func bundleParseArgs(args []string) (bundleArgs, error) {
+	var parsed bundleArgs
+	var positionals []string
+	needValue := func(flag string, index int) error {
+		if index+1 >= len(args) {
+			return usageError("argument " + flag + ": expected one argument")
+		}
+		return nil
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--rig-yaml":
+			if err := needValue(arg, i); err != nil {
+				return parsed, err
+			}
+			i++
+			parsed.rigYAML = args[i]
+		case strings.HasPrefix(arg, "--rig-yaml="):
+			parsed.rigYAML = strings.TrimPrefix(arg, "--rig-yaml=")
+		case arg == "--rig-root":
+			if err := needValue(arg, i); err != nil {
+				return parsed, err
+			}
+			i++
+			parsed.rigRoot = args[i]
+		case strings.HasPrefix(arg, "--rig-root="):
+			parsed.rigRoot = strings.TrimPrefix(arg, "--rig-root=")
+		case arg == "--out-dir":
+			if err := needValue(arg, i); err != nil {
+				return parsed, err
+			}
+			i++
+			parsed.outDir = args[i]
+		case strings.HasPrefix(arg, "--out-dir="):
+			parsed.outDir = strings.TrimPrefix(arg, "--out-dir=")
+		case strings.HasPrefix(arg, "-") && arg != "-":
+			return parsed, usageError("unrecognized arguments: " + arg)
+		default:
+			positionals = append(positionals, arg)
+		}
+	}
+	if len(positionals) != 2 {
+		return parsed, usageError("the following arguments are required: room, seat")
+	}
+	parsed.room, parsed.seat = positionals[0], positionals[1]
+	if parsed.rigYAML == "" {
+		return parsed, usageError("the following arguments are required: --rig-yaml")
+	}
+	if parsed.rigRoot == "" {
+		return parsed, usageError("the following arguments are required: --rig-root")
+	}
+	return parsed, nil
+}
+
+// bundleCreate ports cmd_bundle's body. It reads the pin, builds the exact argv the Python builds (with
+// the source label this tree uses), and then warns about the seats the rig root leaves unpinned.
+func bundleCreate(parsed bundleArgs, stdout, stderr io.Writer) int {
+	room, err := ValidateName("room", parsed.room)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	seat, err := ValidateName("seat", parsed.seat)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+
+	seatDir := filepath.Join(DefaultSeatStore(), room, seat)
+	lockPath := filepath.Join(seatDir, "pinned.json")
+	if !lockPresent(lockPath) {
+		fmt.Fprintf(stderr,
+			"4genteam sync bundle: no pinned snapshot for %s/%s; run `4genteam sync pull %s %s` first\n",
+			room, seat, room, seat)
+		return clientcmd.ExitUsage
+	}
+	lock, err := ReadLock(lockPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
+	}
+	pinnedHash, err := ValidateHash(lock.Hash)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+
+	outDir := parsed.outDir
+	if outDir == "" {
+		outDir = "."
+	}
+	outDir, err = filepath.Abs(outDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	bundlePath := filepath.Join(outDir,
+		fmt.Sprintf("%s-%s-%s.rigbundle", room, seat, bundleHashPrefix(pinnedHash, 8)))
+
+	// THE ARGV IS THE PYTHON'S, argument for argument; only the source label differs, because the
+	// product name the Python stamped is not this tree's. The locked hash - not the cloud's - is what
+	// travels in the notes.
+	command := []string{
+		"rig", "bundle", "create", parsed.rigYAML,
+		"--rig-root", parsed.rigRoot,
+		"-o", bundlePath,
+		"--name", room + "-" + seat,
+		"--bundle-version", "1.0.0",
+		"--notes", "resolved_sha256=" + pinnedHash + " source=4genteam",
+	}
+	if err := bundleRunRig(command); err != nil {
+		if errors.Is(err, errBundleRigNotFound) {
+			fmt.Fprintln(stderr, "4genteam sync bundle: `rig` executable not found on PATH")
+			return clientcmd.ExitRemote
+		}
+		fmt.Fprintf(stderr, "4genteam sync bundle: rig bundle create failed with exit code %d\n",
+			bundleExitCode(err))
+		return clientcmd.ExitRemote
+	}
+
+	missing := bundleUnpinnedSeats(parsed.rigYAML, parsed.rigRoot)
+	if len(missing) > 0 {
+		details := make([]string, 0, len(missing))
+		for _, entry := range missing {
+			details = append(details, fmt.Sprintf("%s (%s)", entry.seat, entry.reason))
+		}
+		fmt.Fprintf(stderr,
+			"warning: %d seat(s) in this bundle have no usable pinned policy, so a seat launched from it "+
+				"offline cannot decide or audit and an offline install will refuse it - %s. Build the rig "+
+				"root with `4genteam sync rig <room>`, which materializes each seat's policy.json into its "+
+				"agent directory.\n",
+			len(missing), strings.Join(details, "; "))
+	}
+	fmt.Fprintln(stdout, bundlePath)
+	return clientcmd.ExitOK
+}
+
+// bundleUnpinned is one seat the rig root cannot hand a usable pin.
+type bundleUnpinned struct {
+	seat   string
+	reason string
+}
+
+// bundleUnpinnedSeats ports unpinned_seats: the seats of the spec whose agent directory holds no usable
+// pinned policy. An unreadable spec or root answers NOTHING TO SAY (an empty list) rather than a warning
+// about the check itself, which is the Python's rule.
+func bundleUnpinnedSeats(rigYAML, rigRoot string) []bundleUnpinned {
+	raw, err := os.ReadFile(rigYAML)
+	if err != nil {
+		return nil
+	}
+	var spec any
+	if err := yaml.Unmarshal(raw, &spec); err != nil {
+		return nil
+	}
+	root, ok := spec.(map[string]any)
+	if !ok {
+		return nil
+	}
+	pods, _ := root["pods"].([]any)
+
+	var missing []bundleUnpinned
+	for _, podValue := range pods {
+		pod, _ := podValue.(map[string]any)
+		members, _ := pod["members"].([]any)
+		for _, memberValue := range members {
+			member, _ := memberValue.(map[string]any)
+			seat, _ := member["id"].(string)
+			ref, _ := member["agent_ref"].(string)
+			agent := bundleAgentFromRef(ref)
+			if seat == "" || agent == "" {
+				continue
+			}
+			if _, err := SafeRelative(agent); err != nil {
+				continue
+			}
+			policy := filepath.Join(rigRoot, "agents", agent, "policy.json")
+			info, statErr := os.Stat(policy)
+			if statErr != nil || info.IsDir() {
+				missing = append(missing, bundleUnpinned{seat, "no policy.json in agents/" + agent})
+				continue
+			}
+			contents, readErr := os.ReadFile(policy)
+			if readErr != nil {
+				missing = append(missing, bundleUnpinned{seat, "the policy in agents/" + agent + " is unreadable"})
+				continue
+			}
+			var document map[string]any
+			if err := json.Unmarshal(contents, &document); err != nil {
+				missing = append(missing, bundleUnpinned{seat, "the policy in agents/" + agent + " is unreadable"})
+				continue
+			}
+			// Two seats sharing one seat type share one agent directory in a bundle, so only one of
+			// their policies can ride there; the seat that lost is named here.
+			if claimed, isString := document["Seat"].(string); isString && claimed != seat {
+				missing = append(missing, bundleUnpinned{seat,
+					"the policy in agents/" + agent + " belongs to seat '" + claimed + "'"})
+			}
+		}
+	}
+	return missing
+}
+
+// bundleAgentFromRef is the Python's `ref.partition("local:agents/")[2]`: everything after the FIRST
+// occurrence of the prefix, and the empty string when it is absent.
+func bundleAgentFromRef(ref string) string {
+	const prefix = "local:agents/"
+	index := strings.Index(ref, prefix)
+	if index < 0 {
+		return ""
+	}
+	return ref[index+len(prefix):]
+}
+
+// bundleHashPrefix is the Python's `pinned_hash[:8]`, safe for a hash shorter than eight characters
+// (which validate_hash would not normally allow, but the slice must not panic).
+func bundleHashPrefix(hash string, length int) string {
+	if len(hash) <= length {
+		return hash
+	}
+	return hash[:length]
+}
+
+// bundleExitCode is the exit code a failed command carried, or 1 when the failure says nothing about
+// one - the Python reports `err.returncode`, and a *exec.ExitError is the one Go shape that has it.
+func bundleExitCode(err error) int {
+	var coded interface{ ExitCode() int }
+	if errors.As(err, &coded) {
+		return coded.ExitCode()
+	}
+	return 1
+}

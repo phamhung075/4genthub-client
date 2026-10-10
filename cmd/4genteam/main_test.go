@@ -29,7 +29,7 @@ func TestUnportedCommandRefusesRatherThanStubbing(t *testing.T) {
 	rigMissing(t)
 	for _, args := range [][]string{
 		{"seatcheck", "send", "x", "y"},
-		{"sync", "bundle", "4genthub-dev", "alpha"},
+		{"sync", "watch"},
 	} {
 		var out, errOut bytes.Buffer
 		if code := run(args, &out, &errOut); code != clientcmd.ExitUnavailable {

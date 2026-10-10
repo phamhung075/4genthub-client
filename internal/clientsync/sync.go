@@ -73,6 +73,10 @@ func (syncCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		return RunOfflineInstallVerb(ctx, args[1:], stdout, stderr)
 	case "respawn":
 		return RunRespawnVerb(ctx, args[1:], stdout, stderr)
+	case "bundle":
+		return RunBundleVerb(ctx, args[1:], stdout, stderr)
+	case "switch":
+		return RunSwitchVerb(ctx, args[1:], stdout, stderr)
 	}
 	want := args[0]
 	for _, verb := range syncVerbs {
