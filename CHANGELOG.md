@@ -47,6 +47,15 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   launch can start the occupant and still exit non-zero. A live or an unknown seat is refused
   without launching anything. `sync watch` is the one declared verb Python's argparse registers
   nowhere, so this build still refuses it by name with exit 3 instead of inventing a contract.
+- `4genteam feedback` is implemented in Go (`e0a9b98`, `internal/clientfeedback`): the friction
+  channel's second door is native now - the flags are parsed in-process, the body is marshalled by
+  `encoding/json` and sent in one POST to `/api/v2/openrig/feedback`, so no `.sh` file, no `python3`
+  and no `curl` is needed. The layer is validated before any dial, the identity defaults come from
+  `rig whoami --json` (read lazily, so a fully-specified call needs no rig at all), and
+  `$AGENTHUB_TOKEN` is sent as a bearer token that is never printed. Deviations from the script,
+  named rather than hidden: the URL default is `$AGENTHUB_URL`, this client's one server variable,
+  instead of the script's MCP/public chain; any 2xx counts as stored; and a missing credential or URL
+  is refused before dialing at exit 2.
 - `skills/`: this repository's skills tree, in four kinds — `share/<skill>` for every seat of every
   room, `rooms/<room>/<skill>` for one room, `rooms/<room>/<seat>/<skill>` for one seat, and
   `client/<skill>` for an LLM running the client. A directory holding `SKILL.md` is a skill; a
