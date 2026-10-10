@@ -316,6 +316,15 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Changed
 
+- The one-binary question is answered for the client, in `README.md`'s install section: the seat checker stays
+  a SECOND binary in this module rather than a `4genteam` subcommand. `install-checker` compiles
+  `cmd/seatcheck` with `-ldflags -X main.installedPinsDir=<store>`, so each installed checker carries the pins
+  directory of the store it was built for - a per-install build input the operator's `4genteam` must not carry
+  - while the guard keeps ONE source (this `cmd/seatcheck`, the copy `install-checker` builds; the server's
+  copy was removed in the server repo and does not come back). The name is fixed too: the seat's rendered
+  settings allow exactly `Bash(seatcheck send:*)`, so `seatcheck` must resolve on the seat's `PATH` to the
+  binary this client built, and `pull` refuses otherwise. Older notes that name `agenthub_go/cmd/agenthubclient`
+  as the single binary are stale: that binary is not the one that ships.
 - `continue --all` reports what happened instead of ending 0 whatever did (`internal/clientrestore/continue.go`).
   Every rig that has a brief is still visited after one of them fails - the shell's `|| true` inside the loop,
   kept, because a room that is not on DeepSeek must be restored while a refused or broken one is not - but the

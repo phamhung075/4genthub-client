@@ -73,6 +73,17 @@ where the seats find it:
 4genteam sync install-checker --go-dir .
 ```
 
+It stays a **second** binary rather than a subcommand of `4genteam`, and that is a decision this section
+records rather than an accident of the port: `install-checker` compiles `cmd/seatcheck` with
+`-ldflags -X main.installedPinsDir=<store>`, so each installed checker carries the pins directory of the seat
+store it was built for, and the seat cannot choose that directory at run time. The operator's own `4genteam`
+must not carry a per-seat build input, so the two builds stay separate. The guard itself has **one source** —
+this repository's `cmd/seatcheck`, which is the copy `install-checker` builds; the server no longer tracks a
+second one — and one name: it must be the bare `seatcheck` on the seat's `PATH`, because the seat's rendered
+settings allow exactly `Bash(seatcheck send:*)` and `pull` fails loudly when `seatcheck` does not resolve to
+the binary this client built. A `4genteam seatcheck send …` subcommand would satisfy neither the pin nor the
+allow rule.
+
 The force-compaction helper for `omp` seats is the Rust program in `rust/forcecompact`; build it with
 `cargo build --release` and point the client at it with `4GENTEAM_FORCECOMPACT`, or leave that unset
 and let the client find `forcecompact` on `PATH`.
