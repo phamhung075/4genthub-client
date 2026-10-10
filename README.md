@@ -5,6 +5,12 @@ project** on it can use a 4genthub team. This repository is standalone: it needs
 repository. The project you work on is the directory you run
 commands from.
 
+Setting a machine up, and then building a room and its seats, is in
+[docs/AGENT-SETUP.md](docs/AGENT-SETUP.md). Watching a running room is in
+[docs/WATCH.md](docs/WATCH.md), and the same procedure is the skill
+[skills/watch-team/SKILL.md](skills/watch-team/SKILL.md), which any project can copy into its own
+skills path.
+
 ## What it is
 
 A command-line client, `4genteam`, for one machine. It:

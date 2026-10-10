@@ -12,6 +12,9 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `docs/WATCH.md` and `skills/watch-team/SKILL.md`: how to watch a running room — the seat grid,
   the lead window, the input panes, the option list and the rules. Generic, with placeholders, so
   it works in any project; the skill is the same procedure packaged for a project's skills path.
+- `docs/AGENT-SETUP.md`: setting a machine up for the 4genthub MCP, OpenRig and herdr, then the
+  procedure an agent follows to build a room and its seats. The README now links it, the watch doc
+  and the watch skill.
 
 ### Changed
 

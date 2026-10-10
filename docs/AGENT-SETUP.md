@@ -1,0 +1,371 @@
+# Agent setup: 4genthub, OpenRig and herdr, then rooms and seats
+
+For an AI agent (or a person) bringing a machine into service for 4genthub, and then building
+rooms and seats when the user asks for them.
+
+Three rules run through the whole page.
+
+- **Ask the user for every value that depends on the machine, the room or the operator's choice.**
+  The placeholders are `<SERVER-URL>`, `<ROOM>`, `<RIG>`, `<SEAT>`, `<RUNTIME>`, `<MODEL>`,
+  `<TEAM-DIR>`, `<SKILLS-PATH>`. Never guess one, never copy one off another machine.
+- **If a prerequisite is missing, stop and tell the user which one.** Do not invent a workaround.
+- **Never print, log, commit or send the token.** It lives in one file, named below, and nowhere
+  else.
+
+Commands run in the project directory unless a step says otherwise.
+
+## Part 1 — Set up a machine
+
+### 1.1 What has to be present
+
+| Piece | What it is | Install check | Version check |
+|---|---|---|---|
+| 4genthub | the hosted service: accounts, rooms, seats, tasks, and the web app | `curl -fsS <SERVER-URL>/health` answers | the `version` field of that answer |
+| 4genthub MCP | the same service over MCP, at `<SERVER-URL>/mcp` | the agent's MCP client lists the `agenthub_http` tools | the `initialize` result's `serverInfo` |
+| `4genteam` | this repository's client: sync, supervisor, status bridge, watch view, team | `4genteam --help` exits 0 | the verb list it prints |
+| OpenRig | the local orchestrator that runs seats in terminals; its CLI is `rig` | `rig --version` exits 0 | the number it prints |
+| OpenRig daemon | the local control plane `rig` talks to, on `127.0.0.1:7433` | `rig daemon status` prints `Daemon running on port 7433` | — |
+| tmux | hosts the seat terminals | `tmux -V` exits 0 | the number it prints |
+| herdr | the terminal provider the watch grid is displayed in | `herdr --version` exits 0 | the number it prints |
+
+Ask the user for `<SERVER-URL>` (the hosted service is `https://api.4genthub.com`, and its web app
+is `https://www.4genthub.com/`) and for the account's key. Both are theirs to give.
+
+### 1.2 The checks, in order
+
+```bash
+4genteam --help            # the client; prints the verb list
+rig --version              # the OpenRig CLI
+rig daemon status          # if it is not running: rig daemon start
+tmux -V
+herdr --version
+curl -fsS <SERVER-URL>/health
+```
+
+`/health` answers JSON with `status` (`healthy` when the service is up), `timestamp`, `server`,
+`version` (the release the backend is running), `auth_enabled`, `connections`
+(`active_connections`, `uptime_seconds`) and `status_broadcasting` (`active`,
+`registered_clients`). A 200 with a different `status` is still a reachable server; a connection
+error is not, and is one of the two things to take back to the user.
+
+Stop here and name the missing piece if any check fails. A seat needs tmux to have a terminal, and
+the watch grid needs herdr; both are installed, not worked around.
+
+### 1.3 One credential, one file
+
+The client has exactly one credential and reads exactly one file.
+
+- `AGENTHUB_URL` — the server's base URL, no trailing slash.
+- `AGENTHUB_TOKEN` — the account key.
+- The file is `~/.config/4genthub/.env`.
+- **A variable already set in the environment wins over the file.** The file is a default, not an
+  override.
+
+```bash
+mkdir -p ~/.config/4genthub
+cp .env.sample ~/.config/4genthub/.env    # then fill in AGENTHUB_TOKEN
+```
+
+Ask the user for the key; do not generate one, and do not put one in this file yourself. The
+sample also lists the optional settings (`OPENRIG_URL`, `OPENRIG_PORT`, the `COMPACT_*` limits,
+`OPENRIG_SKILLS_ROOT`); a blank value means the default shown in the sample. Only the first two
+have to be set for the client to talk to the server.
+
+### 1.4 Connect a project to the 4genthub MCP
+
+Every project reaches the same endpoint with the same key. Add this to the **project's**
+`.mcp.json`, creating the file if it is absent:
+
+```json
+{
+  "mcpServers": {
+    "agenthub_http": {
+      "type": "http",
+      "url": "<SERVER-URL>/mcp",
+      "headers": {
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer ${AGENTHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+`${AGENTHUB_TOKEN}` is expanded from the environment, so export it in the shell that starts the
+agent, or start the agent from a shell that has it. **Never write the token into `.mcp.json`.**
+
+Check the connection by listing the `agenthub_http` tools in the agent's MCP view. The endpoint
+answers `POST /mcp` (JSON-RPC) and `GET /mcp` (the event stream the `Accept` header above asks
+for). A `403 Not authenticated` means no bearer token reached the server; a `401 Invalid
+authentication credentials` means one arrived and is invalid or expired. Both are the user's to
+fix: ask for a key, and never paste one into a message.
+
+### 1.5 Failure map
+
+| Symptom | Cause | What to do |
+|---|---|---|
+| the client says `AGENTHUB_URL` and `AGENTHUB_TOKEN` must be set | neither the file nor the environment has them | ask the user for the key, write `~/.config/4genthub/.env` |
+| `403 Not authenticated` from `<SERVER-URL>` or the MCP endpoint | no bearer token reached the server | ask the user for a key; never paste one into a message |
+| `401 Invalid authentication credentials` | a token arrived and is invalid or expired | ask the user for a new key; nothing else in the client or `.mcp.json` needs to change |
+| `rig daemon status` says the daemon is not running | the daemon is stopped | `rig daemon start` |
+| `rig ps` shows no node for the room | the room was never materialized on this machine | `4genteam sync rig <ROOM>`, then `rig up <spec>` (step 2.5) |
+| the watch view does not open | herdr or tmux is missing | `herdr --version`, `tmux -V`; stop and tell the user |
+| a seat exits at once after launch | its runtime is not installed, or its runtime and model disagree | read the seat's log and report the missing piece to the user; do not switch the model to make it start |
+| `team apply` refuses a version | a version must be a concrete `x.y.z`, and the value lives in `team.json` — `team apply` has no `--version` option | fix `modules[].version` in `team.json`; `latest` and other aliases are rejected. `--version` belongs to `team import-project` and `team publish-skills` |
+
+## Part 2 — Build a room and its seats, when the user asks
+
+A room is the cloud record: the seats, what each seat is told, who may message whom, and which
+skills each seat carries. A rig is the local OpenRig instance that runs those seats. The two share
+a name unless the user wants them different (`--rig` says otherwise).
+
+### 2.1 Ask first
+
+Collect four answers before writing anything. Show the user the placeholder you need and the
+choices the software accepts. Do not answer any of them yourself.
+
+**(a) The seats.** For each seat:
+
+- its **seat key** — the name the room uses for it. Letters, digits, `-` and `_`, starting with a
+  letter or a digit.
+- its **seat type** — a slug the server stores. The curated catalog carries `lead`, `developer`,
+  `reviewer`, `writer`, `tester`, `architect`, `planner`, `researcher`, `debugger`. Ask before
+  using anything else; the seat type decides what the seat is told and which MCP servers it mounts.
+- its **runtime** — one of `claude-code`, `codex`, `agy`, `omp`. Ask, and confirm the runtime is
+  installed on this machine; a runtime the seat cannot run is a seat that exits at launch.
+- its **model** — ask for the exact id the runtime accepts. A blank model is allowed and means the
+  runtime picks its own default. `codex` cannot run Claude models; `agy` can run Claude, GPT and
+  Gemini models; `claude-code` also takes aliases such as `sonnet`.
+- whether it **pins a version** (`pinned_version`, a concrete `x.y.z`) or **follows the latest**.
+
+**(b) The permission policy, one answer per seat.** Read the five choices to the user and get an
+explicit answer for each seat. `rig policy list` prints them:
+
+| Policy | Means | Stored as |
+|---|---|---|
+| `locked` | the most restrictive packaged posture — for seats that must not touch anything unattended | `builtin:locked` |
+| `standard` | the packaged default posture for managed working seats | `builtin:standard` |
+| `open` | a permissive packaged posture for trusted, high-autonomy seats | `builtin:open` |
+| `yolo` | the operator/no-guardrails posture — everything the harness allows; the launch posture is **full bypass** | `builtin:yolo` |
+| `none` | the reserved deliberate-none choice: the posture is the floor, the same as naming nothing, but the choice is visible | `none` |
+
+A seat that does not name one gets `standard`. **Say what `yolo` means before the user picks it: a
+`yolo` seat runs unattended with no approval prompts.**
+
+**What the client does with the choice today, and say this to the user:** the policy is recorded on
+the seat, and the server's default is `standard` — but the client that materializes the room on
+this machine overrides it at launch and starts **every** seat as `builtin:yolo`. So a seat the user
+put on `standard` does not get approval prompts either; only the record keeps the choice. Do not
+present the per-seat answer as the posture the seat will run under until that override is fixed.
+
+**(c) The links.** A link is one direction and one kind. **A seat with no link in a direction
+cannot send in that direction** — the default is deny, and nothing routes a message without an
+explicit link. Ask which seat may send to which, and with what kind:
+
+| Kind | Authorizes |
+|---|---|
+| `delegates_to` | assigning work (`task`) |
+| `collaborates_with` | questions and notices |
+| `escalates_to` | reports and escalations |
+
+`spawned_by` and `can_observe` are also link kinds: `spawned_by` affects launch order and never
+authorizes a send, and `can_observe` allows reading another seat's output (`rig capture`, `rig
+transcript`) but not sending to it.
+
+One link authorizes one direction only. An answer needs its own link the other way: a developer
+that reports to the lead has `dev escalates_to lead` as well as whatever the lead uses to assign.
+
+**(d) The skills paths.** Ask the user for each skills path to give all the agents of the room.
+Never guess one, and never assume a path from another machine. Two shapes, and they publish
+differently:
+
+- a **project's** skills tree — each skill is a directory holding `SKILL.md`, under the project's
+  `.claude/skills`. Publish with `4genteam team import-project`, which also pushes the project's
+  `.mcp.json` servers as modules.
+- a **skill library** that carries an inventory file. Publish with
+  `4genteam team publish-skills --inventory <FILE>`, and pass `--source-root <SKILLS-PATH>` (or set
+  `OPENRIG_SKILLS_ROOT`) to the checkout the inventory's paths are relative to.
+
+Both push module versions. `4genteam team drift-check` then reports stored skills whose recorded
+file has changed under the roots it resolves them against. The published modules are what
+`seat_overlays` in step 2.2 attaches to seats.
+
+### 2.2 Write `<TEAM-DIR>/team.json`
+
+One file names the whole room. Ask the user for `<TEAM-DIR>` (a directory you may create), and
+give every module a file next to it.
+
+```json
+{
+  "room": { "slug": "<ROOM>", "name": "<a display name>" },
+  "modules": [],
+  "seats": [
+    {
+      "seat_key": "<SEAT>",
+      "seat_type": "<SEAT-TYPE>",
+      "runtime": "<RUNTIME>",
+      "model": "<MODEL>",
+      "pinned_version": "1.0.0",
+      "follow_latest": true,
+      "permission_policy": "<POLICY>"
+    }
+  ],
+  "links": [
+    { "from": "<SEAT>", "kind": "delegates_to", "to": "<OTHER-SEAT>" }
+  ],
+  "company_overlay": [],
+  "seat_overlays": { "<SEAT>": ["<module-slug>", "<module-slug>"] }
+}
+```
+
+| Field | Holds |
+|---|---|
+| `room` | `slug` (the room name) and `name` (what the user sees) |
+| `modules` | `slug`, `kind`, `version`, `file` — a module's text is read from `file`, relative to `<TEAM-DIR>` |
+| `seats` | one entry per seat, as in (a) and (b) above |
+| `seats[].pinned_version` | a concrete `x.y.z` to pin the seat to |
+| `seats[].follow_latest` | `true`: the seat follows the latest version. `false`: it takes the latest version now and stays there. A seat that names neither uses the account's seat-settings default |
+| `links` | `from`, `kind`, `to`, as in (c) above |
+| `company_overlay` | module slugs every seat of the account gets (account-wide; applying replaces it) |
+| `seat_overlays` | seat key → the module slugs that seat gets |
+
+A seat is pinned or it follows, not both: send `pinned_version` for the first, `follow_latest`
+for the second, and delete the key you are not using. The example above shows both so you can see
+where each goes; `pinned_version` wins if both are present.
+
+Ask the user before adding a `company_overlay`: it applies to their whole account, not just this
+room.
+
+### 2.3 Dry run, show the plan, get approval
+
+```bash
+4genteam team apply --team <TEAM-DIR> --dry-run
+```
+
+It writes nothing, and it prints one `plan: <label> (METHOD <path>)` line per step, in the order
+apply will send them: the seat types to seed, each module version, the room, each seat, each link,
+then the overlays.
+
+A dry run **still reads the server when credentials are set**: it asks which seat types it already
+stores, so the seed step disappears when they are already there and the list is what apply would
+really send. With no credentials configured it prints the plan without that classification.
+
+`team import-project --dry-run` and `team publish-skills --dry-run` print their own header
+(`plan: import-project from <dir> (N module(s))`) and then one line per module: `PUSH`, `SKIP
+(identical content already stored)`, `NEW-VERSION (<version> stored with different content)`, or,
+with no credentials, `PUSH unless stored content is identical`.
+
+Show the plan to the user and get an explicit yes before the next step.
+
+### 2.4 Apply
+
+```bash
+4genteam team apply --team <TEAM-DIR>
+```
+
+Each step prints its outcome (`created`, `applied`, or `exists` for a room or seat that is already
+there). A failure stops the run and names the step.
+
+### 2.5 Materialize the room on this machine
+
+The cloud now knows the room; this machine has no seats yet. Ask the user which `<RIG>` name to
+use (the room name by default), then:
+
+```bash
+4genteam sync rig <ROOM>     # writes the rig spec and the seat files
+rig up ~/.openrig/agenthub-seats/<ROOM>/rig/rig.yaml
+rig ps --nodes --rig <RIG>   # one row per seat of the room, with its lifecycle and activity
+```
+
+`4genteam up <RIG>` is the way to bring a room back after a restart: in one command it checks the
+OpenRig daemon, restores the rig, checks the force-compaction helper (`forcecompact`), starts the
+status bridge, then the compaction supervisor, opens the watch view, opens the OpenRig UI and hands
+over to herdr. Its positional is the **rig** name — the room name unless the user asked for a
+different one (`4genteam up` takes no room argument).
+
+To watch the room work — the seat grid and the lead's own window — see
+[docs/WATCH.md](WATCH.md).
+
+`sync rig` refuses to replace a real `.env` that sits in the room directory — it names the path
+instead. That file is not this client's to overwrite; show the path to the user.
+
+### 2.6 Brief the lead
+
+Tell the lead, in one message: the room, each seat with its type, runtime, model and policy, the
+links, and the skills attached to each seat. Use the room's own messaging rule (`seatcheck send`,
+or the queue for durable handoffs); the lead routes the work from there.
+
+### 2.7 Worked example: a three-seat room
+
+The user asks for a room with a lead, a developer and a reviewer. Nothing below is a default —
+every value shown came from the user.
+
+| Seat | Type | Runtime | Model | Policy |
+|---|---|---|---|---|
+| `lead` | `lead` | `<RUNTIME>` | `<MODEL>` | `standard` |
+| `dev` | `developer` | `<RUNTIME>` | `<MODEL>` | `standard` |
+| `reviewer` | `reviewer` | `<RUNTIME>` | `<MODEL>` | `standard` |
+
+Links: the lead assigns to the developer and to the reviewer, the developer hands work to the
+reviewer, and both report to the lead. The reviewer needs to ask the developer questions, so that
+direction gets its own link.
+
+```json
+"links": [
+  { "from": "lead",     "kind": "delegates_to",      "to": "dev" },
+  { "from": "lead",     "kind": "delegates_to",      "to": "reviewer" },
+  { "from": "dev",      "kind": "delegates_to",      "to": "reviewer" },
+  { "from": "dev",      "kind": "escalates_to",      "to": "lead" },
+  { "from": "reviewer", "kind": "collaborates_with", "to": "dev" },
+  { "from": "reviewer", "kind": "escalates_to",      "to": "lead" }
+]
+```
+
+Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam sync rig <ROOM>`,
+`rig up ~/.openrig/agenthub-seats/<ROOM>/rig/rig.yaml`, `rig ps --nodes --rig <RIG>`, and the brief
+to the lead (2.6).
+
+### 2.8 The questions, in the order to ask them
+
+1. "What is the server URL for this account, and what is the key?" → `AGENTHUB_URL`,
+   `AGENTHUB_TOKEN`.
+2. "What should the room be called, and what name should the display show?" → `room.slug`,
+   `room.name`.
+3. "Which seats do you want? For each: a short name (the seat key), what kind of seat it is, and
+   whether it pins a version or follows the latest." → `seat_key`, `seat_type`,
+   `pinned_version` / `follow_latest`.
+4. "For each seat: which runtime, and which model? Is that runtime installed on this machine?" →
+   `runtime`, `model`.
+5. "For each seat: which permission policy — `locked`, `standard`, `open`, `yolo` or `none`?
+   `yolo` means the seat runs unattended with no approval prompts." → `permission_policy`.
+6. "Who may send to whom, and in which direction? Assigning work is `delegates_to`, questions and
+   notices are `collaborates_with`, reports and escalations are `escalates_to`." → `links`.
+7. "Which skills paths should all the agents of this room get?" → `team import-project` or
+   `team publish-skills --inventory`, then `seat_overlays`.
+8. "May I write the room to your account now?" → the approval before step 2.4.
+
+A question with no answer is not a licence to choose. If the user does not know, say which field
+is waiting and stop.
+
+### 2.9 Working in the room
+
+Once the room is up, a seat works the same way on any project.
+
+- **Startup.** `rig whoami --json` prints the rig, pod, this seat and its peers. Run it after any
+  restart, before concluding anything about where the work stands.
+- **Find work.** The task board is the MCP server: `manage_task` with `{"action":"list"}`,
+  `{"action":"next","git_branch_id":"<uuid>"}`, or `{"action":"search","query":"<words>"}`. Create
+  a task only after searching, and assign it with the `@seat-key` form.
+- **Record as you go.** `manage_task` `update` to start (it needs `details`), `manage_subtask` for
+  the pieces, `manage_context` for the decisions, numbers and open questions the next session
+  needs.
+- **Finish and hand off.** `manage_task` `complete` with what changed and what you ran, then tell
+  the lead the commit hash or the path you wrote. A room's work is not finished until the seat it
+  names for review has seen it.
+- **Report friction.** `submit_feedback` (or `4genteam feedback` when a runtime has no MCP) sends
+  what went wrong in the layer it went wrong in.
+
+The `agenthub_http` server mounts ten tools for this: `manage_task`, `manage_subtask`,
+`manage_context`, `manage_git_branch`, `manage_project`, `manage_agent`, `manage_connection`,
+`manage_seat`, `call_seat` and `submit_feedback`. Each one answers `--help`-style discovery by
+reading its own schema, so read the tool before you call it.
