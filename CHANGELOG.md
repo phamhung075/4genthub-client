@@ -186,10 +186,15 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Sunday, and every date in `DEEPSEEK_HOLIDAYS` are off-peak; `OFFPEAK_UTC` pins the instant the schedule is read at.
   Measurements 2026-10-10, `4genteam` against the script it replaces, comparing the JSON, the human line AND the exit
   code: 12 instants covering every edge (Fri 00:59, 01:00, 03:59, 04:00, 05:59, 06:00, 09:59, 10:00, 23:30, Sat 12:00,
-  Sun 07:00, Mon 05:00), the holiday file case and a holiday file that does not exist — identical in all 14 runs. ONE
-  deliberate divergence: a malformed `OFFPEAK_UTC` is refused by name with exit 2, where the script printed a
+  Sun 07:00, Mon 05:00), the holiday file case and a holiday file that does not exist — identical in all 14 runs,
+  which is how the 23:30 row was found to be missing from this file while the claim above said it was covered. TWO
+  deliberate divergences: (1) a malformed `OFFPEAK_UTC` is refused by name with exit 2, where the script printed a
   half-empty JSON object and exited 0; a broken clock must not read as off-peak, because that is the direction in
   which the gate silently stops refusing, and every other blank-or-typo value in this client is refused by name too.
+  (2) after a Friday's last peak, `next` names MONDAY 01:00 UTC (`01:00 UTC Monday (peak starts)`), where the script
+  printed "01:00 UTC tomorrow (peak starts)" — tomorrow is Saturday, off-peak in full, so the script's line told a
+  caller to schedule around a peak that does not exist, and that line exists only to be scheduled on. Both Friday
+  instants (10:00 and 23:30) are pinned in `schedule_test.go`, whose other rows remain the script's bytes verbatim.
 - The gate is enforced on the three verbs that START or RESUME a seat — `up`, `compact` and `sync respawn`
   (`internal/clientlifecycle`, `internal/clientsync`). With `OFFPEAK_ONLY` on (the default) a room holding a seat
   whose model begins with `deepseek/` is refused at peak with exit 3 BEFORE the resume, the supervisor spawn or the

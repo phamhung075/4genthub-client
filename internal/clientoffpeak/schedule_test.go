@@ -14,6 +14,11 @@ import (
 // pinned to that instant and reading its own --json line and human line; `holiday` marks the one row that
 // also had a holiday file. The port is only right if it prints the SAME BYTES, so both forms are asserted
 // verbatim rather than compared field by field: a field test would pass while the gate's output drifted.
+//
+// TWO ROWS ARE NOT THE SHELL'S BYTES, on purpose: the Friday instants after the last peak (10:00 and
+// 23:30) carry `01:00 UTC Monday (peak starts)` where the script printed "01:00 UTC tomorrow", because
+// tomorrow is a Saturday and a weekend is off-peak in full. The divergence is commented at the branch in
+// schedule.go and in the CHANGELOG; 23:30 is the row whose absence let the script's line stand unnoticed.
 var everyBoundary = []struct {
 	pin     string
 	peak    bool
@@ -69,9 +74,18 @@ var everyBoundary = []struct {
 	},
 	{
 		pin:  "2026-10-09 10:00",
-		json: `{"state":"OFF-PEAK","utc":"2026-10-09T10:00Z","weekday":5,"holiday":0,"reason":"off-peak: outside the Mon-Fri peak blocks","next":"01:00 UTC tomorrow (peak starts)"}`,
+		json: `{"state":"OFF-PEAK","utc":"2026-10-09T10:00Z","weekday":5,"holiday":0,"reason":"off-peak: outside the Mon-Fri peak blocks","next":"01:00 UTC Monday (peak starts)"}`,
 		human: "OFF-PEAK  10:00 UTC (Fri)  off-peak: outside the Mon-Fri peak blocks\n" +
-			"  next: 01:00 UTC tomorrow (peak starts)\n",
+			"  next: 01:00 UTC Monday (peak starts)\n",
+	},
+	{
+		pin: "2026-10-09 23:30",
+		// The case that caught the "tomorrow" line: on a Friday the shell gate printed
+		// "01:00 UTC tomorrow (peak starts)", but tomorrow is Saturday and a weekend is off-peak in full,
+		// so the next peak is Monday's 01:00. See the divergence note above everyBoundary.
+		json: `{"state":"OFF-PEAK","utc":"2026-10-09T23:30Z","weekday":5,"holiday":0,"reason":"off-peak: outside the Mon-Fri peak blocks","next":"01:00 UTC Monday (peak starts)"}`,
+		human: "OFF-PEAK  23:30 UTC (Fri)  off-peak: outside the Mon-Fri peak blocks\n" +
+			"  next: 01:00 UTC Monday (peak starts)\n",
 	},
 	{
 		pin:   "2026-10-10 12:00",

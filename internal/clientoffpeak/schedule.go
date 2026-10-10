@@ -147,7 +147,17 @@ func At(now time.Time, holidays *Holidays) Verdict {
 		case minutes < peakBlocks[1][0]:
 			v.Next = "06:00 UTC (peak starts)"
 		default:
-			v.Next = "01:00 UTC tomorrow (peak starts)"
+			// "Tomorrow" is a SATURDAY when today is a Friday, and a weekend is off-peak in full, so the
+			// next peak is Monday's 01:00 and not tomorrow's. DELIBERATE DIVERGENCE from the shell gate,
+			// which printed "tomorrow" here and so named a Saturday morning that is off-peak: this line
+			// exists so a caller can SCHEDULE on it, and a caller that scheduled on the shell's word ran
+			// at an off-peak hour it did not need to wait for. Every other weekday's tomorrow does open
+			// a peak at 01:00, so only weekday 5 is special-cased.
+			if weekday == 5 {
+				v.Next = "01:00 UTC Monday (peak starts)"
+			} else {
+				v.Next = "01:00 UTC tomorrow (peak starts)"
+			}
 		}
 	}
 	return v
