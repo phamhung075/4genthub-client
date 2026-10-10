@@ -106,6 +106,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `docs/AGENT-SETUP.md`: the install-target passage names the profile half too — the same render that
   fills `resources.skills` also lists each id in the default profile's `uses.skills`, so a pool entry
   no profile uses is inert exactly as a file no spec declares is.
+- A machine whose real home cannot be resolved now REFUSES the state root instead of answering a
+  relative `.openrig/state/omp` (`42132ff`): `clientenv.DefaultStateRoot` returns no path at all and the
+  new `clientenv.ResolveStateRoot` refuses with one message naming both escapes (`--state-root DIR` or
+  `OPENRIG_STATE_ROOT`), so no path this client derives can depend on the working directory. The
+  resolution points that take the root refuse the same way — `compact`/`compact-run`, `policy apply`,
+  `seat sync|watch`, `watch` and `sync rig` — and the four clauses before it are unchanged.
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md` (both tables, so the mirrors stay mirrors):
   the options gain `--seat` — `feed` and `inputs` only, repeatable — and `--cols` is stated as `grid`
   and `watch` only, matching the help text the code prints; `--state-root` is confirmed at the tip.
