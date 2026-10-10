@@ -47,7 +47,7 @@ Environment:
 
 Usage:
   4genteam sync pull ROOM SEAT [--out DIR] [--update]
-  4genteam sync rig ROOM [--out DIR] [--update]
+  4genteam sync rig ROOM [--out DIR] [--update] [--state-root DIR]
   4genteam sync bundle ROOM SEAT --rig-yaml PATH --rig-root DIR [--out-dir DIR]
   4genteam sync install-checker --go-dir DIR [--out DIR]
   4genteam sync switch ROOM SEAT [--runtime R] [--model M]
@@ -142,10 +142,11 @@ OMP_CONFIG_INSTALL_NAME = "config.yml"
 AGENTS_MD_RENDER_PATH = PurePosixPath("AGENTS.md")
 AGENTS_MD_INSTALL_NAME = "AGENTS.md"
 
-# Where omp keeps per-seat state: the runner's --state-root default, plus the session name. A module
-# constant like DEFAULT_OUT, so a test can point it at a scratch tree. A launch that overrides
-# --state-root cannot be followed from here: the install would place the files under this root.
-OMP_STATE_ROOT = real_home() / ".openrig" / "state" / "omp"
+# Where omp keeps per-seat state. The SAME machine-level default seat_policy carries, because both
+# halves write into this one tree, and `rig --state-root` overrides it for any other layout. A module
+# constant like DEFAULT_OUT, so a test can point it at a scratch tree. A launch that used an override
+# is DETECTED rather than followed blindly or ignored: see launch_state_root below.
+OMP_STATE_ROOT = load_seat_policy().DEFAULT_STATE_ROOT
 
 # The one home of the DeepSeek key. omp reads the launch directory's `.env`, so every room whose
 # seats run a `deepseek/` model gets a `.env` link here: the secret keeps one home and a new room
@@ -462,6 +463,59 @@ SHELL_PATH_SOURCE = (
 DAEMON_PATH_SOURCE = "rig daemon PATH (the daemon starts the first tmux server, so the first seat inherits it)"
 
 
+# The process table the launch roots are read from. A module constant for the same reason
+# DEFAULT_OUT and the state root are ones: a test points it at a scratch tree instead of this box.
+PROC_ROOT = Path("/proc")
+
+
+def launch_state_root(session: str) -> Path | None:
+    """The ``--state-root`` a running seat was launched with, or None when that seat does not run.
+
+    Measured on this machine: every seat's runner is started as ``pi-runner.js --session-name
+    <session> --state-root <root> --cwd <room> --launch-id <id>``, so while a seat runs, the root its
+    omp will read is readable off the process table. While it does not run there is nothing to read,
+    and that answers None rather than this module's default - guessing here is what would put a
+    render where no omp looks.
+    """
+    for entry in PROC_ROOT.glob("[0-9]*"):
+        try:
+            raw = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        args = [part.decode("utf-8", "surrogateescape") for part in raw.split(b"\0") if part]
+        if "--session-name" not in args or "--state-root" not in args:
+            continue
+        named = args.index("--session-name") + 1
+        if named >= len(args) or args[named] != session:
+            continue
+        root = args.index("--state-root") + 1
+        if root < len(args):
+            return Path(args[root])
+    return None
+
+
+def refuse_a_seat_that_reads_another_root(
+    room: str, rig_yaml_text: str, state_root: Path
+) -> None:
+    """Refuse when a seat is running under another omp state root than the one chosen.
+
+    The render must land in the root the seat's omp READS. Writing it under the chosen root while
+    that seat reads a different one is a silent misplacement, so a run that can see the difference
+    stops before it writes anything, naming both roots and the flag.
+    """
+    for pod_id, member_id in rig_members(rig_yaml_text):
+        session = session_name(pod_id, member_id, room)
+        running = launch_state_root(session)
+        if running is None or running == state_root:
+            continue
+        raise SyncError(
+            f"{room}/{member_id} is running under the omp state root {running}, but this run would "
+            f"install its render under {state_root}. Nothing was written. Pass --state-root "
+            f"{running} to follow the launch, or stop and relaunch the seat under {state_root}.",
+            EXIT_USAGE,
+        )
+
+
 def seat_path() -> tuple[str, str]:
     """The PATH to check and its source: tmux global, else the daemon's, else this shell's.
 
@@ -681,6 +735,9 @@ def cmd_rig(args: argparse.Namespace) -> None:
             raise SyncError(f"rigspec lists seat {seat!r} twice", EXIT_REMOTE)
         seats.append(seat)
 
+    state_root = OMP_STATE_ROOT if args.state_root is None else Path(args.state_root).expanduser()
+    refuse_a_seat_that_reads_another_root(room, yaml_text, state_root)
+
     pinned: dict[str, Path] = {}
     for seat in seats:
         try:
@@ -690,9 +747,12 @@ def cmd_rig(args: argparse.Namespace) -> None:
                 f"seat {seat} could not be pulled: {err}", EXIT_REMOTE
             ) from err
 
-    # Resolve and validate every omp MCP install BEFORE the build writes anything, so a rig whose
-    # seats have not been launched yet refuses with nothing half-applied.
-    omp_installs, render_gaps = omp_render_installs(pinned, room, yaml_text)
+    # Resolve every omp MCP install BEFORE the build writes anything: this pass has no side effects,
+    # so a refusal later in the run - a pre-existing .env, a missing key file, a failed pull - leaves
+    # nothing half-applied behind it. A rig whose seats have not been launched yet is NOT refused: it
+    # gets the render for the seats that have one, a warning for a half-render, and the agent
+    # directory it adopts at its first launch.
+    omp_installs, render_gaps = omp_render_installs(pinned, room, yaml_text, state_root)
 
     room_dir = out / room
     room_dir.mkdir(parents=True, exist_ok=True)
@@ -763,7 +823,7 @@ def cmd_rig(args: argparse.Namespace) -> None:
                     file=sys.stderr,
                 )
                 continue
-            agent_dir = omp_agent_dir(session_name(pod_id, member_id, room))
+            agent_dir = omp_agent_dir(session_name(pod_id, member_id, room), state_root)
             if not agent_dir.is_dir():
                 print(
                     f"warning: no omp agent directory at {agent_dir}, so {room}/{member_id} did not "
@@ -792,9 +852,13 @@ def session_name(pod_id: str, member: str, rig: str) -> str:
     return f"{pod_id}-{member}@{rig}"
 
 
-def omp_agent_dir(session: str) -> Path:
-    """Where omp reads one seat's own MCP config: ``<state root>/<session>/agent``."""
-    return OMP_STATE_ROOT / session / "agent"
+def omp_agent_dir(session: str, state_root: Path | None = None) -> Path:
+    """Where omp reads one seat's own MCP config: ``<state root>/<session>/agent``.
+
+    ``state_root`` is the root the operator chose with ``rig --state-root``; None means the module
+    default, so the flag is additive and a test that redirects the constant keeps steering this.
+    """
+    return (OMP_STATE_ROOT if state_root is None else state_root) / session / "agent"
 
 
 def write_bytes_if_changed(data: bytes, target: Path) -> bool:
@@ -1041,7 +1105,7 @@ def rig_members(rig_yaml_text: str) -> list[tuple[str, str]]:
 
 
 def omp_render_installs(
-    snapshots: dict[str, Path], rig: str, rig_yaml_text: str
+    snapshots: dict[str, Path], rig: str, rig_yaml_text: str, state_root: Path | None = None
 ) -> tuple[list[tuple[Path, Path, str]], list[tuple[str, str]]]:
     """Resolve ``(rendered, destination, mode)`` for every seat's render, plus the half-renders.
 
@@ -1063,8 +1127,9 @@ def omp_render_installs(
     because absence is the signal rather than an empty file.
 
     **Every destination is resolved and validated before anything is written**, which is why this is
-    separate from the writing loop: a rig whose seats have not been launched yet must refuse without
-    having installed a file for the seats that happen to be up.
+    separate from the writing loop: the pass has no side effects, so a refusal later in the run (a
+    pre-existing ``.env``, a missing key file, a failed pull) leaves nothing half-applied - no file,
+    and no empty agent directory under the live state root.
 
     The second return value names the seats whose render carries ONE of the two files: that is the
     state the caller must not leave silent, because a document without the config mounts servers the
@@ -1093,7 +1158,7 @@ def omp_render_installs(
         if member_id not in renders_by_seat:
             continue
         present = renders_by_seat[member_id]
-        agent_dir = omp_agent_dir(session_name(pod_id, member_id, rig))
+        agent_dir = omp_agent_dir(session_name(pod_id, member_id, rig), state_root)
         if "verbatim" in present:
             installs.append((present["verbatim"], agent_dir / OMP_MCP_INSTALL_NAME, "verbatim"))
         if "merge" in present:
@@ -1571,6 +1636,12 @@ def main(argv: list[str] | None = None) -> int:
         "--update",
         action="store_true",
         help="adopt fetched snapshots even if different pins exist",
+    )
+    rig.add_argument(
+        "--state-root",
+        default=None,
+        help=f"omp state root to install into (default {OMP_STATE_ROOT}); a running seat "
+        "under another root is refused rather than written to",
     )
     rig.set_defaults(func=cmd_rig)
 

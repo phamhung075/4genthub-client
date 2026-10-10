@@ -191,6 +191,7 @@ def env(monkeypatch, server):
 REAL_REQUIRE_CHECKER = getattr(seat_sync, "require_checker", None)
 REAL_TMUX_GLOBAL_PATH = getattr(seat_sync, "tmux_global_path", None)
 REAL_OPENRIG_DAEMON_PID = getattr(seat_sync, "openrig_daemon_pid", None)
+REAL_LAUNCH_STATE_ROOT = getattr(seat_sync, "launch_state_root", None)
 
 
 @pytest.fixture(autouse=True)
@@ -201,10 +202,12 @@ def checker_present(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_tmux_server(monkeypatch):
-    """Tests do not talk to a real tmux server or the real rig daemon: the checker falls
-    back to the shell PATH (a test that wants the cold-start daemon PATH stubs these)."""
+    """Tests do not talk to a real tmux server, the real rig daemon, or the real process table: the
+    checker falls back to the shell PATH, and no seat is reported running under a root this machine
+    happens to have (a test that wants any of them stubs these back)."""
     monkeypatch.setattr(seat_sync, "tmux_global_path", lambda: None, raising=False)
     monkeypatch.setattr(seat_sync, "openrig_daemon_pid", lambda: None, raising=False)
+    monkeypatch.setattr(seat_sync, "launch_state_root", lambda session: None, raising=False)
 
 
 @pytest.fixture
@@ -2331,3 +2334,77 @@ def test_the_store_and_state_root_do_not_follow_home(monkeypatch, tmp_path):
     assert second.OMP_STATE_ROOT == first.OMP_STATE_ROOT
     assert second.checker_link() == first.checker_link()
     assert second.real_home() == first.real_home()
+
+
+def test_the_launch_state_root_comes_from_the_running_seat(monkeypatch, tmp_path):
+    """The probe reads the RUNNER's own argv, which is where a launch states its root.
+
+    Measured on this machine: every seat's runner is started as
+    ``pi-runner.js --session-name <session> --state-root <root> --cwd ... --launch-id ...``, so the
+    root a seat's omp reads is READABLE while that seat runs and unreadable - None, never a guessed
+    default - when it does not run. A process that exited mid-scan, or one that belongs to another
+    session, must not be mistaken for this seat.
+    """
+    proc = tmp_path / "proc"
+    (proc / "664").mkdir(parents=True)
+    (proc / "664" / "cmdline").write_bytes(b"")
+    (proc / "1798").mkdir()
+    (proc / "1798" / "cmdline").write_bytes(
+        b"node\0/home/daihu/.openrig/openrig/packages/daemon/dist/adapters/pi-runner.js\0"
+        b"--session-name\0" + OMP_SESSION.encode("utf-8") + b"\0"
+        b"--state-root\0/other/state/omp\0--cwd\0/tmp/room1\0--launch-id\0abc\0"
+    )
+    (proc / "1800").mkdir()
+    (proc / "1800" / "cmdline").write_bytes(
+        b"node\0pi-runner.js\0--session-name\0main-other@room1\0--state-root\0/elsewhere\0"
+    )
+    monkeypatch.setattr(seat_sync, "launch_state_root", REAL_LAUNCH_STATE_ROOT, raising=False)
+    monkeypatch.setattr(seat_sync, "PROC_ROOT", proc, raising=False)
+
+    assert seat_sync.launch_state_root(OMP_SESSION) == Path("/other/state/omp")
+    assert seat_sync.launch_state_root("main-other@room1") == Path("/elsewhere")
+    assert seat_sync.launch_state_root("main-missing@room1") is None
+
+
+def test_rig_refuses_when_a_running_seat_uses_another_state_root(
+    env, monkeypatch, tmp_path, capsys
+):
+    """A launch the client can SEE under another root is refused before anything is written.
+
+    Writing the render under the chosen root while the seat's own omp reads a different one is the
+    silent misplacement: the operator gets both roots and the flag, and no file, no agent directory
+    and no rig build is left behind for a run that refused.
+    """
+    _omp_rig(env, monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        seat_sync, "launch_state_root", lambda session: Path("/other/state/omp")
+    )
+
+    code = run_cli(["rig", "room1", "--out", str(tmp_path)])
+    _, err = capsys.readouterr()
+
+    assert code == 2
+    assert str(tmp_path / "ompstate") in err
+    assert "/other/state/omp" in err
+    assert "--state-root" in err
+    assert not (tmp_path / "room1").exists()
+
+
+def test_rig_installs_under_the_state_root_it_is_given(env, monkeypatch, tmp_path, capsys):
+    """``--state-root`` aims every install, so a launch with an override can be followed on purpose.
+
+    This is what makes the refusal above a refusal rather than a fallback: the flag is the only way
+    to place the render elsewhere, and nothing lands under the default while it is used.
+    """
+    _omp_rig(env, monkeypatch, tmp_path)
+    monkeypatch.setattr(seat_sync, "launch_state_root", lambda session: None)
+    chosen = tmp_path / "chosen"
+
+    code = run_cli(["rig", "room1", "--out", str(tmp_path), "--state-root", str(chosen)])
+    _, err = capsys.readouterr()
+
+    assert code == 0
+    installed = chosen / OMP_SESSION / "agent" / ".mcp.json"
+    assert installed.is_file()
+    assert str(installed) in err
+    assert not (_omp_agent_dir(tmp_path) / ".mcp.json").exists()
