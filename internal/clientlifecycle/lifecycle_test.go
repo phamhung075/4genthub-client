@@ -54,11 +54,13 @@ func restoreAll(t *testing.T) {
 	force, bridge := ensureForcecompact, startBridge
 	ui, watch, herdr := openUI, runWatchView, runHerdr
 	spawn, grace := spawnChild, SupervisorStartGrace
+	stop := stopPattern
 	t.Cleanup(func() {
 		ensureDaemon, ensureRig = daemon, rigStep
 		ensureForcecompact, startBridge = force, bridge
 		openUI, runWatchView, runHerdr = ui, watch, herdr
 		spawnChild, SupervisorStartGrace = spawn, grace
+		stopPattern = stop
 	})
 }
 
@@ -117,6 +119,44 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	want := []string{"ensureDaemon", "ensureRig", "ensureForcecompact", "startBridge", "startSupervisor", "watch", "openUI", "herdr"}
 	if strings.Join(ran, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", ran, want)
+	}
+}
+
+// TestStopSignalsTheSupervisorAndTheBridgeForTheNamedRig: `stop` is the other half of `up`'s contract,
+// and it has to name what it signals. Asserted as the PATTERNS rather than by signalling them - a test
+// that ran the real thing would stop this machine's services.
+func TestStopSignalsTheSupervisorAndTheBridgeForTheNamedRig(t *testing.T) {
+	var patterns []string
+	restoreAll(t)
+	stopPattern = func(pattern string) bool {
+		patterns = append(patterns, pattern)
+		return true
+	}
+
+	var out, errOut bytes.Buffer
+	if code := (stopCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"my-rig"}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("stop returned %d (stderr %q)", code, errOut.String())
+	}
+	want := []string{SupervisorPattern("my-rig"), BridgePattern}
+	if strings.Join(patterns, "|") != strings.Join(want, "|") {
+		t.Errorf("signalled %v, want %v", patterns, want)
+	}
+	if !strings.Contains(out.String(), "compact supervisor: stopped") {
+		t.Errorf("stdout = %q, want it to report the supervisor it stopped", out.String())
+	}
+
+	// No rig means no guess, and nothing may be signalled while the verb decides that.
+	patterns = nil
+	out.Reset()
+	if code := (stopCommand{}).Run(context.Background(), &clientcmd.Rig{}, nil, &out, &errOut); code != clientcmd.ExitUsage {
+		t.Errorf("stop with no rig returned %d, want %d", code, clientcmd.ExitUsage)
+	}
+	// Help is the other case where a lifecycle action must not run.
+	if code := (stopCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Errorf("stop --help returned %d, want %d", code, clientcmd.ExitOK)
+	}
+	if len(patterns) != 0 {
+		t.Errorf("stop signalled %v without a rig to name", patterns)
 	}
 }
 

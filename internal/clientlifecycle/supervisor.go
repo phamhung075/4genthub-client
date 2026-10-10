@@ -436,7 +436,7 @@ func StartSupervisor(name string, stdout, stderr io.Writer) bool {
 // StopSupervisor kills the supervisor for a rig. quiet is for the restart path, where "was not running"
 // is not news.
 func StopSupervisor(name string, quiet bool, stdout, stderr io.Writer) {
-	stopped := stopByPattern(SupervisorPattern(name))
+	stopped := stopPattern(SupervisorPattern(name))
 	if quiet {
 		return
 	}
@@ -485,9 +485,10 @@ func SupervisorStatus(name string, stdout, stderr io.Writer) {
 	fmt.Fprintln(stdout, strings.Join(tail, "\n"))
 }
 
-// stopByPattern is pkill -f in one place. False means nothing matched OR pkill is not here; both are
-// "not running" from the caller's point of view.
-func stopByPattern(pattern string) bool {
+// stopPattern is pkill -f in one place. False means nothing matched OR pkill is not here; both are
+// "not running" from the caller's point of view. A var so a test asserts WHAT would be signalled
+// without signalling it - the difference between testing stop and stopping the machine's services.
+var stopPattern = func(pattern string) bool {
 	path, err := exec.LookPath("pkill")
 	if err != nil {
 		return false

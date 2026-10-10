@@ -222,7 +222,7 @@ func startBridgeImpl(stdout, stderr io.Writer) {
 		fmt.Fprintln(stderr, "4genteam: AGENTHUB_URL and AGENTHUB_TOKEN must be set (in the environment or the client's env file)")
 		return
 	}
-	stopByPattern(BridgePattern)
+	stopPattern(BridgePattern)
 	logPath, err := BridgeLogPath()
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
@@ -313,7 +313,7 @@ func (stopCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdou
 		return clientcmd.ExitUsage
 	}
 	StopSupervisor(name, false, stdout, stderr)
-	stopByPattern(BridgePattern)
+	stopPattern(BridgePattern)
 	return clientcmd.ExitOK
 }
 
