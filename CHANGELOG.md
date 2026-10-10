@@ -87,6 +87,9 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- `docs/AGENT-SETUP.md` names the install target for a published skill: the per-agent skills
+  directory the seat spec's `resources.skills[].path` points at, with the module's `id` declared in
+  that spec, because a copy alone is inert — the runtime loads what the spec declares.
 - `skills/client/watch-team-grid/SKILL.md` is folded into `skills/client/watch-team/SKILL.md`, which
   survives, in the client kind's generic voice. Every lesson of the grid playbook is in it: the
   per-pane invocation and header, the `grid: <n> seats in <cols> columns` line, the checks to run

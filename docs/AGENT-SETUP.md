@@ -208,8 +208,14 @@ rig, seat, host or personal path in it.
 Two facts about the publish route, because they decide which tree to point it at: `team
 import-project` reads a **project's** own tree at `.claude/skills`, one directory per skill, each
 holding `SKILL.md`, and refuses a directory that has none — so it publishes a flat tree, not a
-four-kind one. A skill reaches a seat as `skills/<slug>/SKILL.md` in the seat's own spec, written
-when its render is built, whoever published the module.
+four-kind one.
+
+**Where a skill lands, and what makes it count: the seat's own spec.** Publishing puts the file in
+place; the install is the seat spec naming it. The render declares every skill under
+`resources.skills[]` with the module's `id` and the `path` it is delivered at (`skills/<slug>`), and
+that declaration is what the runtime loads from. A copy on disk that the spec does not declare is
+inert, so an install has two halves: the file at the spec's path, and the `id` in the spec that
+names it.
 
 ### 2.2 Write `<TEAM-DIR>/team.json`
 
