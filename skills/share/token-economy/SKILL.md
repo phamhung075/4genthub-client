@@ -1,6 +1,6 @@
 ---
 name: token-economy
-description: Apply token optimization when writing docs, changelogs, MCP tasks. Quality #1, Tokens #2.
+description: Apply token optimization when writing docs, changelogs, MCP tasks, and messages between seats. Quality #1, Tokens #2.
 ---
 
 # Token Economy
@@ -34,6 +34,24 @@ Optimize text for AI context: docs, changelogs, MCP tasks, subtasks.
 1. **Identify**: Prose → tables? Multiple examples → one? ASCII → numbered? Teaching → facts?
 2. **Apply**: Convert, consolidate, compact
 3. **Check**: Essential info preserved? Scannable? No fluff?
+
+## Messages Between Seats
+
+Applies to `rig send`, queue handoffs, replies and reports. Cost is paid by every reader and again by every compaction, so write what changes the reader's next action and nothing else. Quality gate: the reader can act on the message without asking a follow-up.
+
+| # | Rule | Instead of |
+|---|------|------------|
+| 1 | First line = verdict or ask, plus what you need from the reader | Background first, ask last |
+| 2 | One decision per message | Several asks in one block |
+| 3 | Point to an artifact by path or ID; paste only the line that matters | Pasting the file or the log |
+| 4 | Send the delta: skip what the reader already holds (their brief, their queue row, their own report) | Re-stating the task back |
+| 5 | Mark each claim `verified` (you ran it, with the command) or `reported` (someone else said it) | A bare claim |
+| 6 | Reply only when it changes the reader's action; no acknowledgement, "staying quiet" or agreement replies | Replying to confirm receipt |
+| 7 | Long evidence goes in a file under your seat dir; the message carries the path and a one-line result | Evidence inline |
+
+**Never shorten**: negations (`not`, `never`, `no`, `only`), numbers and units, paths, commands, error text, owner-approval status, blockers, and the exact scope of an irreversible action. A dropped negation costs more than every token saved.
+
+**Message**: `[VERDICT or ASK]. [Evidence: path or command]. [Needs from you, by when]`
 
 ## MCP Templates
 
