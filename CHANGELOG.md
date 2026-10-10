@@ -89,6 +89,14 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   into the seat's own skills path (`<agent dir>/skills/<id>/`, the directory its agent spec already
   points at) and declares the ids in that spec's `resources.skills` and in every profile's
   `uses.skills`, because OpenRig projects only the skills a profile selects.
+- `sync rig` delivers them (`3bc73b9`): the build is the step that writes each seat's agent directory, so
+  it is the step that delivers — `internal/clientskills` resolves what that seat receives (`share/`, the
+  room's room-level skills, its own seat-level ones, and nothing from another room, another seat or
+  `client/`), installs them whole into `<rig>/agents/<seat>/skills/<id>/`, and declares the ids in that
+  seat's `agent.yaml` (`resources.skills[]` and every profile's `uses.skills`). The tree is at
+  `--skills-root`, else `$OPENRIG_CLIENT_SKILLS`, else `skills/` beside the binary, and a tree that is
+  not there is refused by name BEFORE the room is fetched. A seat whose render carries no `agent.yaml`
+  is named on stderr and receives nothing: files nothing loads are dead weight.
 
 ### Changed
 
