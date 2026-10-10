@@ -3,6 +3,8 @@ package clientbridge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,6 +41,58 @@ func TestInstallServiceNamesTheClientsOwnEnvFile(t *testing.T) {
 	}
 	if !strings.Contains(unit, " bridge run\n") {
 		t.Errorf("the unit does not start this binary's own bridge sub-verb:\n%s", unit)
+	}
+}
+
+// TestBridgeOncePrintRedactsThroughTheEnvironment drives the REAL VERB rather than a bridge this test
+// built, and that is the whole point of it: the environment's known values are read at the CALL SITE
+// (commands.go, secretscan.KnownValuesFromEnv) and handed to the bridge, so a test that injects the map
+// into its own NewBridge proves only that redaction USES a map. If the call site ever passed nil, such
+// a test would stay green while the report printed a secret - which is the failure mode this test
+// exists to make impossible. A stub `rig` on PATH quotes a value the environment declares; nothing else
+// is stubbed, so the path exercised is the one an operator runs (`bridge once --print`).
+func TestBridgeOncePrintRedactsThroughTheEnvironment(t *testing.T) {
+	const value = "env-secret-value-0123456789"
+	dir := t.TempDir()
+	nodes := `[{"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp","sessionStatus":"running",` +
+		`"latestError":"the token is ` + value + ` - rotate it"}]`
+	nodesFile := filepath.Join(dir, "nodes.json")
+	if err := os.WriteFile(nodesFile, []byte(nodes), 0o644); err != nil {
+		t.Fatalf("writing the nodes fixture: %v", err)
+	}
+	// A `rig` that answers every read with those nodes. cat of a file rather than a quoted heredoc, so
+	// no shell quoting stands between the fixture and the assertion.
+	script := "#!/bin/sh\ncat '" + nodesFile + "'\n"
+	stub := filepath.Join(dir, "rig")
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the stub rig: %v", err)
+	}
+
+	// The environment is the input under test: a name the scanner looks for (TOKEN) with a long enough
+	// value, and a home so the seat store resolves.
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("DEMO_TOKEN", value)
+
+	var out, errOut bytes.Buffer
+	code := (bridgeCommand{}).Run(context.Background(), nil,
+		[]string{"once", "--print", "--machine-id", "test-machine"}, &out, &errOut)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("bridge once --print exited %d (stderr %q)", code, errOut.String())
+	}
+	var payload Payload
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("the printed payload is not a payload: %v (%s)", err, out.String())
+	}
+	if len(payload.Seats) != 1 {
+		t.Fatalf("printed %d seats, want 1: %s", len(payload.Seats), out.String())
+	}
+	seat := payload.Seats[0]
+	if strings.Contains(seat.Detail, value) {
+		t.Fatalf("the printed detail carries the environment's secret value: %q", seat.Detail)
+	}
+	if !seat.Redacted || !strings.Contains(seat.Detail, "[REDACTED:DEMO_TOKEN]") {
+		t.Fatalf("detail = %q redacted = %v, want the marker naming the variable", seat.Detail, seat.Redacted)
 	}
 }
 

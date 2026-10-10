@@ -479,12 +479,25 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   was copied from the LOCAL daemon queue into the cloud's notification store raw. The text is now redacted with the
   bridge's own `secretscan.KnownValuesFromEnv` map BEFORE it is bounded, so the marker that replaced a long value is
   never the thing the bound cuts, and `Redact` fails closed (an empty text), which posts nothing rather than posting
-  the raw text. Three cases pin it: the posted message carries `[REDACTED:DEMO_TOKEN]` and not the value while the
-  rest of the sentence survives, a 422 is recorded as handled with the status in the note, and the classification
-  table (400/404/409/410/413/415/422 final; 401/403/408/429/5xx retryable). The record's own count is corrected in
-  the same commit: `fa486d9`'s "four" tests fail with the sweep call removed, MEASURED - it is FIVE
+  raw text. FOUR cases pin it: the posted message carries `[REDACTED:DEMO_TOKEN]` and not the value while the
+  rest of the sentence survives, a 422 is recorded as handled with the status in the note, the classification
+  table (400/404/409/410/413/415/422 final; 401/403/408/429/5xx retryable), and - because the other three build
+  their OWN bridge, so they would all stay green if the call site handed it no map - a case that drives the real
+  verb (`bridge once --print`, a stub `rig` on PATH and the value in the environment) and fails the moment
+  `commands.go` passes its `known` map as nil. MEASURED: with that call site mutated to nil,
+  `TestBridgeOncePrintRedactsThroughTheEnvironment` fails on "the printed detail carries the environment's secret
+  value" while `TestNotifyRedactsAKnownSecretBeforeItLeavesTheMachine` still passes. The record's own count is
+  corrected in the same commit: `fa486d9`'s "four" tests fail with the sweep call removed, MEASURED - it is FIVE
   (`TestNotifyPostsOneFrameForAHumanRow`, `TestNotifyRunsEvenWhenTheCycleSkipsItsReport`,
   `TestNotifyDoesNotPostTheSameRowTwice`, `TestNotifyStateSurvivesARestart`, `TestNotifyRetriesARefusedPost`).
+- `seatcheck --help` answers usage on STDOUT and exits 0, at every level (`cmd/seatcheck/main.go`). The bare forms
+  answered `unknown subcommand` with no usage, and `send --help` / `audit-scan --help` printed the usage on STDERR -
+  all with exit 2, the code this command documents for a usage or policy refusal, so a help request was
+  indistinguishable from a caller's mistake (and `-h` is the flag package's own trigger, which is how the usage was
+  unreachable that way). `run()` gained the help case ahead of `default:`, and both flag sets answer through one
+  `helpOrUsageError`: `flag.ErrHelp` goes to stdout with 0, every other parse failure keeps stderr with 2 - the
+  `errors.Is` gate is what keeps `TestSendUsageErrorsExit2` and `TestSendHasNoPinsFlag` meaningful. Nothing on PATH
+  was touched, and `sync install-checker` was not run: the link swap is the owner's call.
 - Bare `4genteam continue` printed `Usage: usage: 4genteam continue ...`: the listing ran `continueUsage`
   through its own `Usage: %s` while that constant already opens with `usage: `. The listing now prints the
   shell's own line once, from a constant of its own (`continueListingUsage`, the shape
