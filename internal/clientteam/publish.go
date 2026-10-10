@@ -210,7 +210,7 @@ func publishSkills(inventoryPath, sourceRootFlag, version string, dryRun bool, s
 	if err != nil {
 		return err
 	}
-	if err := verifyInventoryNamesTheSourceRevision(inventory, sourceRoot); err != nil {
+	if err := verifyInventoryNamesTheSourceRevision(inventoryPath, inventory, sourceRoot); err != nil {
 		return err
 	}
 	modules, err := skillLibraryModules(inventory, sourceRoot)
@@ -338,22 +338,25 @@ func revisionDigests(sourceRoot, revision string, paths []string) (map[string]st
 }
 
 // verifyInventoryNamesTheSourceRevision refuses an inventory whose generated_from names a revision
-// that does not describe every digest it records.
+// that does not describe every digest it records, and refuses one that carries no pin at all.
 //
 // The digests themselves are verified against the operator's checkout, so on their own they say only
 // that the inventory and that checkout agree: an inventory regenerated from a MOVED checkout keeps an
 // old pin and publishes bytes the pin does not describe, which is silent. Materialising the named
 // revision is what turns the pin into a claim - the same revision the recorded digests are supposed to
 // describe is read back from git and digested here, and a mismatch names the skill, the path and both
-// digests. An inventory that pins nothing is left to the digest check above (the format is unchanged);
-// one that names a revision which cannot be read is refused, because that is not a verifiable pin.
-func verifyInventoryNamesTheSourceRevision(inventory *skillInventory, sourceRoot string) error {
+// digests. The two pins that cannot be checked are refused rather than trusted: one that names no
+// revision to recompute, and one that carries no generated_from at all - a nameless inventory is worse
+// than a stale one, because nothing downstream can detect the divergence.
+func verifyInventoryNamesTheSourceRevision(inventoryPath string, inventory *skillInventory, sourceRoot string) error {
 	revision, err := inventoryRevision(inventory)
 	if err != nil {
 		return err
 	}
 	if revision == "" {
-		return nil
+		return usageError(fmt.Sprintf(
+			"%s: the inventory carries no generated_from, so no revision is named for the digests it records and nothing can check them against the bytes that name them; regenerate the inventory from the revision its digests were taken from",
+			inventoryPath))
 	}
 	directories := map[string]bool{}
 	for _, row := range inventory.Skills {

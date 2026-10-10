@@ -350,6 +350,21 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Fixed
 
+- `team publish-skills` refuses an inventory that carries no `generated_from` at all, naming the file it
+  read (`internal/clientteam/publish.go`). The pin guard read an absent pin as "nothing to check" and fell
+  through to the digest check, so an inventory whose provenance nobody can name published silently - the
+  one case in which the guard cannot exist, and worse than a stale one, because nothing downstream can
+  detect the divergence. Census first: every `*.json` under this project and under the OpenRig tree was
+  scanned for the inventory shape (a top-level `skills` array whose rows carry `canonical`/`plugin`) - 2,749
+  files, four matches, and all four are the same committed record `ai_docs/agent-system/skill-library.json`
+  (52 skills, `generated_from` naming `31fe301b`), so no real inventory omits the pin. Red first: with the
+  refusal forced off, the fixture's unpinned inventory was published - `publishing 3 skill block(s)`,
+  `module alpha-skill@1.0.0: applied`, `publish summary: 3 pushed, 0 new version(s), 0 skipped`, exit 0 -
+  and the new case was the only failure in the package (41 passed, 1 failed, 0 skipped). The library
+  fixture is now the inventory GENERATOR's output: committed, with `generated_from` naming that revision,
+  and a case that moves bytes and digests regenerates the inventory the same way. `go vet` clean;
+  `go test ./internal/clientteam/` 42 passed, 0 failed, 0 skipped; the committed inventory still passes
+  against a checkout AT `31fe301b` (exit 0, `plan: publish-skills 52 skill block(s)`).
 - Two source comments in `internal/clientbridge` no longer name the owner's own rigs. They recorded a live
   store's destinations as `human@kernel` and `human@4genthub-min`, and this repository is public: the
   measurement survives as what it measured - the daemon addresses one `human@<rig name>` destination per rig,
@@ -379,9 +394,9 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   the inventory records and the revision. The committed inventory still passes against a checkout AT
   `31fe301b` (`exit 0`, `plan: publish-skills 52 skill block(s)`), and the pod's moved checkout is
   refused by the pre-existing staleness check, so the pin is an added claim rather than a replacement
-  for that one. An inventory that pins nothing is left to the digest check (the format is unchanged),
-  and a pin that cannot be read back - no git repository, an unknown revision - is refused rather than
-  trusted.
+  for that one. A pin that cannot be read back - no git repository, an unknown revision - is refused
+  rather than trusted; an inventory carrying no `generated_from` at all still fell through to the digest
+  check in this commit, and the entry above closes that.
 - `cmd/4genteam`'s free-commands test no longer reads the HOST: it pins `clientcmd.LookPath` with the
   new `rigPresent` helper (mirroring `rigMissing`) and asserts BOTH answers to the no-argument
   invocation - `up`'s own missing-rig-name error with rig on PATH, and the platform matrix's one

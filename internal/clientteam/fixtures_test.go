@@ -64,6 +64,10 @@ var pluginPaths = map[string]string{
 	"gamma-skill": "packages/daemon/assets/plugins/openrig-core/skills/gamma-skill",
 }
 
+// writeLibrary is the inventory GENERATOR's output: the three-skill library committed, with
+// generated_from naming that revision. A case that moves the bytes afterwards regenerates the
+// inventory the same way (regenerateInventory), because an inventory whose pin does not describe the
+// revision it names - or that carries no pin at all - is refused.
 func writeLibrary(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -96,6 +100,7 @@ func writeLibrary(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(root, "inventory.json"), encoded, 0o644); err != nil {
 		t.Fatalf("write inventory: %v", err)
 	}
+	regenerateInventory(t, root)
 	return root
 }
 

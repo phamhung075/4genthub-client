@@ -147,6 +147,7 @@ func TestPublishSkillsChangedContentPushesTheNextPatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	rewriteInventorySHA(t, library, "alpha-skill", "canonical", sha256Hex([]byte(changed)))
+	regenerateInventory(t, library)
 
 	code, out, errOut := runTeam(t, args...)
 	if code != 0 {
@@ -173,6 +174,7 @@ func TestPublishSkillsRefusesASecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	rewriteInventorySHA(t, library, "alpha-skill", "canonical", sha256Hex([]byte(secret)))
+	regenerateInventory(t, library)
 
 	code, _, errOut := runTeam(t, "publish-skills", "--inventory", filepath.Join(library, "inventory.json"), "--source-root", library)
 	if code != ExitUsage {
@@ -321,6 +323,32 @@ func TestPublishSkillsRefusesAPinItCannotMaterialise(t *testing.T) {
 	}
 }
 
+// The ruling's other side of the pin: the format carries generated_from, so a record without one names
+// no revision its digests can be checked against and nothing downstream can detect its divergence. It
+// is refused by name, before any request - a nameless inventory is worse than a stale one.
+func TestPublishSkillsRefusesAnInventoryThatCarriesNoGeneratedFrom(t *testing.T) {
+	fake := installFake(t)
+	withCredentials(t, fake)
+	library := writeLibrary(t)
+	clearInventoryGeneratedFrom(t, library)
+
+	code, out, errOut := runTeam(t, "publish-skills", "--inventory", filepath.Join(library, "inventory.json"),
+		"--source-root", library)
+	if code != ExitUsage {
+		t.Fatalf("exit %d, want %d: the verb published an inventory that names no revision at all (stdout %q)",
+			code, ExitUsage, out)
+	}
+	if !strings.Contains(errOut, filepath.Join(library, "inventory.json")) {
+		t.Errorf("stderr did not name the inventory: %q", errOut)
+	}
+	if !strings.Contains(errOut, "generated_from") {
+		t.Errorf("stderr did not name the missing pin: %q", errOut)
+	}
+	if len(fake.recorded()) != 0 {
+		t.Errorf("an inventory with no pin still sent %d request(s)", len(fake.recorded()))
+	}
+}
+
 // gitLibraryCommit commits whatever the library fixture holds and returns the revision, so a case can
 // name one state of the tree and then move the tree again. The identity is passed by environment and
 // the user's own git configuration is bypassed, so the case cannot depend on the machine.
@@ -336,6 +364,15 @@ func gitLibraryCommit(t *testing.T, root, message string) string {
 	gitIn(t, root, "add", "-A")
 	gitIn(t, root, "commit", "-q", "--allow-empty", "-m", message)
 	return gitIn(t, root, "rev-parse", "HEAD")
+}
+
+// regenerateInventory does what the inventory generator does once it has recorded the digests: commit
+// the library and name that revision in generated_from, so the pin describes the bytes the inventory
+// records. A fixture that moves bytes and digests afterwards must come back through here, because the
+// verb refuses an inventory whose pin does not describe the revision it names.
+func regenerateInventory(t *testing.T, libraryRoot string) {
+	t.Helper()
+	setInventoryGeneratedFrom(t, libraryRoot, gitLibraryCommit(t, libraryRoot, "the library as the inventory describes it"))
 }
 
 func gitIn(t *testing.T, root string, args ...string) string {
@@ -368,6 +405,29 @@ func setInventoryGeneratedFrom(t *testing.T, libraryRoot, revision string) {
 	}
 	inventory["generated_from"] = "/fixture/openrig @ HEAD " + revision +
 		", re-verified 2026-10-10 (skills/_canonical + packages/daemon/assets/plugins/openrig-core/skills)"
+	encoded, err := json.Marshal(inventory)
+	if err != nil {
+		t.Fatalf("encode inventory: %v", err)
+	}
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatalf("write inventory: %v", err)
+	}
+}
+
+// clearInventoryGeneratedFrom strips the pin, the way the pre-2026-10-09 format wrote an inventory
+// that carried none.
+func clearInventoryGeneratedFrom(t *testing.T, libraryRoot string) {
+	t.Helper()
+	path := filepath.Join(libraryRoot, "inventory.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read inventory: %v", err)
+	}
+	var inventory map[string]any
+	if err := json.Unmarshal(raw, &inventory); err != nil {
+		t.Fatalf("decode inventory: %v", err)
+	}
+	delete(inventory, "generated_from")
 	encoded, err := json.Marshal(inventory)
 	if err != nil {
 		t.Fatalf("encode inventory: %v", err)
