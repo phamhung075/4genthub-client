@@ -19,6 +19,14 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
+// StateRootEnv names the override for the omp state root - the second clause of the resolution.
+const StateRootEnv = "OPENRIG_STATE_ROOT"
+
+// StateRootMessage is the ONE refusal a machine that cannot resolve the state root gets. It names both
+// escapes rather than guessing, because a relative path would make the state tree depend on the working
+// directory - the dependency this client forbids everywhere.
+const StateRootMessage = "the state root cannot be resolved on this machine: pass --state-root DIR or set " + StateRootEnv
+
 // RealHome is the account's home directory from the passwd entry, NOT $HOME. OpenRig launches a seat
 // with HOME pointed at the seat's own state directory, so resolving from the environment would make a
 // machine-level path a function of which seat happens to run the client - the doubled path seat_policy's
@@ -42,12 +50,38 @@ func DefaultPath() (string, error) {
 // DefaultStateRoot is where OpenRig keeps its per-seat state. It is here rather than in a verb package
 // because two verb groups default to it, and because it is a MACHINE-level location: resolved from the
 // real home, it is the same inside a seat and out.
+//
+// A machine whose real home cannot be resolved answers "" and NEVER a relative path: a relative root
+// would make the state tree a function of the working directory, so a client run from a checkout could
+// read whatever tree happened to sit under it. Callers refuse with StateRootMessage instead -
+// ResolveStateRoot is that refusal, and is what a verb with the root as an option uses.
 func DefaultStateRoot() string {
-	home, err := RealHome()
-	if err != nil {
-		return filepath.Join(".openrig", "state", "omp")
+	home, err := realHome()
+	if err != nil || home == "" {
+		return ""
 	}
 	return filepath.Join(home, ".openrig", "state", "omp")
+}
+
+// realHome is a var so a test can drive the machine that has no resolvable home: that path refuses
+// rather than guesses, so it has to be reachable without breaking the machine running the test.
+var realHome = RealHome
+
+// ResolveStateRoot is the resolution the verbs share: the flag when it is given, else
+// $OPENRIG_STATE_ROOT, else this machine's own default. It REFUSES when all three are empty, with
+// StateRootMessage - a machine with no resolvable home and no override gets one message naming both
+// escapes rather than a path that depends on where the client was run from.
+func ResolveStateRoot(flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if fromEnv := os.Getenv(StateRootEnv); fromEnv != "" {
+		return fromEnv, nil
+	}
+	if root := DefaultStateRoot(); root != "" {
+		return root, nil
+	}
+	return "", &clientcmd.CodedError{Message: StateRootMessage, Code: clientcmd.ExitUsage}
 }
 
 // Load reads KEY=VALUE lines from path and sets each variable that is NOT already in the environment.

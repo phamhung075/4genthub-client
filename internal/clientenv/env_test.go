@@ -1,10 +1,13 @@
 package clientenv
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
 func TestLoadSetsMissingNamesAndLeavesTheEnvironmentWinning(t *testing.T) {
@@ -56,5 +59,47 @@ func TestLimitRefusesATypoAndNamesIt(t *testing.T) {
 		t.Fatal("a non-numeric limit was accepted")
 	} else if !strings.Contains(err.Error(), "GENTEAM_TEST_LIMIT") {
 		t.Errorf("the refusal did not name the variable: %v", err)
+	}
+}
+
+// A machine with no resolvable home REFUSES the state root instead of answering a path relative to the
+// working directory: a relative root would make the state tree a function of where the client was run
+// from, which is the dependency the mission forbids. The refusal names BOTH escapes.
+func TestAnUnresolvableHomeRefusesTheStateRoot(t *testing.T) {
+	restore := realHome
+	realHome = func() (string, error) { return "", errors.New("no home") }
+	defer func() { realHome = restore }()
+	t.Setenv(StateRootEnv, "")
+
+	if root := DefaultStateRoot(); root != "" {
+		t.Errorf("DefaultStateRoot = %q, want empty: a relative path is never returned", root)
+	}
+	_, err := ResolveStateRoot("")
+	if err == nil {
+		t.Fatal("an unresolvable state root was accepted")
+	}
+	if code := clientcmd.CodeOf(err, clientcmd.ExitRemote); code != clientcmd.ExitUsage {
+		t.Errorf("the refusal exits %d, want %d", code, clientcmd.ExitUsage)
+	}
+	for _, want := range []string{"--state-root", StateRootEnv} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, err)
+		}
+	}
+}
+
+// The flag and the variable are checked BEFORE the machine's own default, so a named root is used even
+// where the home cannot be resolved.
+func TestTheStateRootPrefersTheFlagThenTheEnvironment(t *testing.T) {
+	restore := realHome
+	realHome = func() (string, error) { return "", errors.New("no home") }
+	defer func() { realHome = restore }()
+	t.Setenv(StateRootEnv, "/from/environment")
+
+	if root, err := ResolveStateRoot("/from/flag"); err != nil || root != "/from/flag" {
+		t.Errorf("with the flag set: %q, %v; want /from/flag", root, err)
+	}
+	if root, err := ResolveStateRoot(""); err != nil || root != "/from/environment" {
+		t.Errorf("with only the variable set: %q, %v; want /from/environment", root, err)
 	}
 }

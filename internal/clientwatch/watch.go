@@ -101,6 +101,11 @@ func resolveStateRoot(flagValue string) (string, error) {
 	if root == "" {
 		root = defaultStateRoot()
 	}
+	if root == "" {
+		// No flag, no variable and no resolvable home: the machine this client refuses on rather than
+		// reading a state tree relative to wherever it was run from.
+		return "", unavailableError(clientenv.StateRootMessage)
+	}
 	info, err := os.Stat(root)
 	if err != nil {
 		return "", unavailableError(fmt.Sprintf("the omp state root is not there: %s", root))

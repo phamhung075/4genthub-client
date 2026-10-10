@@ -49,7 +49,11 @@ func runSync(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return code
 	}
-	exitCode, err := syncOnce(parsed, defaultSyncDeps(clientenv.DefaultStateRoot()))
+	stateRoot, err := clientenv.ResolveStateRoot("")
+	if err != nil {
+		return report(stderr, err)
+	}
+	exitCode, err := syncOnce(parsed, defaultSyncDeps(stateRoot))
 	if err != nil {
 		return report(stderr, err)
 	}
@@ -61,7 +65,11 @@ func runWatch(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return code
 	}
-	deps := defaultSyncDeps(clientenv.DefaultStateRoot())
+	stateRoot, err := clientenv.ResolveStateRoot("")
+	if err != nil {
+		return report(stderr, err)
+	}
+	deps := defaultSyncDeps(stateRoot)
 	logLine("watching %s every %ds; Ctrl-C to stop", parsed.room, parsed.interval)
 	interrupted := make(chan os.Signal, 1)
 	signal.Notify(interrupted, os.Interrupt)

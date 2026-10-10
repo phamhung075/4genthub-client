@@ -29,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
 	"github.com/phamhung075/4genthub-client/internal/clientskills"
 )
@@ -508,6 +509,24 @@ func TestRigNamesASeatWhoseSkillsItCannotDeclare(t *testing.T) {
 		t.Errorf("stderr does not name the seat and the missing spec: %q", stderr)
 	}
 	rigNotExist(t, filepath.Join(f.rigDir("room1"), "agents", "seat1", "skills"))
+}
+
+// A machine whose home cannot be resolved refuses the rig rather than materializing one whose state tree
+// sits relative to where it was run from.
+func TestRigRefusesAStateRootItCannotResolve(t *testing.T) {
+	f := rigVerbTest(t)
+	rigDefaultStateRoot = func() string { return "" }
+	f.cloud.setSeat("room1", "seat1", rigHashA, nil, nil)
+
+	code, _, stderr := f.run("room1", "--out", f.out)
+
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, stderr)
+	}
+	if !strings.Contains(stderr, "--state-root") || !strings.Contains(stderr, clientenv.StateRootEnv) {
+		t.Errorf("the refusal does not name the flag and the variable: %q", stderr)
+	}
+	rigNotExist(t, f.rigDir("room1"))
 }
 
 // test_rig_writes_yaml_verbatim_and_materializes_each_seat_with_its_policy.

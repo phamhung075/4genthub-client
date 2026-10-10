@@ -464,6 +464,10 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 		fmt.Fprintf(stderr, "4genteam compact-run: --rig is required - there is no default rig. %s\n", compactRunUsage)
 		return options, false
 	}
+	if *stateRoot == "" {
+		fmt.Fprintf(stderr, "4genteam compact-run: %s\n", clientenv.StateRootMessage)
+		return options, false
+	}
 	options = CompactRunOptions{
 		Rig:          *rig,
 		Quiet:        *quietFlag,

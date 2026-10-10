@@ -363,6 +363,27 @@ func TestAMissingStateRootIsRefusedByItsPath(t *testing.T) {
 	}
 }
 
+// A machine whose home cannot be resolved refuses instead of reading a state tree relative to the
+// working directory, and the refusal names both escapes.
+func TestTheWatchVerbRefusesAStateRootItCannotResolve(t *testing.T) {
+	newFakeExec(t)
+
+	restore := defaultStateRoot
+	defaultStateRoot = func() string { return "" }
+	defer func() { defaultStateRoot = restore }()
+	t.Setenv(stateRootEnv, "")
+
+	code, _, errOut := runVerbT(t, "feed", "--rig", "r")
+	if code != 3 {
+		t.Errorf("exit %d, want 3", code)
+	}
+	for _, want := range []string{"--state-root", stateRootEnv} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("the refusal does not name %s: %q", want, errOut)
+		}
+	}
+}
+
 func TestTheStateRootComesFromTheEnvironmentToo(t *testing.T) {
 	fake := newFakeExec(t)
 	root := t.TempDir()

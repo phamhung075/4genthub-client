@@ -391,6 +391,11 @@ func rigRun(ctx context.Context, args rigArgs, stdout, stderr io.Writer) error {
 	if args.haveStateRoot {
 		stateRoot = expandHome(args.stateRoot)
 	}
+	if stateRoot == "" {
+		// No flag and no resolvable home: refuse rather than materialize a rig whose state tree sits
+		// relative to wherever this was run from.
+		return &clientcmd.CodedError{Message: clientenv.StateRootMessage, Code: clientcmd.ExitUsage}
+	}
 	if err := rigRefuseAnotherRoot(room, spec.YAML, stateRoot); err != nil {
 		return err
 	}

@@ -304,6 +304,10 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	if stateRoot == "" {
 		stateRoot = clientenv.DefaultStateRoot()
 	}
+	if stateRoot == "" {
+		fmt.Fprintf(stderr, "4genteam policy apply: %s. %s\n", clientenv.StateRootMessage, applyUsage)
+		return clientcmd.ExitUsage
+	}
 	check := values["check"] == "true"
 	if rig == "" || teamPath == "" {
 		fmt.Fprintf(stderr, "4genteam policy apply: --rig and --team are required. %s\n", applyUsage)
