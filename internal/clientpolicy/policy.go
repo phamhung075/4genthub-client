@@ -32,6 +32,13 @@ import (
 // is named here rather than borrowed.
 const ExitDrift = 1
 
+// servedRuntime is the one runtime `policy apply` writes for. The document it renders is an omp config
+// (`mcp`, `compaction`, `bash.patterns`, `tools.approval`) and the state root it resolves defaults to
+// `~/.openrig/state/omp` - the same default the Python's DEFAULT_STATE_ROOT had - so a seat running
+// anything else has no config here to write: that seat's state lives under its OWN runtime's root, which
+// this verb never addresses. Named rather than inlined because the refusal and the help both state it.
+const servedRuntime = "omp"
+
 // keepRecentTokens is the tokens of the newest conversation kept verbatim at a compaction. omp's default
 // is 20000, which holds the post-compaction floor near 42k; 8000 brings it near 30k.
 const keepRecentTokens = 8000
@@ -85,11 +92,15 @@ var nonLeadToolDeny = []string{
 // A reviewer reads and reports; it does not rewrite source (it can still write its verdict files).
 var reviewerToolDeny = []string{"edit", "ast_edit"}
 
-// Seat is one seat's entry in the team file.
+// Seat is one seat's entry in the team file. Runtime is the one the seat is launched with (`omp`,
+// `claude-code`, ...); the team verb writes it into this file, and this package reads it only to know which
+// seats THIS verb can write for. A file that names no runtime is served: that is the shape the Python's own
+// table had, and the state root this verb resolves is the omp one, so its seats are the omp room's seats.
 type Seat struct {
 	Key      string `json:"seat_key"`
 	Type     string `json:"seat_type"`
 	Thinking string `json:"thinking"`
+	Runtime  string `json:"runtime"`
 }
 
 // Team is the team file: the room it defines, and its seats with their roles. It is the same shape the
@@ -286,7 +297,7 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 
 func runApply(args []string, stdout, stderr io.Writer) int {
 	if wantsHelp(args) {
-		fmt.Fprintf(stdout, "%s\n\nWrite every seat's config.yml from the team file; with --check write nothing and exit 1 on drift.\n", applyUsage)
+		fmt.Fprintf(stdout, "%s\n\nWrite every %s seat's config.yml from the team file; a seat of another runtime is refused by name, before anything is written. With --check write nothing and exit 1 on drift.\n", applyUsage, servedRuntime)
 		return clientcmd.ExitOK
 	}
 	values, _, err := parseArgs(args)
@@ -319,6 +330,27 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 			Message: fmt.Sprintf("no policy table for rig %q (the team file defines %q)", rig, team.Room.Slug),
 			Code:    clientcmd.ExitUsage,
 		})
+	}
+	// THE WHOLE SET IS DECIDED BEFORE THE FIRST WRITE. A seat of another runtime has no agent directory
+	// under THIS root - its state lives under its own runtime's - so without this pass the loop below wrote
+	// the omp seats and then stopped at that seat with "never launched?", which it had been: a partial
+	// application, a false reason, and nothing saying how much had been written. Measured on a scratch room
+	// before the pass existed: one config on disk, exit 2; and with that seat's directory present, an omp
+	// config written into a claude-code seat and exit 0, which is worse. Every unserved seat is named, so
+	// one run tells a caller the whole set.
+	var unserved []Seat
+	for _, seat := range team.Seats {
+		if seat.Runtime != "" && seat.Runtime != servedRuntime {
+			unserved = append(unserved, seat)
+		}
+	}
+	if len(unserved) > 0 {
+		for _, seat := range unserved {
+			fmt.Fprintf(stderr, "%s: runtime %s is not %s - this verb writes %s configs under the %s state root\n",
+				seat.Key, seat.Runtime, servedRuntime, servedRuntime, servedRuntime)
+		}
+		fmt.Fprintln(stderr, "4genteam policy apply: nothing was written")
+		return clientcmd.ExitUsage
 	}
 	drift := 0
 	for _, seat := range team.Seats {

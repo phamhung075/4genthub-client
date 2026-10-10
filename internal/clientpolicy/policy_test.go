@@ -321,6 +321,46 @@ func TestApplyRefusesASeatThatWasNeverLaunched(t *testing.T) {
 	}
 }
 
+// TestApplyRefusesASeatOfAnotherRuntimeBeforeWritingAnything: on a mixed room the loop wrote the omp seats
+// and THEN stopped at the seat whose state lives under its own runtime's root, so a caller got a non-zero
+// exit, a "never launched?" message about a seat that HAD been launched, and no statement of what was
+// skipped or whether the write was complete. Measured at the binary on a scratch room before this test
+// existed: lead's config was already on disk when the exit was 2. Both agent directories exist here on
+// purpose - that is the strongest form of the case, because with no runtime filter the verb writes an omp
+// config into the other runtime's seat and exits 0.
+func TestApplyRefusesASeatOfAnotherRuntimeBeforeWritingAnything(t *testing.T) {
+	teamPath := filepath.Join(t.TempDir(), "team.json")
+	body := `{"room":{"slug":"my-rig"},"seats":[` +
+		`{"seat_key":"lead","seat_type":"lead","runtime":"omp"},` +
+		`{"seat_key":"architect","seat_type":"architect","runtime":"claude-code"}]}`
+	if err := os.WriteFile(teamPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	team, err := ReadTeam(teamPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	seedState(t, root, team)
+
+	var out, errOut bytes.Buffer
+	code := runApply([]string{"--rig", "my-rig", "--team", teamPath, "--state-root", root}, &out, &errOut)
+	if code != clientcmd.ExitUsage {
+		t.Errorf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
+	}
+	for _, want := range []string{"architect", "claude-code", "nothing was written"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr %q does not name %q", errOut.String(), want)
+		}
+	}
+	if _, statErr := os.Stat(ConfigPath(root, "my-rig", "lead")); !os.IsNotExist(statErr) {
+		t.Error("the omp seat was written before the refusal: the application is partial")
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout %q, want nothing: no seat was applied", out.String())
+	}
+}
+
 func TestCheckToleratesKeysThePolicyDoesNotDefineAndStillCatchesABrokenRule(t *testing.T) {
 	team := testTeam(t)
 	root := t.TempDir()

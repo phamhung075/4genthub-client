@@ -350,6 +350,18 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 ### Fixed
 
+- `policy apply` writes only the seats whose runtime it serves (`internal/clientpolicy`): a seat of another
+  runtime is refused BY NAME, and the whole set is decided before the first write. The document the verb
+  renders is an omp config and the state root it resolves defaults to `~/.openrig/state/omp`, so on a mixed
+  room the old loop wrote the omp seats and then stopped at the other runtime's seat with `no agent directory
+  … (never launched?)` - a seat that HAD been launched, under its own runtime's root - leaving a partial
+  application, a false reason, and nothing saying what had been written. Measured on a scratch room before the
+  fix: the omp seat's `config.yml` on disk with exit 2; and with that seat's directory present under the same
+  root, an omp config written INTO a claude-code seat and exit 0, which is worse than the abort. After: both
+  cases print `<seat>: runtime claude-code is not omp …` and `4genteam policy apply: nothing was written`,
+  exit 2, zero files; an all-omp room still applies every seat (exit 0); `--check` refuses identically, since
+  an unserved seat is not a drift question. A team file that names no runtime is still served: that is the
+  shape the Python's own role table had, and the state root is the omp one.
 - `team publish-skills` no longer publishes an inventory whose `generated_from` names a revision it does
   not describe (`internal/clientteam/publish.go`). The recorded digests were verified only against the
   checkout `--source-root` points at, so an inventory regenerated from a MOVED checkout kept its old pin
