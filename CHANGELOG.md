@@ -36,8 +36,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `4genteam sync install-checker` is implemented in Go (`internal/clientsync`): it builds
   `cmd/seatcheck` with the pinned store compiled in, installs it at `<out>/bin/seatcheck`, links it
   where seats resolve it with a relative symlink, and refuses when the NAME still does not resolve
-  rather than leaving behind a binary nothing can call. Every verb Python's argparse registers is now
-  either ported or refuses by name with exit 3 (`offline-install` and `respawn` still refuse).
+  rather than leaving behind a binary nothing can call.
+- `4genteam sync offline-install` is implemented in Go (`internal/clientsync`): it reads a
+  materialized bundle's `rig.yaml` and copies each member's pinned `policy.json`/`pinned.json` into
+  `<home>/.openrig/agenthub-seats/<room>/<member>/`, which is the one place `seatcheck` looks, and
+  refuses a policy that names another seat instead of handing a seat the wrong links. `respawn` is
+  the remaining verb Python's argparse registers that this build still refuses by name with exit 3.
 
 ### Changed
 
@@ -47,6 +51,9 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- `docs/WATCH.md` and `skills/watch-team/SKILL.md`: the three `inputs` examples pass the `--rig` the
+  verb requires, and both files document `--state-root` and `$OPENRIG_STATE_ROOT` with the order they
+  resolve in.
 - `4genteam watch`, `grid` and `feed` now resolve the state root exactly as the doc comment and
   `docs/WATCH.md` promised: `--state-root`, else `$OPENRIG_STATE_ROOT`, else the machine's own
   `~/.openrig/state/omp` (`clientenv.DefaultStateRoot()`). The third clause was documented but
