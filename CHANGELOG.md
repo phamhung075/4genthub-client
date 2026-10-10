@@ -3,6 +3,37 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-10 (later) — the class-(ii) reason list, corrected against the tree
+
+**The change the sign-off below was made subject to is done** (row `3c94814d`). The 25 rows it names are
+corrected in the two room artifacts — `PORT-MAP.md` section (c), and `P6-TEST-DISPOSITION.md`, which
+copies its reason column from those rows — and every anchor they cite was re-read against this tree at
+`13c399c`:
+
+- The 25 reasons now say what the Go client does instead of what the Python plumbing did: each names the
+  Go cover and what it asserts, or the mechanism the port replaced. The one row the P6 verdict marked
+  correct is untouched.
+- Seven line anchors were still wrong and are fixed. `35a40a5` added the peak gate's seam to
+  `restoreAll` and pushed every function below `lifecycle_test.go:34` down seven lines, so `:70` became
+  `:77`, `:97` `:104`, `:183` `:190`, `:202` `:209` and `:242` `:249`. Two more never landed on the line
+  they named: `publish_test.go:238` became `:242` (the comment above the test; it read `:237` when the
+  map was written), and `internal/seatlog/seatlog.go:178` became `:173`, the `RigSeats` function, whose
+  `tmux list-sessions` call is `:174` in every revision, the signed tip included.
+- Verified rather than asserted: every Go test the rows cite exists in the tree (19 names, 0 missing);
+  the counts are unchanged (233 Python tests, 209 class (i), 24 class (ii), 205 same-name mirrors, 2
+  probable under a shorter name); and re-running `P6-TEST-DISPOSITION.py` against its declared baselines
+  changed those seven rows and nothing else.
+- Two of the table's own summaries said something the tree does not: "no mirror yet" counted a NAME
+  miss, and one of the two rows it called the remaining parity work is mirrored by
+  `TestFeedbackHelpPrintsUsageAndExitsZero` — its own reason said so — while the other is the recorded
+  no-mirror reason, because Go's `RenderConfig` takes no rig at all. The table now says a row no test
+  names is a prompt to look, not an uncovered row.
+- `P6-TEST-DISPOSITION.py`'s default Python baseline is pinned to `1663257`: `HEAD` no longer carries the
+  tree it extracts, so the generator could not run at all until the default named a revision that does.
+
+The two artifacts are room files, not files of this repository, and the reviewer's gate files were
+measured at the signed tip, where their anchors were right; neither is edited here.
+
 ## 2026-10-10 — the Python client is gone: the reviewer's sign-off, and the help surface above it
 
 **The deletion is signed.** `1eca7de` (Python sources, `tests/`, `pyproject.toml`, `build/`) is signed by
@@ -158,6 +189,12 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
  its parametrize list omits it - with a value outside the set reading `unknown`. Both rows were previously aliased to the
  dump-only parity test, which cannot reach the missing states. Non-vacuity: with the blocked arm and the passthrough
  broken the test goes red on exactly those three readings, and green again when the patch is reversed.
+
+- The skill tree tolerates an absent or EMPTY `rooms/`, and that is pinned (`internal/clientskills/tree_test.go`): the
+ tree that ships has zero paths under `skills/rooms` at HEAD, while the checkout on disk has an empty `skills/rooms/`
+ directory, and git cannot carry an empty directory. The loader accepts a share-only root (`share/` is the check, not
+ `rooms/`), resolves it to the shared skills alone with no error, and creates NOTHING. Three cases are covered: no
+ `rooms/` at all, an empty `rooms/`, and an empty `rooms/<room>/`.
 
 - The bridge PRODUCES agent-to-human notifications (`internal/clientbridge/notifications.go`): each cycle it lists the
   rigs this machine sees (`rig ps --json`), reads the rows addressed to that rig's human
