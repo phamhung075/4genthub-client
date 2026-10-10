@@ -198,8 +198,8 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   call, which the gate and the restore now share as ONE seam (`rigNodes`), so the gate costs no extra call and no
   cloud round trip, and a room with NO DeepSeek seat is never refused. A reading that fails is not a refusal either:
   the verb's own error says what is wrong, and guessing "peak" from an unreadable room would block a room this client
-  knows nothing about. `--any-time` skips the check for one run and wins over the environment or the env file,
-  `--offpeak-only` forces it back on, and passing both is a usage error rather than last-one-wins.
+  knows nothing about. `--allow-peak` — the ONE flag those verbs take, and the name the order fixed — skips the check
+  for one run and wins over the environment or the env file; an argument they do not know is refused by name.
 - `clientenv.Set` writes ONE key into the client's env file and prints nothing else from it (`internal/clientenv`):
   it replaces the FIRST assignment of that key — `export ` prefix included, which is the line `Load` reads — creates
   the file `0600` and its directory `0700` when missing, keeps every other byte and the mode the operator chose,
@@ -211,7 +211,8 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `internal/clientenv/set_test.go`, `internal/clientlifecycle/offpeak_gate_test.go`,
   `internal/clientsync/respawn_offpeak_test.go`, 0 network, rig or seat): the 12-instant boundary table is asserted
   against the SHELL GATE's own printed bytes, both the JSON and the human form, with the exit code taken through
-  `runReport`; both `OFFPEAK_ONLY` values and the flag-over-environment precedence on all four combinations; the
+  `runReport`; both `OFFPEAK_ONLY` values and the flag-over-environment precedence, including that the flag reaches
+  past a setting that says on and that the name this package first used, `--any-time`, is NOT swallowed; the
   refusal text of each gated verb; and that a refusal happens BEFORE the effect — `up` runs the daemon and not the
   resume, `compact` never spawns, `respawn` never launches. Writing the env-writer's test found a real defect in it:
   `Set` on a file whose last line carried no newline left its own assignment unterminated, so the next tool to append
