@@ -56,6 +56,21 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   named rather than hidden: the URL default is `$AGENTHUB_URL`, this client's one server variable,
   instead of the script's MCP/public chain; any 2xx counts as stored; and a missing credential or URL
   is refused before dialing at exit 2.
+- `4genteam sync rig` is implemented in Go (`4214f18`, `internal/clientsync`): it fetches the room's
+  rigspec, pulls every listed seat under the same pinning rules as `sync pull`, then builds the rig
+  root in a staging directory and swaps it in, so a file the operator placed there while it
+  materializes survives and is named on stderr. Two of the Python's own-team defaults are gone: the
+  per-room `.env` link now points at the client's ONE env file and is made for any member whose model
+  is written `provider/model`, and the per-seat policy table is a seam a governed rig supplies instead
+  of a compiled seat-role table.
+- `4genteam sync bundle` and `4genteam sync switch` are implemented in Go (`3b5d6ec`): bundle builds
+  `<room>-<seat>-<hash8>.rigbundle` from the LOCKED pin with the Python's exact `rig bundle create`
+  arguments (the source label is this tree's own), warns about the seats a rig root leaves unpinned,
+  and exits 2 when there is no pinned snapshot; switch records the new occupant in the cloud first,
+  applies a model change with `rig seat set-model` (or stops and relaunches fresh with
+  `--apply restart`), prints the manual steps for a runtime change because OpenRig cannot swap one in
+  place, and exits 0 with `applied=none` when rig is missing or the seat is absent from `rig ps` -
+  the cloud change is the authority, and only the local half is outstanding.
 - `skills/`: this repository's skills tree, in four kinds — `share/<skill>` for every seat of every
   room, `rooms/<room>/<skill>` for one room, `rooms/<room>/<seat>/<skill>` for one seat, and
   `client/<skill>` for an LLM running the client. A directory holding `SKILL.md` is a skill; a
