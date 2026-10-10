@@ -107,6 +107,22 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   failure can put the token in neither a report, a note, nor the sender's error text. The transport is
   replaced in-process (`statusClient`), so the suite needs no network, no rig and no seat.
 
+- The daemon resolution, the filtered `inputs open` and the last seat model are tested
+  (`internal/clientsync/installchecker_test.go`, `internal/clientwatch/render_test.go`,
+  `internal/clientwatch/commands_test.go`, `internal/clientwatch/watch_test.go`; 7d78395, 7615cd3,
+  ba3b09e): the REAL `seatPath` resolver - the var every earlier test stubbed - returns the tmux global
+  PATH while a server runs, else the cold-start daemon own PATH with `daemonPathSource` read out of
+  `<pid>/environ`, else this process PATH with `shellPathSource`, and reads no process table at all
+  while no daemon port is known. The daemon port is `OPENRIG_PORT` before the port in `OPENRIG_URL`, a
+  non-numeric `OPENRIG_PORT` falls through to the URL, and a URL without a numeric port is the empty
+  fallback; the pid comes out of a real `ss -ltnp` listing (a decoy OpenRig on another port is ignored)
+  and is `0` when the port line names no pid, when nothing listens, and when `ss` itself fails.
+  `inputs open --seat` splits and renames exactly the named seat pane, prints `inputs: opened 1`, and
+  gives a seat outside the filter no pane; and the three `pretty` cases pin what the log does to JSON -
+  a trailer line kept as it is, a truncation notice kept under cut-off JSON, and prose returned
+  untouched. The process table is read through the package own `rigProcRoot` seam (`/proc` by default,
+  so a real machine behaves identically), so the suite needs no network, no rig and no seat.
+
 ### Changed
 
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the `--seat` row is the exhaustive set now —
