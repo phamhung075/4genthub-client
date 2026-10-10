@@ -274,12 +274,32 @@ func relaunch(rig, seat string) error {
 		return err
 	}
 	if done, err := exec.Command(path, "launch", id, rig+"."+seat).CombinedOutput(); err != nil {
+		// A slow daemon answers after rig's 5 s timeout, and the launch still lands ("outcome UNKNOWN").
+		// The session coming up is the answer, not the reply.
+		if strings.Contains(string(done), "did not respond in time") && sessionComesUp(session) {
+			return nil
+		}
 		return &clientcmd.CodedError{
 			Message: fmt.Sprintf("rig launch %s.%s failed: %s", rig, seat, truncate(strings.TrimSpace(string(done)), 200)),
 			Code:    ExitFailed,
 		}
 	}
 	return nil
+}
+
+// sessionComesUp is true when the tmux session exists within 60 seconds.
+func sessionComesUp(session string) bool {
+	tmux, err := exec.LookPath("tmux")
+	if err != nil {
+		return false
+	}
+	for i := 0; i < 30; i++ {
+		if exec.Command(tmux, "has-session", "-t", session).Run() == nil {
+			return true
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
 }
 
 func rigID(rigPath, rig string) (string, error) {
