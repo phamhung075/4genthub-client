@@ -112,29 +112,17 @@ def supervisor_status(rig: str) -> None:
 BRIDGE_PATTERN = "agenthub_client.bridge run"
 
 
-def bridge_env() -> dict[str, str] | None:
-    """The environment the bridge needs, read from the file the systemd unit loads."""
-    try:
-        lines = bridge.DEFAULT_ENV_FILE.read_text().splitlines()
-    except OSError:
-        return None
-    pairs = (line.split("=", 1) for line in lines if "=" in line and not line.lstrip().startswith("#"))
-    env = {k.strip(): v.strip().strip("\"'") for k, v in pairs}
-    return env if env.get("AGENTHUB_URL") and env.get("AGENTHUB_TOKEN") else None
-
-
 def start_bridge() -> bool:
     """Run the status bridge detached, so the 4genthub frontend sees every seat and rig of this PC."""
-    env = bridge_env()
-    if env is None:
-        print("4genteam: AGENTHUB_URL and AGENTHUB_TOKEN missing from the bridge env file", file=sys.stderr)
+    if not (os.environ.get("AGENTHUB_URL") and os.environ.get("AGENTHUB_TOKEN")):
+        print("4genteam: AGENTHUB_URL and AGENTHUB_TOKEN must be set (in .env or the environment)", file=sys.stderr)
         return False
     subprocess.run(["pkill", "-f", BRIDGE_PATTERN])
     paths.LOG_DIR.mkdir(parents=True, exist_ok=True)
     with open(paths.LOG_DIR / "bridge.log", "ab") as log:
         proc = subprocess.Popen(
             [sys.executable, "-m", "agenthub_client.bridge", "run"],
-            env={**os.environ, **env}, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
+            env=os.environ, stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
         )
     try:
         proc.wait(timeout=SUPERVISOR_START_GRACE)

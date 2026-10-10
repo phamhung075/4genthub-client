@@ -498,13 +498,13 @@ def test_the_path_defaults_do_not_follow_home(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "other-home"))
     second = _load_module()
 
-    for name in ("DEFAULT_ENV_FILE", "DEFAULT_PINS", "DEFAULT_SYNC_STATE"):
+    for name in ("DEFAULT_PINS", "DEFAULT_SYNC_STATE"):
         assert (
             getattr(first, name) == getattr(second, name)
         ), f"{name} followed HOME: {getattr(first, name)} against {getattr(second, name)}"
     # And each one is the ACCOUNT's path, not a path under either fake home.
     for module in (first, second):
-        for name in ("DEFAULT_ENV_FILE", "DEFAULT_PINS", "DEFAULT_SYNC_STATE"):
+        for name in ("DEFAULT_PINS", "DEFAULT_SYNC_STATE"):
             value = str(getattr(module, name))
             assert str(seat_like) not in value, f"{name} = {value}"
             assert "other-home" not in value, f"{name} = {value}"
@@ -528,7 +528,7 @@ def test_install_service_prints_unit(capsys):
     assert bridge_mod.main(["install-service"]) == 0
     out = capsys.readouterr().out
     assert "Restart=on-failure" in out
-    assert "EnvironmentFile=%h/.config/agenthub-bridge.env" in out
+    assert f"EnvironmentFile={bridge_mod.CLIENT_DIR / '.env'}" in out
     assert "-m agenthub_client.bridge run" in out
 
 

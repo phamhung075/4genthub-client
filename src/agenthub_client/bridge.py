@@ -50,8 +50,7 @@ Usage:
   4genteam bridge once [--print] [--machine-id ID]
   4genteam bridge install-service
 
-The service unit reads AGENTHUB_URL and AGENTHUB_TOKEN from %h/.config/agenthub-bridge.env
-(mode 0600). The machine id is reported in the request body, not bound to the token.
+The service unit reads AGENTHUB_URL and AGENTHUB_TOKEN from the client's own .env. The machine id is reported in the request body, not bound to the token.
 
 Exit codes: 0 success, 1 send failure (--once), 2 usage error.
 """
@@ -76,6 +75,7 @@ import yaml
 
 from . import scrub as openrig_scrub
 from . import seat_policy as openrig_seat_policy
+from .paths import CLIENT_DIR
 
 # THE ONE HOME RESOLUTION THIS TREE HAS, LOADED RATHER THAN COPIED - the same resolution
 # 4genteam policy carries and 4genteam sync loads. real_home() answers from the
@@ -87,7 +87,6 @@ from . import seat_policy as openrig_seat_policy
 real_home = openrig_seat_policy.real_home
 
 STATUS_PATH = "/api/v2/openrig/seat-status"
-DEFAULT_ENV_FILE = real_home() / ".config" / "agenthub-bridge.env"
 DEFAULT_PINS = real_home() / ".openrig" / "agenthub-seats"
 # DEFAULT_SYNC_STATE records, per seat, the expected hash the cloud last answered in_sync for.
 # It is the client half of drift visibility: without it a seat's pinned hash has nothing local
@@ -652,7 +651,7 @@ Description=4genthub OpenRig status bridge
 After=network-online.target
 
 [Service]
-EnvironmentFile=%h/.config/agenthub-bridge.env
+EnvironmentFile={env_file}
 ExecStart={python} -m agenthub_client.bridge run
 Restart=on-failure
 RestartSec=10
@@ -663,7 +662,7 @@ WantedBy=default.target
 
 
 def service_unit() -> str:
-    return SERVICE_UNIT.format(python=sys.executable)
+    return SERVICE_UNIT.format(python=sys.executable, env_file=CLIENT_DIR / ".env")
 
 
 def build_bridge(args, send: Sender) -> Bridge:
