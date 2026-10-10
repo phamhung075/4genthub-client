@@ -122,7 +122,7 @@ func (b *Bridge) BuildPayload(rig *clientcmd.Rig) Payload {
 
 	seats, invalid, duplicates := BuildSeats(nodes, b.Known, b.PinsDir, b.stripDetail)
 	if invalid > 0 {
-		b.note("invalid", fmt.Sprintf("skipped %d node(s) with invalid names", invalid))
+		b.note("invalid", fmt.Sprintf("skipped %d seat(s) with invalid names", invalid))
 	}
 	for _, message := range duplicates {
 		b.note("duplicate "+message, message)

@@ -248,6 +248,11 @@ func noteTo(stderr io.Writer) func(string) {
 	}
 }
 
+// statusClient is the seam the sender's wire contract is pinned through: a test replaces it with a
+// client whose Transport answers in-process, so the path, the bearer header and the status handling
+// are exercised with NO network at all. This is a push path, and the suite cannot run it live.
+var statusClient = &http.Client{Timeout: SendTimeout}
+
 // senderFromEnv builds the sender from the user credential. A missing one is a usage error, because a
 // bridge without a token cannot report and must not start quietly.
 func senderFromEnv() (Sender, error) {
@@ -255,7 +260,7 @@ func senderFromEnv() (Sender, error) {
 	if baseURL == "" || token == "" {
 		return nil, fmt.Errorf("AGENTHUB_URL and AGENTHUB_TOKEN must be set")
 	}
-	client := &http.Client{Timeout: SendTimeout}
+	client := statusClient
 	endpoint := strings.TrimRight(baseURL, "/") + statusPath
 	return func(body []byte) (int, []byte) {
 		request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))

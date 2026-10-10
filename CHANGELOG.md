@@ -98,6 +98,15 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   not there is refused by name BEFORE the room is fetched. A seat whose render carries no `agent.yaml`
   is named on stderr and receives nothing: files nothing loads are dead weight.
 
+- The bridge's run loop is tested (`internal/clientbridge/runloop_test.go`, 15 tests): the on-change and
+  heartbeat send decision, the 422 detail strip and its next-cycle recovery, the failure classes and the
+  backoff doubling to its cap and its reset, the `once` exit codes, the recorded expected hash and the
+  named drift that does not advance it, the record surviving a restart, the invalid-name skip with its
+  sentence, and the sender's own wire contract. Four of them are the credential behaviours: the sender
+  reads the user token, a missing token exits 2 naming it, a 401 names the variable to check, and a
+  failure can put the token in neither a report, a note, nor the sender's error text. The transport is
+  replaced in-process (`statusClient`), so the suite needs no network, no rig and no seat.
+
 ### Changed
 
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the `--seat` row is the exhaustive set now —
@@ -147,6 +156,10 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   passes to `--session`; `logicalId` still matches, it is simply no longer the address), and the frame
   carries `room` (the rig) and `seat` (the member after the first dot of `logicalId`) beside the
   session key — or NEITHER, when the rig names no seat for the session.
+
+- `bridge` names a skipped invalid-name node with the Python's own word: `skipped N seat(s) with invalid
+  names`, where the first Go draft said `node(s)`. The deleted test asserted that sentence, so the Go is
+  the side that moved rather than the sentence.
 
 ### Removed
 
