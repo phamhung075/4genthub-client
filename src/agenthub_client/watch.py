@@ -25,6 +25,8 @@ import sys
 import time
 from pathlib import Path
 
+from .paths import env_limit
+
 
 SELF = f"{sys.executable} -m agenthub_client.watch"
 ROOT = Path.home() / ".openrig" / "state" / "omp"
@@ -60,10 +62,11 @@ TOOL_COLORS = {
 CLAUDE_PROJECTS = Path.home() / ".claude" / "projects"
 # Per-session context limit: past it the seat finishes its job, then the compaction supervisor
 # (4genteam compact-run) sends it /compact. The harness itself only compacts at ~850k.
-# Each limit is read from .env (or the environment) so it can be changed without editing code.
-COMPACT_LIMIT = int(os.environ.get("COMPACT_LIMIT_TOKENS", 150_000))  # soft: told to find a safe point; compacted once the seat is quiet
-WARN_LIMIT = int(os.environ.get("COMPACT_WARN_TOKENS", 250_000))  # urgent: compacted now, without waiting for quiet; told once
-HARD_LIMIT = int(os.environ.get("COMPACT_HARD_TOKENS", 300_000))  # hard: still not compacted, the running turn is aborted and compaction forced
+# Each limit is read from .env (or the environment) so it can be changed without editing code, and a
+# BLANK one means the default rather than a failed parse - see paths.env_limit.
+COMPACT_LIMIT = env_limit("COMPACT_LIMIT_TOKENS", 150_000)  # soft: told to find a safe point; compacted once the seat is quiet
+WARN_LIMIT = env_limit("COMPACT_WARN_TOKENS", 250_000)  # urgent: compacted now, without waiting for quiet; told once
+HARD_LIMIT = env_limit("COMPACT_HARD_TOKENS", 300_000)  # hard: still not compacted, the running turn is aborted and compaction forced
 BAR_CELLS = 16
 
 

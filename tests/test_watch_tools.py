@@ -325,3 +325,49 @@ def test_seat_model_is_the_last_model_in_the_log_tail(tmp_path):
     )
     assert watch.seat_model(log) == "claude-opus-5-5"
     assert watch.seat_model(None) == ""
+
+
+def test_a_blank_limit_in_the_environment_means_the_default(monkeypatch):
+    """Blanking a limit is how you go back to the default; it is not a failed parse.
+
+    `.env` is a file to copy and edit, so a blank value is a normal thing to find in it - and
+    reading it as ``int("")`` raised at import time, which took every verb down with it.
+    """
+    for name in ("COMPACT_LIMIT_TOKENS", "COMPACT_WARN_TOKENS", "COMPACT_HARD_TOKENS"):
+        monkeypatch.setenv(name, "")
+
+    reloaded = importlib.reload(watch)
+
+    assert (reloaded.COMPACT_LIMIT, reloaded.WARN_LIMIT, reloaded.HARD_LIMIT) == (
+        150_000,
+        250_000,
+        300_000,
+    )
+
+
+def test_the_shipped_sample_loads_without_taking_a_verb_down(monkeypatch):
+    """`cp .env.sample .env`, exactly as the README says, must leave every limit readable.
+
+    The sample is copied WHOLE, so every value in it has to be safe to load before any verb runs -
+    including the ones that ship blank because the operator fills them in later. Its own header says
+    the defaults are shown, so what it shows is what the limits resolve to.
+    """
+    sample = Path(__file__).resolve().parents[1] / ".env.sample"
+    settings = []
+    for line in sample.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, _, value = stripped.partition("=")
+        settings.append((name.strip(), value.strip()))
+    assert settings, "the sample has no settings at all"
+    for name, value in settings:
+        monkeypatch.setenv(name, value)
+
+    reloaded = importlib.reload(watch)
+
+    assert (reloaded.COMPACT_LIMIT, reloaded.WARN_LIMIT, reloaded.HARD_LIMIT) == (
+        150_000,
+        250_000,
+        300_000,
+    )

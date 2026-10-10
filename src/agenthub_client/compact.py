@@ -16,7 +16,6 @@ Run it from the host, not inside a seat pane: a loop in a seat dies with the sea
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
@@ -169,7 +168,7 @@ def step(rig: str, state: dict, quiet: int) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--rig", default="4genthub-min")
-    ap.add_argument("--quiet", type=int, default=int(os.environ.get("COMPACT_QUIET_SECONDS", 15)), help="seconds of log silence that mean the job is finished")
+    ap.add_argument("--quiet", type=int, default=paths.env_limit("COMPACT_QUIET_SECONDS", 15), help="seconds of log silence that mean the job is finished")
     ap.add_argument("--every", type=int, default=10)
     ap.add_argument("--once", action="store_true")
     a = ap.parse_args()

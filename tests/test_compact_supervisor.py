@@ -94,3 +94,20 @@ def test_a_seat_past_the_warn_limit_is_warned_once(monkeypatch, tmp_path):
     sent = run_step(monkeypatch, path, state)
     assert any("VERY IMPORTANT" in t for t in sent)
     assert not any("VERY IMPORTANT" in t for t in run_step(monkeypatch, path, state))
+
+
+def test_a_blank_quiet_value_means_the_default_not_a_failed_parse(monkeypatch):
+    """`COMPACT_QUIET_SECONDS=` in a copied `.env` is the default, not a crash on startup.
+
+    This is the supervisor's own limit and it is read while the PARSER is built, so a blank value
+    used to take `4genteam compact-run` down before it supervised anything.
+    """
+    monkeypatch.setenv("COMPACT_QUIET_SECONDS", "")
+    seen = {}
+    monkeypatch.setattr(sup, "log", lambda *a, **k: None)
+    monkeypatch.setattr(sup, "step", lambda rig, state, quiet: seen.update(quiet=quiet))
+    monkeypatch.setattr(sys, "argv", ["compact-run", "--once"])
+
+    sup.main()
+
+    assert seen == {"quiet": 15}
