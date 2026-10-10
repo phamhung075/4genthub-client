@@ -49,6 +49,11 @@ var feedbackLayers = []string{"runtime", "openrig", "cloud", "seat-context", "wo
 // named so a reader can see it is a constant rather than a guess.
 const httpTimeout = 60 * time.Second
 
+// feedbackClient is the seam the push path is pinned through: a test replaces it with a client whose
+// Transport answers in-process, so the reason the transport gave is asserted verbatim with NO network.
+// This is a push path, and the suite cannot run it against a cloud.
+var feedbackClient = &http.Client{Timeout: httpTimeout}
+
 // feedbackUsage is what `4genteam feedback --help` prints. It names the verb, as the Python door's
 // help test requires.
 const feedbackUsage = `usage: 4genteam feedback --layer <layer> --text <text> [--room R] [--seat S] [--session X] [--url BASE]
@@ -259,16 +264,19 @@ func postFeedback(ctx context.Context, baseURL, token string, opts feedbackOptio
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam feedback: the request to %s failed\n", url)
+		fmt.Fprintf(stderr, "4genteam feedback: the request to %s failed: %v\n", url, err)
 		return clientcmd.ExitRemote
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: httpTimeout}
-	resp, err := client.Do(req)
+	resp, err := feedbackClient.Do(req)
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam feedback: the request to %s failed\n", url)
+		// The REASON is named here, because the shell client this replaced showed one: `curl -sS`
+		// prints its own diagnostic before the script's line, so a compiled replacement that printed
+		// only the line would tell the operator less than the door it replaced. The text carries the
+		// URL and the transport's round trip; the credential is in the header, so it cannot be in it.
+		fmt.Fprintf(stderr, "4genteam feedback: the request to %s failed: %v\n", url, err)
 		return clientcmd.ExitRemote
 	}
 	defer func() { _ = resp.Body.Close() }()

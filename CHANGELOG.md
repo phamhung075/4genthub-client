@@ -268,3 +268,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   error carries the URL, never the token, which the credential test pins on the sender's error AND on the
   loop's note. Spec: `tests/test_bridge.py:581` asserted the timeout's own words reach the output, and
   `:587` that the token does not.
+- `4genteam feedback` names the reason a request failed, not only its URL. The shell client it replaced
+  showed one - `curl -sS` prints its own diagnostic before the script's line - so a compiled
+  replacement that printed the line alone told the operator less than the door it replaced. The verb's
+  client is a seam now, so the reason is asserted verbatim in the suite with no network.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -363,6 +364,49 @@ func TestFeedbackTransportFailureExitsRemote(t *testing.T) {
 		t.Errorf("stderr = %q, want the failed request named", stderr.String())
 	}
 }
+
+// The failure names the REASON, which is what the shell client showed: `curl -sS` prints its own
+// diagnostic before the script's line, so a compiled replacement that printed only the line would tell
+// the operator less than the door it replaced. The transport is injected, so the reason is asserted
+// verbatim with no network - and the credential is not in it.
+func TestFeedbackTransportFailureNamesTheReason(t *testing.T) {
+	const reason = "dial tcp: connect: connection refused"
+	withFeedbackTransport(t, func(*http.Request) (*http.Response, error) {
+		return nil, errors.New(reason)
+	})
+	feedbackEnv(t, "http://feedback.invalid", "tok")
+
+	var stdout, stderr bytes.Buffer
+	code := runFeedback(context.Background(), []string{
+		"--layer", "cloud", "--text", "t", "--room", "dev", "--seat", "alpha", "--session", "s",
+	}, &stdout, &stderr)
+	if code != clientcmd.ExitRemote {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRemote, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), reason) {
+		t.Errorf("stderr = %q, want the transport reason named", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "http://feedback.invalid") {
+		t.Errorf("stderr = %q, want the URL named too, as the script did", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "tok") {
+		t.Errorf("stderr = %q, want no credential in it", stderr.String())
+	}
+}
+
+// withFeedbackTransport installs an in-process transport for the duration of one test, because a push
+// path cannot be exercised against a cloud. The previous client is restored in cleanup, so the tests
+// that drive a real local server keep the real transport.
+func withFeedbackTransport(t *testing.T, round func(*http.Request) (*http.Response, error)) {
+	t.Helper()
+	previous := feedbackClient
+	feedbackClient = &http.Client{Timeout: httpTimeout, Transport: roundTripFunc(round)}
+	t.Cleanup(func() { feedbackClient = previous })
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
 func TestCommandsRegistersTheFeedbackVerb(t *testing.T) {
 	commands := Commands()
