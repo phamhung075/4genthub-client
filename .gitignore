@@ -6,3 +6,9 @@ __pycache__/
 rust/*/target/
 .env
 logs/
+
+# Go: the two binaries built from cmd/, and local build caches
+/4genteam
+/seatcheck
+.gocache/
+.gotmp/

@@ -1,0 +1,223 @@
+{
+  "comment": "Redaction parity cases. Generated from the reference implementation: scripts/openrig_scrub.py via the command in TEST-CHANGELOG; the Python emits expect_text/expect_redacted for each case's own text and known map.",
+  "cases": [
+    {
+      "name": "jwt",
+      "text": "token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk here",
+      "known": {},
+      "expect_text": "token [REDACTED:jwt] here",
+      "expect_redacted": true
+    },
+    {
+      "name": "bearer",
+      "text": "Authorization: Bearer abcdef1234567890abcdef1234567890",
+      "known": {},
+      "expect_text": "Authorization: [REDACTED:bearer]",
+      "expect_redacted": true
+    },
+    {
+      "name": "openai-style",
+      "text": "key sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+      "known": {},
+      "expect_text": "key [REDACTED:sk]",
+      "expect_redacted": true
+    },
+    {
+      "name": "aws-access-key",
+      "text": "AKIAIOSFODNN7EXAMPLE in env",
+      "known": {},
+      "expect_text": "[REDACTED:aws] in env",
+      "expect_redacted": true
+    },
+    {
+      "name": "github-token",
+      "text": "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+      "known": {},
+      "expect_text": "[REDACTED:github]",
+      "expect_redacted": true
+    },
+    {
+      "name": "private-key",
+      "text": "-----BEGIN RSA PRIVATE KEY-----\nMIIEfake\n-----END RSA PRIVATE KEY-----",
+      "known": {},
+      "expect_text": "[REDACTED:pem]",
+      "expect_redacted": true
+    },
+    {
+      "name": "password-pair",
+      "text": "db password=hunter2hunter2",
+      "known": {},
+      "expect_text": "db password=[REDACTED:value]",
+      "expect_redacted": true
+    },
+    {
+      "name": "secret-colon",
+      "text": "client_secret: s3cr3tValue-9981",
+      "known": {},
+      "expect_text": "client_secret: [REDACTED:value]",
+      "expect_redacted": true
+    },
+    {
+      "name": "token-equals",
+      "text": "AGENTHUB_TOKEN=abc123def456ghi789",
+      "known": {},
+      "expect_text": "AGENTHUB_TOKEN=[REDACTED:value]",
+      "expect_redacted": true
+    },
+    {
+      "name": "url-credentials",
+      "text": "connect postgres://agent:s3cretpass@db.internal:5432/app failed",
+      "known": {},
+      "expect_text": "connect postgres[REDACTED:url-credentials]db.internal:5432/app failed",
+      "expect_redacted": true
+    },
+    {
+      "name": "url-at-in-password",
+      "text": "clone https://deploy:p@ssw0rd99@git.example.com/org/repo",
+      "known": {},
+      "expect_text": "clone https[REDACTED:url-credentials]git.example.com/org/repo",
+      "expect_redacted": true
+    },
+    {
+      "name": "url-empty-user",
+      "text": "cache redis://:onlypass@cache.internal:6379/0 down",
+      "known": {},
+      "expect_text": "cache redis[REDACTED:url-credentials]cache.internal:6379/0 down",
+      "expect_redacted": true
+    },
+    {
+      "name": "url-empty-password",
+      "text": "upload ftp://backup:@files.internal/x done",
+      "known": {},
+      "expect_text": "upload ftp://backup:@files.internal/x done",
+      "expect_redacted": false
+    },
+    {
+      "name": "url-nbsp-in-password",
+      "text": "dsn http://svc:pass word123@db.internal/app",
+      "known": {},
+      "expect_text": "dsn http[REDACTED:url-credentials]db.internal/app",
+      "expect_redacted": true
+    },
+    {
+      "name": "url-vtab-in-password",
+      "text": "dsn http://svc:pa\u000bss1234@db.internal/app",
+      "known": {},
+      "expect_text": "dsn http[REDACTED:url-credentials]db.internal/app",
+      "expect_redacted": true
+    },
+    {
+      "name": "url-space-ends-userinfo",
+      "text": "see http://svc: word@db.internal",
+      "known": {},
+      "expect_text": "see http://svc: word@db.internal",
+      "expect_redacted": false
+    },
+    {
+      "name": "known-gap-url-slash-in-password",
+      "text": "dsn postgres://user:pa/ssword99@db.internal/app",
+      "known": {},
+      "expect_text": "dsn postgres://user:pa/ssword99@db.internal/app",
+      "expect_redacted": false
+    },
+    {
+      "name": "url-plain",
+      "text": "listening on http://localhost:8000/health",
+      "known": {},
+      "expect_text": "listening on http://localhost:8000/health",
+      "expect_redacted": false
+    },
+    {
+      "name": "plain-status",
+      "text": "seat coder is idle",
+      "known": {},
+      "expect_text": "seat coder is idle",
+      "expect_redacted": false
+    },
+    {
+      "name": "plain-error",
+      "text": "exit code 1 while starting claude-code",
+      "known": {},
+      "expect_text": "exit code 1 while starting claude-code",
+      "expect_redacted": false
+    },
+    {
+      "name": "hash",
+      "text": "snapshot 3f2a9c1b7d8e4a5f6b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a",
+      "known": {},
+      "expect_text": "snapshot 3f2a9c1b7d8e4a5f6b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a",
+      "expect_redacted": false
+    },
+    {
+      "name": "word-token",
+      "text": "token budget exceeded for this seat",
+      "known": {},
+      "expect_text": "token budget exceeded for this seat",
+      "expect_redacted": false
+    },
+    {
+      "name": "pair-guard-already-redacted",
+      "text": "password=[REDACTED:value] trailing",
+      "known": {},
+      "expect_text": "password=[REDACTED:value] trailing",
+      "expect_redacted": false
+    },
+    {
+      "name": "known-value-marker-names-the-variable",
+      "text": "token is synthetichunter2value",
+      "known": {
+        "SYNTHETIC_ENV_NAME": "synthetichunter2value"
+      },
+      "expect_text": "token is [REDACTED:SYNTHETIC_ENV_NAME]",
+      "expect_redacted": true
+    },
+    {
+      "name": "known-value-under-min-length-is-left",
+      "text": "too short to count: abcdef",
+      "known": {
+        "SHORT": "abcde"
+      },
+      "expect_text": "too short to count: abcdef",
+      "expect_redacted": false
+    },
+    {
+      "name": "known-value-base64-form",
+      "text": "header c3ludGhldGljaHVudGVyMnZhbHVl trailer",
+      "known": {
+        "SYNTHETIC_ENV_NAME": "synthetichunter2value"
+      },
+      "expect_text": "header [REDACTED:SYNTHETIC_ENV_NAME] trailer",
+      "expect_redacted": true
+    },
+    {
+      "name": "known-value-url-encoded-form",
+      "text": "param synthetichunter2value%2Ftail",
+      "known": {
+        "SYNTHETIC_ENV_NAME": "synthetichunter2value/tail"
+      },
+      "expect_text": "param [REDACTED:SYNTHETIC_ENV_NAME]",
+      "expect_redacted": true
+    },
+    {
+      "name": "clean-text-over-max-length-is-truncated-not-redacted",
+      "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "known": {},
+      "expect_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expect_redacted": false
+    },
+    {
+      "name": "multi-byte-truncation-counts-characters",
+      "text": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "known": {},
+      "expect_text": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "expect_redacted": false
+    },
+    {
+      "name": "marker-survives-truncation-at-the-end",
+      "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy key sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD",
+      "known": {},
+      "expect_text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy key [REDA",
+      "expect_redacted": true
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "comment": "Shared by the Go server scanner and the Python bridge scrubber. has_secret=true means both must detect it. Fake values only.",
+  "cases": [
+    {"name": "jwt", "text": "token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk here", "has_secret": true},
+    {"name": "bearer", "text": "Authorization: Bearer abcdef1234567890abcdef1234567890", "has_secret": true},
+    {"name": "openai-style", "text": "key sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD", "has_secret": true},
+    {"name": "aws-access-key", "text": "AKIAIOSFODNN7EXAMPLE in env", "has_secret": true},
+    {"name": "github-token", "text": "ghp_abcdefghijklmnopqrstuvwxyz0123456789", "has_secret": true},
+    {"name": "private-key", "text": "-----BEGIN RSA PRIVATE KEY-----\nMIIEfake\n-----END RSA PRIVATE KEY-----", "has_secret": true},
+    {"name": "password-pair", "text": "db password=hunter2hunter2", "has_secret": true},
+    {"name": "secret-colon", "text": "client_secret: s3cr3tValue-9981", "has_secret": true},
+    {"name": "token-equals", "text": "AGENTHUB_TOKEN=abc123def456ghi789", "has_secret": true},
+    {"name": "url-credentials", "text": "connect postgres://agent:s3cretpass@db.internal:5432/app failed", "has_secret": true},
+    {"name": "url-at-in-password", "text": "clone https://deploy:p@ssw0rd99@git.example.com/org/repo", "has_secret": true},
+    {"name": "url-empty-user", "text": "cache redis://:onlypass@cache.internal:6379/0 down", "has_secret": true},
+    {"name": "url-empty-password", "text": "upload ftp://backup:@files.internal/x done", "has_secret": false},
+    {"name": "url-nbsp-in-password", "text": "dsn http://svc:pass\u00a0word123@db.internal/app", "has_secret": true},
+    {"name": "url-vtab-in-password", "text": "dsn http://svc:pa\u000bss1234@db.internal/app", "has_secret": true},
+    {"name": "url-space-ends-userinfo", "text": "see http://svc: word@db.internal", "has_secret": false},
+    {"name": "known-gap-url-slash-in-password", "text": "dsn postgres://user:pa/ssword99@db.internal/app", "has_secret": false},
+    {"name": "url-plain", "text": "listening on http://localhost:8000/health", "has_secret": false},
+    {"name": "plain-status", "text": "seat coder is idle", "has_secret": false},
+    {"name": "plain-error", "text": "exit code 1 while starting claude-code", "has_secret": false},
+    {"name": "hash", "text": "snapshot 3f2a9c1b7d8e4a5f6b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a", "has_secret": false},
+    {"name": "word-token", "text": "token budget exceeded for this seat", "has_secret": false}
+  ]
+}

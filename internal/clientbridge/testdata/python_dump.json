@@ -1,0 +1,513 @@
+{
+  "machine_id": "test-machine",
+  "reported_at": "2026-10-06T19:58:42Z",
+  "seats": [
+    {
+      "room": "4genthub-deepseek",
+      "seat": "supervisor",
+      "state": "stopped",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-go",
+      "seat": "owner",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-go",
+      "seat": "check",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "lead",
+      "state": "running",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "go-dev",
+      "state": "unknown",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "reviewer",
+      "state": "unknown",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "fe-dev",
+      "state": "running",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "web-dev",
+      "state": "running",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "writer",
+      "state": "running",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "go-dev2",
+      "state": "running",
+      "runtime": "omp",
+      "pinned_hash": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "skills-dev",
+      "state": "unknown",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "context-dev",
+      "state": "unknown",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "4genthub-min",
+      "seat": "feedback-dev",
+      "state": "unknown",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "f4death",
+      "seat": "alpha",
+      "state": "stopped",
+      "runtime": "agy",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "f4kill",
+      "seat": "alpha",
+      "state": "stopped",
+      "runtime": "agy",
+      "pinned_hash": "",
+      "detail": "no_runtime_hook",
+      "redacted": false
+    },
+    {
+      "room": "f4off",
+      "seat": "alpha",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "f4off",
+      "seat": "beta",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "f4rev",
+      "seat": "alpha",
+      "state": "stopped",
+      "runtime": "agy",
+      "pinned_hash": "",
+      "detail": "no_runtime_hook",
+      "redacted": false
+    },
+    {
+      "room": "f4rev2",
+      "seat": "alpha",
+      "state": "stopped",
+      "runtime": "agy",
+      "pinned_hash": "",
+      "detail": "no_runtime_hook",
+      "redacted": false
+    },
+    {
+      "room": "f4typed",
+      "seat": "alpha",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "f4typed",
+      "seat": "beta",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "first-project-claude",
+      "seat": "owner",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "first-project-claude",
+      "seat": "check",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "g6launch",
+      "seat": "alpha",
+      "state": "stopped",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "kernel",
+      "seat": "lead",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "kernel",
+      "seat": "agent",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "kernel",
+      "seat": "human",
+      "state": "stopped",
+      "runtime": "terminal",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "kernel",
+      "seat": "worker",
+      "state": "stopped",
+      "runtime": "claude-code",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "kernel-agy",
+      "seat": "lead",
+      "state": "stopped",
+      "runtime": "agy",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "kernel-agy",
+      "seat": "agent",
+      "state": "stopped",
+      "runtime": "agy",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "kernel-agy",
+      "seat": "human",
+      "state": "stopped",
+      "runtime": "terminal",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "kernel-agy",
+      "seat": "worker",
+      "state": "stopped",
+      "runtime": "agy",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "of4room",
+      "seat": "alpha",
+      "state": "stopped",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "of4room",
+      "seat": "beta",
+      "state": "stopped",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "of4room",
+      "seat": "blankmodel",
+      "state": "stopped",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    },
+    {
+      "room": "of4room",
+      "seat": "gamma",
+      "state": "stopped",
+      "runtime": "omp",
+      "pinned_hash": "",
+      "detail": "",
+      "redacted": false
+    }
+  ],
+  "agents": [],
+  "local_record": {
+    "4genthub-deepseek/supervisor": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-go/owner": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-go/check": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/lead": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/go-dev": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/reviewer": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/fe-dev": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/web-dev": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/writer": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/go-dev2": {
+      "running": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/skills-dev": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/context-dev": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "4genthub-min/feedback-dev": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "f4death/alpha": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "f4kill/alpha": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "f4off/alpha": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "f4off/beta": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "f4rev/alpha": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "f4rev2/alpha": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "f4typed/alpha": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "f4typed/beta": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "first-project-claude/owner": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "first-project-claude/check": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "g6launch/alpha": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "kernel/lead": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "kernel/agent": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "kernel/human": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "kernel/worker": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "kernel-agy/lead": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "kernel-agy/agent": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "kernel-agy/human": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "kernel-agy/worker": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "of4room/alpha": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "of4room/beta": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "of4room/blankmodel": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    },
+    "of4room/gamma": {
+      "running": "",
+      "last_in_sync": "",
+      "since_last_in_sync": "unknown"
+    }
+  }
+}

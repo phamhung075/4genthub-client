@@ -1,0 +1,4 @@
+openrig-bridge: rig ok
+openrig-bridge: herdr unavailable: RuntimeError: exit 1: {"id":"cli:api:snapshot","error":{"code":"server_not_running","message":"no herd
+openrig-bridge: seat 'owner' in rig 4genthub-go exists in pods agy and dev; rename one
+openrig-bridge: seat 'check' in rig 4genthub-go exists in pods agy and dev; rename one

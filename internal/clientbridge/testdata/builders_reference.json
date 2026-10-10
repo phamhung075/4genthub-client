@@ -1,0 +1,80 @@
+{
+  "comment": "Reference outputs from scripts/openrig_bridge.py, generated once and stored so the Go port can be compared without a Python runtime in the test.",
+  "agents_input": [
+    {
+      "agent": "lead",
+      "agent_status": "working",
+      "pane_id": "w1:p1"
+    },
+    {
+      "agent": "Bad Name",
+      "agent_status": "idle",
+      "pane_id": "w1:p2"
+    },
+    {
+      "agent": "ok",
+      "agent_status": "weird",
+      "pane_id": "w1:p3"
+    },
+    {
+      "agent": "no-pane",
+      "agent_status": "idle",
+      "pane_id": "../etc"
+    }
+  ],
+  "agents_expect": [
+    {
+      "agent": "lead",
+      "status": "working",
+      "pane_id": "w1:p1"
+    },
+    {
+      "agent": "ok",
+      "status": "unknown",
+      "pane_id": "w1:p3"
+    }
+  ],
+  "duplicate_cases": [
+    {
+      "room": "rig",
+      "seat": "lead",
+      "pods": [
+        "a",
+        "b"
+      ],
+      "expect": "seat 'lead' in rig rig exists in pods a and b; rename one"
+    },
+    {
+      "room": "rig",
+      "seat": "lead",
+      "pods": [
+        "a",
+        "a"
+      ],
+      "expect": "seat 'lead' in rig rig is listed twice in pod a; rename one"
+    },
+    {
+      "room": "rig",
+      "seat": "lead",
+      "pods": [
+        "",
+        "b"
+      ],
+      "expect": "seat 'lead' in rig rig exists in pods (no pod) and b; rename one"
+    }
+  ],
+  "machine_id_cases": [
+    {
+      "in": "DESKTOP-TGKDSS8",
+      "expect": "DESKTOP-TGKDSS8"
+    },
+    {
+      "in": "  weird name ",
+      "expect": "weird-name-"
+    },
+    {
+      "in": "",
+      "expect": "machine"
+    }
+  ]
+}
