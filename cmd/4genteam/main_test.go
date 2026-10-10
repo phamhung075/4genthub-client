@@ -90,15 +90,17 @@ func TestBridgeIsRefusedByThePlatformMatrixBeforeItIsRefusedAsUnported(t *testin
 	}
 }
 
-// TestUsageAndVersionAreTheOnlyFreeCommands: no arguments is a usage error, an unknown command is a
-// usage error, and the two commands that need nothing at all succeed.
+// TestUsageAndVersionAreTheOnlyFreeCommands: no arguments means `up` (which then needs a rig), an
+// unknown command is a usage error, and the two commands that need nothing at all succeed.
 func TestUsageAndVersionAreTheOnlyFreeCommands(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := run(nil, &out, &errOut); code != clientcmd.ExitUsage {
 		t.Errorf("no arguments: exit code = %d, want %d", code, clientcmd.ExitUsage)
 	}
-	if !strings.Contains(errOut.String(), "commands:") {
-		t.Errorf("no arguments: stderr = %q, want the command list", errOut.String())
+	// No argument means `up`, as the Python client's dispatcher did, so the failure names THAT verb and
+	// the argument it is missing - not the command list it would have printed before.
+	if !strings.Contains(errOut.String(), "4genteam up:") || !strings.Contains(errOut.String(), "no default rig") {
+		t.Errorf("no arguments: stderr = %q, want up's required-rig error", errOut.String())
 	}
 
 	out.Reset()

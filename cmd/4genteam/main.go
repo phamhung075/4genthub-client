@@ -25,6 +25,10 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
+	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
+	"github.com/phamhung075/4genthub-client/internal/clientseat"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
@@ -69,6 +73,9 @@ func refuse(stderr io.Writer, name, owner string) int {
 // internal/clientcmd buys.
 func commands() []clientcmd.Command {
 	registry := append(clientsync.Commands(), clientbridge.Commands()...)
+	registry = append(registry, clientlifecycle.Commands()...)
+	registry = append(registry, clientseat.Commands()...)
+	registry = append(registry, clientpolicy.Commands()...)
 	return append(registry,
 		pending("feedback", "report friction to the owner", false),
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])", false),
@@ -76,13 +83,17 @@ func commands() []clientcmd.Command {
 }
 
 func main() {
+	// The client's ONE env file, loaded once, with a variable already in the environment winning.
+	if path, err := clientenv.DefaultPath(); err == nil {
+		_ = clientenv.Load(path)
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		usage(stderr)
-		return clientcmd.ExitUsage
+		// No argument means `up`, as the Python client did.
+		args = []string{"up"}
 	}
 	switch args[0] {
 	case "help", "-h", "--help":
@@ -114,7 +125,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	_, _ = io.WriteString(w, "4genteam - the local OpenRig client (sync, bridge, feedback, seatcheck)\n\ncommands:\n")
+	_, _ = io.WriteString(w, "4genteam - the local OpenRig client\n\ncommands:\n")
 	for _, cmd := range commands() {
 		_, _ = io.WriteString(w, "  "+cmd.Name()+"\t"+cmd.Summary()+"\n")
 	}
