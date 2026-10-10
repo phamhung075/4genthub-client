@@ -123,6 +123,15 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   untouched. The process table is read through the package own `rigProcRoot` seam (`/proc` by default,
   so a real machine behaves identically), so the suite needs no network, no rig and no seat.
 
+- The pinned hash is tested the way its Python row tested it (`internal/clientbridge/pinnedhash_test.go`):
+  a well-formed pin IS the seat's hash, and a value that does not match `hashPattern` is not used at all -
+  the row's own two values, a valid `ab12` and `../evil`, driven through the exported `PinnedHash` and
+  then through the `Hash` field `BuildSeats` fills. The invalid half is the guard at `payload.go:177`,
+  which no test in that package asserted until now. The invariant is the pattern and not the dot-dot:
+  the first character must be alphanumeric, so `../evil` fails on its leading `.` where `aa..bb` would be
+  accepted. Non-vacuity was proven in a clone - with the guard bypassed the test goes red on both halves
+  (`pinned hashes = [ab12 ../evil], want [ab12 ]`) and green again once the patch is reverted.
+
 ### Changed
 
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the `--seat` row is the exhaustive set now —
