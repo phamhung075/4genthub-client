@@ -2,6 +2,7 @@ package clientseat
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
@@ -59,5 +60,15 @@ func TestReseatRefusesAnUnknownSeatBeforeTouchingAny(t *testing.T) {
 	}
 	if len(*log) != 0 {
 		t.Fatalf("nothing may run before the seats are checked: %v", *log)
+	}
+}
+
+func TestReseatTakesTheRigBeforeItsSeatFlags(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := runReseat([]string{"--seat", "lead", "r"}, &out, &errOut); code != clientcmd.ExitUsage {
+		t.Fatalf("a flag before the rig must be refused with usage, got %d", code)
+	}
+	if code := runReseat([]string{"r"}, &out, &errOut); code != clientcmd.ExitUsage {
+		t.Fatalf("a rig with no --seat must be refused with usage, got %d", code)
 	}
 }

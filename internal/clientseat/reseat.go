@@ -53,10 +53,15 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	var seats repeatedFlag
 	flags.Var(&seats, "seat", "seat to restart (repeatable, required)")
-	if err := flags.Parse(rest); err != nil {
+	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
+		fmt.Fprintln(stderr, "4genteam seat reseat: the RIG comes first, then the --seat flags")
 		return clientcmd.ExitUsage
 	}
-	if flags.NArg() != 1 || len(seats) == 0 {
+	rig := rest[0]
+	if err := flags.Parse(rest[1:]); err != nil {
+		return clientcmd.ExitUsage
+	}
+	if flags.NArg() != 0 || len(seats) == 0 {
 		fmt.Fprintln(stderr, "4genteam seat reseat: a RIG and at least one --seat are required")
 		return clientcmd.ExitUsage
 	}
@@ -64,7 +69,7 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return report(stderr, err)
 	}
-	code, err := reseatSeats(flags.Arg(0), seats, allowPeak, defaultReseatDeps(stateRoot))
+	code, err := reseatSeats(rig, seats, allowPeak, defaultReseatDeps(stateRoot))
 	if err != nil {
 		return report(stderr, err)
 	}
@@ -147,7 +152,7 @@ const defaultSender = "owner session"
 
 func (sendCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		fmt.Fprintln(stdout, "usage: 4genteam send RIG SEAT [--from NAME] MESSAGE")
+		fmt.Fprintln(stdout, "usage: 4genteam send [--from NAME] RIG SEAT MESSAGE")
 		fmt.Fprintln(stdout, "\nSends MESSAGE to the seat with `rig send`, starting it with \"From NAME:\" so the seat knows who")
 		fmt.Fprintln(stdout, "wrote it (rig does not carry the sender when the call is not made from a seat shell). The text goes")
 		fmt.Fprintln(stdout, "to rig as one argument, so no shell expands backticks or $ in it. NAME defaults to \""+defaultSender+"\".")
