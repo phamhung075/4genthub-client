@@ -295,11 +295,17 @@ func (c *connectorConn) Hello(connectorID string) error {
 }
 
 // RegisterSession declares one local session and returns the session id the cloud assigned it.
-func (c *connectorConn) RegisterSession(sessionKey, name string) (string, error) {
+//
+// room and seat are the seat identity the connector observed: the rig that runs the session, and the
+// member inside it. THEY TRAVEL AS A PAIR OR NOT AT ALL - a frame naming a room without a seat, or a
+// seat without a room, is one the server would have to refuse or guess about, so the pair is sent
+// whole or omitted whole, and a session from a machine that cannot name its seat is still a session.
+func (c *connectorConn) RegisterSession(sessionKey, name, room, seat string) (string, error) {
 	if sessionKey == "" {
 		return "", errors.New("the session key cannot be empty")
 	}
-	if err := c.writeJSON(map[string]any{"type": "session", "session_key": sessionKey, "name": name}); err != nil {
+	frame := sessionFrame(sessionKey, name, room, seat)
+	if err := c.writeJSON(frame); err != nil {
 		return "", err
 	}
 	frame, err := c.readFrame()
@@ -314,6 +320,18 @@ func (c *connectorConn) RegisterSession(sessionKey, name string) (string, error)
 		return "", errors.New("the session acknowledgement carried no session id")
 	}
 	return id, nil
+}
+
+// sessionFrame is the session frame's body: the key and the name always, and the seat identity only
+// when BOTH halves are known. A half pair is never sent, because the server would either have to
+// refuse it or store a room or a seat it was never told.
+func sessionFrame(sessionKey, name, room, seat string) map[string]any {
+	frame := map[string]any{"type": "session", "session_key": sessionKey, "name": name}
+	if room != "" && seat != "" {
+		frame["room"] = room
+		frame["seat"] = seat
+	}
+	return frame
 }
 
 // AppendEvents sends one batch and returns the server's last_seq. last_seq is MONOTONE (the server's

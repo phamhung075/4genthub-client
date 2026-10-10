@@ -11,6 +11,30 @@ import (
 	"testing"
 )
 
+// The seat identity travels as a pair or not at all: a client that cannot name its seat still
+// registers its session, and the server is never handed a room it would have to complete itself.
+func TestSessionFrameCarriesTheSeatPairOrNeither(t *testing.T) {
+	frame := sessionFrame("dev-alice@room-a", "dev-alice@room-a", "room-a", "alice")
+	if frame["room"] != "room-a" || frame["seat"] != "alice" {
+		t.Errorf("frame = %v, want room and seat beside the key", frame)
+	}
+	if frame["session_key"] != "dev-alice@room-a" || frame["name"] != "dev-alice@room-a" {
+		t.Errorf("frame = %v, want the session key and name always", frame)
+	}
+	for _, c := range []struct{ what, room, seat string }{
+		{"a room without a seat", "room-a", ""},
+		{"a seat without a room", "", "alice"},
+	} {
+		half := sessionFrame("k", "n", c.room, c.seat)
+		if _, ok := half["room"]; ok {
+			t.Errorf("%s: frame carried a room: %v", c.what, half)
+		}
+		if _, ok := half["seat"]; ok {
+			t.Errorf("%s: frame carried a seat: %v", c.what, half)
+		}
+	}
+}
+
 func TestRedactRemovesSecretShapesAndKeepsTheRest(t *testing.T) {
 	cases := []struct {
 		name string

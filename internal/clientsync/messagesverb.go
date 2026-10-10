@@ -121,10 +121,10 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 		}
 		if len(candidates) > 1 {
 			fmt.Fprintf(stderr, "4genteam sync messages: %d sessions are running (%s), so this verb will not guess which prompt to type into — the wrong prompt is somebody else's. Name this seat's own with --session <name>\n",
-				len(candidates), strings.Join(candidates, ", "))
+				len(candidates), strings.Join(candidateNames(candidates), ", "))
 			return clientcmd.ExitUnavailable
 		}
-		session = candidates[0]
+		session = candidates[0].name
 	}
 
 	ledgerPath := messagesLedgerPath(out, room, seat)

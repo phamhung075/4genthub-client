@@ -142,6 +142,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (the same sha256), as the first skill of the tree's client kind. `README.md` and the two entries
   above now name the new path.
 
+- `4genteam sync connector` sends the seat identity it observed with the session: `rig ps --json` is
+  read once, the session is addressed by its `canonicalSessionName` (the name the UI shows and a person
+  passes to `--session`; `logicalId` still matches, it is simply no longer the address), and the frame
+  carries `room` (the rig) and `seat` (the member after the first dot of `logicalId`) beside the
+  session key — or NEITHER, when the rig names no seat for the session.
+
 ### Removed
 
 - The Python client is gone: `pyproject.toml`, `src/agenthub_client/` (11 modules and
