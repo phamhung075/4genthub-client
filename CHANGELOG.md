@@ -3,6 +3,15 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — `4genteam team prune`: remove the seats a team no longer defines
+
+### Added
+- `internal/clientteam/prune.go`: `4genteam team prune --team DIR [--dry-run]` lists the cloud room's seats, deletes those `team.json` does not define (`DELETE /api/v2/openrig/rooms/{room}/seats/{seat}`), and refuses to delete anything when the listing cannot be read. `apply` only creates, so a seat dropped from `team.json` stayed in the room and `sync rig` kept building it into the rig.
+- `internal/clientteam/team.go`: the verb is registered and listed in the usage.
+
+### Verified
+- `go test ./internal/clientteam/` -> ok, including four new cases: deletes only the undefined seats, a dry run deletes nothing, an unreadable listing deletes nothing, `--team` is required.
+
 ## 2026-10-11 — `4genteam evidence`: the client half of the evidence route
 
 ### Added
