@@ -30,7 +30,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: seatcheck <send|audit-scan> ...")
+		fmt.Fprintln(stderr, topUsage)
 		return 2
 	}
 	switch args[0] {
@@ -38,10 +38,36 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runSend(args[1:], stdout, stderr)
 	case "audit-scan":
 		return runAuditScan(args[1:], stdout, stderr)
+	case "-h", "--help", "help":
+		// Help is help: the flag package answers -h itself inside the two subcommands, and the guard's
+		// own usage must be reachable the same way. It goes to STDOUT with exit 0, because 2 is this
+		// command's usage/policy code - a help request returning it is indistinguishable from a caller's
+		// mistake to anything reading the exit status.
+		fmt.Fprintln(stdout, topUsage)
+		return 0
 	default:
 		fmt.Fprintf(stderr, "seatcheck: unknown subcommand %q\n", args[0])
 		return 2
 	}
+}
+
+// topUsage is the guard's own usage line: to STDERR with exit 2 when no subcommand was given (that is a
+// mistake), to STDOUT with exit 0 when help was asked for.
+const topUsage = "usage: seatcheck <send|audit-scan> ..."
+
+// helpOrUsageError turns one flag set's answer into an exit code.
+//
+// -h/--help is a REQUEST for help: flag.ContinueOnError makes the flag package answer it itself with
+// flag.ErrHelp, and the usage then goes to STDOUT with exit 0 - 2 is this command's usage/policy code,
+// so a help request returning it cannot be told apart from a mistyped flag. EVERY OTHER parse failure is
+// that mistake: the usage on stderr with exit 2, exactly as before.
+func helpOrUsageError(err error, usage string, stdout, stderr io.Writer) int {
+	if errors.Is(err, flag.ErrHelp) {
+		fmt.Fprintln(stdout, usage)
+		return 0
+	}
+	fmt.Fprintln(stderr, usage)
+	return 2
 }
 
 var intents = map[string]commpolicy.Intent{
@@ -90,16 +116,20 @@ func defaultPins() (string, error) {
 	return clientenv.ResolveSeatStore("")
 }
 
+// sendUsage is what `seatcheck send` prints: help when help was asked for, the usage error otherwise.
+const sendUsage = "usage: seatcheck send --to <seat> --intent <task|escalation|report|question|notice> -- <message words...>"
+
 func runSend(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	to := fs.String("to", "", "recipient seat")
 	intentName := fs.String("intent", "", "message intent")
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: seatcheck send --to <seat> --intent <task|escalation|report|question|notice> -- <message words...>")
-	}
+	// The flag package would print the usage itself, to the one writer it holds. It is silenced here
+	// because the stream depends on the ANSWER rather than on the flag set: helpOrUsageError prints it
+	// to stdout for -h/--help and to stderr for a mistake.
+	fs.Usage = func() {}
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return helpOrUsageError(err, sendUsage, stdout, stderr)
 	}
 	words := fs.Args()
 	if *to == "" || *intentName == "" || len(words) == 0 {
@@ -369,16 +399,18 @@ func rigSend(target, text string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// auditScanUsage is what `seatcheck audit-scan` prints, on the same rule as sendUsage.
+const auditScanUsage = "usage: seatcheck audit-scan --known <wrapper names comma separated> --file <path to a text file of observed command lines, one per line>"
+
 func runAuditScan(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("audit-scan", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	known := fs.String("known", "", "comma separated wrapper command names")
 	file := fs.String("file", "", "file of observed command lines, one per line")
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: seatcheck audit-scan --known <wrapper names comma separated> --file <path to a text file of observed command lines, one per line>")
-	}
+	// Silenced for the same reason as send's: see helpOrUsageError.
+	fs.Usage = func() {}
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return helpOrUsageError(err, auditScanUsage, stdout, stderr)
 	}
 	if *file == "" {
 		fmt.Fprintln(stderr, "seatcheck audit-scan: --file is required")

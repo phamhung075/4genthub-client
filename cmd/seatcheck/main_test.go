@@ -287,6 +287,32 @@ func TestSendUsageErrorsExit2(t *testing.T) {
 	}
 }
 
+// TestHelpAnswersUsageOnStdoutAndZero: -h, --help and help are REQUESTS, at every level this command
+// has. 2 is the documented usage/policy code, so a help request returning it is indistinguishable from
+// a mistyped flag - and -h is the flag package's own trigger, which is how the usage became unreachable
+// that way in the first place. A parse error that is NOT help keeps 2 and stderr (TestSendUsageErrorsExit2).
+func TestHelpAnswersUsageOnStdoutAndZero(t *testing.T) {
+	for _, args := range [][]string{
+		{"-h"}, {"--help"}, {"help"},
+		{"send", "-h"}, {"send", "--help"},
+		{"audit-scan", "-h"}, {"audit-scan", "--help"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			var out, errb bytes.Buffer
+			code := run(args, &out, &errb)
+			if code != 0 {
+				t.Fatalf("exit = %d, want 0", code)
+			}
+			if !strings.HasPrefix(out.String(), "usage: seatcheck") {
+				t.Errorf("stdout = %q, want the usage", out.String())
+			}
+			if errb.Len() != 0 {
+				t.Errorf("stderr = %q, want nothing: a help request is not an error", errb.String())
+			}
+		})
+	}
+}
+
 func TestSendIdentityFailureExits2(t *testing.T) {
 	_, got := seatEnv(t, allowPolicy)
 	identify = func() (identity, error) { return identity{}, io.ErrUnexpectedEOF }
