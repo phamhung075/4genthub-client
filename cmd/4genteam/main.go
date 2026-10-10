@@ -30,6 +30,8 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
 	"github.com/phamhung075/4genthub-client/internal/clientseat"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
+	"github.com/phamhung075/4genthub-client/internal/clientteam"
+	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 )
 
 // pending registers a verb whose implementation package does not exist yet. It REFUSES rather than
@@ -76,6 +78,8 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientlifecycle.Commands()...)
 	registry = append(registry, clientseat.Commands()...)
 	registry = append(registry, clientpolicy.Commands()...)
+	registry = append(registry, clientteam.Commands()...)
+	registry = append(registry, clientwatch.Commands()...)
 	return append(registry,
 		pending("feedback", "report friction to the owner", false),
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])", false),
