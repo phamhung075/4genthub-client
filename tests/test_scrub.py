@@ -10,12 +10,9 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / "agenthub_client" / "src" / "agenthub_client" / "scrub.py"
-FIXTURE = (
-    ROOT
-    / "agenthub_go/fastmcp/seat_management/domain/secretscan/testdata/scan_cases.json"
-)
+# A copy of the server's secret-scan corpus: the client stands alone, so it carries the cases its
+# patterns must keep matching. Refresh it from the server's testdata when the server adds a case.
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "scan_cases.json"
 
 
 def _load_module():

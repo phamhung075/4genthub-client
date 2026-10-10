@@ -27,8 +27,7 @@ it as module versions through the same ``PUT`` call ``apply`` uses::
   2. .claude/skills/*  one ``skill`` block per directory: the SKILL.md text plus its
                        source path and sha256
 
-The project root is the one the Claude-code hooks derive, imported from
-``utils/env_loader.get_project_root`` (never re-derived here). A block never carries a
+The project root is the directory the command is run from (``--root`` names another). A block never carries a
 secret value: a credential-shaped literal is refused with a clear message, while a value
 that names ``${ENV_VAR}`` is stored verbatim for the client runtime to expand.
 
@@ -59,7 +58,7 @@ provenance: it lists the stored modules (``GET /api/v2/openrig/modules``), reads
 the root that path is relative to.
 
 Two publishers write provenance with different path bases, so two roots are resolved in order.
-``--root`` (default: the hooks-derived project root) holds ``import-project``'s paths, relative
+``--root`` (default: the current directory) holds ``import-project``'s paths, relative
 to THIS project (``.claude/skills/<dir>/SKILL.md``). ``--library-root`` (default:
 ``$OPENRIG_SKILLS_ROOT``) holds ``publish-skills``' paths, relative to the OpenRig checkout
 (``skills/_canonical/...``, ``packages/daemon/assets/plugins/...``). A path is tried under
@@ -106,42 +105,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-# Sibling client-side helpers live next to this script; the Claude-code hooks live under the
-# repository's .claude. The hooks' env_loader owns the one project-root derivation, so this
-# script imports it instead of computing a second "project root" of its own.
-from . import paths
 from .scrub import scrub
 
 
 def get_project_root() -> str:
-    """The project root the Claude-code hooks derive, imported where it is USED.
+    """The project the client works on: the directory it is run from."""
+    return str(Path.cwd())
 
-    THE HOOKS LIVE IN THE REPOSITORY, under ``.claude/hooks``, so an installation that is not a
-    checkout has none: ``paths.HOOKS_DIR`` then resolves to a path that is not there. Importing this
-    module used to die outright in that case with ``ModuleNotFoundError: No module named 'utils'`` -
-    a message that names nothing a reader can act on, raised at import time, which took the whole
-    ``4genteam`` CLI with it, ``--help`` included. The import therefore moves into this function,
-    where its result is needed, and a missing hook tree raises the ONE thing that is actionable.
 
-    The name stays ``get_project_root`` because it is this module's seam: the tests replace it to
-    point a run at a temporary root. The derivation is still the hooks' own - this function returns
-    what ``utils.env_loader.get_project_root`` returns and computes nothing itself.
-    """
-    if str(paths.HOOKS_DIR) not in sys.path:
-        sys.path.insert(0, str(paths.HOOKS_DIR))
-    try:
-        from utils.env_loader import get_project_root as hooks_get_project_root
-    except ModuleNotFoundError as err:
-        raise SystemExit(
-            f"4genteam: this client needs the repository's Claude hooks, which only a checkout has "
-            f"({err}). Set AGENTHUB_REPO_ROOT to the repository root; looked in {paths.HOOKS_DIR}"
-        ) from err
-    return hooks_get_project_root()
-
-DEFAULT_TEAM_DIR = paths.TEAM_DIR
-# The skill library inventory (machine-readable twin of skill-library.md): 52 skills, each
-# with its committed path and the sha256 of its SKILL.md, plus the per-seat curation.
-DEFAULT_SKILL_INVENTORY = paths.SKILL_INVENTORY
 API = "/api/v2/openrig"
 
 EXIT_OK = 0
@@ -176,7 +147,7 @@ DRIFT_NO_PROVENANCE = "no-provenance"
 DRIFT_MIRROR = "mirror"
 DRIFT_HEADER = "stored skill provenance drifted from disk; nothing was written."
 # drift-check resolves each recorded path under the root its publisher wrote it against, in this
-# order: --root (default: the hooks' project root) holds import-project's paths, relative to THIS
+# order: --root (default: the current directory) holds import-project's paths, relative to THIS
 # project (``.claude/skills/<dir>/SKILL.md``); --library-root (default: ``$OPENRIG_SKILLS_ROOT``)
 # holds publish-skills' paths, relative to the OpenRig checkout (``skills/_canonical/...``,
 # ``packages/daemon/assets/plugins/...``). The root a finding resolved against is named in its line.
@@ -987,7 +958,7 @@ def main(argv: list = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     apply = subparsers.add_parser("apply", help="create modules, room, seats, links, overlays")
     apply.add_argument("--dry-run", action="store_true", help="print the plan, call nothing")
-    apply.add_argument("--team", type=Path, default=DEFAULT_TEAM_DIR, help="team definition directory")
+    apply.add_argument("--team", type=Path, required=True, help="team definition directory (holds team.json)")
     apply.set_defaults(func=cmd_apply)
     import_project = subparsers.add_parser(
         "import-project",
@@ -1004,8 +975,8 @@ def main(argv: list = None) -> int:
     )
     publish.add_argument("--dry-run", action="store_true", help="print the plan, call nothing")
     publish.add_argument(
-        "--inventory", type=Path, default=DEFAULT_SKILL_INVENTORY,
-        help="skill library inventory JSON (default: ai_docs/agent-system/skill-library.json)",
+        "--inventory", type=Path, required=True,
+        help="skill library inventory JSON",
     )
     publish.add_argument(
         "--source-root", type=Path, default=None,
@@ -1023,7 +994,7 @@ def main(argv: list = None) -> int:
     drift.add_argument(
         "--root", type=Path, default=None,
         help="project root import-project's paths are relative to "
-             "(default: the hooks' project root)",
+             "(default: the current directory)",
     )
     drift.add_argument(
         "--library-root", type=Path, default=None,

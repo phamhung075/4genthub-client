@@ -1923,12 +1923,14 @@ def test_install_checker_builds_and_links_on_path(
     real_checker_requirement, checker_home, monkeypatch, tmp_path, capsys
 ):
     pins = tmp_path / "pins"
+    go_dir = tmp_path / "server-go"
+    go_dir.mkdir()
     old = make_binary(tmp_path / "old")
     (checker_home / "seatcheck").symlink_to(old)
     calls = []
     monkeypatch.setattr(seat_sync.subprocess, "run", fake_go_build(calls))
 
-    code = run_cli(["install-checker", "--out", str(pins)])
+    code = run_cli(["install-checker", "--go-dir", str(go_dir), "--out", str(pins)])
     out, _ = capsys.readouterr()
 
     binary = pins.resolve() / "bin" / "seatcheck"
@@ -1945,13 +1947,9 @@ def test_install_checker_builds_and_links_on_path(
         str(binary),
         "./cmd/seatcheck",
     ]
-    assert (
-        kwargs["cwd"]
-        == seat_sync.AGENTHUB_GO_DIR
-        == MODULE_PATH.parents[3] / "agenthub_go"
-    )
-    assert kwargs["env"]["GOCACHE"] == str(seat_sync.AGENTHUB_GO_DIR / ".gocache")
-    assert kwargs["env"]["TMPDIR"] == str(seat_sync.AGENTHUB_GO_DIR / ".gotmp")
+    assert kwargs["cwd"] == go_dir.resolve()
+    assert kwargs["env"]["GOCACHE"] == str(go_dir.resolve() / ".gocache")
+    assert kwargs["env"]["TMPDIR"] == str(go_dir.resolve() / ".gotmp")
     assert kwargs["check"] is True
     # The installed link now satisfies pull's check.
     assert seat_sync.resolve_checker(pins.resolve())
@@ -1962,7 +1960,7 @@ def test_install_checker_fails_loudly_when_the_link_dir_is_not_on_path(
 ):
     monkeypatch.setenv("PATH", str(tmp_path / "elsewhere"))
     monkeypatch.setattr(seat_sync.subprocess, "run", fake_go_build([]))
-    assert run_cli(["install-checker", "--out", str(tmp_path / "pins")]) == 2
+    assert run_cli(["install-checker", "--go-dir", str(tmp_path), "--out", str(tmp_path / "pins")]) == 2
     err = capsys.readouterr().err
     assert f"add {checker_home} to PATH" in err
     assert "rig daemon stop" in err and "restart the daemon" in err
@@ -1976,7 +1974,7 @@ def test_install_checker_without_go_exits_2_and_links_nothing(
         raise FileNotFoundError("go")
 
     monkeypatch.setattr(seat_sync.subprocess, "run", no_go)
-    assert run_cli(["install-checker", "--out", str(tmp_path / "pins")]) == 2
+    assert run_cli(["install-checker", "--go-dir", str(tmp_path), "--out", str(tmp_path / "pins")]) == 2
     assert "go is not installed" in capsys.readouterr().err
     assert not (checker_home / "seatcheck").exists()
 
@@ -1988,7 +1986,7 @@ def test_install_checker_build_failure_exits_1_and_links_nothing(
         raise subprocess.CalledProcessError(3, command)
 
     monkeypatch.setattr(seat_sync.subprocess, "run", failing)
-    assert run_cli(["install-checker", "--out", str(tmp_path / "pins")]) == 1
+    assert run_cli(["install-checker", "--go-dir", str(tmp_path), "--out", str(tmp_path / "pins")]) == 1
     assert "go build failed with exit code 3" in capsys.readouterr().err
     assert not (checker_home / "seatcheck").exists()
 

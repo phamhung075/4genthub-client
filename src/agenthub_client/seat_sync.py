@@ -49,11 +49,11 @@ Usage:
   4genteam sync pull ROOM SEAT [--out DIR] [--update]
   4genteam sync rig ROOM [--out DIR] [--update]
   4genteam sync bundle ROOM SEAT --rig-yaml PATH --rig-root DIR [--out-dir DIR]
-  4genteam sync install-checker [--out DIR]
+  4genteam sync install-checker --go-dir DIR [--out DIR]
   4genteam sync switch ROOM SEAT [--runtime R] [--model M]
                        [--apply none|set-model|restart] [--reason TEXT]
 
-``install-checker`` builds ``agenthub_go/cmd/seatcheck`` to ``<DIR>/bin/seatcheck`` (DIR is the
+``install-checker`` builds ``<GO_DIR>/cmd/seatcheck`` (the Go module of the 4genthub server) to ``<DIR>/bin/seatcheck`` (DIR is the
 seat store) and links ``~/.local/bin/seatcheck`` to it. Seats run the bare name
 ``seatcheck send ...``, so it must resolve on the PATH the seats inherit; ``pull`` and ``rig``
 fail until it resolves to the store's binary. The check reads the PATH the seats inherit: while
@@ -89,7 +89,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 
-from . import paths
 
 EXIT_OK = 0
 EXIT_REMOTE = 1
@@ -120,7 +119,6 @@ def load_seat_policy():
 real_home = load_seat_policy().real_home
 
 DEFAULT_OUT = real_home() / ".openrig" / "agenthub-seats"
-AGENTHUB_GO_DIR = paths.GO_DIR
 CHECKER_NAME = "seatcheck"
 
 # The rendered omp MCP document inside a seat's render files, and the file name omp reads it from in
@@ -522,9 +520,10 @@ def require_checker(out: Path) -> None:
 
 def cmd_install_checker(args: argparse.Namespace) -> None:
     out = (args.out or DEFAULT_OUT).expanduser().resolve()
+    go_dir = args.go_dir.expanduser().resolve()
     binary = checker_binary(out)
     binary.parent.mkdir(parents=True, exist_ok=True)
-    cache, tmp = AGENTHUB_GO_DIR / ".gocache", AGENTHUB_GO_DIR / ".gotmp"
+    cache, tmp = go_dir / ".gocache", go_dir / ".gotmp"
     for directory in (cache, tmp):
         directory.mkdir(exist_ok=True)
     try:
@@ -538,7 +537,7 @@ def cmd_install_checker(args: argparse.Namespace) -> None:
                 str(binary),
                 "./cmd/seatcheck",
             ],
-            cwd=AGENTHUB_GO_DIR,
+            cwd=go_dir,
             env={**os.environ, "GOCACHE": str(cache), "TMPDIR": str(tmp)},
             check=True,
         )
@@ -1630,6 +1629,10 @@ def main(argv: list[str] | None = None) -> int:
     install = subparsers.add_parser(
         "install-checker",
         help="build seatcheck into the seat store and link it on PATH",
+    )
+    install.add_argument(
+        "--go-dir", type=Path, required=True,
+        help="the Go module that holds cmd/seatcheck (the 4genthub server's agenthub_go)",
     )
     install.add_argument(
         "--out", type=Path, default=None, help=f"seat store (default {DEFAULT_OUT})"

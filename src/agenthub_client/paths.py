@@ -1,20 +1,15 @@
-"""Where the repository's files are, resolved once.
+"""Where the client keeps its own files, resolved once.
 
-The client is installed editable from ``<repo>/agenthub_client``, so the repository root is three
-levels above this file. ``AGENTHUB_REPO_ROOT`` overrides it for a client installed anywhere else.
+The client depends on no other repository. ``CLIENT_DIR`` is its own checkout, its ``.env`` sits at
+that root (see ``.env.sample``) and its logs go to ``logs/`` there. The project a command works on
+is the directory it is run from.
 """
 
-import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-REPO_ROOT = Path(os.environ.get("AGENTHUB_REPO_ROOT") or Path(__file__).resolve().parents[3])
-load_dotenv(REPO_ROOT / ".env")  # values already in the environment win
-CLIENT_DIR = REPO_ROOT / "agenthub_client"
-LOG_DIR = REPO_ROOT / "logs"
-GO_DIR = REPO_ROOT / "agenthub_go"
+CLIENT_DIR = Path(__file__).resolve().parents[2]
+load_dotenv(CLIENT_DIR / ".env")  # values already in the environment win
+LOG_DIR = CLIENT_DIR / "logs"
 FORCECOMPACT = CLIENT_DIR / "rust" / "forcecompact" / "target" / "release" / "forcecompact"
-HOOKS_DIR = REPO_ROOT / ".claude" / "hooks"
-TEAM_DIR = REPO_ROOT / "scripts" / "team" / "4genthub"
-SKILL_INVENTORY = REPO_ROOT / "ai_docs" / "agent-system" / "skill-library.json"

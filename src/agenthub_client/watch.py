@@ -25,7 +25,6 @@ import sys
 import time
 from pathlib import Path
 
-from . import paths
 
 SELF = f"{sys.executable} -m agenthub_client.watch"
 ROOT = Path.home() / ".openrig" / "state" / "omp"
@@ -351,7 +350,7 @@ def close_workspaces(label: str) -> None:
 def grid(a: argparse.Namespace) -> None:
     """One pane per seat. Columns are split first, then each column into equal rows."""
     seats = rig_seats(a.rig)
-    cwd = str(paths.REPO_ROOT)
+    cwd = str(Path.cwd())
     close_workspaces(f"{a.rig} grid")
     root = herdr("workspace", "create", "--cwd", cwd, "--label", f"{a.rig} grid")[
         "root_pane"
@@ -438,7 +437,7 @@ def inputs(a: argparse.Namespace) -> None:
         new = pane_id(
             herdr(
                 "pane", "split", "--pane", p["pane_id"], "--direction", "down",
-                "--ratio", f"{INPUT_ROWS_RATIO:.3f}", "--cwd", str(paths.REPO_ROOT),
+                "--ratio", f"{INPUT_ROWS_RATIO:.3f}", "--cwd", str(Path.cwd()),
             )
         )
         herdr("pane", "rename", new, seat + INPUT_SUFFIX)
@@ -470,13 +469,13 @@ LEAD_ROWS_RATIO = 0.8  # share of the lead workspace that stays with its feed
 def lead_window(rig: str) -> None:
     """A workspace for the lead alone: its detailed feed on top, an input pane under it."""
     close_workspaces(f"{rig} lead")
-    root = herdr("workspace", "create", "--cwd", str(paths.REPO_ROOT), "--label", f"{rig} lead", "--no-focus")[
+    root = herdr("workspace", "create", "--cwd", str(Path.cwd()), "--label", f"{rig} lead", "--no-focus")[
         "root_pane"
     ]["pane_id"]
     below = pane_id(
         herdr(
             "pane", "split", "--pane", root, "--direction", "down",
-            "--ratio", f"{LEAD_ROWS_RATIO:.3f}", "--cwd", str(paths.REPO_ROOT),
+            "--ratio", f"{LEAD_ROWS_RATIO:.3f}", "--cwd", str(Path.cwd()),
         )
     )
     herdr("pane", "rename", below, f"lead{INPUT_SUFFIX}")

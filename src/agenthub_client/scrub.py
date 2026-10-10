@@ -3,8 +3,8 @@
 ``scrub`` redacts known secret values (exact, base64 and URL-encoded forms) and
 well-known secret patterns, then truncates to ``MAX_LEN``. It fails closed: any
 internal error returns ``("", True)`` so nothing unscrubbed leaves the machine.
-The patterns mirror the server-side scanner and share its fixture
-(agenthub_go/fastmcp/seat_management/domain/secretscan/testdata/scan_cases.json).
+The patterns mirror the server-side scanner and are tested against a copy of its
+corpus (tests/fixtures/scan_cases.json).
 """
 
 import base64
