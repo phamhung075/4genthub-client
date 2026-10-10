@@ -84,10 +84,6 @@ func Commands() []clientcmd.Command {
 	}
 }
 
-func wantsHelp(args []string) bool {
-	return len(args) > 0 && (args[0] == "-h" || args[0] == "--help")
-}
-
 func printHelp(out io.Writer, usage, description string) {
 	fmt.Fprintf(out, "%s\n\n%s\n", usage, description)
 }
@@ -139,7 +135,7 @@ func (upCommand) Summary() string {
 func (upCommand) NeedsRig() bool { return true }
 
 func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, upUsage,
 			"OpenRig daemon, the rig's seats, the status bridge, the compaction supervisor and the OpenRig UI, in that order.")
 		return clientcmd.ExitOK
@@ -283,7 +279,7 @@ func (compactCommand) Summary() string {
 func (compactCommand) NeedsRig() bool { return false }
 
 func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, compactUsage, "(Re)start the compaction supervisor, detached. A start whose child dies at once returns non-zero.")
 		return clientcmd.ExitOK
 	}
@@ -304,7 +300,7 @@ func (stopCommand) Summary() string { return "stop the compaction supervisor and
 func (stopCommand) NeedsRig() bool  { return false }
 
 func (stopCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, stopUsage, "Stop the compaction supervisor and the status bridge for a rig.")
 		return clientcmd.ExitOK
 	}
@@ -324,7 +320,7 @@ func (statusCommand) Summary() string { return "the supervisor's process and the
 func (statusCommand) NeedsRig() bool  { return false }
 
 func (statusCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, statusUsage, "The compaction supervisor's process, or 'not running', and the last five lines of its log.")
 		return clientcmd.ExitOK
 	}
@@ -343,7 +339,7 @@ func (logCommand) Summary() string { return "follow the supervisor's log" }
 func (logCommand) NeedsRig() bool  { return false }
 
 func (logCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, logUsage, "Follow the compaction supervisor's log for a rig.")
 		return clientcmd.ExitOK
 	}
@@ -376,7 +372,7 @@ func (uiCommand) Summary() string { return "open the OpenRig web UI" }
 func (uiCommand) NeedsRig() bool  { return true }
 
 func (uiCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, uiUsage, "Open the OpenRig web UI.")
 		return clientcmd.ExitOK
 	}
@@ -393,7 +389,7 @@ func (compactRunCommand) Summary() string {
 func (compactRunCommand) NeedsRig() bool { return false }
 
 func (compactRunCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
-	if wantsHelp(args) {
+	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, compactRunUsage,
 			"The compaction supervisor loop in the foreground. Every pass reads each seat's newest session log and\n"+
 				"applies three limits: past COMPACT_LIMIT_TOKENS the seat is told to find its own safe point, past\n"+

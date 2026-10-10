@@ -130,6 +130,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if cmd.Name() != args[0] {
 			continue
 		}
+		// HELP IS ANSWERED BEFORE THE PLATFORM MATRIX. A verb's own usage must be readable on a machine
+		// that has never had OpenRig: six verbs used to refuse here with the matrix's reason instead,
+		// because this loop resolved rig before it called the verb, so the verb's own help path was never
+		// reached. The predicate is the one every verb answers help with (clientcmd.HelpRequested), so a
+		// verb reached here for help never touches a rig, and a verb that does NOT ask for help still
+		// goes through the matrix below - the refusal is not softened for anything else.
+		if clientcmd.HelpRequested(args[1:]) {
+			return cmd.Run(context.Background(), nil, args[1:], stdout, stderr)
+		}
 		var rig *clientcmd.Rig
 		if cmd.NeedsRig() {
 			tool, err := clientcmd.RequireRig()

@@ -285,3 +285,11 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Python's argparse printed that as the sync parser's epilog, and the Go help had dropped it, which left
   `tests/test_seat_sync.py::test_help_states_offline_use_is_manual` with no Go witness. The sentence is
   ported, and the Go test carries the row's name so the instrument pairs it by name.
+- `4genteam <verb> --help` is answered even on a machine that has no `rig` on PATH. The dispatcher
+  resolved the tool before it called the verb, so `up --help`, `ui --help`, `bridge --help` and bridge's
+  `run`, `once` and `install-service` exited 3 with the matrix's message and printed nothing - exactly the
+  six shapes, of forty measured, that refused while every other verb answered. Help now wins over the
+  prerequisite check, decided by the one predicate every verb answers help with
+  (`clientcmd.HelpRequested`, which also replaces `clientlifecycle`'s first-position copy of it, so a verb
+  reached for help never has to touch a rig), and the gate is moved rather than removed: the same verbs
+  without `--help` still exit 3, naming what the machine is missing.

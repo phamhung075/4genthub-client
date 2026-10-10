@@ -147,3 +147,70 @@ func TestSyncRefusesAnUnknownVerbAsUsageNotAsUnavailable(t *testing.T) {
 		t.Errorf("sync with no verb: exit code = %d, want %d", code, clientcmd.ExitUsage)
 	}
 }
+
+// TestHelpIsAnsweredBeforeThePlatformMatrix: a verb's own usage must be readable on a machine that has
+// never had OpenRig, and the client's README states that rule without conditions. Six verbs used to
+// refuse here instead - `up`, `ui`, `bridge`, and bridge's `run`, `once` and `install-service` - because
+// the dispatcher resolved rig BEFORE it called the verb, so the verb's own help path, which every one of
+// them answers first, was never reached. Those six are the whole extent: measured against the binary with
+// a PATH that has no rig on it, they were the only refusing shapes of forty, and every other verb already
+// answered.
+//
+// The second half is the half a fix like this usually breaks: the SAME verbs driven WITHOUT --help must
+// still refuse with the matrix's reason, which is what makes this a move of the gate rather than its
+// removal.
+func TestHelpIsAnsweredBeforeThePlatformMatrix(t *testing.T) {
+	rigMissing(t)
+
+	for _, args := range [][]string{
+		{"up", "--help"},
+		{"up", "4genthub-dev", "--help"},
+		{"ui", "--help"},
+		{"bridge", "--help"},
+		{"bridge", "run", "--help"},
+		{"bridge", "once", "--help"},
+		{"bridge", "install-service", "--help"},
+	} {
+		var out, errOut bytes.Buffer
+		if code := run(args, &out, &errOut); code != clientcmd.ExitOK {
+			t.Errorf("%v: exit code = %d, want %d (stderr %q)", args, code, clientcmd.ExitOK, errOut.String())
+			continue
+		}
+		if out.Len() == 0 {
+			t.Errorf("%v: stdout is empty: the verb's own help was not answered", args)
+		}
+		if errOut.Len() != 0 {
+			t.Errorf("%v: stderr = %q, want nothing beside the help", args, errOut.String())
+		}
+	}
+
+	// And it is the VERB's own help, not the command list the top-level usage prints.
+	var out, errOut bytes.Buffer
+	if code := run([]string{"up", "--help"}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("up --help exited %d, want %d", code, clientcmd.ExitOK)
+	}
+	if !strings.Contains(out.String(), "usage: 4genteam up RIG") {
+		t.Errorf("up --help printed %q, want up's own usage line", out.String())
+	}
+
+	// The refusal is NOT softened: the same verbs without --help still fail on the matrix, naming the
+	// missing tool and printing nothing on stdout.
+	for _, args := range [][]string{
+		{"up", "4genthub-dev"},
+		{"ui"},
+		{"bridge"},
+		{"bridge", "once"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		if code := run(args, &out, &errOut); code != clientcmd.ExitUnavailable {
+			t.Errorf("%v: exit code = %d, want %d (the matrix still governs)", args, code, clientcmd.ExitUnavailable)
+		}
+		if !strings.Contains(errOut.String(), "rig") {
+			t.Errorf("%v: stderr = %q, want the missing tool named", args, errOut.String())
+		}
+		if out.Len() != 0 {
+			t.Errorf("%v: stdout = %q, want nothing: a refused verb does no partial work", args, out.String())
+		}
+	}
+}
