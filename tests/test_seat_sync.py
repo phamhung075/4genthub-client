@@ -1202,6 +1202,9 @@ def test_rig_links_the_one_deepseek_key_into_a_room_with_a_deepseek_seat(
     key = tmp_path / "deepseek-env"
     key.write_text("DEEPSEEK_API_KEY=placeholder\n")
     monkeypatch.setattr(seat_sync, "DEEPSEEK_ENV", key)
+    # The state root is redirected for ISOLATION, not convenience: omp_render_installs creates agent
+    # directories under whatever root is in force, and the live one is the operator's.
+    monkeypatch.setattr(seat_sync, "OMP_STATE_ROOT", tmp_path / "ompstate")
     env.set_rigspec(
         "name: room1\npods:\n  - id: main\n    members:\n"
         "      - id: coder\n        agent_ref: local:agents/coder\n"
@@ -1217,10 +1220,32 @@ def test_rig_links_the_one_deepseek_key_into_a_room_with_a_deepseek_seat(
     assert link.is_symlink() and link.resolve() == key.resolve()
 
 
+def test_rig_links_no_env_into_a_room_without_a_deepseek_seat(
+    env, tmp_path, capsys, monkeypatch
+):
+    """MINOR 6 of the d8d333b6 gate: no DeepSeek seat, no ``.env``.
+
+    The link is created only under the DeepSeek guard, and the branch that skips it had no test -
+    so a room whose members are not DeepSeek must get no ``.env`` in its directory at all.
+    """
+    key = tmp_path / "deepseek-env"
+    key.write_text("DEEPSEEK_API_KEY=placeholder\n")
+    monkeypatch.setattr(seat_sync, "DEEPSEEK_ENV", key)
+    monkeypatch.setattr(seat_sync, "OMP_STATE_ROOT", tmp_path / "ompstate")
+    env.set_rigspec(RIG_YAML, [{"seat": "seat1", "hash": HASH_A}])
+    env.set_seat(HASH_A)
+
+    code = run_cli(["rig", "room1", "--out", str(tmp_path)])
+
+    assert code == 0
+    assert not (tmp_path / "room1" / ".env").exists()
+
+
 def test_rig_refuses_a_deepseek_room_when_the_key_file_is_absent(
     env, tmp_path, capsys, monkeypatch
 ):
     monkeypatch.setattr(seat_sync, "DEEPSEEK_ENV", tmp_path / "missing-env")
+    monkeypatch.setattr(seat_sync, "OMP_STATE_ROOT", tmp_path / "ompstate")
     env.set_rigspec(
         "name: room1\npods:\n  - id: main\n    members:\n"
         "      - id: coder\n        agent_ref: local:agents/coder\n"
@@ -1235,6 +1260,91 @@ def test_rig_refuses_a_deepseek_room_when_the_key_file_is_absent(
     assert code == 2
     assert "does not exist" in err
     assert not (tmp_path / "room1" / "rig").exists()
+
+
+def test_rig_refuses_to_replace_a_pre_existing_env_file_and_names_it(
+    env, tmp_path, capsys, monkeypatch
+):
+    """MAJOR 2 of the d8d333b6 gate: a regular ``.env`` is the operator's, so REFUSE and name it.
+
+    The defect, observed by the reviewer: ``link_provider_key`` unlinked ANY existing
+    ``<room>/.env`` and symlinked the key over it, so a file this client did not create lost its
+    content with no message - against this file's own rule for the files it did not write. The
+    refusal must happen BEFORE the build, so a refused run leaves nothing half-applied.
+    """
+    key = tmp_path / "deepseek-env"
+    key.write_text("DEEPSEEK_API_KEY=placeholder\n")
+    monkeypatch.setattr(seat_sync, "DEEPSEEK_ENV", key)
+    monkeypatch.setattr(seat_sync, "OMP_STATE_ROOT", tmp_path / "ompstate")
+    env.set_rigspec(
+        "name: room1\npods:\n  - id: main\n    members:\n"
+        "      - id: coder\n        agent_ref: local:agents/coder\n"
+        "        runtime: omp\n        model: deepseek/deepseek-flash\n",
+        [{"seat": "coder", "hash": HASH_A}],
+    )
+    env.set_seat(
+        HASH_A,
+        room="room1",
+        seat="coder",
+        files=[
+            {"path": "runtime/omp-mcp.json", "content": json.dumps(OMP_MCP_DOCUMENT)}
+        ],
+    )
+
+    room_dir = tmp_path / "room1"
+    room_dir.mkdir()
+    operator_env = room_dir / ".env"
+    operator_env.write_text("OPERATOR_OWN=1\n")
+
+    code = run_cli(["rig", "room1", "--out", str(tmp_path)])
+    _, err = capsys.readouterr()
+
+    assert code == 2
+    assert str(tmp_path.resolve() / "room1" / ".env") in err
+    assert not operator_env.is_symlink()
+    assert operator_env.read_text() == "OPERATOR_OWN=1\n"
+    assert not (room_dir / "rig").exists()
+    # MINOR 4: the resolve pass must not create anything either. This assertion failed before that
+    # fix, with an empty agent directory left under the state root by a run that installed nothing.
+    assert not seat_sync.omp_agent_dir(
+        seat_sync.session_name("main", "coder", "room1")
+    ).exists()
+
+
+def test_rig_retargets_a_stale_key_link_and_leaves_its_old_target_alone(
+    env, tmp_path, capsys, monkeypatch
+):
+    """The other side of MAJOR 2's line, pinned so the boundary is visible rather than implicit.
+
+    The line is drawn at the FILE TYPE, because ownership cannot be read: a REGULAR ``.env`` is
+    refused (the test above), while a symlink is the shape this client itself creates, so a link
+    left over from a key file that moved is retargeted. What the old link POINTED AT is not this
+    client's to delete, so it must still be there afterwards.
+    """
+    key = tmp_path / "deepseek-env"
+    key.write_text("DEEPSEEK_API_KEY=placeholder\n")
+    monkeypatch.setattr(seat_sync, "DEEPSEEK_ENV", key)
+    monkeypatch.setattr(seat_sync, "OMP_STATE_ROOT", tmp_path / "ompstate")
+    env.set_rigspec(
+        "name: room1\npods:\n  - id: main\n    members:\n"
+        "      - id: coder\n        agent_ref: local:agents/coder\n"
+        "        runtime: omp\n        model: deepseek/deepseek-flash\n",
+        [{"seat": "coder", "hash": HASH_A}],
+    )
+    env.set_seat(HASH_A, room="room1", seat="coder")
+
+    room_dir = tmp_path / "room1"
+    room_dir.mkdir()
+    old_target = tmp_path / "moved-env"
+    old_target.write_text("OLD=1\n")
+    (room_dir / ".env").symlink_to(old_target)
+
+    code = run_cli(["rig", "room1", "--out", str(tmp_path)])
+
+    link = room_dir / ".env"
+    assert code == 0
+    assert link.is_symlink() and link.resolve() == key.resolve()
+    assert old_target.read_text() == "OLD=1\n"
 
 
 def test_rig_update_moves_pin_and_materialized_agent(env, tmp_path, capsys):

@@ -722,6 +722,12 @@ def cmd_rig(args: argparse.Namespace) -> None:
     # The rendered omp MCP documents, once the build is in place. Written VERBATIM and only when
     # they differ, so a rebuild is not a diff; the operator's rig-root .mcp.json is never opened.
     for rendered, destination, mode in omp_installs:
+        # A rig that has never been up has no agent directory yet; omp adopts the one placed here at
+        # its first launch, so the render installs before the seat exists. Created HERE, at write
+        # time, rather than in the resolve pass: that pass runs before the build, so a later refusal
+        # (a pre-existing .env, a missing key file, a failed pull) would otherwise leave empty
+        # directories under the LIVE state root for a run that installed nothing.
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if mode == "verbatim":
             changed = write_bytes_if_changed(rendered.read_bytes(), destination)
         else:
@@ -984,7 +990,11 @@ def launch_spec(rig_yaml_text: str, room_dir: Path) -> str:
 
 
 def link_provider_key(room_dir: Path) -> None:
-    """Link ``<room_dir>/.env`` to the one DeepSeek key file, replacing a link that points elsewhere."""
+    """Link ``<room_dir>/.env`` to the one DeepSeek key file, replacing only this client's OWN link.
+
+    A regular file at that path is not ours: it is REFUSED and named rather than replaced, which is
+    the same rule the rig directory keeps for the files the build did not create.
+    """
     if not DEEPSEEK_ENV.is_file():
         raise SyncError(
             f"the room has a {DEEPSEEK_MODEL_PREFIX} seat and {DEEPSEEK_ENV} does not exist: "
@@ -992,10 +1002,17 @@ def link_provider_key(room_dir: Path) -> None:
             EXIT_USAGE,
         )
     link = room_dir / ".env"
-    if link.is_symlink() and link.resolve() == DEEPSEEK_ENV.resolve():
-        return
-    if link.exists() or link.is_symlink():
+    if link.is_symlink():
+        if link.resolve() == DEEPSEEK_ENV.resolve():
+            return
+        # Our own link, aimed at a key file that moved: retargeting is what the link is for.
         link.unlink()
+    elif link.exists():
+        raise SyncError(
+            f"{link} already exists and is not a symlink: refusing to replace a file this client "
+            f"did not create. Move it aside, or point it at {DEEPSEEK_ENV}, to use the one key.",
+            EXIT_USAGE,
+        )
     link.symlink_to(DEEPSEEK_ENV)
 
 
@@ -1078,9 +1095,6 @@ def omp_render_installs(
             continue
         present = renders_by_seat[member_id]
         agent_dir = omp_agent_dir(session_name(pod_id, member_id, rig))
-        # A rig that has never been up has no agent directory yet; omp adopts the one placed here
-        # at its first launch, so the render installs before the seat exists.
-        agent_dir.mkdir(parents=True, exist_ok=True)
         if "verbatim" in present:
             installs.append((present["verbatim"], agent_dir / OMP_MCP_INSTALL_NAME, "verbatim"))
         if "merge" in present:
