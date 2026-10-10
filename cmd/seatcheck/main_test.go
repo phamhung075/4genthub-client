@@ -168,8 +168,21 @@ func TestSendPolicyMissingOrCorruptFailsClosed(t *testing.T) {
 			if got.calls != 0 {
 				t.Fatal("delivery ran without a usable policy")
 			}
-			if records := auditRecords(t, seatDir); len(records) != 0 {
-				t.Fatalf("audit = %+v, want none", records)
+			// A policy that cannot be loaded is still a decision the guard reached, and the box this
+			// guard exists to satisfy claims EVERY send is audited with its reason (allowed or denied).
+			// The line is what makes that claim true on this path: before it, this exit-2 wrote nothing
+			// at all, so a call refused here was invisible in the store (friction cbb1777a).
+			records := auditRecords(t, seatDir)
+			if len(records) != 1 {
+				t.Fatalf("audit = %+v, want exactly one line for the attempt", records)
+			}
+			got1 := records[0]
+			if got1.Allowed || got1.From != testMember || got1.To != "b" || got1.Intent != commpolicy.IntentTask {
+				t.Fatalf("audit line = %+v, want denied, from %q, to b, intent task", got1, testMember)
+			}
+			want := map[string]string{"missing": "unreadable", "corrupt": "unparsable"}[name]
+			if !strings.Contains(got1.Reason, want) {
+				t.Fatalf("reason = %q, want it to name %q", got1.Reason, want)
 			}
 		})
 	}
@@ -407,8 +420,8 @@ func TestSendRefusesAPolicyOfAnotherSeat(t *testing.T) {
 	if code != 2 || !strings.Contains(stderr, "belongs to seat") || got.calls != 0 {
 		t.Fatalf("exit = %d, stderr %q, calls = %d, want 2, a mismatch message, no delivery", code, stderr, got.calls)
 	}
-	if records := auditRecords(t, seatDir); len(records) != 0 {
-		t.Fatalf("audit = %+v, want none", records)
+	if records := auditRecords(t, seatDir); len(records) != 1 || records[0].Allowed || !strings.Contains(records[0].Reason, "belongs to seat") {
+		t.Fatalf("audit = %+v, want one denied line naming the mismatch", records)
 	}
 }
 

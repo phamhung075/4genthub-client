@@ -156,20 +156,51 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	seatDir := filepath.Join(pins, who.Rig, who.Member)
+	auditPath := filepath.Join(seatDir, "audit.jsonl")
+
+	// noDecision records a send that never reached a decision, then returns that failure's code. The
+	// seat's own store is what makes the line writable without a policy - the directory exists - and
+	// the friction this closes (cbb1777a) was exactly this path: an exit 2 on the policy file that
+	// left NO line, so the claim that every send is audited, allowed or denied, with its reason, was
+	// not true of a refusal that happened before the decision could be made. Every failure AFTER the
+	// seat directory is known is audited here; a pins-directory or identity failure is not, because
+	// without either there is no store to name and no seat to attribute the line to. A failed WRITE
+	// stays its own code: the reason is then unrecorded, which the caller must see.
+	noDecision := func(reason string) int {
+		// A seat DIRECTORY that does not exist is a store this guard cannot write to at all - the seat
+		// was never installed under this root - so the attempt is refused without a line rather than
+		// reported as an audit failure: there is nowhere to put it, and a refusal is still a refusal.
+		if _, err := os.Stat(seatDir); err != nil {
+			return 2
+		}
+		record := commpolicy.AuditRecord{
+			At:      time.Now().UTC(),
+			From:    who.Member,
+			To:      *to,
+			Intent:  intent,
+			Allowed: false,
+			Reason:  reason,
+		}
+		if err := appendAudit(auditPath, record); err != nil {
+			fmt.Fprintf(stderr, "seatcheck send: audit: %v\n", err)
+			return exitAuditFailed
+		}
+		return 2
+	}
 
 	data, err := os.ReadFile(filepath.Join(seatDir, "policy.json"))
 	if err != nil {
 		fmt.Fprintf(stderr, "seatcheck send: read policy: %v\n", err)
-		return 2
+		return noDecision("policy unreadable: " + err.Error())
 	}
 	policy, err := commpolicy.ParsePolicy(data)
 	if err != nil {
 		fmt.Fprintf(stderr, "seatcheck send: parse policy: %v\n", err)
-		return 2
+		return noDecision("policy unparsable: " + err.Error())
 	}
 	if policy.Seat != who.Member {
 		fmt.Fprintf(stderr, "seatcheck send: the policy in %s belongs to seat %q, not %q\n", seatDir, policy.Seat, who.Member)
-		return 2
+		return noDecision(fmt.Sprintf("policy belongs to seat %q, not %q", policy.Seat, who.Member))
 	}
 
 	// The policy and the roster speak in seat keys; a reply to a message header carries a full
@@ -188,7 +219,6 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 		Reason:     decision.Reason,
 		PolicyHash: commpolicy.PolicyHash(policy),
 	}
-	auditPath := filepath.Join(seatDir, "audit.jsonl")
 	if err := appendAudit(auditPath, record); err != nil {
 		fmt.Fprintf(stderr, "seatcheck send: audit: %v\n", err)
 		return exitAuditFailed

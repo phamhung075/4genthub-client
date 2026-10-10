@@ -3,6 +3,41 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-10 (late night) — a refused send is audited even when the policy cannot be read
+
+### Fixed
+- `cmd/seatcheck/main.go`: a send that never reached a decision now appends its audit line before it
+  fails, instead of failing silently. The friction (`cbb1777a`, found by the writer on the live rig)
+  was `seatcheck send` exiting 2 on a policy path resolved under the seat state dir and writing
+  NOTHING, while the box this guard exists to satisfy claims every message is audited — allowed or
+  denied, with its reason — so a refusal that happened before the decision was invisible in the store.
+  The three failures that can block the decision now write `Allowed:false` with a reason naming the
+  failure — `policy unreadable: ...`, `policy unparsable: ...`, `policy belongs to seat "x", not "y"` —
+  and then return the same non-zero code as before. A seat DIRECTORY that does not exist is refused
+  WITHOUT a line: there is no store to append to, and the guard does not create one in order to record
+  its own refusal. A failed audit WRITE keeps its own exit code (1), because the reason is then
+  unrecorded and the caller must see that.
+
+### Added
+- `cmd/seatcheck/main_test.go`: `TestSendPolicyMissingOrCorruptFailsClosed` now asserts the line —
+  exactly one, `Allowed:false`, from the calling seat, to the requested recipient, with a reason naming
+  the failure — for both the missing and the corrupt policy, and `TestSendRefusesAPolicyOfAnotherSeat`
+  does the same for the wrong-seat policy. Both asserted `len(records) == 0` before this change: the
+  defect was pinned in the tests themselves, which is why they are rewritten rather than extended.
+
+### Verified
+- FAIL-first, measured rather than argued: with the expectations in place and the guard untouched,
+  `go test ./cmd/seatcheck/ -run 'TestSendPolicyMissingOrCorruptFailsClosed|TestSendRefusesAPolicyOfAnotherSeat' -count=1`
+  -> `audit = [], want exactly one line for the attempt` (missing and corrupt) and
+  `audit = [], want one denied line naming the mismatch`. After the change: `ok`.
+- Through the REAL binary, in the friction's own configuration (store baked in with
+  `-ldflags -X main.installedPinsDir=<store>`, a seat directory present with no `policy.json`):
+  `seatcheck send --to lead --intent report -- probe` -> `rc=2` and the store gains
+  `{"At":"...","From":"go-dev","To":"lead","Intent":"report","Allowed":false,"Reason":"policy unreadable: open <store>/4genthub-min/go-dev/policy.json: no such file or directory","PolicyHash":""}`.
+  With the seat directory absent instead: `rc=2`, and the store still contains no seat directory.
+- Whole module: `gofmt -l cmd/seatcheck` empty, `go vet ./cmd/seatcheck/` rc 0, `go build ./...` rc 0,
+  `go test ./... -count=1` -> rc 0, 18 packages ok, no FAIL.
+
 ## 2026-10-10 (late night) — the shipped agent-browser skill stops linking files it never shipped
 
 ### Fixed
