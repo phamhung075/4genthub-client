@@ -56,6 +56,8 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   restarts seats whose pin changed, so a seat holding an old skill or a deleted cwd while its pin was
   current was never restarted and nothing in the client could do it. Unknown seats are refused before
   anything runs, and the DeepSeek peak gate applies (`--allow-peak` skips it).
+- `seat reseat --force` skips the quiet wait for the owner who decides a restart cannot wait. The seat resumes its
+  session; only the turn in progress is lost.
 - `send [--from NAME] RIG SEAT MESSAGE`: one signed message to one seat. The text starts with
   `From NAME:` because `rig send` does not carry the sender outside a seat shell, and it reaches `rig`
   as one argument, so no shell expands backticks in it.

@@ -42,9 +42,9 @@ func defaultReseatDeps(stateRoot string) *reseatDeps {
 
 func runReseat(args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		fmt.Fprintln(stdout, "usage: 4genteam seat reseat RIG --seat NAME [--seat NAME]... "+clientoffpeak.ModeFlagUsage)
+		fmt.Fprintln(stdout, "usage: 4genteam seat reseat RIG --seat NAME [--seat NAME]... [--force] "+clientoffpeak.ModeFlagUsage)
 		fmt.Fprintln(stdout, "\nRestarts each named seat once it is quiet, so it loads the skills, guide and cwd it is now")
-		fmt.Fprintln(stdout, "configured with. The seats go one at a time, in the order given. The DeepSeek peak gate applies:")
+		fmt.Fprintln(stdout, "configured with. The seats go one at a time, in the order given. --force skips the wait: a seat in the middle of a turn loses that turn and resumes its session. The DeepSeek peak gate applies:")
 		fmt.Fprintln(stdout, "with OFFPEAK_ONLY on (the default) a deepseek/ seat is not restarted at peak.")
 		return clientcmd.ExitOK
 	}
@@ -53,6 +53,7 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	var seats repeatedFlag
 	flags.Var(&seats, "seat", "seat to restart (repeatable, required)")
+	force := flags.Bool("force", false, "restart at once, without waiting for the seat to be quiet")
 	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
 		fmt.Fprintln(stderr, "4genteam seat reseat: the RIG comes first, then the --seat flags")
 		return clientcmd.ExitUsage
@@ -69,7 +70,11 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return report(stderr, err)
 	}
-	code, err := reseatSeats(rig, seats, allowPeak, defaultReseatDeps(stateRoot))
+	deps := defaultReseatDeps(stateRoot)
+	if *force {
+		deps.waitQuiet = func(string, string) bool { return true }
+	}
+	code, err := reseatSeats(rig, seats, allowPeak, deps)
 	if err != nil {
 		return report(stderr, err)
 	}
