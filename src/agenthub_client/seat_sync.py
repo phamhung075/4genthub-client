@@ -19,7 +19,9 @@ is an error; the script never silently falls back to another snapshot.
 ``rig`` materializes a whole room in one command. It fetches the room's rigspec,
 pulls every listed seat with the same pinning rules as ``pull``, then builds::
 
-    <out>/<room>/rig/rig.yaml         the server's RigSpec, written verbatim
+    <out>/<room>/rig/rig.yaml         the server's RigSpec with each member's cwd (the room
+                                      directory) and permission policy set
+    <out>/<room>/.env                 link to the one DeepSeek key, for a room with a deepseek/ seat
     <out>/<room>/rig/agents/<seat>    link to that seat's pinned hash directory
 
 The ``agents/<seat>`` link makes the ``local:agents/<seat>`` references in the
@@ -144,8 +146,17 @@ AGENTS_MD_INSTALL_NAME = "AGENTS.md"
 
 # Where omp keeps per-seat state: the runner's --state-root default, plus the session name. A module
 # constant like DEFAULT_OUT, so a test can point it at a scratch tree. A launch that overrides
-# --state-root cannot be followed from here - the install refuses legibly instead of missing quietly.
+# --state-root cannot be followed from here: the install would place the files under this root.
 OMP_STATE_ROOT = real_home() / ".openrig" / "state" / "omp"
+
+# The one home of the DeepSeek key. omp reads the launch directory's `.env`, so every room whose
+# seats run a `deepseek/` model gets a `.env` link here: the secret keeps one home and a new room
+# needs no copy of it.
+DEEPSEEK_ENV = real_home() / ".config" / "deepseek" / "env"
+DEEPSEEK_MODEL_PREFIX = "deepseek/"
+# Every seat of a materialized room launches with this policy: it resolves to a full-bypass launch
+# posture, without which omp's always-ask floor cancels approvals headlessly and the seat parks.
+SEAT_PERMISSION_POLICY = "builtin:yolo"
 SEATS_PATH = "/api/v2/openrig/seats"
 ROOMS_PATH = "/api/v2/openrig/rooms"
 
@@ -689,7 +700,7 @@ def cmd_rig(args: argparse.Namespace) -> None:
     rig_dir = room_dir / "rig"
     staging = Path(tempfile.mkdtemp(prefix=".rig.", dir=room_dir))
     try:
-        (staging / "rig.yaml").write_text(yaml_text, encoding="utf-8")
+        (staging / "rig.yaml").write_text(launch_spec(yaml_text, room_dir), encoding="utf-8")
         agents = staging / "agents"
         agents.mkdir()
         for seat in seats:
@@ -949,6 +960,45 @@ def apply_policy(document: str, target: Path) -> bool:
     return True
 
 
+def launch_spec(rig_yaml_text: str, room_dir: Path) -> str:
+    """The rig spec a launch needs: the server's spec with every member's ``cwd`` and policy set.
+
+    ``cwd`` is the room directory, which no build replaces. The server's ``.`` would resolve to the
+    ``rig`` directory, and ``swap_dir`` replaces that directory on every build, so a seat launched
+    from it kept a deleted working directory. The ``.env`` link that carries the DeepSeek key sits
+    in the same directory, and is created here for a room with a ``deepseek/`` seat.
+    """
+    import yaml  # rig_members has already shown a spec needs it
+
+    members = []
+    rig_members(rig_yaml_text)  # a spec that cannot be read raises here
+    spec = yaml.safe_load(rig_yaml_text)
+    for pod in spec.get("pods") or []:
+        members.extend(member for member in (pod or {}).get("members") or [] if member)
+    for member in members:
+        member["cwd"] = str(room_dir)
+        member["permission_policy"] = SEAT_PERMISSION_POLICY
+    if any(str(member.get("model") or "").startswith(DEEPSEEK_MODEL_PREFIX) for member in members):
+        link_provider_key(room_dir)
+    return yaml.safe_dump(spec, sort_keys=False)
+
+
+def link_provider_key(room_dir: Path) -> None:
+    """Link ``<room_dir>/.env`` to the one DeepSeek key file, replacing a link that points elsewhere."""
+    if not DEEPSEEK_ENV.is_file():
+        raise SyncError(
+            f"the room has a {DEEPSEEK_MODEL_PREFIX} seat and {DEEPSEEK_ENV} does not exist: "
+            "omp reads the key from the launch directory's .env",
+            EXIT_USAGE,
+        )
+    link = room_dir / ".env"
+    if link.is_symlink() and link.resolve() == DEEPSEEK_ENV.resolve():
+        return
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    link.symlink_to(DEEPSEEK_ENV)
+
+
 def rig_members(rig_yaml_text: str) -> list[tuple[str, str]]:
     """The ``(pod id, member id)`` pairs of a rig spec, in spec order; a bad spec raises.
 
@@ -1028,15 +1078,9 @@ def omp_render_installs(
             continue
         present = renders_by_seat[member_id]
         agent_dir = omp_agent_dir(session_name(pod_id, member_id, rig))
-        if not agent_dir.is_dir():
-            raise SyncError(
-                f"cannot install the rendered omp files for {rig}/{member_id}: "
-                f"{agent_dir} does not exist. That directory appears once the seat has been "
-                f"launched, so on a rig that has never been up run the client again after the "
-                f"seats exist. If the seats ARE running, this launch used a different "
-                f"--state-root than {OMP_STATE_ROOT}.",
-                EXIT_USAGE,
-            )
+        # A rig that has never been up has no agent directory yet; omp adopts the one placed here
+        # at its first launch, so the render installs before the seat exists.
+        agent_dir.mkdir(parents=True, exist_ok=True)
         if "verbatim" in present:
             installs.append((present["verbatim"], agent_dir / OMP_MCP_INSTALL_NAME, "verbatim"))
         if "merge" in present:

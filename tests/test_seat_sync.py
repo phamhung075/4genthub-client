@@ -508,8 +508,16 @@ def test_rig_writes_yaml_verbatim_and_materializes_each_seat_with_its_policy(
     assert code == 0
     assert out.strip().splitlines() == [f"rig:{rig_dir / 'rig.yaml'}"]
     assert err == ""
-    # The server's YAML is written verbatim, byte for byte.
-    assert (rig_dir / "rig.yaml").read_text() == yaml_text
+    # The server's spec, with each member launched from the room directory under the one policy.
+    spec = yaml.safe_load((rig_dir / "rig.yaml").read_text())
+    members = spec["pods"][0]["members"]
+    assert [member["id"] for member in members] == ["coder", "checker"]
+    assert [member["agent_ref"] for member in members] == [
+        "local:agents/coder",
+        "local:agents/checker",
+    ]
+    assert {member["cwd"] for member in members} == {str(tmp_path / "room1")}
+    assert {member["permission_policy"] for member in members} == {"builtin:yolo"}
 
     coder = rig_dir / "agents" / "coder"
     checker = rig_dir / "agents" / "checker"
@@ -549,7 +557,7 @@ def test_rig_second_run_keeps_pin_and_prints_notice(env, tmp_path, capsys):
     assert run_cli(["rig", "room1", "--out", str(tmp_path)]) == 0
     capsys.readouterr()
 
-    shifted_yaml = RIG_YAML + "# shifted\n"
+    shifted_yaml = RIG_YAML.replace("id: main", "id: shifted")
     env.set_rigspec(shifted_yaml, [{"seat": "seat1", "hash": HASH_B}])
     env.set_seat(HASH_B, files=[{"path": "docs/readme.md", "content": "newer"}])
     code = run_cli(["rig", "room1", "--out", str(tmp_path)])
@@ -568,7 +576,8 @@ def test_rig_second_run_keeps_pin_and_prints_notice(env, tmp_path, capsys):
     assert json.loads((agent / "policy.json").read_text()) == POLICY
     assert not (seat_dir / HASH_B).exists()
     # rig.yaml always comes from the current server response.
-    assert (rig_dir / "rig.yaml").read_text() == shifted_yaml
+    assert yaml.safe_load((rig_dir / "rig.yaml").read_text())["pods"][0]["id"] == "shifted"
+
 
 
 def test_rig_build_keeps_operator_files_it_did_not_create(env, tmp_path, capsys):
@@ -639,7 +648,7 @@ def test_rig_build_keeps_a_file_placed_while_it_materializes(
     assert (rig_dir / "dropped-while-building.txt").read_text() == "landed mid-build\n"
     assert "dropped-while-building.txt" in err
     # The build's own content is still the build's.
-    assert (rig_dir / "rig.yaml").read_text() == RIG_YAML
+    assert yaml.safe_load((rig_dir / "rig.yaml").read_text())["name"] == "room1"
 
 
 def test_rig_build_replaces_its_own_rendered_content(env, tmp_path, capsys):
@@ -1173,24 +1182,58 @@ def test_rig_writes_nothing_for_a_seat_with_no_mcp_block(
     assert "installed" not in err
 
 
-def test_rig_refuses_when_the_seat_agent_directory_is_absent(
+def test_rig_creates_the_seat_agent_directory_of_a_rig_that_has_never_been_up(
     env, tmp_path, capsys, monkeypatch
 ):
-    """A seat that has not been launched has no agent directory, and the install must say so rather
-    than miss quietly: the refusal names the path, the SEQUENCE that creates it, and the possibility
-    that the launch used a different --state-root. Nothing is written, including the rig itself."""
+    """A never-launched seat has no agent directory; the install creates it and places the render
+    there, so the first launch needs no second run of the client."""
     installed = _omp_rig(env, monkeypatch, tmp_path, make_agent_dir=False)
 
     code = run_cli(["rig", "room1", "--out", str(tmp_path)])
-    out, err = capsys.readouterr()
+
+    assert code == 0
+    assert installed.is_file()
+    assert (tmp_path / "room1" / "rig" / "rig.yaml").is_file()
+
+
+def test_rig_links_the_one_deepseek_key_into_a_room_with_a_deepseek_seat(
+    env, tmp_path, capsys, monkeypatch
+):
+    key = tmp_path / "deepseek-env"
+    key.write_text("DEEPSEEK_API_KEY=placeholder\n")
+    monkeypatch.setattr(seat_sync, "DEEPSEEK_ENV", key)
+    env.set_rigspec(
+        "name: room1\npods:\n  - id: main\n    members:\n"
+        "      - id: coder\n        agent_ref: local:agents/coder\n"
+        "        runtime: omp\n        model: deepseek/deepseek-flash\n",
+        [{"seat": "coder", "hash": HASH_A}],
+    )
+    env.set_seat(HASH_A, room="room1", seat="coder")
+
+    code = run_cli(["rig", "room1", "--out", str(tmp_path)])
+
+    link = tmp_path / "room1" / ".env"
+    assert code == 0
+    assert link.is_symlink() and link.resolve() == key.resolve()
+
+
+def test_rig_refuses_a_deepseek_room_when_the_key_file_is_absent(
+    env, tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setattr(seat_sync, "DEEPSEEK_ENV", tmp_path / "missing-env")
+    env.set_rigspec(
+        "name: room1\npods:\n  - id: main\n    members:\n"
+        "      - id: coder\n        agent_ref: local:agents/coder\n"
+        "        model: deepseek/deepseek-flash\n",
+        [{"seat": "coder", "hash": HASH_A}],
+    )
+    env.set_seat(HASH_A, room="room1", seat="coder")
+
+    code = run_cli(["rig", "room1", "--out", str(tmp_path)])
+    _, err = capsys.readouterr()
 
     assert code == 2
-    # The message names the missing DIRECTORY rather than the file that would go in it: the
-    # directory is what is absent, and it is what the operator has to look for.
-    assert str(_omp_agent_dir(tmp_path)) in err
-    assert "launched" in err and "--state-root" in err
-    assert not installed.exists()
-    # Validated before the build wrote anything: no half-applied rig directory.
+    assert "does not exist" in err
     assert not (tmp_path / "room1" / "rig").exists()
 
 
