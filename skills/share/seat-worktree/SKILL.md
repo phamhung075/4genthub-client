@@ -30,6 +30,15 @@ Read it from git (`git log`, `git diff main..<branch>`, `git show <commit>`), no
 
 Stale worktrees (`/tmp/wt-*`, `/tmp/gate-*`, prunable entries in `git worktree list`) are listed and pruned by the client. Do not remove a worktree with `rm`. Use `safe-file-removal` for single files only.
 
-## Open items
+## Ruled (architect, 2026-10-11: `ai_docs/core-architecture/seat-worktrees.md`)
 
-Branch naming, the exact merge routine and the pathspec change are ruled by the architect. Follow the committed ruling in `ai_docs/` when it exists; this skill carries only the rule that does not depend on it.
+- **Your worktree and branch:** `<roomDir>/wt/<seat>` on `<rig>/<seat>`, for example `4genthub-min/go-dev`. The reviewer's worktree is detached. Inside it, `agenthub_client` is on the same branch name, and `.claude` is detached. Never run `git submodule update` there.
+- **Staging:** `git add -- <paths>` (`-N` for a new file), then check `git diff --cached --stat` before every commit. `git add -A`, `git add .` and `commit -a` stay forbidden. A plain `git commit` after that check is allowed.
+- **Ready for a gate:** tell the lead your tip as `<rig>/<seat>=<sha>`.
+- **The merge routine (the lead's):**
+  1. The lead merges each ready tip `--no-ff` into `<rig>/integration`.
+  2. The reviewer gates its tip `C`. The verdict names `C`, the main tip `M`, every `branch=sha` it contains, the commands run, and each result.
+  3. The lead checks that integration = `C` and main = `M`, then runs `git merge --ff-only C` in the main checkout.
+  4. The lead re-checks that main = `C`.
+- **On a conflict:** the lead aborts and returns the item to you. Run `git merge <rig>/integration` on your branch, resolve it there, and name your new tip.
+- **After a land that contains your tip:** run `git merge --ff-only main` before your next edit.
