@@ -26,6 +26,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientfeedback"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
 	"github.com/phamhung075/4genthub-client/internal/clientseat"
@@ -80,8 +81,8 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientpolicy.Commands()...)
 	registry = append(registry, clientteam.Commands()...)
 	registry = append(registry, clientwatch.Commands()...)
+	registry = append(registry, clientfeedback.Commands()...)
 	return append(registry,
-		pending("feedback", "report friction to the owner", false),
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])", false),
 	)
 }

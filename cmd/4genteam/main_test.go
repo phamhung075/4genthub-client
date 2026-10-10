@@ -28,7 +28,6 @@ func rigMissing(t *testing.T) {
 func TestUnportedCommandRefusesRatherThanStubbing(t *testing.T) {
 	rigMissing(t)
 	for _, args := range [][]string{
-		{"feedback", "oops"},
 		{"seatcheck", "send", "x", "y"},
 		{"sync", "bundle", "4genthub-dev", "alpha"},
 	} {
