@@ -70,6 +70,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `--apply restart`), prints the manual steps for a runtime change because OpenRig cannot swap one in
   place, and exits 0 with `applied=none` when rig is missing or the seat is absent from `rig ps` -
   the cloud change is the authority, and only the local half is outstanding.
+- Every verb answers `--help` (`5cb9206`): one decision in `internal/clientcmd` replaced the per-verb
+  flag loops and closed the last five verbs that treated `--help` as an unknown flag - `bridge run`,
+  `bridge once`, `sync pull`, `sync status` and `sync messages` - and the one name that still refuses,
+  `seatcheck`, answers help too. `sync watch` is dropped from the `sync` group: Python's argparse
+  registers no such verb under sync, so the name is gone rather than advertised, and the group's usage
+  now describes only what this build implements.
 - `skills/`: this repository's skills tree, in four kinds — `share/<skill>` for every seat of every
   room, `rooms/<room>/<skill>` for one room, `rooms/<room>/<seat>/<skill>` for one seat, and
   `client/<skill>` for an LLM running the client. A directory holding `SKILL.md` is a skill; a
