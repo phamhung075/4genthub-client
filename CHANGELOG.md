@@ -132,6 +132,14 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   accepted. Non-vacuity was proven in a clone - with the guard bypassed the test goes red on both halves
   (`pinned hashes = [ab12 ../evil], want [ab12 ]`) and green again once the patch is reverted.
 
+- The seat state and runtime tables are asserted against their Python rows (`internal/clientbridge/seatstate_test.go`):
+ all ten rows of `test_seat_state_mapping` in the Python order, including the two blocked readings and `idle`, which the
+ captured dump never carries (stopped 26 / running 5 / unknown 5) so no other test in the package reached them; and every
+ runtime a report may carry through `BuildSeats` - `codex` and `omp` included, because the Python dump emits `omp` while
+ its parametrize list omits it - with a value outside the set reading `unknown`. Both rows were previously aliased to the
+ dump-only parity test, which cannot reach the missing states. Non-vacuity: with the blocked arm and the passthrough
+ broken the test goes red on exactly those three readings, and green again when the patch is reversed.
+
 ### Changed
 
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the `--seat` row is the exhaustive set now —
