@@ -33,44 +33,30 @@ usage window with the `resetsAt` it prints (task e7c7d763).
 
 ## Steps
 
-1. **MCP task first** (`manage_task` create): cap evidence, plan, acceptance.
-2. **Author the variant spec** next to the others — copy `rig-claude.yaml`, set per member
-   `runtime: omp` + `model: deepseek/deepseek-flash`, keep `permission_policy: builtin:yolo`.
-3. **DeepSeek key**: `ln -sfn <provider-env-file> <rig>/rig/.env` and `<rig>/.env`
-   (the omp launch dir is one of these; both is harmless insurance).
-4. **Dry-run**: `cd <rig>/rig && rig up rig-omp.yaml --plan` → expect `resolve_spec: ok`,
-   `preflight: ok` (yolo warnings only).
-5. **Have the user name the teardown.** The permission guard blocks
-   `rig down <rig> --delete --force` until the user explicitly asks for that rig's teardown.
-6. **Switch**: `rig down <rig> --delete --force` (rc=0; snapshot name is printed) then
-   `rig up rig-omp.yaml --yes`.
-7. **Verify**: `rig ps --nodes --rig <rig> --json` → every node
-   `runtime=omp, model=deepseek/deepseek-flash, startupStatus=ready`; `activity=running` once the
-   kickoff lands; queue WORK counts unchanged.
-8. **Kick off the team** — `rig send <rig>-<seat>@<rig> "<mission>"` per seat. Keep backticks out of that message: **your own shell executes a backtick substitution before rig sees the text**, and the seat policy does not catch it (a refusal matches the command prefix, not a substitution inside an argument) — wrap the message in SINGLE quotes. Every kickoff needs:
-   goal; files to read (`handover/_shared.md`, `OPENRIG-TASK.md`, `NEXT_GEN.md`,
-   `state-<seat>.md`); **state at the cutoff** (what was approved/in-flight, pending push
-   requests, uncommitted paths not to lose); the rules (commit locally only, stage by explicit
-   path, never `git add -A`, no compatibility code, the user approves every push, don't touch other
-   rigs); the flow (lead → go-dev → reviewer → lead status file).
-   **Runtime note is mandatory, and it has INVERTED since this playbook was written**: an
-   omp seat DOES get MCP and skills when its render carries mcp blocks — measured on this rig: the
-   launch dir's `.mcp.json` declares `deepseek` and `agenthub_http`, and a seat resolves
-   `mcp__agenthub_http__*` and `mcp__deepseek__*` (the renderer, `seatrenderer.RenderSeat`, emits the
-   per-seat file to `$PI_CODING_AGENT_DIR/.mcp.json`; a seat with NO mcp block gets no
-   file and no servers, so check before asserting either way). So do NOT tell a seat to ignore
-   `mcp__*` or `deepseek_agent` instructions: they are live, and the seat's own AGENTS.md depends on
-   them. Headless workers: `omp --model deepseek/deepseek-flash -p '<job>'`; `--no-tools` disables
-   ALL built-in tools (`omp --help`), so add it only for a job that reads and writes nothing.
-9. **Revive companion rigs**: supervisor loop `rig up <RIG> --existing --yes`
-   (restores from the latest snapshot and resumes the session).
-10. **Open the watch wall**: `4genteam watch --rig <rig>` (the client's binary; `4genteam up <rig>`
-    opens the same wall as part of the lifecycle; replaces the earlier wall, same style; the user's
-    standing choice; see `spawn-team`), one per companion rig. `rig terminal open <rig>` gives raw
-    `tmux attach` tiles as a secondary view. Closing a pane only detaches; it never touches the
-    daemon-owned session.
-11. **Switch back after the reset**: `rig down <rig> --delete --force` → `rig up rig-claude.yaml`
-    (variants are drop-in; the parked Claude sessions' state lives in the handover files + queue).
+1. **Record the switch in cloud**:
+   ```bash
+   4genteam sync switch <rig> <seat> --runtime <new-runtime> --model <new-model>
+   ```
+   This records the occupant change in 4genthub cloud first.
+2. **Author or select the variant spec**:
+   In `~/.openrig/agenthub-seats/<rig>/rig/`:
+   `rig.yaml` (agy), `rig-claude.yaml` (claude-code), `rig-omp.yaml` (omp/DeepSeek).
+   Set per member `runtime: omp` + `model: deepseek/deepseek-flash`, keep `permission_policy: builtin:yolo`.
+3. **DeepSeek key**:
+   Ensure `~/.config/4genthub/.env` and `~/.config/deepseek/.env` contain `DEEPSEEK_API_KEY`.
+4. **Dry-run**:
+   `cd <rig>/rig && rig up rig-omp.yaml --plan` → expect `resolve_spec: ok`, `preflight: ok`.
+5. **Teardown previous rig** (requires owner's explicit confirmation):
+   `rig down <rig> --delete --force` (takes a snapshot and deletes sessions).
+6. **Re-launch with the client lifecycle (`4genteam up`)**:
+   Do **NOT** use bare `rig up`! Always bring the rig back via `4genteam up` or `4genteam continue` so that `rigd`, the auto-compaction supervisor, the watchdog, and the status bridge are running:
+   ```bash
+   4genteam up <rig> [--allow-peak]
+   ```
+   (If pointing to a specific new spec file, launch the spec once and immediately ensure `4genteam up <rig>` or `4genteam compact <rig>` is running).
+7. **Verify & watch**:
+   `4genteam watch --rig <rig>` opens the styled 2-column live monitor.
+   `4genteam status <rig>` verifies compaction supervisor and safeguards are running.
 
 ## Gotchas seen live
 
