@@ -568,7 +568,16 @@ func TestSeatLogPrefersOmpStateThenClaude(t *testing.T) {
 	if runtime != "claude" || path != "" {
 		t.Errorf("a seat with no log resolved to (%q, %q), want (\"\", claude)", path, runtime)
 	}
-	_ = fake
+
+	// OpenRig writes a state directory with only agent/AGENTS.md for a Claude Code seat too. It holds no
+	// session, so the seat is not an omp seat and its Claude Code log is looked for.
+	if err := os.MkdirAll(filepath.Join(root, "r-architect@r", "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake.on("pgrep -af claude .*--name r-architect@r", "")
+	if _, runtime = seatLog(context.Background(), root, "r", "architect"); runtime != "claude" {
+		t.Errorf("a state directory with no session resolved to runtime %q, want claude", runtime)
+	}
 }
 
 // Mirrors test_seat_model_is_the_last_model_in_the_log_tail: the model the header shows is the one that

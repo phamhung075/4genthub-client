@@ -3,6 +3,15 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — the watch grid showed no events for a Claude Code seat
+
+### Fixed
+- `internal/clientwatch/seatlog.go`, `internal/seatlog/seatlog.go`: a seat whose omp state directory existed was
+  always read as an omp seat, even with no session in it. OpenRig writes that directory (holding only
+  `agent/AGENTS.md`) for a Claude Code seat too, so the architect's grid pane showed its header and no events.
+  An omp seat now needs a session in the directory; without one the Claude Code log is looked for.
+- Test: `TestSeatLogPrefersOmpStateThenClaude` gains the empty-directory case; it fails without the change.
+
 ## 2026-10-11 — the withheld copy's mode and its seven-day window are asserted
 
 ### Tests

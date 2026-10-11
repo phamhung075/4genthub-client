@@ -63,12 +63,15 @@ func Kilo(tokens int) string {
 }
 
 // SeatLog is seat_log: (the seat's newest session log, its runtime), where the omp state directory is
-// tried first and the Claude Code log is the fallback. An empty path means the seat has no log this
+// tried first and the Claude Code log is the fallback. An omp state directory with no session in it (OpenRig
+// writes one for a Claude Code seat too, holding only its guide) does not count as an omp seat. An empty path means the seat has no log this
 // machine can read, which the caller skips rather than guessing at.
 func SeatLog(stateRoot, rig, seat string) (string, string) {
 	seatDir := filepath.Join(stateRoot, rig+"-"+seat+"@"+rig)
 	if info, err := os.Stat(seatDir); err == nil && info.IsDir() {
-		return NewestSession(seatDir), "omp"
+		if session := NewestSession(seatDir); session != "" {
+			return session, "omp"
+		}
 	}
 	return claudeLog(rig, seat), "claude"
 }

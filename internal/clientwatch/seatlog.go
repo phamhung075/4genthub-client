@@ -86,7 +86,9 @@ func newestByModTime(paths []string) string {
 func seatLog(ctx context.Context, root, rig, seat string) (string, string) {
 	seatDir := filepath.Join(root, fmt.Sprintf("%s-%s@%s", rig, seat, rig))
 	if info, err := os.Stat(seatDir); err == nil && info.IsDir() {
-		return newestSession(seatDir), "omp"
+		if session := newestSession(seatDir); session != "" {
+			return session, "omp"
+		}
 	}
 	return claudeLog(ctx, rig, seat), "claude"
 }
