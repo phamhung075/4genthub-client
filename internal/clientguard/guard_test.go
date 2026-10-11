@@ -75,7 +75,9 @@ func TestAPushFromTheCheckoutWithNoSessionIsNotRefused(t *testing.T) {
 	}
 }
 
-// A SEAT's commit in the shared checkout is refused and names the checkout and the worktree to use.
+// A SEAT's commit in the shared checkout is refused, and the route out is NOT that same checkout. What is
+// asserted here is the MESSAGE: a refusal that tells the reader to commit where the refusal just refused is
+// no route out (the reviewer reproduced exactly that against the real verb).
 func TestASeatsCommitInTheSharedCheckoutIsRefused(t *testing.T) {
 	f := seatFacts(HookPreCommit)
 	f.Worktree, f.Linked = "/checkout", false
@@ -86,6 +88,13 @@ func TestASeatsCommitInTheSharedCheckoutIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(lines[0], "/checkout") || !strings.Contains(lines[0], "shared checkout") {
 		t.Errorf("refusal = %q, want it to name the shared checkout", lines[0])
+	}
+	if want := "Run the commit from your own worktree instead."; !strings.Contains(lines[0], want) {
+		t.Errorf("refusal = %q, want it to name the route out as %q", lines[0], want)
+	}
+	after := lines[0][strings.Index(lines[0], "Run the commit from"):]
+	if strings.Contains(after, "/checkout") {
+		t.Errorf("the route out names the path just refused: %q", after)
 	}
 }
 

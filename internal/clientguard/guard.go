@@ -175,8 +175,12 @@ func refusalPush(f Facts) string {
 
 func refusalSharedCheckout(f Facts) string {
 	worktree := f.Worktree
-	if worktree == "" {
-		worktree = "your worktree"
+	if worktree == "" || worktree == f.MainRoot {
+		// A commit made in the checkout itself is the case this refusal exists for, and that checkout is
+		// already named as the wrong place: naming it as the right one too would send the reader in a
+		// circle ("commit in the shared checkout ... run the commit from the shared checkout instead").
+		// The seat's own worktree is not derivable from here, so the route out is named, not invented.
+		worktree = "your own worktree"
 	}
 	return fmt.Sprintf("the git guard refuses a commit made in the shared checkout %s: every seat commits in "+
 		"its own worktree, because a commit made here is attributed to no seat and mixes with everyone "+
