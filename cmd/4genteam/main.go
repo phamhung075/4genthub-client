@@ -26,6 +26,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientevidence"
 	"github.com/phamhung075/4genthub-client/internal/clientfacts"
 	"github.com/phamhung075/4genthub-client/internal/clientfeedback"
+	"github.com/phamhung075/4genthub-client/internal/clientguard"
 	"github.com/phamhung075/4genthub-client/internal/clientheal"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
@@ -108,6 +109,7 @@ func commands() []clientcmd.Command {
 	// where it is, in clientlifecycle.
 	registry = append(registry, clientroom.Commands()...)
 	registry = append(registry, clientheal.Commands()...)
+	registry = append(registry, clientguard.Commands()...)
 	registry = append(registry, clientoffpeak.Commands()...)
 	registry = append(registry, clientseat.Commands()...)
 	registry = append(registry, clientpolicy.Commands()...)

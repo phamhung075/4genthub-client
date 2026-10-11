@@ -132,9 +132,12 @@ func Decide(f Facts) Verdict {
 			verdict.Refusals = append(verdict.Refusals, refusalPush(f))
 		}
 	} else {
-		// A commit is refused in the shared checkout, and refused under a foreign author. The shared
-		// checkout is the one no seat owns: everything committed there is attributed to nobody.
-		if !inWorktree {
+		// A SEAT's commit in the shared checkout is refused: it is the day's own failure, and a commit made
+		// there is attributed to no seat and mixes with everyone else's. The owner commits in the checkout
+		// legitimately - the checkout is the owner's tree, not a seat's - so the refusal needs the daemon's
+		// session name, which every runtime's seat has. Without it this is the doctor's F1 row to report, not
+		// a refusal that would stop the owner's own work (4.4's first risk).
+		if !inWorktree && seat {
 			verdict.Refusals = append(verdict.Refusals, refusalSharedCheckout(f))
 		}
 		if line := refusalForeignAuthor(f); line != "" {

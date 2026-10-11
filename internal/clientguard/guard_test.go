@@ -75,17 +75,25 @@ func TestAPushFromTheCheckoutWithNoSessionIsNotRefused(t *testing.T) {
 	}
 }
 
-// A commit made in the shared checkout is refused and names the worktree to commit from.
-func TestACommitInTheSharedCheckoutIsRefused(t *testing.T) {
-	f := ownerFacts(HookPreCommit)
-	f.Worktree = "/checkout/wt/writer"
+// A SEAT's commit in the shared checkout is refused and names the checkout and the worktree to use.
+func TestASeatsCommitInTheSharedCheckoutIsRefused(t *testing.T) {
+	f := seatFacts(HookPreCommit)
+	f.Worktree, f.Linked = "/checkout", false
 
 	lines := refusals(t, f)
 	if len(lines) != 1 {
 		t.Fatalf("refusals = %v, want one", lines)
 	}
-	if !strings.Contains(lines[0], "/checkout") || !strings.Contains(lines[0], "/checkout/wt/writer") {
-		t.Errorf("refusal = %q, want it to name both the checkout and the worktree", lines[0])
+	if !strings.Contains(lines[0], "/checkout") || !strings.Contains(lines[0], "shared checkout") {
+		t.Errorf("refusal = %q, want it to name the shared checkout", lines[0])
+	}
+}
+
+// The OWNER commits in the checkout legitimately: the checkout is the owner's tree, and refusing there would
+// stop the owner's own work for a rule aimed at seats.
+func TestTheOwnersCommitInTheCheckoutIsNotRefused(t *testing.T) {
+	if lines := refusals(t, ownerFacts(HookPreCommit)); len(lines) != 0 {
+		t.Fatalf("refusals = %v, want none for the owner in the checkout", lines)
 	}
 }
 

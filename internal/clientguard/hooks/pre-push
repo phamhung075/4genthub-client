@@ -1,0 +1,28 @@
+#!/bin/sh
+# 4genteam git guard - pre-push
+#
+# Installed by `4genteam guard install`. This file carries the guard's marker so the `hooks` row of
+# `4genteam doctor` can see the guard is in force; the template it was written from lives in the client
+# (internal/clientguard/hooks/pre-push), so edit that, not this copy.
+#
+# PUSH FAILS CLOSED (4.4): a push is the one action here that cannot be undone, so a guard that cannot run
+# refuses the push rather than letting it through. The previous hook runs FIRST, because git hands the refs
+# to a pre-push hook on standard input and a hook that read it would leave the guard nothing to read.
+
+GUARD_BIN="__GUARD_BIN__"
+PREV="__PREV__"
+
+if [ -n "$PREV" ] && [ -x "$PREV" ]; then
+    "$PREV" "$@"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        exit "$status"
+    fi
+fi
+
+if [ ! -x "$GUARD_BIN" ]; then
+    echo "4genteam git guard: $GUARD_BIN is gone, so the guard cannot check this push - refusing it, because a push cannot be undone" >&2
+    exit 1
+fi
+
+exec "$GUARD_BIN" guard run pre-push "$@"

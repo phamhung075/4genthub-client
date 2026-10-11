@@ -1,0 +1,28 @@
+#!/bin/sh
+# 4genteam git guard - pre-commit
+#
+# Installed by `4genteam guard install`. This file carries the guard's marker so the `hooks` row of
+# `4genteam doctor` can see the guard is in force; the template it was written from lives in the client
+# (internal/clientguard/hooks/pre-commit), so edit that, not this copy.
+#
+# A commit is NOT a blocking hook (4.4): a guard that cannot run says so and lets the commit through, and
+# so does the previous hook below.
+
+GUARD_BIN="__GUARD_BIN__"
+PREV="__PREV__"
+
+if [ -x "$GUARD_BIN" ]; then
+    "$GUARD_BIN" guard run pre-commit "$@"
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        exit "$status"
+    fi
+else
+    echo "4genteam git guard: $GUARD_BIN is not there, so the guard did not check this commit (a commit is not blocked by a guard that cannot run)" >&2
+fi
+
+# The hook this one replaced, run exactly as git would have run it.
+if [ -n "$PREV" ] && [ -x "$PREV" ]; then
+    exec "$PREV" "$@"
+fi
+exit 0
