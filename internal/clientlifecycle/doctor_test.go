@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,10 +52,16 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 
 	previousStatePath := clientservices.AgentStatePath
 	previousNow, previousLive := clientservices.Now, clientservices.Live
+	previousOrphans := orphanRowsFor
 	t.Cleanup(func() {
 		clientservices.AgentStatePath = previousStatePath
 		clientservices.Now, clientservices.Live = previousNow, previousLive
+		orphanRowsFor = previousOrphans
 	})
+	// The orphan row reads the queue and the node list through the rig tool, and no test in this file runs
+	// a daemon: the default here is a report with NO orphan row at all, so every case below sees exactly
+	// the safeguard rows it was written for. A case that wants the row replaces this.
+	orphanRowsFor = func(string) []orphanRow { return nil }
 
 	clientservices.AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
 
@@ -128,6 +135,149 @@ func doctor(t *testing.T, fixture *healthFixture, args ...string) (int, string, 
 	var out, errOut bytes.Buffer
 	code := (doctorCommand{}).Run(context.Background(), append(args, "--state-root", fixture.root), &out, &errOut)
 	return code, out.String(), errOut.String()
+}
+
+// orphanRowFor is one rig's orphan_handoffs row as a case supplies it, so a case can choose the state
+// without producing a queue or a daemon.
+func orphanRowFor(t *testing.T, rig string, state string, orphans ...orphanHandoff) {
+	t.Helper()
+	orphanRowsFor = func(string) []orphanRow {
+		return []orphanRow{{
+			Row: clientservices.Health{
+				Rig:       rig,
+				Safeguard: clientservices.OrphanHandoffs,
+				State:     state,
+				AgeS:      clientservices.UnknownAge,
+			},
+			Orphans: orphans,
+		}}
+	}
+}
+
+// 7.11: `doctor` reports `orphan_handoffs`, the row is STOPPED, and it NAMES every stranded qitem with the
+// destination it was addressed to. The same names go to stderr, because the refusal is only actionable if
+// it says which handoff is stranded.
+func TestDoctorReportsOrphanHandoffsAndNamesEachQitem(t *testing.T) {
+	f := newHealthFixture(t, []string{"demo"})
+	f.everythingRunning()
+	orphanRowFor(t, "demo", clientservices.Stopped,
+		orphanHandoff{Qitem: "qitem-20261009-aaaa", Destination: "demo-writer@demo"},
+		orphanHandoff{Qitem: "qitem-20261009-bbbb", Destination: "demo-web-dev@demo"})
+
+	code, out, errOut := doctor(t)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit = %d, want %d", code, clientcmd.ExitUnavailable)
+	}
+	line := "demo orphan_handoffs: stopped, age unknown"
+	if !strings.Contains(out, line) {
+		t.Errorf("stdout does not report the row:\n%s", out)
+	}
+	for _, name := range []string{"qitem-20261009-aaaa -> demo-writer@demo: not live", "qitem-20261009-bbbb -> demo-web-dev@demo: not live"} {
+		if !strings.Contains(out, name) {
+			t.Errorf("stdout does not name %q:\n%s", name, out)
+		}
+		if !strings.Contains(errOut, name) {
+			t.Errorf("stderr does not name %q:\n%s", name, errOut)
+		}
+	}
+	if !strings.Contains(errOut, line) {
+		t.Errorf("stderr does not report the row:\n%s", errOut)
+	}
+}
+
+// THE FALSIFICATION for that row: the same verb, the same fixture, no stranded handoff - the row reads
+// RUNNING and doctor answers ExitOK. Without this, the case above would prove only that a row was printed.
+func TestAnOrphanFreeReportIsExitOKAndARunningRow(t *testing.T) {
+	f := newHealthFixture(t, []string{"demo"})
+	f.everythingRunning()
+	orphanRowFor(t, "demo", clientservices.Running)
+
+	code, out, errOut := doctor(t)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit = %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut)
+	}
+	if !strings.Contains(out, "demo orphan_handoffs: running, age unknown") {
+		t.Errorf("the row is missing or not running:\n%s", out)
+	}
+	if errOut != "" {
+		t.Errorf("stderr = %q, want nothing when every row is running", errOut)
+	}
+}
+
+// A read that fails is NOT a clean machine: the row says silent, the reason is named, and doctor refuses.
+// This is the reading 7.7 forbids - a missing signal is not evidence of work - applied to the queue read.
+func TestAnUnreadableOrphanReadIsNotACleanReport(t *testing.T) {
+	f := newHealthFixture(t, []string{"demo"})
+	f.everythingRunning()
+	orphanRowsFor = func(string) []orphanRow {
+		return []orphanRow{{
+			Row: clientservices.Health{Rig: "demo", Safeguard: clientservices.OrphanHandoffs, State: clientservices.Silent, AgeS: clientservices.UnknownAge},
+			Err: errors.New("rig queue list: exit status 1"),
+		}}
+	}
+
+	code, _, errOut := doctor(t)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit = %d, want %d", code, clientcmd.ExitUnavailable)
+	}
+	if !strings.Contains(errOut, "orphan_handoffs could not be read: rig queue list: exit status 1") {
+		t.Errorf("stderr does not name the reason:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "demo orphan_handoffs: silent, age unknown") {
+		t.Errorf("stderr does not report the row:\n%s", errOut)
+	}
+}
+
+// The reader over the two rig reads it makes: a pending qitem to a RUNNING seat is not an orphan, the
+// owner's `human@` rows are not handoffs to a seat at all, and a dead seat's row is. With no rig named, a
+// handoff into another room is reported too; with one named, it is not.
+func TestOrphanHandoffsReadsTheQueueAndTheLiveNodes(t *testing.T) {
+	previous := rigToolOutput
+	t.Cleanup(func() { rigToolOutput = previous })
+	rigToolOutput = func(args ...string) ([]byte, error) {
+		switch args[0] {
+		case "queue":
+			if strings.Join(args[1:], " ") != "list --all-rigs --state pending --limit 1000 --json" {
+				t.Errorf("queue read = %v, want the pending listing of every rig", args)
+			}
+			return []byte(`[{"qitemId":"q-live","destinationSession":"demo-lead@demo"},` +
+				`{"qitemId":"q-human","destinationSession":"human@demo"},` +
+				`{"qitemId":"q-dead","destinationSession":"demo-writer@demo"},` +
+				`{"qitemId":"q-other","destinationSession":"other-go-dev@other"}]`), nil
+		case "ps":
+			if strings.Join(args[1:], " ") != "--nodes --all-rigs --json" {
+				t.Errorf("node read = %v, want every rig's nodes", args)
+			}
+			return []byte(`[{"canonicalSessionName":"demo-lead@demo","sessionStatus":"running"},` +
+				`{"canonicalSessionName":"demo-writer@demo","sessionStatus":"stopped"},` +
+				`{"canonicalSessionName":"other-go-dev@other","sessionStatus":"exited"}]`), nil
+		}
+		return nil, errors.New("unexpected rig call: " + strings.Join(args, " "))
+	}
+
+	orphans, err := orphanHandoffs("demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(orphans) != 1 || orphans[0].Qitem != "q-dead" || orphans[0].Destination != "demo-writer@demo" {
+		t.Fatalf("orphans for demo = %+v, want only q-dead to demo-writer@demo", orphans)
+	}
+	all, err := orphanHandoffs("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := map[string]bool{}
+	for _, orphan := range all {
+		named[orphan.Qitem] = true
+	}
+	if !named["q-dead"] || !named["q-other"] || named["q-live"] || named["q-human"] {
+		t.Fatalf("orphans with no rig named = %+v, want q-dead and q-other only", all)
+	}
+
+	rigToolOutput = func(...string) ([]byte, error) { return nil, errors.New("no daemon") }
+	if _, err := orphanHandoffs("demo"); err == nil {
+		t.Fatal("an unreadable queue must be an error, not a machine with no orphans")
+	}
 }
 
 // TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses is the owner's incident: the compaction supervisor,

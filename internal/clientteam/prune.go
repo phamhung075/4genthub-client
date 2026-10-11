@@ -58,6 +58,28 @@ options:
 	return nil
 }
 
+// RoomSeatsOutsideTeam is prune's own predicate as a function, for the guard `up` runs: the room's seat
+// keys that the team definition in teamDir does not name, in the cloud's order. The room is the one
+// team.json names, so the caller passes the team rather than a room name. An unreadable listing is an
+// error, exactly as it is for prune: refusing on a guess would be worse than refusing late.
+func RoomSeatsOutsideTeam(teamDir string) (room string, seats []string, err error) {
+	loaded, err := loadTeam(teamDir)
+	if err != nil {
+		return "", nil, err
+	}
+	cloud, err := credentials()
+	if err != nil {
+		return "", nil, err
+	}
+	room, _ = loaded.room["slug"].(string)
+	seatsPath := fmt.Sprintf("%s/rooms/%s/seats", apiPrefix, room)
+	seats, err = cloud.staleSeats(seatsPath, loaded)
+	if err != nil {
+		return "", nil, err
+	}
+	return room, seats, nil
+}
+
 // staleSeats lists the room's seat keys that team.json does not define, in the cloud's order. An
 // unreadable listing is an error: pruning from a guess would delete the wrong seats.
 func (c *cloudClient) staleSeats(seatsPath string, loaded *team) ([]string, error) {

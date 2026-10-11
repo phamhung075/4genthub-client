@@ -45,6 +45,10 @@ const (
 	Budget = "budget"
 	Bridge = "bridge"
 	Agent  = "agent"
+	Rigd   = "rigd"
+	// OrphanHandoffs is 7.11's row about WORK rather than about a child: the pending handoffs whose
+	// destination seat is not running. It carries no process, so its rows have no pid and no heartbeat.
+	OrphanHandoffs = "orphan_handoffs"
 )
 
 // The four states of 7.2. There is no fifth, and `running` is the ONLY state doctor accepts.

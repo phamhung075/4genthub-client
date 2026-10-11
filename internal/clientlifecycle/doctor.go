@@ -100,10 +100,7 @@ func safeguardRows(rig, root string) []clientservices.Health {
 	// so the rows for the two machine-scoped safeguards still print. `agent status` says in words when the
 	// read failed; naming it here needs an error shape in the report seam, which is its own unit.
 	state, _ := clientservices.ReadAgentState()
-	rigs := state.Rigs
-	if rig != "" {
-		rigs = []string{rig}
-	}
+	rigs := reportedRigs(state.Rigs, rig)
 	return clientservices.Verify(context.Background(), clientservices.Env{
 		Root:       root,
 		Rigs:       rigs,
@@ -111,11 +108,28 @@ func safeguardRows(rig, root string) []clientservices.Health {
 	})
 }
 
+// reportedRigs is 7.2's list of the rigs a report covers: the named rig alone, or every rig agent.json
+// lists, because that list is what "meant to run" means (7.9). The safeguard rows and the orphan row cover
+// the same list, so they cannot disagree about which rooms exist.
+func reportedRigs(rigs []string, rig string) []string {
+	if rig != "" {
+		return []string{rig}
+	}
+	return rigs
+}
+
 // runDoctor prints the rows and decides the exit code. `--json` prints the rows instead of the lines, and
 // the tail of alerts.log is a reading surface for the human output only: the JSON is the rows 7.5 says it
 // is.
 func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	rows := rowsFor(rig, root)
+	orphanRows := orphanRowsFor(rig)
+	for _, orphan := range orphanRows {
+		rows = append(rows, orphan.Row)
+		if orphan.Err != nil {
+			fmt.Fprintf(stderr, "4genteam doctor: %s could not be read: %v\n", clientservices.OrphanHandoffs, orphan.Err)
+		}
+	}
 	if asJSON {
 		body, err := json.MarshalIndent(rows, "", "  ")
 		if err != nil {
@@ -127,6 +141,11 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		for _, row := range rows {
 			fmt.Fprintln(stdout, clientservices.StateLine(row))
 		}
+		for _, orphan := range orphanRows {
+			for _, line := range orphanLines(orphan) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
 		for _, line := range clientservices.TailAlerts(root) {
 			fmt.Fprintln(stdout, line)
 		}
@@ -136,11 +155,29 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		return clientcmd.ExitOK
 	}
 	// The SAME line the report prints, on stderr, so a caller that only reads stderr still learns which
-	// safeguard is down, in which room, and for how long.
+	// safeguard is down, in which room, and for how long. An orphan row names its qitems there too: the
+	// refusal is only actionable if it says which handoff is stranded.
 	for _, row := range down {
 		fmt.Fprintln(stderr, clientservices.StateLine(row))
+		for _, orphan := range orphanRows {
+			if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Rig == row.Rig {
+				for _, line := range orphanLines(orphan) {
+					fmt.Fprintln(stderr, line)
+				}
+			}
+		}
 	}
 	return clientcmd.ExitUnavailable
+}
+
+// orphanLines is one orphan row's names, in report order: the row line says the state, these say which
+// qitems are stranded and where they were addressed.
+func orphanLines(row orphanRow) []string {
+	lines := make([]string, 0, len(row.Orphans))
+	for _, orphan := range row.Orphans {
+		lines = append(lines, orphanLine(orphan))
+	}
+	return lines
 }
 
 // safeguardWaitGap is how often `up` re-reads the report while it waits for the safeguards to come up.

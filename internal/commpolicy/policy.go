@@ -190,6 +190,30 @@ func Decide(policy Policy, to string, intent Intent) Decision {
 	return Decision{Allowed: true, Reason: reasonAllowed, Link: allow}
 }
 
+// LiveSet is the destinations a sending seat may reach now, keyed by seat key: the peers its own
+// `rig whoami` returns, which are the members of the rig whose sessions are up. A nil set means liveness
+// was not consulted, and the policy decision then stands alone.
+type LiveSet map[string]bool
+
+// reasonNotLive is the refusal for a destination the policy allows and the live set does not hold.
+const reasonNotLive = "not_live"
+
+// DecideLive resolves one send against the policy AND the live set. 7.11 makes the live set the only
+// source of a handed_off_to destination - a commit trailer, the startup identity hint and memory can all
+// name seats the room no longer runs - so a destination the policy allows that the live set does not hold
+// is refused with not_live: the words would reach no reader, and the sender would wait for closure from a
+// seat that cannot answer.
+//
+// The policy's own verdicts are returned unchanged. A self message, an unknown intent, an explicit deny
+// and no link all decide first, so this adds one terminal reason rather than a second policy.
+func DecideLive(policy Policy, to string, intent Intent, live LiveSet) Decision {
+	decision := Decide(policy, to, intent)
+	if !decision.Allowed || live == nil || live[to] {
+		return decision
+	}
+	return Decision{Reason: reasonNotLive, Link: decision.Link}
+}
+
 // ParsePolicy decodes a policy strictly: unknown fields, unknown link kinds,
 // foreign links, duplicate triples and trailing data are all errors.
 func ParsePolicy(data []byte) (Policy, error) {

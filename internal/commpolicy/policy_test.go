@@ -414,3 +414,48 @@ func TestBypassSuspectedNilKnown(t *testing.T) {
 		t.Fatal("nil known list should still flag raw pane input")
 	}
 }
+
+// 7.11: a destination the policy allows but the live set does not hold is refused with not_live; every
+// verdict the policy itself reaches is returned unchanged, and a nil live set means liveness was not
+// consulted at all.
+func TestDecideLiveAddsOneReasonBesideDecide(t *testing.T) {
+	allowed := Policy{Seat: "a", Links: []Link{{From: "a", To: "b", Kind: KindDelegatesTo, Allow: true}}}
+	denied := Policy{Seat: "a", Links: []Link{{From: "a", To: "b", Kind: KindDelegatesTo, Allow: false}}}
+	cases := []struct {
+		name        string
+		policy      Policy
+		to          string
+		intent      Intent
+		live        LiveSet
+		wantAllowed bool
+		wantReason  string
+	}{
+		{"live destination", allowed, "b", IntentTask, LiveSet{"b": true}, true, reasonAllowed},
+		{"destination not in the live set", allowed, "b", IntentTask, LiveSet{"c": true}, false, reasonNotLive},
+		{"empty live set", allowed, "b", IntentTask, LiveSet{}, false, reasonNotLive},
+		{"nil live set leaves the policy verdict", allowed, "b", IntentTask, nil, true, reasonAllowed},
+		{"explicit deny outranks liveness", denied, "b", IntentTask, LiveSet{"b": true}, false, reasonExplicitDeny},
+		{"no link outranks liveness", Policy{Seat: "a"}, "b", IntentTask, LiveSet{"b": true}, false, reasonNoLink},
+		{"self message outranks liveness", allowed, "a", IntentTask, LiveSet{"a": true}, false, reasonSelfMessage},
+		{"unknown intent outranks liveness", allowed, "b", Intent("gossip"), LiveSet{"b": true}, false, reasonUnknownIntent},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecideLive(tc.policy, tc.to, tc.intent, tc.live)
+			if got.Allowed != tc.wantAllowed || got.Reason != tc.wantReason {
+				t.Fatalf("DecideLive = {allowed %v, reason %q}, want {%v, %q}",
+					got.Allowed, got.Reason, tc.wantAllowed, tc.wantReason)
+			}
+		})
+	}
+}
+
+// A not_live refusal keeps the link the policy allowed, so the audit line and the refusal can name the
+// same edge the decision used.
+func TestDecideLiveKeepsTheAllowedLinkOnARefusal(t *testing.T) {
+	policy := Policy{Seat: "a", Links: []Link{{From: "a", To: "b", Kind: KindDelegatesTo, Allow: true}}}
+	got := DecideLive(policy, "b", IntentTask, LiveSet{})
+	if got.Link == nil || got.Link.To != "b" || got.Link.Kind != KindDelegatesTo {
+		t.Fatalf("link = %+v, want the delegates_to link to b", got.Link)
+	}
+}
