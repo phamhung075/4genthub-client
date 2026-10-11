@@ -3,6 +3,20 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — trap 15 listed two readers that annotate instead of stopping
+
+### Fixed
+- `SKILL.md` trap 15 said every page reader that misses the 30s readiness floor "FAILS naming that
+  timeout and does not read past it", and listed `check-nav` and `check-responsive` among them. Both
+  do call `waitForReady` (`check-nav.mjs:40`, `check-responsive.mjs:121`), but on `ready === false`
+  they read the page anyway and append the reason to their own `chars < 120` FAIL (`:52`, `:132`), so
+  a report can carry a row measured from a page that never reached the floor. Trap 15 now names them
+  as the two that annotate rather than refuse; their behaviour is unchanged and both still exit
+  non-zero, so no false green follows.
+- Source: the parent gate's one minor — `GATE-7f318f6-range-readiness-2026-10-12.md` recorded the
+  same reading ("annotate rather than refuse": `check-nav.mjs:40,52`, `check-responsive.mjs:121,132`)
+  and the lead ruled to fix the TEXT, not the code. No code or test change; both checks are untouched.
+
 ## 2026-10-11 — the seventh file: `check-login` waits for its page too
 
 ### Fixed

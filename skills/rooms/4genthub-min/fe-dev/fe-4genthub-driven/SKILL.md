@@ -208,11 +208,14 @@ the same traps will catch the next person writing a frontend measurement.
     `/dashboard` at 10 characters and printed `PASS /dashboard: all 1 measured text runs meet AA`,
     a false green, while the rendered page measures 23 runs. Every check that reads a rendered page
     now calls `waitForReady` (lib.mjs) and, when the floor is not reached within 30s, FAILS naming
-    that timeout and does not read past it: `check-nav`, `check-responsive`, `check-login`,
-    `check-contrast`, `check-motion`, `check-theme`, `check-backend`, `check-crud-animation` — and
-    `production-walk.mjs` stops the capture with `die`, because a pre-data capture must never
-    become a baseline (it records structure, not lengths, so a placeholder reads as a diff of
-    everything). The goto-level warm-up and sign-out navigations are deliberately left ungated:
+    that timeout and does not read past it: `check-login`, `check-contrast`, `check-motion`,
+    `check-theme`, `check-backend`, `check-crud-animation` — and `production-walk.mjs` stops the
+    capture with `die`, because a pre-data capture must never become a baseline (it records
+    structure, not lengths, so a placeholder reads as a diff of everything). Two of them annotate
+    rather than refuse the read: `check-nav` (`:40`, `:52`) and `check-responsive` (`:121`, `:132`)
+    still read the page when `ready === false` and append the reason to their own `chars < 120`
+    FAIL, which still exits non-zero — so their row can be a measurement of a page that never
+    reached the floor. The goto-level warm-up and sign-out navigations are deliberately left ungated:
     they assert nothing about the page.
 16. **A report is only as wide as the map it reads.** `check-crud-animation` collected CSS names
     from the CRUD matrix, then filtered the five `*RowCompleteAnimation` classes out of that same
