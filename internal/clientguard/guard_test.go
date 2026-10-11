@@ -98,15 +98,24 @@ func TestTheOwnersCommitInTheCheckoutIsNotRefused(t *testing.T) {
 }
 
 // The seat's own commit in its own worktree is not refused, and neither is a foreign author this client
-// could not read an identity for: refusing on a value nobody read would refuse the honest commit.
+// could not read an identity for: refusing on a value nobody read would refuse the honest commit. That
+// undecided rule is WARNED about rather than left silent, which is what the guard promises a reader.
 func TestACommitByTheSeatInItsWorktreeIsNotRefused(t *testing.T) {
 	if lines := refusals(t, seatFacts(HookPreCommit)); len(lines) != 0 {
 		t.Fatalf("refusals = %v, want none", lines)
 	}
+	if warnings := Decide(seatFacts(HookPreCommit)).Warnings; len(warnings) != 0 {
+		t.Errorf("warnings = %v, want none when both identities were read", warnings)
+	}
+
 	f := seatFacts(HookPreCommit)
 	f.SeatName, f.SeatEmail = "", ""
-	if lines := refusals(t, f); len(lines) != 0 {
-		t.Fatalf("refusals = %v, want none when the seat's identity could not be read", lines)
+	verdict := Decide(f)
+	if len(verdict.Refusals) != 0 {
+		t.Fatalf("refusals = %v, want none when the seat's identity could not be read", verdict.Refusals)
+	}
+	if len(verdict.Warnings) != 1 || !strings.Contains(verdict.Warnings[0], "could not read a complete commit identity") {
+		t.Errorf("warnings = %v, want the one that names the identity it could not read", verdict.Warnings)
 	}
 }
 

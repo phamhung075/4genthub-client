@@ -87,6 +87,58 @@ func Install(dir, clientBinary string, out io.Writer) ([]InstalledHook, error) {
 	return installed, nil
 }
 
+// UninstalledHook is one hook the guard took back out: the file, and the hook it put back in its place
+// (empty when there was nothing before the guard, so the file is simply gone).
+type UninstalledHook struct {
+	Name     string
+	Path     string
+	Restored string
+}
+
+// Uninstall takes the guard's hooks back out of the hooks folder git resolves for dir, and puts back whatever
+// the installer moved aside, so a checkout that was carrying its own hooks is exactly as it was.
+//
+// A hook that is NOT the guard's is left alone and reported: uninstalling must never remove a hook this
+// client did not write. Installing the guard is a change to every linked worktree of a repository (the hooks
+// folder is the repository's), so an install that could not be undone would be one nobody should make.
+func Uninstall(dir string, out io.Writer) ([]UninstalledHook, error) {
+	folder, err := HooksFolder(dir)
+	if err != nil {
+		return nil, err
+	}
+	var removed []UninstalledHook
+	for _, name := range []string{HookPreCommit, HookPrePush} {
+		path := filepath.Join(folder, name)
+		body, err := os.ReadFile(path)
+		switch {
+		case err != nil && !os.IsNotExist(err):
+			return removed, fmt.Errorf("cannot read the hook %s: %v", path, err)
+		case os.IsNotExist(err):
+			fmt.Fprintf(out, "%s is not there: the guard was not installed for it\n", path)
+			continue
+		case !strings.Contains(string(body), clientservices.GuardMarker):
+			fmt.Fprintf(out, "%s is not the guard's hook: left alone\n", path)
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return removed, fmt.Errorf("cannot remove the guard's hook %s: %v", path, err)
+		}
+		entry := UninstalledHook{Name: name, Path: path}
+		backup := path + BackupSuffix
+		if _, err := os.Stat(backup); err == nil {
+			if err := os.Rename(backup, path); err != nil {
+				return removed, fmt.Errorf("cannot put the hook the guard replaced back at %s: %v", path, err)
+			}
+			entry.Restored = path
+			fmt.Fprintf(out, "removed %s and put back the hook it replaced\n", path)
+		} else {
+			fmt.Fprintf(out, "removed %s (there was no hook there before the guard)\n", path)
+		}
+		removed = append(removed, entry)
+	}
+	return removed, nil
+}
+
 // previousHook answers the hook the guard's own file should run after the guard allows: the hook that was
 // just moved aside, a backup an earlier install left, or "" when there is none.
 //

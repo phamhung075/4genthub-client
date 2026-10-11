@@ -14,6 +14,7 @@ import (
 )
 
 const guardUsage = `usage: 4genteam guard install [--checkout DIR]
+       4genteam guard uninstall [--checkout DIR]
        4genteam guard run pre-commit|pre-push [args...]`
 
 // ExitRefused is the git guard declining the command git called the hook for. Any non-zero exit from a hook
@@ -41,16 +42,18 @@ func (guardCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdo
 		return clientcmd.ExitOK
 	}
 	if len(args) == 0 {
-		fmt.Fprintf(stderr, "4genteam guard: pick a verb: install, run\n%s\n", guardUsage)
+		fmt.Fprintf(stderr, "4genteam guard: pick a verb: install, uninstall, run\n%s\n", guardUsage)
 		return clientcmd.ExitUsage
 	}
 	switch args[0] {
 	case "install":
 		return runInstall(args[1:], stdout, stderr)
+	case "uninstall":
+		return runUninstall(args[1:], stdout, stderr)
 	case "run":
 		return runHook(args[1:], stdout, stderr)
 	}
-	fmt.Fprintf(stderr, "4genteam guard: unknown verb %q; the verbs are install, run\n", args[0])
+	fmt.Fprintf(stderr, "4genteam guard: unknown verb %q; the verbs are install, uninstall, run\n", args[0])
 	return clientcmd.ExitUsage
 }
 
@@ -77,6 +80,31 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "the git guard is in force for %s: %d hook(s) written, and the hooks folder git resolves is "+
 		"the one they went into\n", *checkout, len(installed))
+	return clientcmd.ExitOK
+}
+
+func runUninstall(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("guard uninstall", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	checkout := flags.String("checkout", ".", "the checkout whose guard hooks should be taken back out")
+	if err := flags.Parse(args); err != nil {
+		return clientcmd.ExitUsage
+	}
+	if flags.NArg() > 0 {
+		fmt.Fprintf(stderr, "4genteam guard uninstall: unexpected argument %q\n%s\n", flags.Arg(0), guardUsage)
+		return clientcmd.ExitUsage
+	}
+	removed, err := Uninstall(*checkout, stdout)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam guard uninstall: %v\n", err)
+		return ExitRefused
+	}
+	if len(removed) == 0 {
+		fmt.Fprintf(stdout, "the git guard is not installed for %s: nothing to take out\n", *checkout)
+		return clientcmd.ExitOK
+	}
+	fmt.Fprintf(stdout, "the git guard is out of %s: %d hook(s) removed, and any hook it had replaced is back "+
+		"where it was\n", *checkout, len(removed))
 	return clientcmd.ExitOK
 }
 

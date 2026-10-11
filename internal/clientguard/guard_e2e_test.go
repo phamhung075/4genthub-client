@@ -234,3 +234,113 @@ func TestAPushIsRefusedWhenTheClientTheHookRunsIsGone(t *testing.T) {
 		t.Errorf("push refused for the wrong reason:\n%s", out)
 	}
 }
+
+// THE PRECONDITION FOR ANY LIVE INSTALL: a checkout that already runs its own hooks keeps them. This room's
+// shared repo carries a pre-commit.com hook, so the question is not academic - the guard must chain to it,
+// both must run, a refusal must still come before their hook, and uninstalling must put the originals back
+// exactly as they were. Nothing here touches a live checkout: the fixture is a temporary repository.
+func TestTheGuardChainsToTheHooksAlreadyThereAndUninstallPutsThemBack(t *testing.T) {
+	r := newSeatRepo(t)
+	hooks := filepath.Join(r.checkout, ".git", "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "own-hooks.log")
+	own := map[string]string{}
+	for _, name := range []string{HookPreCommit, HookPrePush} {
+		body := "#!/bin/sh\necho " + name + " ran >> " + log + "\nexit 0\n"
+		own[name] = body
+		if err := os.WriteFile(filepath.Join(hooks, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	installed, err := Install(r.checkout, r.bin, &strings.Builder{})
+	if err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	for _, hook := range installed {
+		if hook.Replaced == "" {
+			t.Errorf("%s: the hook already there was not kept", hook.Name)
+		}
+	}
+
+	// A commit the guard allows runs BOTH: the guard's decision and then the hook that was already there.
+	if err := os.WriteFile(filepath.Join(r.worktree, "file.txt"), []byte("chained\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.worktree, "add", "file.txt")
+	if out, err := r.try(r.worktree, nil, "commit", "-m", "chained"); err != nil {
+		t.Fatalf("the seat's own commit was refused: %v\n%s", err, out)
+	}
+	if lines := readLog(t, log); !strings.Contains(lines, HookPreCommit+" ran") {
+		t.Errorf("the hook that was already there did not run: %q", lines)
+	}
+
+	// A commit the guard REFUSES never reaches that hook: the guard's line is first in pre-commit, so its
+	// refusal cannot be bypassed by a later hook, and the repo's own hook is not run for it.
+	before := readLog(t, log)
+	if err := os.WriteFile(filepath.Join(r.checkout, "new.txt"), []byte("here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.checkout, "add", "new.txt")
+	seatEnv := withSession(envWithoutSession(), "room-writer@room")
+	if out, err := r.try(r.checkout, seatEnv, "commit", "-m", "in the shared checkout"); err == nil {
+		t.Fatalf("a seat's commit in the shared checkout succeeded:\n%s", out)
+	}
+	if after := readLog(t, log); after != before {
+		t.Errorf("the repo's own hook ran for a commit the guard refused:\nbefore %q\nafter  %q", before, after)
+	}
+
+	// Uninstall puts the originals back, byte for byte, and leaves nothing of the guard's behind.
+	removed, err := Uninstall(r.checkout, &strings.Builder{})
+	if err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed %d hook(s), want both", len(removed))
+	}
+	for _, hook := range removed {
+		if hook.Restored == "" {
+			t.Errorf("%s: the hook the guard replaced was not put back", hook.Name)
+		}
+		body, err := os.ReadFile(filepath.Join(hooks, hook.Name))
+		if err != nil {
+			t.Fatalf("reading %s back: %v", hook.Name, err)
+		}
+		if string(body) != own[hook.Name] {
+			t.Errorf("%s after uninstall:\n%q\nwant the original\n%q", hook.Name, body, own[hook.Name])
+		}
+		if _, err := os.Stat(filepath.Join(hooks, hook.Name+BackupSuffix)); err == nil {
+			t.Errorf("%s: the backup is still there after uninstall", hook.Name)
+		}
+	}
+
+	// A hook that is not the guard's is left alone, and uninstalling again says so without touching it.
+	if err := os.WriteFile(filepath.Join(hooks, HookPreCommit), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Uninstall(r.checkout, &strings.Builder{})
+	if err != nil {
+		t.Fatalf("Uninstall (second): %v", err)
+	}
+	if len(again) != 0 {
+		t.Errorf("uninstall removed %d hook(s) it did not write", len(again))
+	}
+	if body, err := os.ReadFile(filepath.Join(hooks, HookPreCommit)); err != nil || string(body) != "#!/bin/sh\nexit 0\n" {
+		t.Errorf("a hook the guard did not write was changed: %q (%v)", body, err)
+	}
+}
+
+// readLog answers what a hook of the repo's own recorded, or "" when it never ran.
+func readLog(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ""
+		}
+		t.Fatal(err)
+	}
+	return string(body)
+}

@@ -143,6 +143,11 @@ func Decide(f Facts) Verdict {
 		if line := refusalForeignAuthor(f); line != "" {
 			verdict.Refusals = append(verdict.Refusals, line)
 		}
+		// An identity this client could not read is not a refusal - nobody should be refused on a value nobody
+		// read - but it is NAMED, because a rule the guard could not decide is a fact the caller reports.
+		if line := warningUnreadableIdentity(f); line != "" {
+			verdict.Warnings = append(verdict.Warnings, line)
+		}
 	}
 
 	// The secret scan warns, in both hooks: a secret in a local commit can still be taken out before
@@ -199,6 +204,20 @@ func warningSecret(f Facts) string {
 	return "the git guard WARNS: this change looks like it carries a credential, and a commit keeps it in " +
 		"history. Nothing is blocked. Take the secret out before anything is pushed, and rotate it if it was " +
 		"already pushed."
+}
+
+// warningUnreadableIdentity names a commit whose identity this client could not read in full: with a name or
+// an address missing on either side there is nothing to compare, so the author rule cannot decide, and this
+// says so instead of leaving the commit silently unchecked. Nothing is blocked: git refuses a commit it
+// cannot resolve an author for anyway.
+func warningUnreadableIdentity(f Facts) string {
+	if f.SeatName != "" && f.SeatEmail != "" && f.AuthorName != "" && f.AuthorEmail != "" {
+		return ""
+	}
+	return fmt.Sprintf("the git guard WARNS: it could not read a complete commit identity (the author git "+
+		"would record is %s, and the identity this repository resolves for the seat is %s), so it cannot check "+
+		"who this commit belongs to. Set user.name and user.email in this worktree. Nothing is blocked.",
+		identity(f.AuthorName, f.AuthorEmail), identity(f.SeatName, f.SeatEmail))
 }
 
 // sameIdentity compares one half of an identity, treating an unreadable side as no claim about it.
