@@ -3,6 +3,27 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — the fe-dev room gains a measured production recheck toolkit
+
+### Added
+- `skills/rooms/4genthub-min/fe-dev/fe-4genthub-driven/`: a read-only recheck of the deployed
+  frontend, walked as a real signed-in user with the shared e2e account (read in-process, never
+  printed). Eight checks — login, nav, backend, responsive, theme, motion, contrast, CRUD
+  animation — run via `node checks/all.mjs`; `production-walk.mjs` captures an origin and diffs it
+  against `baseline/production.json` (11 routes, measured 2026-10-11). The SKILL.md records the
+  measured state honestly: a production run fails 4 of 8 checks — 7 WCAG AA contrast violations
+  (#3b82f6 = 3.68:1, #16a34a = 3.30:1), an ungated `shimmer-spin` on /dashboard under
+  prefers-reduced-motion, a 71px sideways drag at 1280 on all eight shell routes, and CRUD
+  animation wiring (six dead branch/project classes, a subtask create truncated by 200ms) — plus
+  the fourteen traps the toolkit's own development paid for.
+- `skills/rooms/4genthub-min/fe-dev/taste-skill/` (`design-taste-frontend`): the design-rules skill
+  the recheck references at `../taste-skill/SKILL.md`, included so the reference resolves in a
+  fresh checkout.
+
+### Tests
+- `go test ./internal/clientskills/...` ok — the new tree's relative links resolve and the files
+  follow the per-skill directory layout.
+
 ## 2026-10-11 — the watch grid showed no events for a Claude Code seat
 
 ### Fixed
