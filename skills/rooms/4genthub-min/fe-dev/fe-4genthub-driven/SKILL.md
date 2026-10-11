@@ -208,8 +208,8 @@ the same traps will catch the next person writing a frontend measurement.
     `/dashboard` at 10 characters and printed `PASS /dashboard: all 1 measured text runs meet AA`,
     a false green, while the rendered page measures 23 runs. Every check that reads a rendered page
     now calls `waitForReady` (lib.mjs) and, when the floor is not reached within 30s, FAILS naming
-    that timeout and does not read past it: `check-nav`, `check-responsive`, `check-contrast`,
-    `check-motion`, `check-theme`, `check-backend`, `check-crud-animation` — and
+    that timeout and does not read past it: `check-nav`, `check-responsive`, `check-login`,
+    `check-contrast`, `check-motion`, `check-theme`, `check-backend`, `check-crud-animation` — and
     `production-walk.mjs` stops the capture with `die`, because a pre-data capture must never
     become a baseline (it records structure, not lengths, so a placeholder reads as a diff of
     everything). The goto-level warm-up and sign-out navigations are deliberately left ungated:

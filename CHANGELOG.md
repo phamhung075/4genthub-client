@@ -3,6 +3,37 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — the seventh file: `check-login` waits for its page too
+
+### Fixed
+- `checks/check-login.mjs` carried the same un-gated read as the six files of the entry below, and it
+  is the last one in the toolkit: after `goto('/login', { waitUntil: 'networkidle' })` it read the
+  login form with instantaneous calls — three `locator.count()` assertions (`:38`), the card's
+  `boundingBox()`, the toggle's `count()`, the password-type `evaluate()` (also an assertion) and two
+  link counts (`:61`). A cold load therefore measured a page whose form had not mounted.
+- Found by the census that entry asked for, and measured rather than argued: in an eight-check
+  `all.mjs` run the same three locators were found `0 time(s)` (`textbox "Email Address"`,
+  `textbox "Password"`, `button "Sign In"`), while the same check run alone on the same build passed
+  2 of 2 with each locator present exactly once — the page renders them (`LoginForm.tsx:210`
+  `label="Email Address"`, `:284` the `Sign In` button), so the red was a race, not a page defect.
+- The gate is the same line as the six: `waitForReady` after the navigation, and when the floor is not
+  reached within 30s the check FAILS naming that timeout and ends (`browser.close()` + `r.done`), so
+  nothing below it is read. No assertion, locator or expectation changed. `SKILL.md`'s trap 15 now
+  lists this file with the rest.
+
+### Tests
+- Fail path, deterministic — `node checks/check-login.mjs --base http://localhost:8123 --fe <checkout>`
+  against a 60-byte `/login` printed
+  `FAIL http://localhost:8123/login: the view never reached the 120-character readiness floor within 30s — the login form was not read (the reads below are instantaneous)`,
+  exited 1, and printed no login-form verdict for that page.
+- Happy path — `node checks/check-login.mjs --base http://localhost:3800 --fe <checkout>` twice: exit 0
+  both runs, 7 `PASS` lines each (the three locators, the password input's type, sign-in reaching
+  `/dashboard` with the shell, the banner account chip, sign-out back to `/login`), no `FAIL`.
+  `node --check` clean.
+- Full runner after the gate — `node checks/all.mjs --base http://localhost:3800 --fe <checkout>` →
+  **all 8 checks passed** (exit 0, 284.63s), where the same command before the gate reported
+  `1 of 8 checks failed`, this check and falsely.
+
 ## 2026-10-11 — every check that reads a rendered page waits for it (the ruling's six)
 
 ### Fixed

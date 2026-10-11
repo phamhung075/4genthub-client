@@ -14,7 +14,7 @@
 // toggle, the forgot-password and signup links, the login card's measured box.
 //
 // Read-only: signs in and out against --base and changes nothing. Credentials stay in-process.
-import { VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, signOut, watchPage } from '../lib.mjs'
+import { VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, signOut, waitForReady, watchPage } from '../lib.mjs'
 
 const { flags } = parseArgs(process.argv.slice(2))
 const r = reporter()
@@ -28,6 +28,16 @@ const watch = watchPage(page)
 try {
   const response = await page.goto(`${base}/login`, { waitUntil: 'networkidle', timeout: 60_000 })
   r.info(`GET /login from ${base} answered ${response?.status()}`)
+  // `networkidle` is not readiness for a client-rendered view (see lib.mjs waitForReady): every read
+  // below is instantaneous (locator.count(), boundingBox(), evaluate()), so a cold load reads a page
+  // whose form has not mounted. Measured 2026-10-11: those three locators were found 0 times in an
+  // eight-check run and present exactly once in 2 of 2 solo runs on the same build - a race, not a
+  // page defect. A login page that never renders ends the check instead of reporting a false red.
+  if (!(await waitForReady(page))) {
+    r.fail(`${base}/login: the view never reached the 120-character readiness floor within 30s — the login form was not read (the reads below are instantaneous)`)
+    await browser.close().catch(() => {})
+    r.done('check-login')
+  }
 
   const seats = {
     'textbox "Email Address"': page.getByRole('textbox', { name: 'Email Address' }),
