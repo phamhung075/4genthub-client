@@ -344,3 +344,67 @@ func readLog(t *testing.T, path string) string {
 	}
 	return string(body)
 }
+
+// A hook the guard chains to still decides: when it fails, git refuses the commit and the guard's own
+// verdict is not what stopped it. The chain gives the other tool its veto, which is the whole reason the
+// installer moves a hook aside instead of replacing it.
+func TestAChainedHookThatFailsStillStopsTheCommit(t *testing.T) {
+	r := newSeatRepo(t)
+	hooks := filepath.Join(r.checkout, ".git", "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	failing := "#!/bin/sh\necho the chained hook refuses this commit >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(hooks, HookPreCommit), []byte(failing), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(r.checkout, r.bin, &strings.Builder{}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(r.worktree, "file.txt"), []byte("chained\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.worktree, "add", "file.txt")
+	out, err := r.try(r.worktree, nil, "commit", "-m", "the other hook refuses")
+	if err == nil {
+		t.Fatalf("the commit went through although the chained hook refuses:\n%s", out)
+	}
+	if !strings.Contains(out, "the chained hook refuses this commit") {
+		t.Errorf("the commit failed for the wrong reason:\n%s", out)
+	}
+	if strings.Contains(out, "git guard") {
+		t.Errorf("the guard refused, but the verdict belongs to the chained hook:\n%s", out)
+	}
+}
+
+// Uninstalling a guard that replaced nothing removes its hooks and puts nothing back: the field is empty and
+// the hook files are gone, which is the branch the other cases do not reach.
+func TestUninstallRemovesAGuardThatReplacedNothing(t *testing.T) {
+	r := newSeatRepo(t)
+	hooks := filepath.Join(r.checkout, ".git", "hooks")
+	for _, name := range []string{HookPreCommit, HookPrePush} {
+		if _, err := os.Stat(filepath.Join(hooks, name)); err == nil {
+			t.Fatalf("%s exists before the install, so this case cannot prove the no-backup branch", name)
+		}
+	}
+	if _, err := Install(r.checkout, r.bin, &strings.Builder{}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	removed, err := Uninstall(r.checkout, &strings.Builder{})
+	if err != nil {
+		t.Fatalf("Uninstall: %v", err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("removed %d hook(s), want both", len(removed))
+	}
+	for _, hook := range removed {
+		if hook.Restored != "" {
+			t.Errorf("%s: Restored = %q, want empty - there was no hook before the guard", hook.Name, hook.Restored)
+		}
+		if _, err := os.Stat(filepath.Join(hooks, hook.Name)); !os.IsNotExist(err) {
+			t.Errorf("%s is still there after uninstall (err %v)", hook.Name, err)
+		}
+	}
+}

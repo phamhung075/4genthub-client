@@ -87,8 +87,8 @@ func Install(dir, clientBinary string, out io.Writer) ([]InstalledHook, error) {
 	return installed, nil
 }
 
-// UninstalledHook is one hook the guard took back out: the file, and the hook it put back in its place
-// (empty when there was nothing before the guard, so the file is simply gone).
+// UninstalledHook is one hook the guard took back out: the file, and the path the hook it had replaced was
+// put back at (empty when there was nothing before the guard, so the file is simply gone).
 type UninstalledHook struct {
 	Name     string
 	Path     string
@@ -120,19 +120,28 @@ func Uninstall(dir string, out io.Writer) ([]UninstalledHook, error) {
 			fmt.Fprintf(out, "%s is not the guard's hook: left alone\n", path)
 			continue
 		}
-		if err := os.Remove(path); err != nil {
-			return removed, fmt.Errorf("cannot remove the guard's hook %s: %v", path, err)
-		}
 		entry := UninstalledHook{Name: name, Path: path}
 		backup := path + BackupSuffix
-		if _, err := os.Stat(backup); err == nil {
+		// ONE atomic step when the repository's own hook was moved aside: os.Rename replaces the guard's file in
+		// place, so there is no window in which a crash loses the hook the guard replaced. A stat error that is
+		// not "it is not there" REFUSES, exactly as the same question is asked fifteen lines above: reading an
+		// unreadable backup as "there was no hook before the guard" would remove the guard's hook, leave the
+		// repository's own behind as a file nothing runs, and report success.
+		switch _, err := os.Stat(backup); {
+		case err == nil:
 			if err := os.Rename(backup, path); err != nil {
 				return removed, fmt.Errorf("cannot put the hook the guard replaced back at %s: %v", path, err)
 			}
 			entry.Restored = path
 			fmt.Fprintf(out, "removed %s and put back the hook it replaced\n", path)
-		} else {
+		case os.IsNotExist(err):
+			if err := os.Remove(path); err != nil {
+				return removed, fmt.Errorf("cannot remove the guard's hook %s: %v", path, err)
+			}
 			fmt.Fprintf(out, "removed %s (there was no hook there before the guard)\n", path)
+		default:
+			return removed, fmt.Errorf("cannot read %s, the hook the guard replaced, so nothing was removed: %v",
+				backup, err)
 		}
 		removed = append(removed, entry)
 	}
