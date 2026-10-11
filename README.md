@@ -308,6 +308,26 @@ what it is scoped to.
 
 `docs/AGENT-SETUP.md` describes how a skill gets to a seat.
 
+### The skills for the LLM that runs the client
+
+`skills/client/` is read by the LLM that operates `4genteam` and the rig, not by a seat, so `sync rig`
+never delivers it:
+
+| Skill | Use it to |
+|---|---|
+| [`watch-team`](skills/client/watch-team/SKILL.md) | open the live seat grid and the lead window |
+| [`rig-runtime-switch`](skills/client/rig-runtime-switch/SKILL.md) | move a whole rig to another runtime when a provider is capped |
+| [`seat-runtime-switch`](skills/client/seat-runtime-switch/SKILL.md) | move one seat to another runtime or model, check it, brief it |
+| [`spawn-team`](skills/client/spawn-team/SKILL.md) | continue or spawn an agent team |
+| [`offpeak-gate`](skills/client/offpeak-gate/SKILL.md) | decide whether DeepSeek seats may start at off-peak billing |
+
+### Using this tree from another project
+
+This tree is the one source of skills. A project does not keep its own copy.
+- **Seats:** `4genteam sync rig` delivers `share/` and the room's skills into each seat. A seat gets nothing from a project-local skills folder.
+- **An LLM outside a seat** (your own session, an operator): copy or link the `skills/client/` folders it needs into the path its runtime reads, or point it at this directory.
+- **Tell the project's agents:** add one line to the project's `AGENTS.md`, for example: `Project skills: <path to this repository>/skills/ (share/ and rooms/<room>/ are delivered to seats by 4genteam sync rig; client/ is for the LLM running the client)`.
+
 ## Failure map
 
 | Message or symptom | Cause | Action |
