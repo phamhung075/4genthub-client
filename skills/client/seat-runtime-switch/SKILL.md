@@ -34,11 +34,18 @@ description: Switch ONE seat of an OpenRig rig to another runtime/LLM (e.g. arch
 2. **DeepSeek key, in the LAUNCH dir.** omp reads `<L>/.env`. Check it **before** the rebuild:
    ```bash
    grep -c DEEPSEEK_API_KEY <L>/.env   # must be 1; the link must not point at a file without it
-   ln -sfn ~/.config/deepseek/env <L>/.env   # if it does; note the old target, to switch back
+   # If missing, ensure DEEPSEEK_API_KEY is populated in ~/.config/4genthub/.env (copied from ~/.config/deepseek/env)
+   # and relink if needed: ln -sfn ~/.config/deepseek/env <L>/.env or ln -sfn ~/.config/4genthub/.env <L>/.env
    ```
-   **Pitfall seen live:** `<L>/.env` pointed at `~/.config/4genthub/.env` (no DeepSeek key), so the first rebuild left every omp seat on `runtime_error: No API key found for deepseek`, and `rig send` refused with "interactive prompt (runtime_error)". The 4genthub client reads `~/.config/4genthub/.env` from the home dir itself, so repointing `<L>/.env` does not break it. A key in your own shell env does not reach seats: tmux inherits the daemon's environment.
-3. **Dry-run**: `rig up rig-<seat>-<runtime>.yaml --plan` expects `resolve_spec: ok`, `preflight: ok` (yolo `full_bypass` warnings are expected).
-4. **Switch** (after the owner's yes): `rig down <rig> --delete --force` (prints a snapshot id), then `rig up rig-<seat>-<runtime>.yaml --yes`. Run both in one command; it can take about 30 s, so use a background task and wait for it.
+   **Pitfall seen live:** `<L>/.env` pointed at `~/.config/4genthub/.env` when it lacked `DEEPSEEK_API_KEY`, or `~/.config/deepseek/env` was missing its `.env` sibling, so the rebuild left omp seats on `runtime_error: No API key found for deepseek`, and `rig send` refused with "interactive prompt (runtime_error)". Ensure `~/.config/4genthub/.env` and `~/.config/deepseek/.env` both contain `DEEPSEEK_API_KEY`. Also ensure the global tmux environment has `DEEPSEEK_API_KEY` set (`tmux set-environment -g DEEPSEEK_API_KEY <key>`).
+3. **Dry-run**: `cd <L>/rig && rig up rig-<seat>-<runtime>.yaml --plan` expects `resolve_spec: ok`, `preflight: ok` (yolo `full_bypass` warnings are expected).
+4. **Switch** (after the owner's yes):
+   `rig down <rig> --delete --force` (prints a snapshot id), then launch the new spec and bring up the supervisor stack with `4genteam up`:
+   ```bash
+   rig up <L>/rig/rig-<seat>-<runtime>.yaml --yes
+   4genteam up <rig> [--allow-peak]
+   ```
+   **Never stop at bare `rig up`**: always run `4genteam up <rig>` immediately afterwards to start `rigd`, the auto-compaction loop, the watchdog, and the status bridge.
 5. **Verify with a measurement**, not silence:
    ```bash
    rig ps --nodes --rig <rig> --json    # every node runtime/model/startupStatus=ready

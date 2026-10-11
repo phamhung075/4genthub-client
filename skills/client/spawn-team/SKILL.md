@@ -71,7 +71,7 @@ Always watch an omp seat team with the grid script, not with bare tiles:
 - `[omp-runner] ERROR rpc: RPC response exceeded the transport limit` printed after `READY` is cosmetic on resume — the seat still answers. Ping it before considering a re-prime.
 - Route: check the provider window before picking a runtime (`rig usage series --lane provider_window`). When Claude weekly is capped (it was 100 percent on 2026-10-05, reset 2026-10-06 12:00Z), the seats belong on omp/DeepSeek.
 - Write domain: a repo worktree takes one writer team. A second team stays out of it (skill files, brief files, read-only audits).
-- A stopped rig loses nothing: seats, sessions and snapshots live in the daemon database, so "down" is a lifecycle state, not data loss. Do not tear a rig down to bring it back — `rig up <rig> --existing` is the whole restore.
+- A stopped rig loses nothing: seats, sessions and snapshots live in the daemon database, so "down" is a lifecycle state, not data loss. Do not tear a rig down to bring it back — `4genteam continue <rig> [--allow-peak]` restores the rig, briefs the seats, and starts the full supervisor stack (never bare `rig up <rig> --existing`).
 
 ## When to Use
 

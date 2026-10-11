@@ -125,12 +125,15 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `up` | start the local stack for a rig: daemon, seats, bridge, supervisor, UI |
 | `compact` | (re)start the compaction supervisor for a rig, detached |
 | `compact-run` | the compaction supervisor loop, in the foreground (what `compact` starts) |
-| `stop` | stop the compaction supervisor and the status bridge |
-| `status` | the supervisor's process and the last log lines |
+| `doctor` | report every safeguard (compact, watchdog, bridge, rigd); read-only |
+| `rigd` | the always-on client: stream local sessions, supervise the safeguards |
+| `stop` | stop rigd and its children (a machine-wide stop: compact, watchdog, bridge) |
+| `status` | the safeguard rows (--json too) and the supervisor's last log lines |
 | `log` | follow the supervisor's log |
 | `ui` | open the OpenRig web UI |
 | `offpeak` | is DeepSeek billing at off-peak right now: exit 0 off-peak, 1 peak, so it works as a gate; `status` prints the setting, `set on\|off` writes it |
 | `seat` | status, sync and watch of a room's seats |
+| `send` | send one signed message to one seat |
 | `policy` | per-seat policy: `show`, `apply` |
 | `team` | create the cloud room: `apply`, `import-project`, `publish-skills`, `drift-check` |
 | `watch` | the live view of a room: the seat grid and the lead window |
@@ -139,6 +142,7 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `inputs` | open or hide an input pane under each seat pane |
 | `input` | read lines and send each to one seat |
 | `feedback` | report friction to the owner |
+| `evidence` | submit evidence for a task |
 | `continue` | restore a stopped rig from its latest snapshot and brief its seats; no argument lists the rigs and the briefs, `--all` walks every rig that has one |
 | `watchdog` | notice when a rig's tmux seats have vanished and restore it: `--check` reports, `--watch SECONDS` restores after two dead polls, `--self-test` exercises the rule |
 | `seatcheck` | the seat-side checker (also reachable as `seatcheck` via argv[0]) |
@@ -238,8 +242,7 @@ Run from the project's directory. `ROOM` is the room's name on the server.
 
 ```bash
 4genteam sync rig ROOM      # writes ~/.openrig/agenthub-seats/ROOM/rig/rig.yaml and the seat files
-rig up ~/.openrig/agenthub-seats/ROOM/rig/rig.yaml
-4genteam up ROOM            # supervisor, status bridge and watch view for the running room
+4genteam up ROOM            # starts the full lifecycle: daemon, seats, supervisor, bridge and watch view
 ```
 
 `sync rig` does everything a new room needs in one step: when a member's model names a provider
@@ -315,6 +318,7 @@ never delivers it:
 
 | Skill | Use it to |
 |---|---|
+| [`install`](skills/client/install/SKILL.md) | audit environment, detect missing configs/keys, run doctor, onboard PC |
 | [`watch-team`](skills/client/watch-team/SKILL.md) | open the live seat grid and the lead window |
 | [`rig-runtime-switch`](skills/client/rig-runtime-switch/SKILL.md) | move a whole rig to another runtime when a provider is capped |
 | [`seat-runtime-switch`](skills/client/seat-runtime-switch/SKILL.md) | move one seat to another runtime or model, check it, brief it |

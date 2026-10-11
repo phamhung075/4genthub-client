@@ -319,7 +319,7 @@ use (the room name by default), then:
 
 ```bash
 4genteam sync rig <ROOM>     # writes the rig spec and the seat files
-rig up ~/.openrig/agenthub-seats/<ROOM>/rig/rig.yaml
+4genteam up <RIG>            # launches daemon, seats, supervisor, bridge and watch wall
 rig ps --nodes --rig <RIG>   # one row per seat of the room, with its lifecycle and activity
 ```
 
