@@ -7,17 +7,22 @@ description: Continue or spawn an agent team — any OpenRig rig, any project �
 
 Two ways to run a team, and the two are not exclusive:
 
-- **An OpenRig rig** — the durable form: seats in tmux, state in the daemon, survives restarts and resumes each seat's own session. Continue one with `4genteam continue <rig>`; spawn a new one from a rig spec. See the two sections below.
+- **An OpenRig rig** — the durable form: seats in tmux, state in the daemon, survives restarts and resumes each seat's own session. **ALWAYS launch or restore using `4genteam up <rig> [--allow-peak]` or `4genteam continue <rig>`. NEVER use bare `rig up` to launch/resume a rig**, because bare `rig up` bypasses the entire client lifecycle: `rigd`, the compaction supervisor (`auto compact`), the `watchdog`, the status `bridge`, and the styled `watch` grid. See the sections below.
 - **An in-session Claude Code team** — the Proxy Pattern below: teammates spawned from the current session, sharing its terminal.
 
 **Only the in-session team below needs the lead to fetch each agent's configuration and inject it into the teammate's prompt** — a Claude Code teammate spawned by the `Task` tool does not inherit MCP connections. **A rig is the other case and needs none of that**: OpenRig renders each seat's own `agent.yaml` and guidance at launch, and a seat has its own MCP whenever its render carries mcp blocks — measured 2026-10-10 on `<RIG>`, where a seat resolves `mcp__agenthub_http__*` and `mcp__deepseek__*`. That is why a seat's own `AGENTS.md` tells it to drive `manage_task` itself instead of waiting for a lead to hand it configuration.
 
-## Continue a team — any rig, any project
+## Start or continue a team — always via `4genteam`
 
-An OpenRig rig *is* a team: seats in tmux, a snapshot in the daemon, a queue. Continuing one is one command, and nothing in it is project- or team-specific:
-
+### 1. Start full stack (daemon + seats + rigd + auto-compact + bridge + watch wall):
 ```bash
-4genteam continue <rig> [brief-file]
+4genteam up <rig> [--allow-peak]
+```
+`4genteam up` starts the entire supervisor stack in order: OpenRig daemon, seat sessions, `rigd` (which supervises the `compact` loop and `watchdog`), status `bridge`, and automatically opens `4genteam watch`.
+
+### 2. Continue / restore an existing team with brief:
+```bash
+4genteam continue <rig> [brief-file] [--allow-peak]
 ```
 
 - no arguments — lists the rigs and the briefs on disk
