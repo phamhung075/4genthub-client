@@ -3,6 +3,39 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — every check that reads a rendered page waits for it (the ruling's six)
+
+### Fixed
+- The `waitForReady` gate is now in the measure path of the six checks that still read a
+  client-rendered page too early: `check-contrast`, `check-motion`, `check-theme`, `check-backend`,
+  `check-crud-animation` and `production-walk`. Each waits for the 120-character floor after its
+  network wait and, when the floor is not reached within 30s, FAILS naming that timeout and does not
+  read past it — so the six now behave like `check-nav` and `check-responsive` (fe56321) and no
+  check can print a verdict from the pre-data page.
+- `check-contrast` is the measured case: it read `/dashboard` at 10 characters and printed
+  `PASS /dashboard: all 1 measured text runs meet AA` — a false green. Gated, the same command
+  measures 23 runs and passes on the evidence (`/login`: 10 runs).
+- `check-theme` returns `null` from an unready arm and its four call sites skip that route;
+  `check-crud-animation` ends the check when the stylesheet map cannot be read (that map decides
+  every verdict) and skips an unready route in the at-rest loop; `check-backend` records the failure
+  and moves on (its inventory is only meaningful for a route that rendered); `production-walk` calls
+  `die`, because a capture of a page that never rendered must never become a baseline or a diff. The
+  reporter already tolerates a missing motion read, so `check-motion` needed no caller change.
+- The goto-level warm-up and sign-out navigations are deliberately left ungated: they assert nothing
+  about the page. `SKILL.md`'s trap 15 now records the whole sweep, with the false green that
+  proved it.
+
+### Tests
+- All six against the a9d6c328 tree on the local chain (`vite → 127.0.0.1:8000 relay → production
+  API`), each exit 0, no new red anywhere: `check-contrast --routes /dashboard,/login` (23 and 10
+  text runs, 0 violations); `check-motion --routes /login,/dashboard` (`/dashboard`: longest
+  animation 2500ms infinite `shimmer-spin` on `div.absolute.inset-0`; under reduce no long or
+  looping animation survives); `check-theme --routes /login,/dashboard`; `check-backend` (endpoint
+  inventory, no call ≥400); `check-crud-animation --routes /seats,/dashboard` (`'complete': 5/5
+  class(es) defined in the shipped CSS`); `production-walk capture --routes /dashboard --no-shots
+  --out /tmp/gate-capture` (captured `/login` and `/dashboard`, heading "Choose a workspace").
+  `node --check` clean on all six files.
+
 ## 2026-10-11 — the recheck's own two defects: readiness, and the Complete report
 
 ### Fixed

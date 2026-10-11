@@ -201,11 +201,19 @@ the same traps will catch the next person writing a frontend measurement.
     analysis that follows it.
 15. **Neither `load` nor `networkidle` is readiness.** The app is client-rendered: the document
     finishes loading while the view still holds its pre-data placeholder, and the `networkidle`
-    wait is `.catch(() => {})`-swallowed, so the probe ran against a placeholder. Measured
+    wait is `.catch(() => {})`-swallowed, so the read lands on the placeholder. Measured
     2026-10-11 on the local chain (vite → 127.0.0.1:8000 relay → production): the SAME route
     rendered 6029 characters in one viewport and 10 in another viewport of the same run — a race,
-    not a route defect. `check-nav` and `check-responsive` now call `waitForReady` (a floor on the
-    very text they read) and still fail a page that never reaches it, naming that timeout.
+    not a route defect. And a check that reads early does not fail loudly: `check-contrast` read
+    `/dashboard` at 10 characters and printed `PASS /dashboard: all 1 measured text runs meet AA`,
+    a false green, while the rendered page measures 23 runs. Every check that reads a rendered page
+    now calls `waitForReady` (lib.mjs) and, when the floor is not reached within 30s, FAILS naming
+    that timeout and does not read past it: `check-nav`, `check-responsive`, `check-contrast`,
+    `check-motion`, `check-theme`, `check-backend`, `check-crud-animation` — and
+    `production-walk.mjs` stops the capture with `die`, because a pre-data capture must never
+    become a baseline (it records structure, not lengths, so a placeholder reads as a diff of
+    everything). The goto-level warm-up and sign-out navigations are deliberately left ungated:
+    they assert nothing about the page.
 16. **A report is only as wide as the map it reads.** `check-crud-animation` collected CSS names
     from the CRUD matrix, then filtered the five `*RowCompleteAnimation` classes out of that same
     map and reported them "defined in no CSS and called from no hook/component". The first clause

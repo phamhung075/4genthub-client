@@ -10,7 +10,7 @@
 // something opaque; text over a gradient or an image is counted as unknown and reported, never
 // guessed. Each number printed is the real computed ratio, so it can be checked by eye in
 // devtools.
-import { ROUTES, VIEWPORTS, baseURL, contrastRatio, launchBrowser, parseArgs, parseColor, readAccount, reporter, signIn } from '../lib.mjs'
+import { ROUTES, VIEWPORTS, baseURL, contrastRatio, launchBrowser, parseArgs, parseColor, readAccount, reporter, signIn, waitForReady } from '../lib.mjs'
 
 const { flags } = parseArgs(process.argv.slice(2))
 const r = reporter()
@@ -97,6 +97,12 @@ async function measure(route) {
   try {
     await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 60_000 })
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+    // `networkidle` is not readiness for a client-rendered view: measured 2026-10-11, this read
+    // landed on the 10-character pre-data placeholder and PASSed a page nobody had rendered yet.
+    if (!(await waitForReady(page))) {
+      r.fail(`${route}: the view never reached the 120-character readiness floor within 30s — not measured (the read would land on the pre-data placeholder)`)
+      return
+    }
     const { candidates, placeholders } = await page.evaluate(collect, MAX)
     const checked = []
     const unknown = []

@@ -11,7 +11,7 @@
 //     is the normal answer for an anonymous visitor.
 // The run ends with the endpoint inventory: every method + path seen, with its statuses, which
 // is the list fe-dev compares a local backend against.
-import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, signOut, watchPage } from '../lib.mjs'
+import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, signOut, waitForReady, watchPage } from '../lib.mjs'
 
 const { flags } = parseArgs(process.argv.slice(2))
 const r = reporter()
@@ -32,6 +32,12 @@ try {
   for (const route of routes) {
     await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 60_000 })
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+    // The inventory is only meaningful for a route that rendered: a view still pre-data has not
+    // made the calls it would make, so a 4xx/5xx behind them would be missed (a false green).
+    if (!(await waitForReady(page))) {
+      r.fail(`${route}: the view never reached the 120-character readiness floor within 30s — its calls were not observed, so this route is missing from the inventory`)
+      continue
+    }
   }
   // Sign out from /dashboard, not wherever the last route left off: /docs and /help-setup render
   // without the shell, so they have no account chip to open.

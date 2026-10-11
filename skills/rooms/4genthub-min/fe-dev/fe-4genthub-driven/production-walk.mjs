@@ -16,7 +16,7 @@
 // signed-in routes to capture after it (default: the four the deploy smoke walks).
 import fs from 'node:fs'
 import path from 'node:path'
-import { ROUTES, VIEWPORTS, baseURL, die, launchBrowser, parseArgs, readAccount, signIn, signOut, watchPage } from './lib.mjs'
+import { ROUTES, VIEWPORTS, baseURL, die, launchBrowser, parseArgs, readAccount, signIn, signOut, waitForReady, watchPage } from './lib.mjs'
 
 const DEFAULT_ROUTES = ['/dashboard', '/topology', '/sessions']
 
@@ -44,6 +44,9 @@ async function capture(flags) {
 
   const dumpRoute = async (route) => {
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+    // A capture is the record of what rendered; capturing a pre-data page would write the
+    // placeholder into a baseline (or into a diff against one), so the walk stops instead.
+    if (!(await waitForReady(page))) die(`${route}: the view never reached the 120-character readiness floor within 30s — not captured (a pre-data capture must not become a baseline)`)
     if (!('no-shots' in flags)) await page.screenshot({ path: path.join(outDir, `${label}-${route.replace(/\W+/g, '_') || 'root'}.png`), fullPage: true })
     return page.evaluate(() => {
       const described = (el) => {

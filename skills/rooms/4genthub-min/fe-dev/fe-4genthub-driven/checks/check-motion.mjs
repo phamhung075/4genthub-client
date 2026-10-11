@@ -8,7 +8,7 @@
 // It reports the motion inventory either way: how many elements transition, how many animate,
 // the longest durations, and the first few selectors — the material to judge whether the motion
 // is motivated, which no script can decide.
-import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn } from '../lib.mjs'
+import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, waitForReady } from '../lib.mjs'
 
 const { flags } = parseArgs(process.argv.slice(2))
 const r = reporter()
@@ -65,7 +65,13 @@ for (const [label, reducedMotion] of [['normal', 'no-preference'], ['reduce', 'r
     try {
       await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 60_000 })
       await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
-      read[label][route] = await page.evaluate(probe)
+      // `networkidle` is not readiness (see lib.mjs waitForReady): a pre-data page measures the
+      // placeholder's motion, not the route's. The report below already skips a missing read.
+      if (!(await waitForReady(page))) {
+        r.fail(`${route} under ${label}: the view never reached the 120-character readiness floor within 30s — not measured`)
+      } else {
+        read[label][route] = await page.evaluate(probe)
+      }
     } catch (err) {
       r.fail(`${route} under ${label} failed to load: ${String(err).split('\n')[0]}`)
     }

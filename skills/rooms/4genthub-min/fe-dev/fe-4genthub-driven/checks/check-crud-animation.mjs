@@ -21,7 +21,7 @@
 // What a read-only production walk cannot prove: that a real CRUD event CALLS animate() — that
 // link is covered by the frontend's own tests (websocket-animations-e2e.test.tsx,
 // taskUpdateAnimation.test.ts) and by running a write-capable local stack.
-import { VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn } from '../lib.mjs'
+import { VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, waitForReady } from '../lib.mjs'
 
 const { flags } = parseArgs(process.argv.slice(2))
 const r = reporter()
@@ -156,6 +156,14 @@ if (sessionOk) {
   const page = await context.newPage()
   await page.goto(`${base}${pages[0]}`, { waitUntil: 'load', timeout: 60_000 })
   await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+  // The stylesheet map decides every verdict in this check (defined, duration, reduce-gating,
+  // at-rest) and the app injects sheets at runtime, so a pre-data map is one nobody should read:
+  // a page that never becomes ready ends the check instead of producing false reds.
+  if (!(await waitForReady(page))) {
+    r.fail(`${pages[0]}: the view never reached the 120-character readiness floor within 30s — the stylesheet map was not read, so nothing below was measured`)
+    await browser.close().catch(() => {})
+    r.done('check-crud-animation')
+  }
   const res = await page.evaluate(collectCss, [...names])
   Object.assign(css, res.map)
   r.info(`stylesheets: ${res.meta.sheets}, ${res.meta.rules} top-level rules; unreadable: ${res.meta.unreadable.length ? res.meta.unreadable.join(', ') : 'none'}`)
@@ -171,6 +179,11 @@ if (sessionOk) {
   for (const route of pages) {
     if (route !== pages[0]) await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 60_000 })
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+    // Readiness first: "at rest" on a page that never rendered cannot witness a trigger.
+    if (!(await waitForReady(page))) {
+      r.fail(`at rest on ${route}: the view never reached the 120-character readiness floor within 30s — not measured`)
+      continue
+    }
     await page.waitForTimeout(2500)
     const hits = await page.evaluate(restScan, [...names, ...INITIAL])
     if (hits.length === 0) r.pass(`at rest on ${route}: no CRUD animation class present (the trigger fires on change, not on render)`)
@@ -183,6 +196,11 @@ if (sessionOk) {
   const reducePage = await reduceContext.newPage()
   await reducePage.goto(`${base}${pages[0]}`, { waitUntil: 'load', timeout: 60_000 })
   await reducePage.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+  if (!(await waitForReady(reducePage))) {
+    r.fail(`${pages[0]} under reduced motion: the view never reached the 120-character readiness floor within 30s — the reduce pass was not measured`)
+    await browser.close().catch(() => {})
+    r.done('check-crud-animation')
+  }
   for (const className of CRUD) {
     if (!found[className]) continue
     reduced[className] = await reducePage.evaluate(engineProbe, className)

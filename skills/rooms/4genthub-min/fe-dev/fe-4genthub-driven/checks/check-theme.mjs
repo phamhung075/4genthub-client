@@ -13,7 +13,7 @@
 //   - a saved preference outranks the system setting (the user's choice is not overridden)
 //   - the shell's toggle flips the surface and records the choice
 //   - the two produced states differ across the semantic token watchlist
-import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, parseColor, luminance, readAccount, reporter, signIn, watchPage } from '../lib.mjs'
+import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, parseColor, luminance, readAccount, reporter, signIn, waitForReady, watchPage } from '../lib.mjs'
 
 const { flags } = parseArgs(process.argv.slice(2))
 const r = reporter()
@@ -66,6 +66,13 @@ async function measure(route, { colorScheme, savedTheme, clickToggle }) {
     if (savedTheme) await page.addInitScript((value) => localStorage.setItem('theme', value), savedTheme)
     await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 60_000 })
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+    // `networkidle` is not readiness (see lib.mjs waitForReady): measuring the painted surface of
+    // a view that has not rendered measures the placeholder's surface, not the route's. `null`
+    // tells the caller this route/arm was not measured; the callers skip it.
+    if (!(await waitForReady(page))) {
+      r.fail(`${route}: the view never reached the 120-character readiness floor within 30s — not measured`)
+      return null
+    }
     const before = await page.evaluate(probe, WATCH)
     if (!clickToggle) return { before, after: null, control: before.control, writes: [] }
     // The toggle test: click only if a control exists, then read the surface again.
@@ -102,7 +109,9 @@ for (const route of pages) {
 
   // First visit, no saved theme: the system preference decides.
   const dark = await measure(route, { colorScheme: 'dark' })
+  if (!dark) continue
   const light = await measure(route, { colorScheme: 'light' })
+  if (!light) continue
   r.info(`${label}: emulation read back as system=${dark.before.colorSchemeMatches}/${light.before.colorSchemeMatches}, root class in dark = "${dark.before.rootClass}"`)
   const darkSurface = surface(dark.before)
   const lightSurface = surface(light.before)
@@ -113,6 +122,7 @@ for (const route of pages) {
 
   // A saved preference outranks the system setting.
   const pinned = await measure(route, { colorScheme: 'dark', savedTheme: 'light' })
+  if (!pinned) continue
   const pinnedSurface = surface(pinned.before)
   if (pinnedSurface.lum !== null && pinnedSurface.lum > 0.5) r.pass(`${label} saved "light" under system dark: stays light (the user's choice wins)`)
   else r.fail(`${label} saved "light" under system dark: body is ${pinnedSurface.bg}, the saved preference was overridden`)
@@ -131,6 +141,7 @@ for (const route of pages) {
   // one control proof is enough and the anonymous one cannot carry session state into the result).
   if (anon) {
     const toggled = await measure(route, { colorScheme: 'light', clickToggle: true })
+    if (!toggled) continue
     if (!toggled.control) r.info(`${label}: no theme control found on this page`)
     else {
       r.info(`${label}: theme control "${toggled.control}"`)
