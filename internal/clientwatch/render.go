@@ -186,11 +186,17 @@ func block(head, style, text string, width, lines int) string {
 		rows = []string{""}
 	}
 	out := []string{head + style + rows[0] + reset}
-	for _, row := range rows[1:min(lines, len(rows))] {
-		out = append(out, "    "+style+row+reset)
-	}
-	if len(rows) > lines {
-		out = append(out, "    "+fg(stampColor)+fmt.Sprintf("… +%d more lines", len(rows)-lines)+reset)
+	if lines > 0 {
+		for _, row := range rows[1:min(lines, len(rows))] {
+			out = append(out, "    "+style+row+reset)
+		}
+		if len(rows) > lines {
+			out = append(out, "    "+fg(stampColor)+fmt.Sprintf("… +%d more lines", len(rows)-lines)+reset)
+		}
+	} else {
+		for _, row := range rows[1:] {
+			out = append(out, "    "+style+row+reset)
+		}
 	}
 	return strings.Join(out, "\n")
 }

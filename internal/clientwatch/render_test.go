@@ -135,6 +135,25 @@ func TestLinesBeyondTheCapAreCountedNotDroppedSilently(t *testing.T) {
 	}
 }
 
+func TestLinesZeroShowsAllLinesWithoutTruncation(t *testing.T) {
+	rows := []string{}
+	for n := range 12 {
+		rows = append(rows, fmt.Sprintf("row %d", n))
+	}
+	rendered := events(toolResult(strings.Join(rows, "\n")), 200, false, 0)
+	if len(rendered) != 1 {
+		t.Fatalf("got %d lines, want 1", len(rendered))
+	}
+	for n := range 12 {
+		if !strings.Contains(rendered[0], fmt.Sprintf("row %d", n)) {
+			t.Errorf("row %d is missing when lines=0: %q", n, rendered[0])
+		}
+	}
+	if strings.Contains(rendered[0], "more lines") {
+		t.Errorf("unexpected truncation notice when lines=0: %q", rendered[0])
+	}
+}
+
 func TestACompactJSONResultIsShownIndented(t *testing.T) {
 	rendered := events(toolResult(`{"success":true,"data":{"task":{"id":"abc"}}}`), 200, false, 25)
 	if len(rendered) != 1 {
