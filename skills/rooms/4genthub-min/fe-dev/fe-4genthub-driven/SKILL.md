@@ -211,9 +211,9 @@ the same traps will catch the next person writing a frontend measurement.
     that timeout and does not read past it: `check-login`, `check-contrast`, `check-motion`,
     `check-theme`, `check-backend`, `check-crud-animation` — and `production-walk.mjs` stops the
     capture with `die`, because a pre-data capture must never become a baseline (it records
-    structure, not lengths, so a placeholder reads as a diff of everything). Two of them annotate
-    rather than refuse the read: `check-nav` (`:40`, `:52`) and `check-responsive` (`:121`, `:132`)
-    still read the page when `ready === false` and append the reason to their own `chars < 120`
+    structure, not lengths, so a placeholder reads as a diff of everything). Two of the readers
+    annotate rather than refuse the read: `check-nav` (`:40`, `:52`) and `check-responsive` (`:121`,
+    `:132`) still read the page when `ready === false` and append the reason to their own `chars < 120`
     FAIL, which still exits non-zero — so their row can be a measurement of a page that never
     reached the floor. The goto-level warm-up and sign-out navigations are deliberately left ungated:
     they assert nothing about the page.

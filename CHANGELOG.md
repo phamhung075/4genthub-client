@@ -16,6 +16,10 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Source: the parent gate's one minor — `GATE-7f318f6-range-readiness-2026-10-12.md` recorded the
   same reading ("annotate rather than refuse": `check-nav.mjs:40,52`, `check-responsive.mjs:121,132`)
   and the lead ruled to fix the TEXT, not the code. No code or test change; both checks are untouched.
+- Follow-up, the lead's read of the sentence itself: "Two of them" was ambiguous, because its nearest
+  antecedent is the seven-item list directly before it and the two are precisely NOT in that list —
+  the same defect class this range exists to fix. It now reads "Two of the readers annotate rather
+  than refuse the read:". Nothing else changed.
 
 ## 2026-10-11 — the seventh file: `check-login` waits for its page too
 
