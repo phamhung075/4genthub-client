@@ -1,13 +1,12 @@
 ---
 name: watch-team
-description: Open or reopen the live view of an OpenRig room — a herdr grid with one pane per seat plus a lead window with an input pane. Use when the user says "open the grid", "reopen grid watch", "watch the team", "show me the agents", or after any restore, relaunch, runtime switch or script change.
+description: Open or reopen the live view of an OpenRig room — a herdr grid with one pane per seat plus a lead window with an input pane. Use whenever the user asks to "spawn grid", "give watch grid", "show me grid", "open the grid", "reopen grid watch", "watch the team", "show me the agents", "watch session", or after any restore, relaunch, resume, runtime switch or script change. ALWAYS use `4genteam watch --rig <RIG>` instead of manual terminal/tmux panes.
 ---
 
 # Watch a room
 
 The live view of a running room: every seat's tool calls, results, reasoning and incoming
-messages, read-only. Use it instead of raw terminal tiles. It reads the seats' session logs and
-never types into a seat. It needs `herdr` (the terminal provider the panes live in) and the room's
+messages, read-only. **NEVER use raw terminal tiles or `tmux attach` when asked for the grid/watch view** — always run `4genteam watch --rig <RIG>`. It reads the seats' session logs, displays compaction token gauges (`used/150k to compact`), colors reasoning and tool calls, and provides a proper input pane. It needs `herdr` (the terminal provider the panes live in) and the room's
 seats running in tmux.
 
 Full reference: `docs/WATCH.md` in the `4genthub-client` repository.
