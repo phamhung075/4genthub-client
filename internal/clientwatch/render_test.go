@@ -148,19 +148,37 @@ func TestACompactJSONResultIsShownIndented(t *testing.T) {
 	}
 }
 
-func TestALongLineIsCutAtTheWidthButTheOtherLinesStay(t *testing.T) {
-	rendered := events(toolResult(strings.Repeat("x", 500)+"\nsecond"), 50, false, 25)
+func TestALongLineIsWrappedAtWidth(t *testing.T) {
+	rendered := events(toolResult(strings.Repeat("x", 120)+"\nsecond"), 50, false, 25)
 	if len(rendered) != 1 {
 		t.Fatalf("got %d lines, want 1", len(rendered))
 	}
-	if !strings.Contains(rendered[0], strings.Repeat("x", 50)) {
-		t.Errorf("the kept prefix is missing")
-	}
-	if strings.Contains(rendered[0], strings.Repeat("x", 51)) {
-		t.Errorf("the line was not cut at 50")
+	// The 120 'x's should be wrapped across multiple lines within the block
+	lines := strings.Split(rendered[0], "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected at least 3 wrapped lines, got %d: %q", len(lines), rendered[0])
 	}
 	if !strings.Contains(rendered[0], "second") {
 		t.Errorf("the second line was dropped")
+	}
+}
+
+func TestWrapRunesBreaksAtWordBoundaries(t *testing.T) {
+	text := "ARCHITECT - your evidence decided it and I have taken your recommendation (a)."
+	wrapped := wrapRunes(text, 45)
+	if len(wrapped) != 2 {
+		t.Fatalf("expected 2 wrapped lines, got %d: %v", len(wrapped), wrapped)
+	}
+	for _, line := range wrapped {
+		if len([]rune(line)) > 45 {
+			t.Errorf("line exceeds width 45: %q", line)
+		}
+	}
+	if wrapped[0] != "ARCHITECT - your evidence decided it and I" {
+		t.Errorf("unexpected first line: %q", wrapped[0])
+	}
+	if wrapped[1] != "have taken your recommendation (a)." {
+		t.Errorf("unexpected second line: %q", wrapped[1])
 	}
 }
 

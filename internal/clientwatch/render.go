@@ -171,22 +171,60 @@ func pretty(text string) string {
 
 // block renders head then text as real lines: the first beside the head, the rest indented.
 //
-// Each line is cut at width characters and at most lines lines are shown; what is hidden is counted,
-// never silently dropped.
+// Lines are wrapped at width characters and indented; at most lines lines are shown.
 func block(head, style, text string, width, lines int) string {
 	trimmed := strings.TrimRightFunc(text, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\v' || r == '\f' })
-	rows := splitLines(trimmed)
+	rawRows := splitLines(trimmed)
+	if len(rawRows) == 0 {
+		rawRows = []string{""}
+	}
+	var rows []string
+	for _, r := range rawRows {
+		rows = append(rows, wrapRunes(r, width)...)
+	}
 	if len(rows) == 0 {
 		rows = []string{""}
 	}
-	out := []string{head + style + cutRunes(rows[0], width) + reset}
+	out := []string{head + style + rows[0] + reset}
 	for _, row := range rows[1:min(lines, len(rows))] {
-		out = append(out, "    "+style+cutRunes(row, width)+reset)
+		out = append(out, "    "+style+row+reset)
 	}
 	if len(rows) > lines {
 		out = append(out, "    "+fg(stampColor)+fmt.Sprintf("… +%d more lines", len(rows)-lines)+reset)
 	}
 	return strings.Join(out, "\n")
+}
+
+// wrapRunes splits text into slices of at most width runes. If width <= 0, no wrapping is applied.
+func wrapRunes(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	runes := []rune(text)
+	if len(runes) <= width {
+		return []string{text}
+	}
+	var out []string
+	for len(runes) > width {
+		// Look for a whitespace within [width/2, width] to break cleanly at word boundaries
+		splitAt := width
+		for i := width; i >= width/2 && i > 0; i-- {
+			if runes[i-1] == ' ' || runes[i-1] == '\t' {
+				splitAt = i
+				break
+			}
+		}
+		chunk := strings.TrimRight(string(runes[:splitAt]), " \t")
+		out = append(out, chunk)
+		runes = runes[splitAt:]
+		for len(runes) > 0 && (runes[0] == ' ' || runes[0] == '\t') {
+			runes = runes[1:]
+		}
+	}
+	if len(runes) > 0 {
+		out = append(out, string(runes))
+	}
+	return out
 }
 
 // cutRunes is Python's text[:width]: it counts characters, not bytes.
