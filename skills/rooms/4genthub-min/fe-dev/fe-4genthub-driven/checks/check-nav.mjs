@@ -10,7 +10,7 @@
 // a fresh page so one route's console noise cannot fail the next. Dynamic routes (a project,
 // branch, task, subtask, seat, or session id in the path) need data this check will not create:
 // pass them with --routes and they are checked as-is, otherwise they are reported as skipped.
-import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, watchPage } from '../lib.mjs'
+import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, waitForReady, watchPage } from '../lib.mjs'
 
 const { flags } = parseArgs(process.argv.slice(2))
 const r = reporter()
@@ -36,6 +36,8 @@ async function visit(route, { shell }) {
     const response = await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 60_000 })
     row.status = response?.status() ?? null
     await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+    // `networkidle` is not readiness for a client-rendered app: wait for the text the checks read.
+    const ready = await waitForReady(page)
     const seen = await page.evaluate(() => ({
       path: location.pathname,
       chars: document.body.innerText.trim().length,
@@ -47,7 +49,7 @@ async function visit(route, { shell }) {
     row.heading = seen.heading || '(none)'
 
     if (row.status !== null && row.status >= 400) r.fail(`${route} answered ${row.status}`)
-    if (row.chars < 120) r.fail(`${route} rendered only ${row.chars} characters of text (an empty shell or an error boundary)`)
+    if (row.chars < 120) r.fail(`${route} rendered only ${row.chars} characters of text${ready ? '' : ' and never reached the readiness floor within 30s'} (an empty shell or an error boundary)`)
     if (SHELL_EXEMPT.has(route)) r.info(`${route} renders outside the app shell (documented exception)`)
     else if (shell && !seen.shell) r.fail(`${route} is a signed-in route but the shell did not render (no account chip)`)
     for (const e of consoleErrors.slice(0, 3)) r.fail(`${route} console error: ${e.text}`)

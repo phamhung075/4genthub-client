@@ -3,6 +3,30 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-11 — the recheck's own two defects: readiness, and the Complete report
+
+### Fixed
+- `fe-4genthub-driven/lib.mjs` gains `waitForReady(page)`; `check-nav` and `check-responsive` call it
+  after their network wait. Neither `load` nor `networkidle` is readiness for a client-rendered
+  app: the document is up while the view still holds its pre-data placeholder, and the swallowed
+  `networkidle` timeout let the probe read that placeholder. Measured on the local chain (vite →
+  127.0.0.1:8000 relay → production) on 2026-10-11: the same route rendered 6029 characters in one
+  viewport and 10 in another viewport of the same run — a race, not a route defect; the same
+  instrument failed 4 of 5 `/dashboard` viewport combinations at 10 visible characters. Both checks
+  now wait on the very text they read and still fail a page that never reaches the floor, naming
+  that timeout. After: `check-nav` 16 of 16 routes pass (6029 characters on `/`, 305 on
+  `/dashboard`), `check-responsive` 48 of 48 combinations pass, no placeholder reads.
+- `checks/check-crud-animation.mjs` no longer reports the five live `*RowCompleteAnimation` classes
+  as undefined. It filtered those names out of a map collected from the CRUD matrix alone, and its
+  sentence added "called from no hook/component" — a caller is not observable from a black-box walk.
+  The map now asks for the Complete names and the line reports only what the stylesheet shows.
+  Measured against the same origin, both runs on the same build: before `'complete': registered in
+  AnimationFactory but defined in no CSS and called from no hook/component — inert until a caller
+  exists`; after `'complete': 5/5 class(es) defined in the shipped CSS
+  (taskRowCompleteAnimation, subtaskRowCompleteAnimation, seatRowCompleteAnimation,
+  branchRowCompleteAnimation, projectRowCompleteAnimation)`. Both defects are recorded in `SKILL.md`
+  as traps 15 and 16.
+
 ## 2026-10-11 — the fe-dev room gains a measured production recheck toolkit
 
 ### Added

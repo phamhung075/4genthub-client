@@ -37,6 +37,11 @@ const REGISTRY = { create: 800, update: 1700, delete: 800 }
 // create animation takes over — one still present at rest is an invisible row.
 const INITIAL = ['taskRowNew', 'subtaskRowNew']
 const CRUD = ENTITIES.flatMap((e) => TYPES.map((t) => `${e}Row${t[0].toUpperCase()}${t.slice(1)}Animation`))
+// 'complete' is registered in AnimationFactory and the frontend defines the classes, but it is not
+// in the asserted matrix: this walk cannot see a caller inside a bundle, so it is reported, not
+// asserted. It still has to be in the map the check collects — otherwise the report below reads a
+// map that never asked for these names and calls every one of them undefined (paid for 2026-10-11).
+const COMPLETE = ENTITIES.map((e) => `${e}RowCompleteAnimation`)
 
 // NOTE: nothing may be referenced from module scope inside a page.evaluate function — Playwright
 // serializes the function alone, so a module-level helper is a ReferenceError in the page. That
@@ -141,7 +146,7 @@ try {
 const state = await warm.storageState()
 await warm.close().catch(() => {})
 
-const names = new Set(CRUD)
+const names = new Set([...CRUD, ...COMPLETE])
 const css = {}
 const found = {}
 const reduced = {}
@@ -224,12 +229,14 @@ for (const entity of ENTITIES) {
   if (lines.length) (clean ? r.pass : r.info)(`${entity} rows: ${lines.join('; ')}`)
 }
 
-// The registered-but-dead corner, reported not asserted: 'complete' exists in the registry yet
-// no caller in the app asks for it and no CSS defines it — a future caller would land a dead class.
+// The registered-elsewhere corner, reported not asserted: 'complete' is in the registry and the
+// frontend defines the classes, but this walk cannot see a caller inside a bundle, so the sentence
+// says only what the stylesheet shows. The map above asks for these names, so this reading is a
+// measurement rather than a lookup against names nobody collected.
 if (sessionOk) {
-  const complete = ENTITIES.map((e) => `${e}RowCompleteAnimation`)
-  const defined = complete.filter((c) => css[c]?.ms)
-  r.info(`'complete': registered in AnimationFactory but ${defined.length ? `defined in CSS for ${defined.join(', ')}` : 'defined in no CSS and called from no hook/component — inert until a caller exists'}`)
+  const defined = COMPLETE.filter((c) => css[c]?.ms)
+  const missing = COMPLETE.filter((c) => !css[c]?.ms)
+  r.info(`'complete': ${defined.length}/${COMPLETE.length} class(es) defined in the shipped CSS${defined.length ? ` (${defined.join(', ')})` : ''}${missing.length ? `; not defined: ${missing.join(', ')}` : ''}`)
 }
 
 await browser.close().catch(() => {})

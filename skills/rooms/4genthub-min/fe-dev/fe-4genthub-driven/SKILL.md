@@ -199,6 +199,19 @@ the same traps will catch the next person writing a frontend measurement.
     bug. Page functions must carry everything they read, and a catch must cover exactly the
     operation that can legitimately fail (here: the cross-origin `cssRules` access) — never the
     analysis that follows it.
+15. **Neither `load` nor `networkidle` is readiness.** The app is client-rendered: the document
+    finishes loading while the view still holds its pre-data placeholder, and the `networkidle`
+    wait is `.catch(() => {})`-swallowed, so the probe ran against a placeholder. Measured
+    2026-10-11 on the local chain (vite → 127.0.0.1:8000 relay → production): the SAME route
+    rendered 6029 characters in one viewport and 10 in another viewport of the same run — a race,
+    not a route defect. `check-nav` and `check-responsive` now call `waitForReady` (a floor on the
+    very text they read) and still fail a page that never reaches it, naming that timeout.
+16. **A report is only as wide as the map it reads.** `check-crud-animation` collected CSS names
+    from the CRUD matrix, then filtered the five `*RowCompleteAnimation` classes out of that same
+    map and reported them "defined in no CSS and called from no hook/component". The first clause
+    was a lookup against names nobody had asked for; the second described code the walk never
+    inspects. The classes are live (`AnimationFactory` + the five Complete components). Collect
+    what you report on, and make every clause say exactly what was measured.
 
 ## Rules
 
@@ -216,7 +229,7 @@ the same traps will catch the next person writing a frontend measurement.
 
 | File | Job |
 |---|---|
-| [lib.mjs](lib.mjs) | The shared core: routes table, viewports, argument parsing, account reading, browser launch, sign-in/out, the page watcher (API calls, console errors, redaction), color math. |
+| [lib.mjs](lib.mjs) | The shared core: routes table, viewports, argument parsing, account reading, browser launch, sign-in/out, `waitForReady` (the readiness floor a client-rendered view needs before anything is read from it), the page watcher (API calls, console errors, redaction), color math. |
 | [production-walk.mjs](production-walk.mjs) | `capture` — sign in, walk routes, record what rendered; `compare` — structural diff of two captures. |
 | [checks/all.mjs](checks/all.mjs) | The runner: each check in its own process, one summary, one exit code. |
 | [checks/check-login.mjs](checks/check-login.mjs) · [checks/check-nav.mjs](checks/check-nav.mjs) · [checks/check-backend.mjs](checks/check-backend.mjs) · [checks/check-responsive.mjs](checks/check-responsive.mjs) · [checks/check-theme.mjs](checks/check-theme.mjs) · [checks/check-motion.mjs](checks/check-motion.mjs) · [checks/check-contrast.mjs](checks/check-contrast.mjs) · [checks/check-crud-animation.mjs](checks/check-crud-animation.mjs) | The eight checks, above. |

@@ -13,7 +13,7 @@
 // Measured and reported, not failed: the elements sticking out of a page that does overflow (the
 // culprits, with coordinates), and — on mobile — buttons under 24x24 CSS px (WCAG 2.5.8 has a
 // spacing exception no bounding box reveals, so this is a list to look at, not a verdict).
-import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, watchPage } from '../lib.mjs'
+import { ROUTES, VIEWPORTS, baseURL, launchBrowser, parseArgs, readAccount, reporter, signIn, waitForReady, watchPage } from '../lib.mjs'
 
 const { flags } = parseArgs(process.argv.slice(2))
 const r = reporter()
@@ -117,6 +117,8 @@ for (const name of viewportNames) {
     try {
       const response = await page.goto(`${base}${route}`, { waitUntil: 'load', timeout: 60_000 })
       await page.waitForLoadState('networkidle', { timeout: 30_000 }).catch(() => {})
+      // `networkidle` is not readiness for a client-rendered app: wait for the text the checks read.
+      const ready = await waitForReady(page)
       const seen = await page.evaluate(probe)
       Object.assign(row, seen, { errors: consoleErrors.length, failed: failed.length })
       const status = response?.status() ?? null
@@ -127,7 +129,7 @@ for (const name of viewportNames) {
         r.fail(`${name} ${route}: the page can be dragged sideways by ${seen.sideScroll}px (client ${seen.clientWidth}, inner ${seen.innerWidth}, scroll ${seen.scrollWidth})`)
         for (const w of seen.wide) r.note(`sticks out: ${w}`)
       }
-      if (seen.chars < 120) r.fail(`${name} ${route}: only ${seen.chars} visible characters rendered`)
+      if (seen.chars < 120) r.fail(`${name} ${route}: only ${seen.chars} visible characters rendered${ready ? '' : ' and the view never reached the readiness floor within 30s'}`)
       if (!anon && !SHELL_EXEMPT.has(route) && seen.affordance.length === 0) r.fail(`${name} ${route}: signed in, but no visible account chip or menu control — no way to navigate`)
       if (status !== null && status >= 400) r.fail(`${name} ${route}: answered ${status}`)
       for (const e of consoleErrors.slice(0, 2)) r.fail(`${name} ${route}: console error: ${e.text}`)

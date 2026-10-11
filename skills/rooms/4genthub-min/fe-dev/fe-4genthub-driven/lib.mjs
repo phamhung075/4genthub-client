@@ -122,6 +122,24 @@ export async function signOut(page) {
   await page.getByRole('textbox', { name: 'Email Address' }).waitFor({ timeout: 30_000 })
 }
 
+// The app is client-rendered, so neither `load` nor `networkidle` is readiness: on a cold run (a
+// fresh context, no query cache, a dev server compiling) the document is up while the view still
+// holds its pre-data placeholder, and every check downstream then reads ~10 characters and calls it
+// a broken route — or, worse, a passing contrast check over one text run. Measured 2026-10-11 on the
+// local chain (vite → 127.0.0.1:8000 relay → production): the SAME route rendered 6029 characters
+// in one viewport and 10 in another viewport of the same run, which is a race, not a route defect.
+// Wait for the thing the checks actually read — the visible text — and leave the caller's own floor
+// as the verdict, so a page that never mounts still fails, with an accurate sentence. Console errors
+// keep accumulating while this waits, so a realtime loop is still caught by the arm that has it.
+export async function waitForReady(page, { floor = 120, timeout = 30_000 } = {}) {
+  try {
+    await page.waitForFunction((n) => document.body.innerText.trim().length >= n, floor, { timeout })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // One collector shared by every check: the /api/ calls, the console errors, and the requests that
 // never completed. ERR_ABORTED is dropped because a navigation cancels its own in-flight fetches.
 // Console text is redacted before it is stored: the realtime socket carries a JWT in its query
