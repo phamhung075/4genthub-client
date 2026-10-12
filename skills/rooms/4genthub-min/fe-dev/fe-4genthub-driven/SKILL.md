@@ -238,7 +238,12 @@ the same traps will catch the next person writing a frontend measurement.
     page (count them; `ownerNode` separates linked from injected) and walk every sheet's rules — a
     rule with `selectorText` is a style rule, one with `cssRules.length` and no `selectorText` is a
     container — recording the `CSSMediaRule.conditionText` chain over each match. Then quote the sheet
-    that actually carries the rule, and say plainly when the served asset does not.
+    that actually carries the rule, and say plainly when the served asset does not — keeping only the
+    rules that **match the element**: its matched rules are the ones whose `selectorText` matches that
+    node and whose declarations set the property in question, and a grep hit in the served asset is not
+    one of them. That asset (`index-DW8gSl2a.css`, 162,357 bytes, re-checked 2026-10-12) carries 19
+    `/shimmer/i` occurrences on 12 lines — three in the ungated `.shimmer-modern` family — and **0**
+    `.shimmer-spin-layer`: a hit there invites both the wrong rule and the wrong sheet.
 
 ## Rules
 

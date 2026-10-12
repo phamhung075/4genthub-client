@@ -20,6 +20,14 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   quote the sheet that actually carries the rule. Deliberately distinct from trap 16: 16 is "a report is
   only as wide as the map it reads", 17 is "the served stylesheet is not the page's CSS".
 
+### Changed
+- Trap 17 keeps only the rules that **match the element**: its matched rules are the ones whose
+  `selectorText` matches that node and whose declarations set the property in question. The served
+  `index-DW8gSl2a.css` (162,357 bytes, re-checked 2026-10-12) carries 19 `/shimmer/i` occurrences on 12
+  lines — three of them the ungated `.shimmer-modern` family, which gates nothing — and 0
+  `.shimmer-spin-layer`, so a grep hit in the served asset invites naming both the wrong rule and the
+  wrong sheet. Source: the reviewer's cross-check of the trap item.
+
 ## 2026-10-11 — trap 15 listed two readers that annotate instead of stopping
 
 ### Fixed
