@@ -242,8 +242,9 @@ the same traps will catch the next person writing a frontend measurement.
     rules that **match the element**: its matched rules are the ones whose `selectorText` matches that
     node and whose declarations set the property in question, and a grep hit in the served asset is not
     one of them. That asset (`index-DW8gSl2a.css`, 162,357 bytes, re-checked 2026-10-12) carries 19
-    `/shimmer/i` occurrences on 12 lines — three in the ungated `.shimmer-modern` family — and **0**
-    `.shimmer-spin-layer`: a hit there invites both the wrong rule and the wrong sheet.
+    `/shimmer/i` occurrences in **12 rules** — it is one minified line, so the unit is the
+    `}`-delimited segment, not a line; three of the twelve are the ungated `.shimmer-modern` family —
+    and **0** `.shimmer-spin-layer`: a hit there invites both the wrong rule and the wrong sheet.
 
 ## Rules
 
