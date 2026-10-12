@@ -224,6 +224,22 @@ the same traps will catch the next person writing a frontend measurement.
     inspects. The classes are live (`AnimationFactory` + the five Complete components). Collect
     what you report on, and make every clause say exactly what was measured.
 
+17. **The served stylesheet is not the page's CSS.** A static grep of the served `index-*.css` cannot
+    settle a computed-style question: it is one sheet of the page's set, not the set. `/dashboard`
+    carried **38 stylesheets — the linked `index-DW8gSl2a.css` plus 37 runtime-injected `<style>`** —
+    and both `.shimmer-spin-layer` rules lived in an injected one (the `2.5s linear infinite
+    shimmer-spin` base rule, and `animation: none` inside `@media (prefers-reduced-motion: reduce)`).
+    So the served CSS carried **0** `.shimmer-spin-layer` while reduce-mode `div.absolute.inset-0`
+    computed `animationName: none` — and this trap cost a wrong sentence in a shipped evidence
+    artifact ("no CSS rule gates `shimmer-spin` … the gate is in the app path"), caught by the
+    reviewer's cross-check: the observable was right, the location wrong. Distinct from 16: 16 is "a
+    report is only as wide as the map it reads"; 17 is "the served stylesheet is not the page's CSS".
+    **Do instead:** for a computed-style or gating question, enumerate `document.styleSheets` in the
+    page (count them; `ownerNode` separates linked from injected) and walk every sheet's rules — a
+    rule with `selectorText` is a style rule, one with `cssRules.length` and no `selectorText` is a
+    container — recording the `CSSMediaRule.conditionText` chain over each match. Then quote the sheet
+    that actually carries the rule, and say plainly when the served asset does not.
+
 ## Rules
 
 - **Read-only against production.** No writes, no token minted, no resource created. The only

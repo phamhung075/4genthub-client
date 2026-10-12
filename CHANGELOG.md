@@ -3,6 +3,23 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-12 — trap 17: the served stylesheet is not the page's CSS
+
+### Added
+- `SKILL.md` trap 17, paid for on a live recheck of the redesigned frontend. The toolkit's own evidence
+  artifact first concluded "no CSS rule gates `shimmer-spin` under reduce … the gate is in the app
+  path", after grepping only the served `index-DW8gSl2a.css`. The reviewer's cross-check found the
+  gate: `.shimmer-spin-layer { animation: none }` inside `@media (prefers-reduced-motion: reduce)`, in
+  one of the **37 runtime-injected `<style>`** sheets — the page carries **38 stylesheets** (1 linked +
+  37 injected), so a static grep of the served asset cannot settle a computed-style question. The
+  observable was right (`div.absolute.inset-0` computes `animationName: none` under reduce) and the
+  location was wrong.
+- The trap records the procedure, not only the lesson: enumerate `document.styleSheets` in the page and
+  walk each sheet's rules (a rule with `selectorText` is a style rule; one with `cssRules.length` and no
+  `selectorText` is a container), recording the `CSSMediaRule.conditionText` chain over each match, then
+  quote the sheet that actually carries the rule. Deliberately distinct from trap 16: 16 is "a report is
+  only as wide as the map it reads", 17 is "the served stylesheet is not the page's CSS".
+
 ## 2026-10-11 — trap 15 listed two readers that annotate instead of stopping
 
 ### Fixed
