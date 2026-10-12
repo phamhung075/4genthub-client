@@ -400,7 +400,7 @@ type stopCommand struct{}
 
 func (stopCommand) Name() string { return "stop" }
 func (stopCommand) Summary() string {
-	return "stop rigd and its children (a machine-wide stop: compact, watchdog, bridge)"
+	return "stop rigd and its children (a machine-wide stop: compact, watchdog, messages, bridge)"
 }
 func (stopCommand) NeedsRig() bool { return false }
 

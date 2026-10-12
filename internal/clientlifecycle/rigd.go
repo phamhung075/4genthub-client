@@ -3,10 +3,10 @@
 //
 // WHY SUPERVISION LIVES IN THIS PROCESS AND NOT IN A SECOND ONE. A separate keeper would be a second
 // always-on process that itself needs supervising - two mechanisms where the owner ruled one. So rigd
-// starts `compact-run --rig R`, `watchdog R --watch` and `bridge run` as its own children, through the
-// EXISTING spawnChild/awaitStart pair the supervisor and the bridge already use, and restarts them with
-// backoff from 1 s doubling to 120 s. A child that dies three times inside ten minutes is `failing`, and
-// rigd keeps retrying it at the cap.
+// starts `compact-run --rig R`, `watchdog R --watch`, `sync messages --rig R --watch` and `bridge run`
+// as its own children, through the EXISTING spawnChild/awaitStart pair the supervisor and the bridge
+// already use, and restarts them with backoff from 1 s doubling to 120 s. A child that dies three times
+// inside ten minutes is `failing`, and rigd keeps retrying it at the cap.
 //
 // WHAT CHANGED AROUND IT, so the reader does not go looking for the old mechanism: `up` starts rigd (one
 // detached child, checked with awaitStart) and records the rig in rigd.json's `rigs` list; `compact` and
@@ -82,7 +82,8 @@ func (rigdCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		printHelp(stdout, rigdUsage,
 			"One outbound /ws/connector socket: every local rig session registered, its transcript tailed and\n"+
 				"uploaded redacted, and every safeguard transition published. It also starts and restarts\n"+
-				"`compact-run --rig R`, `watchdog R --watch` and `bridge run` for the rigs listed in rigd.json,\n"+
+				"`compact-run --rig R`, `watchdog R --watch`, `sync messages --rig R --watch` and `bridge run`\n"+
+				"for the rigs listed in rigd.json,\n"+
 				"so it is the single restart authority: `stop` stops rigd and its children, and `up` starts it.\n\n"+
 				"  status [--json]      the safeguard rows and the per-session withheld counts\n\n"+
 				"Requires AGENTHUB_URL and AGENTHUB_TOKEN (the value is never printed).")
@@ -244,8 +245,8 @@ func (m *rigdManager) pass() {
 	m.persist(rows)
 }
 
-// rigdSpecs is the child list of 7.1: a compaction supervisor and a watchdog per listed rig, and ONE
-// bridge per machine.
+// rigdSpecs is the child list of 7.1: a compaction supervisor, a watchdog and a seat-message deliverer
+// per listed rig, and ONE bridge per machine.
 func rigdSpecs(rigs []string) ([]rigdSpec, error) {
 	var specs []rigdSpec
 	for _, rig := range rigs {
@@ -254,6 +255,10 @@ func rigdSpecs(rigs []string) ([]rigdSpec, error) {
 			return nil, err
 		}
 		watchdogLog, err := WatchdogLogPath(rig)
+		if err != nil {
+			return nil, err
+		}
+		messagesLog, err := MessagesLogPath(rig)
 		if err != nil {
 			return nil, err
 		}
@@ -269,6 +274,12 @@ func rigdSpecs(rigs []string) ([]rigdSpec, error) {
 				argv:      []string{"watchdog", rig, "--watch"},
 				logPath:   watchdogLog,
 				threshold: clientservices.SilentAfter(clientservices.WatchdogInterval),
+			},
+			rigdSpec{
+				safeguard: clientservices.Messages, rig: rig,
+				argv:      []string{"sync", "messages", "--rig", rig, "--watch"},
+				logPath:   messagesLog,
+				threshold: clientservices.SilentAfter(clientservices.MessagesEvery),
 			},
 		)
 	}

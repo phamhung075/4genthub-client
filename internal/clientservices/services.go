@@ -35,10 +35,11 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// The four safeguards of 7.2, in the order a report lists them.
+// The safeguards of 7.2, in the order a report lists them.
 const (
 	Compact  = "compact"
 	Watchdog = "watchdog"
+	Messages = "messages"
 	Bridge   = "bridge"
 	Rigd     = "rigd"
 )
@@ -60,32 +61,40 @@ const (
 	// WatchdogInterval is the watchdog's watch interval, 60 s: rigd launches `watchdog R --watch` with no
 	// SECONDS, which is the documented default.
 	WatchdogInterval = 60 * time.Second
+	// MessagesEvery is the seat deliverer's pass interval, 10 s: one pass over every running seat of one
+	// rig, then one heartbeat, then this sleep - the cast of `sync messages --rig R --watch`.
+	MessagesEvery = 10 * time.Second
 	// BridgeBackoffCap is the bridge's own retry cap, 120 s (clientbridge.MaxBackoffSecs).
 	BridgeBackoffCap = 120 * time.Second
 	// RigdHeartbeat is the socket heartbeat rigd answers to, 25 s (the server's ready.heartbeat_s).
 	RigdHeartbeat = 25 * time.Second
 )
 
-// Safeguards is the list a report walks: the rig-scoped pair first, then the two machine-scoped rows.
+// Safeguards is the list a report walks: the rig-scoped rows first, then the two machine-scoped rows.
 // One bridge per machine and one rigd per machine, which is why those two carry no rig.
-func Safeguards() []string { return []string{Compact, Watchdog, Bridge, Rigd} }
+func Safeguards() []string { return []string{Compact, Watchdog, Messages, Bridge, Rigd} }
 
 // RigScoped reports whether a safeguard runs once per rig rather than once per machine. It decides both
 // the heartbeat file's name and whether the row carries a rig at all.
-func RigScoped(safeguard string) bool { return safeguard == Compact || safeguard == Watchdog }
+func RigScoped(safeguard string) bool {
+	return safeguard == Compact || safeguard == Watchdog || safeguard == Messages
+}
 
 // SilentAfter is 7.4's rule in one line: silent means a heartbeat age past three times the child's
 // longest legitimate sleep.
 func SilentAfter(longestSleep time.Duration) time.Duration { return 3 * longestSleep }
 
-// DefaultSilentAfter is 7.4's table: 30 s, 180 s, 360 s and 75 s. `doctor` has no launch flags, so it
-// uses these; rigd computes each child's from the flags it launched it with, through SilentAfter.
+// DefaultSilentAfter is 7.4's table - 30 s for the supervisor, 180 s for the watchdog, 30 s for the seat
+// deliverer, 360 s for the bridge and 75 s for rigd. `doctor` has no launch flags, so it uses these;
+// rigd computes each child's from the flags it launched it with, through SilentAfter.
 func DefaultSilentAfter(safeguard string) time.Duration {
 	switch safeguard {
 	case Compact:
 		return SilentAfter(CompactEvery)
 	case Watchdog:
 		return SilentAfter(WatchdogInterval)
+	case Messages:
+		return SilentAfter(MessagesEvery)
 	case Bridge:
 		return SilentAfter(BridgeBackoffCap)
 	case Rigd:
@@ -94,9 +103,9 @@ func DefaultSilentAfter(safeguard string) time.Duration {
 	return 0
 }
 
-// Pattern is the command line that identifies a safeguard's process, as `pgrep -f` takes it. The two
+// Pattern is the command line that identifies a safeguard's process, as `pgrep -f` takes it. The
 // rig-scoped patterns name the rig, so a report for one rig can never be answered by another rig's
-// child; the two machine patterns are anchored to the start of the command line so a shell or an editor
+// child; the machine patterns are anchored to the start of the command line so a shell or an editor
 // whose text merely contains them is not mistaken for the process.
 func Pattern(safeguard, rig string) string {
 	switch safeguard {
@@ -104,6 +113,8 @@ func Pattern(safeguard, rig string) string {
 		return "compact-run --rig " + rig
 	case Watchdog:
 		return "^[^ ]*4genteam watchdog " + rig + " --watch"
+	case Messages:
+		return "^[^ ]*4genteam sync messages --rig " + rig + " --watch"
 	case Bridge:
 		return "^[^ ]*4genteam bridge run"
 	case Rigd:
@@ -172,11 +183,11 @@ type Heartbeat struct {
 }
 
 // WriteHeartbeat stamps the caller's own process into its heartbeat file. It is called on EVERY pass of
-// every child - the supervisor per Step, the watchdog per poll, the bridge per Cycle, rigd per tick -
-// because a heartbeat that is written only when something happens cannot tell a stopped child from a
-// quiet one, which is the incident this report exists for.
+// every child - the supervisor per Step, the watchdog per poll, the seat deliverer per pass, the bridge
+// per Cycle, rigd per tick - because a heartbeat that is written only when something happens cannot
+// tell a stopped child from a quiet one, which is the incident this report exists for.
 //
-// It is a variable so ONE test seam covers all four children and no test needs the machine's own log
+// It is a variable so ONE test seam covers every child and no test needs the machine's own log
 // directory to observe a pass, in the repo's style of a package-level variable rather than an interface
 // added for testing.
 var WriteHeartbeat = writeHeartbeatFile
@@ -315,10 +326,11 @@ func (e Env) recorded(safeguard, rig string) (Health, bool) {
 // will grow a bounded read; the computation itself touches only local files and pgrep.
 func Verify(ctx context.Context, env Env) []Health {
 	_ = ctx
-	rows := make([]Health, 0, len(env.Rigs)*2+2)
+	rows := make([]Health, 0, len(env.Rigs)*3+2)
 	for _, rig := range env.Rigs {
 		rows = append(rows, verifyRow(env, Compact, rig))
 		rows = append(rows, verifyRow(env, Watchdog, rig))
+		rows = append(rows, verifyRow(env, Messages, rig))
 	}
 	rows = append(rows, verifyRow(env, Bridge, ""), verifyRow(env, Rigd, ""))
 	return rows

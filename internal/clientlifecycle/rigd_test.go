@@ -109,8 +109,8 @@ func TestEverySupervisionPassWritesRigdOwnHeartbeat(t *testing.T) {
 	}
 }
 
-// TestTheChildListIsSevenOne: a compaction supervisor and a watchdog per listed rig, and ONE bridge per
-// machine, each with the arguments and the derived threshold 7.4 gives it.
+// TestTheChildListIsSevenOne: a compaction supervisor, a watchdog and a seat-message deliverer per
+// listed rig, and ONE bridge per machine, each with the arguments and the derived threshold 7.4 gives it.
 func TestTheChildListIsSevenOne(t *testing.T) {
 	specs, err := rigdSpecs([]string{"demo", "other"})
 	if err != nil {
@@ -123,8 +123,10 @@ func TestTheChildListIsSevenOne(t *testing.T) {
 	want := []string{
 		"compact-run --rig demo @30s",
 		"watchdog demo --watch @3m0s",
+		"sync messages --rig demo --watch @30s",
 		"compact-run --rig other @30s",
 		"watchdog other --watch @3m0s",
+		"sync messages --rig other --watch @30s",
 		"bridge run @6m0s",
 	}
 	if strings.Join(described, "|") != strings.Join(want, "|") {
@@ -166,7 +168,7 @@ func TestAChildThatDiesIsRestartedWithBackoffFromOneSecond(t *testing.T) {
 	// Only the children of the ONE listed rig, plus the single bridge: nothing else is ever started.
 	for _, argv := range f.spawned {
 		joined := strings.Join(argv, " ")
-		if !strings.HasSuffix(joined, " demo") && joined != "bridge run" && joined != "watchdog demo --watch" {
+		if !strings.HasSuffix(joined, " demo") && joined != "bridge run" && joined != "watchdog demo --watch" && joined != "sync messages --rig demo --watch" {
 			t.Errorf("spawned %v, which belongs to no listed rig", argv)
 		}
 	}

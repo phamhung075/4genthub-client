@@ -31,7 +31,7 @@ type doctorCommand struct{}
 
 func (doctorCommand) Name() string { return "doctor" }
 func (doctorCommand) Summary() string {
-	return "report every safeguard (compact, watchdog, bridge, rigd); read-only"
+	return "report every safeguard (compact, watchdog, messages, bridge, rigd); read-only"
 }
 func (doctorCommand) NeedsRig() bool { return false }
 

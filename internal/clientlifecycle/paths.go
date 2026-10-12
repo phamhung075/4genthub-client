@@ -38,6 +38,16 @@ func LogPath(rig string) (string, error) {
 	return filepath.Join(dir, "compact-supervisor-"+rig+".log"), nil
 }
 
+// MessagesLogPath is the seat-message deliverer's log for one rig: what every pass printed, so a message
+// that would not land stays readable after the fact rather than only in the operator's scrollback.
+func MessagesLogPath(rig string) (string, error) {
+	dir, err := LogDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "messages-"+rig+".log"), nil
+}
+
 // BridgeLogPath is the status bridge's log.
 func BridgeLogPath() (string, error) {
 	dir, err := LogDir()

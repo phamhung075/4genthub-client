@@ -73,13 +73,14 @@ func (f *reportFixture) row(safeguard, rig string, env Env) Health {
 	return Health{}
 }
 
-// TestTheSilenceThresholdsAreSevenFour pins the table: 30 s, 180 s, 360 s and 75 s - three times each
-// child's longest legitimate sleep - and rejects any environment knob, because a threshold nobody owns is
-// how the silence went unnoticed.
+// TestTheSilenceThresholdsAreSevenFour pins the table - 30 s, 180 s, 30 s, 360 s and 75 s, three times
+// each child's longest legitimate sleep - and rejects any environment knob, because a threshold nobody
+// owns is how the silence went unnoticed.
 func TestTheSilenceThresholdsAreSevenFour(t *testing.T) {
 	want := map[string]time.Duration{
 		Compact:  30 * time.Second,
 		Watchdog: 180 * time.Second,
+		Messages: 30 * time.Second,
 		Bridge:   360 * time.Second,
 		Rigd:     75 * time.Second,
 	}
@@ -352,8 +353,8 @@ func TestStateLineIsTheLineSevenFiveRequires(t *testing.T) {
 	}
 }
 
-// TestTheReportWalksTheListedRigsAndTheTwoMachineRows: one supervisor and one watchdog per listed rig, and
-// exactly one bridge and one rigd, in a stable order.
+// TestTheReportWalksTheListedRigsAndTheTwoMachineRows: one supervisor, one watchdog and one seat
+// deliverer per listed rig, and exactly one bridge and one rigd, in a stable order.
 func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 	newReportFixture(t)
 	rows := Verify(context.Background(), Env{Rigs: []string{"demo", "other"}})
@@ -361,7 +362,7 @@ func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 	for _, row := range rows {
 		order = append(order, strings.TrimSpace(row.Rig+" "+row.Safeguard))
 	}
-	want := "demo compact,demo watchdog,other compact,other watchdog,bridge,rigd"
+	want := "demo compact,demo watchdog,demo messages,other compact,other watchdog,other messages,bridge,rigd"
 	if strings.Join(order, ",") != want {
 		t.Errorf("order = %v, want %v", order, want)
 	}

@@ -3,6 +3,34 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the seat-message deliverer ran only when a human typed it; it is now the fifth supervised safeguard
+
+### Fixed
+- A message the frontend sent to a seat (cloud `seat_messages` row `8df26eb8-9526-420b-9dad-e04ff4d59bd1`,
+  room `4genthub-min`/seat `lead`, 2026-10-12T22:00:26Z) sat unread: the only consumer of that store was
+  the manual `4genteam sync messages <room> <seat>` verb, the supervising rigd tree had died ~2.7 minutes
+  before the POST (its rows' last beats 21:56:48–21:57:39Z), and nothing brought the deliverer back. The
+  pass typed the stranded text into the lead's session and acked it — at-least-once: ledger append
+  (`delivered/<room>-<seat>.ids`) first, ack last, so a crash between the two re-acks without re-typing.
+
+### Added
+- `4genteam sync messages --rig R [--watch]` (`internal/clientsync/messagesverb.go`): the rig shape derives
+  each seat's session from `rig ps --nodes --rig R --json` (running seats only, by canonical session), and
+  `--watch` runs one pass every 10 s until the context is cancelled — a pass that fails is logged and the
+  loop goes on, because a deliverer that stops is how the message reached the cloud and stopped there.
+  Sends are stamped `OPENRIG_SESSION_NAME=human@kernel` so the receiving seat sees the human sender.
+- `MessagesLogPath` (`internal/clientlifecycle/paths.go`): `messages-<rig>.log`, what every pass printed,
+  so a message that would not land stays readable after the fact.
+
+### Changed
+- The `messages` safeguard joins the health tables (`internal/clientservices/services.go`): `Safeguards()`,
+  `RigScoped()`, `DefaultSilentAfter()` (10 s pass, 30 s silence), `Pattern()` (`4genteam sync messages
+  --rig <rig> --watch`) and `Verify()`'s capacity — the five definitions that must move together, or the
+  report and the process table start disagreeing about which process is the deliverer.
+- `rigd` supervises it as each rig's third child (`internal/clientlifecycle/rigd.go`), beside compact and
+  the watchdog, so delivery restarts with the machine's other safeguards rather than by hand. `doctor` and
+  `lifecycle`'s summaries name it (`internal/clientlifecycle/doctor.go`, `lifecycle.go`).
+
 ## 2026-10-12 — trap 17: the served stylesheet is not the page's CSS
 
 ### Added

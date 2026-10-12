@@ -100,10 +100,11 @@ func (f *healthFixture) running(safeguard, rig string, pid int) {
 	f.beat(safeguard, rig, time.Second, pid)
 }
 
-// everythingRunning is the all-healthy machine: the three safeguards the incident named, plus rigd itself.
+// everythingRunning is the all-healthy machine: every safeguard the report walks, plus rigd itself.
 func (f *healthFixture) everythingRunning() {
 	f.running(clientservices.Compact, "demo", 4101)
 	f.running(clientservices.Watchdog, "demo", 4102)
+	f.running(clientservices.Messages, "demo", 4105)
 	f.running(clientservices.Bridge, "", 4103)
 	f.running(clientservices.Rigd, "", 4104)
 }
