@@ -28,6 +28,7 @@ package clientruntime
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -115,6 +116,14 @@ type SendResult struct {
 // rather than typed into the wrong prompt.
 func OpenRigSend(ctx context.Context, session, text string, opts SendOptions) (SendResult, int, error) {
 	payload := map[string]any{"session": session}
+	// The CLI names every delivery (`deliveryId: randomUUID()`, send.ts:475) and the route reads that
+	// field (transport.js:76). The daemon uses it as this delivery's outbox id (session-transport.js:1143
+	// `opts?.deliveryId ?? guard-send-<uuid>`) and refuses a reuse that names different content or a
+	// different sender rather than re-delivering it (:1160). Omitting it left every shim send on a
+	// daemon-minted id, so a replayed shim send could never be recognised as the same delivery.
+	if deliveryID := newDeliveryID(); deliveryID != "" {
+		payload["deliveryId"] = deliveryID
+	}
 	if opts.Raw {
 		payload["text"] = text
 	} else {
@@ -154,6 +163,24 @@ func OpenRigSend(ctx context.Context, session, text string, opts SendOptions) (S
 		result.Warning, result.Error = decoded.Warning, decoded.Error
 	}
 	return result, status, err
+}
+
+// newDeliveryID mints the per-invocation delivery identity the OpenRig CLI sends as `deliveryId`
+// (send.ts:475, `deliveryId: randomUUID()`), in the RFC 4122 v4 shape the CLI's UUIDs have. A random
+// value per invocation — never a fixed one — is the CLI's own choice and the safe one: a constant id
+// would make the daemon treat a deliberately repeated message as a replay of the first
+// (`delivery_identity_conflict`, session-transport.js:1160-1175).
+//
+// It returns "" only when the kernel's random source fails. The send then proceeds without an id,
+// exactly as it did before, rather than inventing a guessable one.
+func newDeliveryID() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return ""
+	}
+	raw[6] = (raw[6] & 0x0f) | 0x40 // version 4
+	raw[8] = (raw[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16])
 }
 
 // openRigSession is the session name this shell's environment claims, or "" when the shell is not a

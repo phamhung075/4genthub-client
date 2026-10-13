@@ -3,6 +3,88 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — `rig queue` answers from the daemon, `rig capture` exists, and a queue note is readable
+
+Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps`; the daemon's own
+`commands.captureExamples` advertises `rig capture`. Both are fixed here on top of the verdict changes.
+
+### Fixed
+- **`rig queue` answered a false empty.** Measured before: `rig queue --json` → `[]`, exit 0, and the bare
+  form printed "No pending items in local queue." while this rig's OpenRig queue held the rows the lead had
+  routed. On a rig whose durable work *is* the queue, a false empty is worse than an error: a seat trusts it
+  and believes it owes nothing. The verb now reads the daemon (`GET /api/queue/list` with
+  `destinationSession` of this seat's session, `activeOnly=1`, `compact=1`) and renders one line per row. An
+  empty document is reported only as a **measurement of a named session against a named daemon**
+  (`Measured 0 pending items for <session> on the OpenRig daemon at <url>.`); with no daemon configured it
+  says nothing was measured and exits 3 (`set OPENRIG_URL or OPENRIG_PORT`); a daemon refusal is reported
+  with its status and reason, never flattened to `[]`.
+- **The list's own parameter was dropped.** The route reads `destinationSession`; `--destination` now
+  reaches it, so `rig queue --destination 4genthub-min-reviewer@4genthub-min` answers with that seat's rows
+  (live). Same class as the defect, in the same verb, found by reading the route rather than the output.
+- **A queue write is refused by name.** `rig queue update <id> --note ...`, `claim`, `block` and the rest are
+  writes this shim does not perform: exit 2, nothing sent, stderr naming the write and pointing at the
+  OpenRig CLI. Measured before: a write reported success while its note was unreadable anywhere the caller
+  could look. (An undeclared flag like `--note` is refused even earlier, by the parser.)
+- **`send` dropped `deliveryId`.** The route reads it (`transport.js:76`) and the OpenRig CLI always sends
+  one (`send.ts:475`, `deliveryId: randomUUID()`); the daemon uses it as this delivery's outbox id
+  (`session-transport.js:1143`) and refuses a reuse that names other content instead of re-delivering it
+  (`:1160`). The shim now sends a fresh v4 identity per invocation — never a constant, which would make a
+  deliberately repeated message a replay of the first.
+
+### Added
+- **`rig capture <session> [--lines <n>] [--json]`** (`internal/clientruntime`): the verb the daemon's own
+  `whoami` advertises, through `POST /api/transport/capture` on the same route the R7 receiver-side proof
+  used. The pane goes out verbatim, no heading added.
+- **`rig queue show <qitemId>`** and **`rig queue transitions <qitemId>`**: a note the queue accepts does not
+  ride the row — `update --note` writes it into the row's transition log, and the row document carries no
+  note field at all (`transitionNote`, `humanDetail` and `resolution` are null on every row read, including
+  the ones with notes). `transitions` reads the log, which is where the note actually is.
+
+### Changed
+- One parser for the verb surface this row touches: `queue` and `capture` take their options before, between
+  or after the positionals through `clientruntime.SplitFlags`, the helper the verdict commit added for
+  `send` (an undeclared flag stops the verb rather than becoming a positional). The private
+  `reorderFlags` helper is gone. `whoami` keeps its own flag set: it takes no positionals.
+
+### Tests
+- `internal/clientruntime/openrigdaemon_test.go`: the queue list asks for THIS seat's `destinationSession`
+  with `activeOnly=1`/`compact=1` and prints every row the daemon returned; an empty document is a named
+  measurement; a daemonless shell gets the refusal, not an empty list; a daemon failure is surfaced;
+  `transitions` prints the note the row does not carry; `show` names the row's state and blocker; the write
+  shapes (`update <id> --note`, `update <id>`, `claim <id>`) exit 2 with **zero requests**; `--json` prints
+  the daemon's own document; `capture` prints the pane and takes `--lines` on either side of the session;
+  `OpenRigSend` names the delivery with a fresh v4 id on every invocation.
+
+### Verified (live, 4genthub-min rig, binary built from this commit at `/tmp/r7-verdict/4genteam`)
+- `4genteam queue --json` → 4 rows, including three **this seat did not create** (U2 `…86cab906`, U1+U0
+  `…da1e5cce`, and the blocked owner-action row `…416a3da42a595995`); `4genteam queue` → the same rows, one
+  tab-separated line each.
+- `4genteam queue --destination 4genthub-min-reviewer@4genthub-min` → that seat's two rows (the delta gate
+  and U3). `queue show qitem-20261013193957-ee8cadf348fe93c9` → `done`, `closed: handed_off_to ->
+  4genthub-min-reviewer@4genthub-min`, `tsUpdated: 2026-10-13T20:00:30.422Z`. `queue transitions` on the same
+  row → my own custody note (`custody-verified: …`) and the delivery note, both readable.
+- `4genteam queue update <id> --note "…"` → exit 2, `unknown flag --note for this verb; nothing was read`,
+  and the row's `tsUpdated` unchanged (nothing written); `queue claim <id>` → exit 2, `"claim" is not a read
+  this shim performs … Nothing was read or written.`
+- `env -u OPENRIG_URL -u OPENRIG_PORT 4genteam queue` → exit 3, `no OpenRig daemon is configured in this
+  environment (set OPENRIG_URL or OPENRIG_PORT); nothing was measured`.
+- `4genteam capture 4genthub-min-reviewer@4genthub-min --lines 4` → the pane; two sessions → usage, exit 2;
+  `--nope` → exit 2 naming the flag; daemonless → exit 3.
+- `go build ./...`, `go vet ./...`, `go test ./...` exit 0 (23 packages ok); `gofmt -l` clean on both
+  changed packages. A live `send --raw` through the binary returned `Sent to …` plus the advisory, and
+  recorded its sender-side outbox row.
+
+### Named, not silently fixed
+- **`deliveryId`'s effect, precisely.** With the typing guard off the id is inert: the outbox store mints
+  its own row id (`outbox-<stamp>-<hash>`, measured live on this daemon), and the emitted send is unchanged.
+  The id matters on the guarded path (the idempotency check at `session-transport.js:1160`) and for
+  cross-host relay naming (`:2373`). The shim matches the CLI's request; no behaviour change was observed on
+  an unguarded daemon, and none is claimed.
+- **The CLI's own `queue update --note` read path is not fixed here.** The note is written to the transition
+  log while the row it prints carries no note (the lead measured this through the CLI, not the shim). This
+  shim now reads the log — the surface where the note is — and refuses writes it cannot perform; the
+  daemon/CLI row read is a separate change for whoever owns that surface.
+
 ## 2026-10-13 — the R7 shim's `send` flags, and the daemon's advisory the shim was dropping
 
 The two majors from `GATE-08c41a5-r7-shim-2026-10-13.md` (verdict: approve with changes), plus the

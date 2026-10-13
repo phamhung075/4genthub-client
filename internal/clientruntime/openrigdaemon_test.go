@@ -446,3 +446,420 @@ func TestTerminalTokenPreference(t *testing.T) {
 		t.Errorf("token = %q, want OPENRIG_TERMINAL_BEARER_TOKEN to win", got)
 	}
 }
+
+// TestQueueCommandReadsDaemonRows is the R7 contract for `rig queue`: the verb asks the daemon for THIS
+// seat's active queue (the compact shape it advertises) and prints one line per real row rather than a
+// canned empty list.
+func TestQueueCommandReadsDaemonRows(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+
+	var gotPath, gotDest, gotActive, gotCompact string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotDest = r.URL.Query().Get("destinationSession")
+		gotActive = r.URL.Query().Get("activeOnly")
+		gotCompact = r.URL.Query().Get("compact")
+		_, _ = w.Write([]byte(`[{"qitemId":"qitem-aaa","state":"pending","sourceSession":"4genthub-min-lead@4genthub-min","summary":"first owed task"},{"qitemId":"qitem-bbb","state":"claimed","sourceSession":"4genthub-min-fe-dev@4genthub-min","summary":"second owed task"}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("queue exit = %d, stderr = %q", code, errOut.String())
+	}
+	if gotPath != "/api/queue/list" {
+		t.Errorf("asked %q, want /api/queue/list", gotPath)
+	}
+	if gotDest != "4genthub-min-go-dev@4genthub-min" {
+		t.Errorf("destinationSession = %q, want this seat's session", gotDest)
+	}
+	if gotActive != "1" || gotCompact != "1" {
+		t.Errorf("activeOnly=%q compact=%q, want both 1", gotActive, gotCompact)
+	}
+	for _, want := range []string{"qitem-aaa", "qitem-bbb", "pending", "claimed"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("queue printed %q, want it to carry %q", out.String(), want)
+		}
+	}
+}
+
+// TestQueueCommandMeasuresAnEmptyQueue: an empty document is reported as a measurement of THIS session
+// against THIS daemon, not as the old false sentence.
+func TestQueueCommandMeasuresAnEmptyQueue(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("queue exit = %d, stderr = %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "4genthub-min-go-dev@4genthub-min") {
+		t.Errorf("an empty queue did not name the session it measured: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "0") {
+		t.Errorf("an empty queue did not state a count of zero: %q", out.String())
+	}
+	if !strings.Contains(out.String(), srv.URL) {
+		t.Errorf("an empty queue did not name the daemon it measured: %q", out.String())
+	}
+	if strings.Contains(out.String(), "No pending items in local queue") {
+		t.Errorf("the removed false sentence came back: %q", out.String())
+	}
+}
+
+// TestQueueCommandWithoutADaemonIsNotAnEmptyQueue: a shell that names no daemon gets a refusal naming
+// the missing configuration, never a queue-looking empty answer.
+func TestQueueCommandWithoutADaemonIsNotAnEmptyQueue(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	t.Setenv("OPENRIG_URL", "")
+	t.Setenv("OPENRIG_PORT", "")
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
+
+	if code == 0 {
+		t.Fatalf("a daemonless queue exited 0, stdout = %q", out.String())
+	}
+	for _, want := range []string{"OPENRIG_URL", "OPENRIG_PORT"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr = %q, want it to name the missing %s", errOut.String(), want)
+		}
+	}
+	if strings.Contains(out.String(), "[]") {
+		t.Errorf("a daemonless queue printed %q on stdout", out.String())
+	}
+	if strings.Contains(out.String(), "Measured 0") || strings.Contains(out.String(), "No pending items") {
+		t.Errorf("a daemonless queue claimed an empty queue: %q", out.String())
+	}
+}
+
+// TestQueueCommandSurfacesADaemonFailure: a daemon that refuses is reported, and never flattened to [].
+func TestQueueCommandSurfacesADaemonFailure(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"queue store unavailable"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
+
+	if code == 0 {
+		t.Fatalf("a failing daemon exited 0, stdout = %q", out.String())
+	}
+	if strings.Contains(out.String(), "[]") {
+		t.Errorf("a failing daemon printed %q on stdout", out.String())
+	}
+	if !strings.Contains(errOut.String(), "500") || !strings.Contains(errOut.String(), "queue store unavailable") {
+		t.Errorf("stderr = %q, want the daemon's HTTP status and reason", errOut.String())
+	}
+}
+
+// TestCaptureCommandPrintsThePane: `rig capture <session>` posts the session (and only the lines the
+// caller asked for) to the daemon and prints the pane verbatim.
+func TestCaptureCommandPrintsThePane(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+
+	const pane = "line one  \nline two\n"
+	var gotPath string
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		got = nil
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"ok":true,"content":"line one  \nline two\n","lines":2}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := captureCommand{}.Run(context.Background(), nil, []string{"--lines", "40", "4genthub-min-fe-dev@4genthub-min"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("capture exit = %d, stderr = %q", code, errOut.String())
+	}
+	if gotPath != "/api/transport/capture" {
+		t.Errorf("posted to %q, want /api/transport/capture", gotPath)
+	}
+	if got["session"] != "4genthub-min-fe-dev@4genthub-min" {
+		t.Errorf("session = %v, want the named session", got["session"])
+	}
+	if got["lines"] != float64(40) {
+		t.Errorf("lines = %v, want 40", got["lines"])
+	}
+	if out.String() != pane {
+		t.Errorf("stdout = %q, want the pane verbatim %q", out.String(), pane)
+	}
+
+	// Without --lines the field is omitted entirely rather than sent as a default.
+	out.Reset()
+	errOut.Reset()
+	code = captureCommand{}.Run(context.Background(), nil, []string{"4genthub-min-fe-dev@4genthub-min"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("capture exit = %d, stderr = %q", code, errOut.String())
+	}
+	if _, present := got["lines"]; present {
+		t.Errorf("lines was sent although --lines was absent: %v", got)
+	}
+}
+
+// TestCaptureCommandSurfacesAPaneFailure: the daemon's reason is what the caller sees, and nothing
+// pane-like reaches stdout.
+func TestCaptureCommandSurfacesAPaneFailure(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"ok":false,"reason":"session_missing"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := captureCommand{}.Run(context.Background(), nil, []string{"ghost@4genthub-min"}, &out, &errOut)
+
+	if code == 0 {
+		t.Fatalf("a failed capture exited 0, stdout = %q", out.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("a failed capture printed %q on stdout", out.String())
+	}
+	if !strings.Contains(errOut.String(), "session_missing") {
+		t.Errorf("stderr = %q, want the daemon's reason", errOut.String())
+	}
+}
+
+// TestCaptureCommandWithoutADaemon: no configured daemon is a refusal naming the missing configuration,
+// not an empty pane.
+func TestCaptureCommandWithoutADaemon(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	t.Setenv("OPENRIG_URL", "")
+	t.Setenv("OPENRIG_PORT", "")
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := captureCommand{}.Run(context.Background(), nil, []string{"4genthub-min-fe-dev@4genthub-min"}, &out, &errOut)
+
+	if code == 0 {
+		t.Fatalf("a daemonless capture exited 0, stdout = %q", out.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("a daemonless capture printed %q on stdout", out.String())
+	}
+	for _, want := range []string{"OPENRIG_URL", "OPENRIG_PORT"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr = %q, want it to name the missing %s", errOut.String(), want)
+		}
+	}
+}
+
+// TestQueueTransitionsPrintsTheNotesTheRowDoesNotCarry is the measured half of the queue defect: a note
+// `queue update --note` accepts is written to the row's TRANSITION LOG and the row document carries no
+// note field at all, so the shim must read the log or a caller can never see what was recorded.
+func TestQueueTransitionsPrintsTheNotesTheRowDoesNotCarry(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`[{"transitionId":9129,"qitemId":"qitem-aaa","ts":"2026-10-13T19:59:43.804Z","state":"done","transitionNote":"custody-verified: the successor holds the work","actorSession":"4genthub-min-go-dev@4genthub-min"}]`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := queueCommand{}.Run(context.Background(), nil, []string{"transitions", "qitem-aaa"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("queue transitions exit = %d, stderr = %q", code, errOut.String())
+	}
+	if gotPath != "/api/queue/qitem-aaa/transitions" {
+		t.Errorf("asked %q, want the row's transition log", gotPath)
+	}
+	for _, want := range []string{"custody-verified: the successor holds the work", "done", "2026-10-13T19:59:43.804Z"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("transitions printed %q, want it to carry %q", out.String(), want)
+		}
+	}
+}
+
+// TestQueueShowReadsOneRow: the row read names the row, its state and why it is where it is.
+func TestQueueShowReadsOneRow(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"qitemId":"qitem-aaa","state":"blocked","sourceSession":"4genthub-min-lead@4genthub-min","summary":"owner decision owed","blockedOn":"human@kernel","closureRequiredAt":"2026-10-13T23:50:42.519Z","tsUpdated":"2026-10-13T20:00:00.000Z"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := queueCommand{}.Run(context.Background(), nil, []string{"show", "qitem-aaa"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("queue show exit = %d, stderr = %q", code, errOut.String())
+	}
+	if gotPath != "/api/queue/qitem-aaa" {
+		t.Errorf("asked %q, want /api/queue/qitem-aaa", gotPath)
+	}
+	for _, want := range []string{"qitem-aaa", "blocked", "owner decision owed", "human@kernel"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("show printed %q, want it to carry %q", out.String(), want)
+		}
+	}
+}
+
+// TestQueueRefusesAWriteSubcommandWithoutTouchingTheDaemon: `queue update <id> --note ...` is the shape
+// that reported success while the note went nowhere readable. This shim reads the queue; it must say so
+// and send nothing, in both the flagged and the bare spelling.
+func TestQueueRefusesAWriteSubcommandWithoutTouchingTheDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		args      []string
+		wantInErr string
+	}{
+		// The flag spelling is refused by the parser (an option no verb declares is never text); the bare
+		// subcommand is refused by name. Both exit 2, both send nothing.
+		{[]string{"update", "qitem-aaa", "--note", "a note"}, "unknown flag --note"},
+		{[]string{"update", "qitem-aaa"}, "not a read this shim performs"},
+		{[]string{"claim", "qitem-aaa"}, "not a read this shim performs"},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			t.Setenv("OPENRIG_HOME", t.TempDir())
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+			t.Setenv("OPENRIG_URL", srv.URL)
+			t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+			var out, errOut bytes.Buffer
+			code := queueCommand{}.Run(context.Background(), nil, tc.args, &out, &errOut)
+
+			if code != 2 {
+				t.Errorf("exit = %d, want the caller-error code 2", code)
+			}
+			if calls != 0 {
+				t.Errorf("%d requests reached the daemon, want none", calls)
+			}
+			if out.Len() != 0 {
+				t.Errorf("stdout = %q, want nothing reported as read", out.String())
+			}
+			if !strings.Contains(errOut.String(), tc.wantInErr) {
+				t.Errorf("stderr = %q, want it to carry %q", errOut.String(), tc.wantInErr)
+			}
+		})
+	}
+}
+
+// TestQueueJSONPrintsTheDaemonsOwnDocument: --json is the daemon's bytes, not a re-encode of a struct.
+func TestQueueJSONPrintsTheDaemonsOwnDocument(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	document := `[{"qitemId":"qitem-aaa","fieldsElided":["body"],"pickup":{"state":"working"}}]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(document))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := queueCommand{}.Run(context.Background(), nil, []string{"--json"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("queue --json exit = %d, stderr = %q", code, errOut.String())
+	}
+	for _, want := range []string{"fieldsElided", "pickup", "qitem-aaa"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("queue --json printed %q, want the daemon's own document (missing %q)", out.String(), want)
+		}
+	}
+}
+
+// TestCaptureTakesItsOptionsOnEitherSideOfTheSession: capture is the read half of send, so it parses its
+// options the same way send does.
+func TestCaptureTakesItsOptionsOnEitherSideOfTheSession(t *testing.T) {
+	for _, args := range [][]string{
+		{"4genthub-min-reviewer@4genthub-min", "--lines", "20"},
+		{"--lines", "20", "4genthub-min-reviewer@4genthub-min"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Setenv("OPENRIG_HOME", t.TempDir())
+			var got map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&got)
+				_, _ = w.Write([]byte(`{"ok":true,"content":"pane bytes"}`))
+			}))
+			defer srv.Close()
+			t.Setenv("OPENRIG_URL", srv.URL)
+			t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+			var out, errOut bytes.Buffer
+			code := captureCommand{}.Run(context.Background(), nil, args, &out, &errOut)
+
+			if code != 0 {
+				t.Fatalf("capture exit = %d, stderr = %q", code, errOut.String())
+			}
+			if got["session"] != "4genthub-min-reviewer@4genthub-min" {
+				t.Errorf("captured %v, want the named session", got["session"])
+			}
+			if got["lines"] != float64(20) {
+				t.Errorf("lines = %v, want 20", got["lines"])
+			}
+			if out.String() != "pane bytes" {
+				t.Errorf("stdout = %q, want the pane verbatim", out.String())
+			}
+		})
+	}
+}
+
+// TestOpenRigSendNamesTheDeliveryLikeTheCLI: the route reads `deliveryId` and the daemon uses it as this
+// delivery's outbox id, refusing a reuse that names other content rather than re-delivering it. The CLI
+// always sends one (send.ts:475); a shim that omits it leaves the id to the daemon, so a replayed send
+// is never recognised as the same delivery. One fresh v4 identity per invocation, never a constant.
+func TestOpenRigSendNamesTheDeliveryLikeTheCLI(t *testing.T) {
+	v4 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	seen := make(map[string]bool, 2)
+	for i := 0; i < 2; i++ {
+		t.Setenv("OPENRIG_HOME", t.TempDir())
+		var got map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered"}`))
+		}))
+		defer srv.Close()
+		t.Setenv("OPENRIG_URL", srv.URL)
+		t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+		if _, _, err := OpenRigSend(context.Background(), "peer@rig", "text", SendOptions{}); err != nil {
+			t.Fatalf("OpenRigSend: %v", err)
+		}
+		id, _ := got["deliveryId"].(string)
+		if !v4.MatchString(id) {
+			t.Fatalf("deliveryId = %q, want the CLI's own v4 shape", id)
+		}
+		if seen[id] {
+			t.Fatalf("two invocations sent the same deliveryId %q; a reused id is a replay to the daemon", id)
+		}
+		seen[id] = true
+	}
+}

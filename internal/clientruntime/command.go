@@ -1,13 +1,17 @@
 package clientruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
@@ -17,6 +21,7 @@ func Commands() []clientcmd.Command {
 	return []clientcmd.Command{
 		whoamiCommand{},
 		queueCommand{},
+		captureCommand{},
 		shimCommand{},
 	}
 }
@@ -253,22 +258,252 @@ func (queueCommand) Name() string    { return "queue" }
 func (queueCommand) Summary() string { return "queue compatibility shim for seat and bridge tasks" }
 func (queueCommand) NeedsRig() bool  { return false }
 
-func (queueCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+// queueCommand answers `rig queue` from the OpenRig daemon's OWN queue, so a seat on a daemon-hosted
+// rig learns what it actually owes. It never renders an empty list to stand in for a measurement it did
+// not make: with no daemon configured it says so and exits non-zero, a daemon failure is reported rather
+// than flattened to `[]`, and a queue WRITE is refused by name instead of being answered as though it
+// had run. `show` and `transitions` exist because a note the queue accepts does not ride the row: it
+// lands in the row's transition log, which is the only surface that carries it.
+func (queueCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		fmt.Fprintln(stdout, "usage: 4genteam queue [list] [--json] [--destination <dest>]")
+		fmt.Fprintln(stdout, queueUsage)
+		fmt.Fprintln(stdout, "\nlist (the default) prints the active rows the OpenRig daemon holds for this seat's")
+		fmt.Fprintln(stdout, "session, or for --destination's. show and transitions read one row and its log. With")
+		fmt.Fprintln(stdout, "no daemon configured the verb reports that nothing was measured, never an empty queue.")
+		fmt.Fprintln(stdout, "Writes (create/claim/update/block/resolve/handoff/inbox/outbox) are the OpenRig CLI's;")
+		fmt.Fprintln(stdout, "this shim refuses them by name rather than reporting a write it did not make.")
 		return clientcmd.ExitOK
 	}
-	isJSON := false
-	for _, a := range args {
-		if a == "--json" {
-			isJSON = true
-			break
+	opts, rest, err := SplitFlags(args, []FlagSpec{{Name: "json"}, {Name: "destination", Value: true}})
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: %v; nothing was read\n", err)
+		return clientcmd.ExitUsage
+	}
+	_, asJSON := opts["json"]
+
+	sub := "list"
+	if len(rest) > 0 {
+		sub, rest = rest[0], rest[1:]
+	}
+	switch sub {
+	case "list":
+		if len(rest) != 0 {
+			fmt.Fprintln(stderr, queueUsage)
+			return clientcmd.ExitUsage
 		}
+		return queueList(ctx, opts["destination"], asJSON, stdout, stderr)
+	case "show", "transitions":
+		if len(rest) != 1 {
+			fmt.Fprintln(stderr, queueUsage)
+			return clientcmd.ExitUsage
+		}
+		return queueReadOne(ctx, sub, rest[0], asJSON, stdout, stderr)
+	default:
+		// The measured failure this refusal exists for: `queue update <id> --note ...` printing a success
+		// while the note went nowhere the caller could read. A verb that cannot do the thing says so.
+		fmt.Fprintf(stderr, "4genteam queue: %q is not a read this shim performs; it reads the queue (list, show, transitions). Queue writes (create/claim/update/block/resolve/handoff/inbox/outbox) are the OpenRig CLI's own. Nothing was read or written.\n", sub)
+		return clientcmd.ExitUsage
 	}
-	if isJSON {
-		_, _ = stdout.Write([]byte("[]\n"))
+}
+
+const queueUsage = `usage: 4genteam queue [list] [--json] [--destination <dest>]
+       4genteam queue show <qitemId> [--json]
+       4genteam queue transitions <qitemId> [--json]`
+
+// queueList is the default read: THIS seat's active rows on the daemon, rendered one line each. An empty
+// document is only ever reported as a measurement of a named session against a named daemon.
+func queueList(ctx context.Context, destination string, asJSON bool, stdout, stderr io.Writer) int {
+	if destination == "" {
+		destination = openRigSession()
+	}
+	if !openRigDaemonConfigured() {
+		fmt.Fprintf(stderr, "4genteam queue: no OpenRig daemon is configured in this environment (set %s or %s); nothing was measured\n", openRigURLEnv, openRigPortEnv)
+		return clientcmd.ExitUnavailable
+	}
+	query := url.Values{}
+	query.Set("destinationSession", destination)
+	query.Set("activeOnly", "1")
+	query.Set("compact", "1")
+	raw, err := openRigRequest(ctx, "GET", "/api/queue/list?"+query.Encode(), nil)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
+	}
+	if asJSON {
+		printDaemonJSON(stdout, raw)
 		return clientcmd.ExitOK
 	}
-	fmt.Fprintln(stdout, "No pending items in local queue. (Tasks are recorded via agenthub_http MCP tools)")
+	var rows []struct {
+		QItemID       string `json:"qitemId"`
+		State         string `json:"state"`
+		SourceSession string `json:"sourceSession"`
+		Summary       string `json:"summary"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: could not read the daemon's queue document: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	if len(rows) == 0 {
+		fmt.Fprintf(stdout, "Measured 0 pending items for %s on the OpenRig daemon at %s.\n", orDash(destination), openRigDaemonURL())
+		return clientcmd.ExitOK
+	}
+	for _, row := range rows {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", row.QItemID, orDash(row.State), orDash(row.SourceSession), row.Summary)
+	}
+	return clientcmd.ExitOK
+}
+
+// queueReadOne reads a single row (`show`) or its transition log (`transitions`). The log is where a note
+// lives: `update --note` writes it there and the row document carries no note field at all.
+func queueReadOne(ctx context.Context, sub, qitemID string, asJSON bool, stdout, stderr io.Writer) int {
+	if !openRigDaemonConfigured() {
+		fmt.Fprintf(stderr, "4genteam queue: no OpenRig daemon is configured in this environment (set %s or %s); nothing was measured\n", openRigURLEnv, openRigPortEnv)
+		return clientcmd.ExitUnavailable
+	}
+	path := "/api/queue/" + url.PathEscape(qitemID)
+	if sub == "transitions" {
+		path += "/transitions"
+	}
+	raw, err := openRigRequest(ctx, "GET", path, nil)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
+	}
+	if asJSON {
+		printDaemonJSON(stdout, raw)
+		return clientcmd.ExitOK
+	}
+	if sub == "show" {
+		var row struct {
+			QItemID       string `json:"qitemId"`
+			State         string `json:"state"`
+			SourceSession string `json:"sourceSession"`
+			Summary       string `json:"summary"`
+			BlockedOn     string `json:"blockedOn"`
+			ClosureReason string `json:"closureReason"`
+			ClosureTarget string `json:"closureTarget"`
+			TSUpdated     string `json:"tsUpdated"`
+		}
+		if err := json.Unmarshal(raw, &row); err != nil {
+			fmt.Fprintf(stderr, "4genteam queue: could not read the daemon's row document: %v\n", err)
+			return clientcmd.ExitRemote
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", orDash(row.QItemID), orDash(row.State), orDash(row.SourceSession), row.Summary)
+		if row.BlockedOn != "" {
+			fmt.Fprintf(stdout, "blockedOn: %s\n", row.BlockedOn)
+		}
+		if row.ClosureReason != "" {
+			fmt.Fprintf(stdout, "closed: %s -> %s\n", row.ClosureReason, orDash(row.ClosureTarget))
+		}
+		fmt.Fprintf(stdout, "tsUpdated: %s\n", orDash(row.TSUpdated))
+		return clientcmd.ExitOK
+	}
+	var transitions []struct {
+		TS             string `json:"ts"`
+		State          string `json:"state"`
+		ActorSession   string `json:"actorSession"`
+		TransitionNote string `json:"transitionNote"`
+	}
+	if err := json.Unmarshal(raw, &transitions); err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: could not read the daemon's transition log: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	for _, transition := range transitions {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", orDash(transition.TS), orDash(transition.State), orDash(transition.ActorSession), strings.ReplaceAll(transition.TransitionNote, "\n", " "))
+	}
+	return clientcmd.ExitOK
+}
+
+// printDaemonJSON writes the daemon's document as it arrived, indented when it is JSON. --json prints the
+// document rather than a re-encode of it, so a field this build has not heard of still reaches the caller.
+func printDaemonJSON(stdout io.Writer, raw []byte) {
+	out := raw
+	var indented bytes.Buffer
+	if json.Indent(&indented, raw, "", "  ") == nil {
+		out = indented.Bytes()
+	}
+	_, _ = stdout.Write(out)
+	_, _ = stdout.Write([]byte("\n"))
+}
+
+type captureCommand struct{}
+
+func (captureCommand) Name() string    { return "capture" }
+func (captureCommand) Summary() string { return "capture a session's pane through the OpenRig daemon" }
+func (captureCommand) NeedsRig() bool  { return false }
+
+const captureUsage = "usage: 4genteam capture <session> [--lines <n>] [--json]"
+
+func (captureCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+	if clientcmd.HelpRequested(args) {
+		fmt.Fprintln(stdout, captureUsage)
+		fmt.Fprintln(stdout, "\nCaptures the named session's pane from the OpenRig daemon and prints it verbatim.")
+		fmt.Fprintln(stdout, "--lines bounds how many lines are captured; --json prints the daemon's own document.")
+		return clientcmd.ExitOK
+	}
+	opts, rest, err := SplitFlags(args, []FlagSpec{{Name: "json"}, {Name: "lines", Value: true}})
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam capture: %v; nothing was captured\n", err)
+		return clientcmd.ExitUsage
+	}
+	if len(rest) != 1 {
+		fmt.Fprintln(stderr, captureUsage)
+		return clientcmd.ExitUsage
+	}
+	name := rest[0]
+	_, asJSON := opts["json"]
+	lines := -1
+	if value, given := opts["lines"]; given {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			fmt.Fprintf(stderr, "4genteam capture: --lines wants a positive number of lines, got %q; nothing was captured\n", value)
+			return clientcmd.ExitUsage
+		}
+		lines = parsed
+	}
+
+	if !openRigDaemonConfigured() {
+		fmt.Fprintf(stderr, "4genteam capture: no OpenRig daemon is configured in this environment (set %s or %s); nothing was captured\n", openRigURLEnv, openRigPortEnv)
+		return clientcmd.ExitUnavailable
+	}
+
+	payload := map[string]any{"session": name}
+	if lines > 0 {
+		payload["lines"] = lines
+	}
+	raw, err := openRigRequest(ctx, "POST", "/api/transport/capture", payload)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam capture: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
+	}
+
+	var doc struct {
+		OK      bool   `json:"ok"`
+		Content string `json:"content"`
+		Reason  string `json:"reason"`
+		Error   string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		fmt.Fprintf(stderr, "4genteam capture: could not read the daemon's capture document: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	if !doc.OK {
+		reason := strings.TrimSpace(doc.Reason)
+		if reason == "" {
+			reason = strings.TrimSpace(doc.Error)
+		}
+		if reason == "" {
+			reason = daemonDetail(raw)
+		}
+		fmt.Fprintf(stderr, "4genteam capture: %s\n", reason)
+		return clientcmd.ExitRemote
+	}
+
+	if asJSON {
+		printDaemonJSON(stdout, raw)
+		return clientcmd.ExitOK
+	}
+	// The content is a pane: it goes out verbatim, trailing whitespace and all, with no heading added.
+	_, _ = io.WriteString(stdout, doc.Content)
 	return clientcmd.ExitOK
 }
