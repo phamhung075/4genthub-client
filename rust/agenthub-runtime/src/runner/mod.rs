@@ -25,8 +25,10 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use parking_lot::Mutex;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -189,11 +191,20 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     spawn_mailbox(mailbox.clone(), to_child.clone())?;
 
     // The RPC reader: responses are answered to a pending id, events are mirrored to the pane.
+    // The RPC reader: responses answer a pending id, events drive the pane and the seat's state, and a
+    // turn that dies retryably is resumed from here (never from the sight of an error line alone).
+    let state_path = target.mailbox(state_dir).with_extension("state.json");
+    let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
     let ready = {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
+        let pending_reader = Arc::clone(&pending);
+        let to_child_reader = to_child.clone();
+        let state_path = state_path.clone();
         thread::spawn(move || {
             let reader = BufReader::new(child_stdout);
             let mut announced_ready = false;
+            let mut turn_active = false;
+            let mut attempts: u32 = 0;
             for line in reader.lines() {
                 let line = match line {
                     Ok(l) => l,
@@ -223,43 +234,128 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                     }
                     Some("response") => {
                         let id = record.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                        let failed = record.get("success").and_then(|v| v.as_bool()) == Some(false);
+                        let error_text = record
+                            .get("error")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
                         if id == "runner-get-state" {
-                            match record.get("success").and_then(|v| v.as_bool()) {
-                                Some(false) => {
-                                    let _ = ready_tx.send(Err(format!(
-                                        "the agent answered get_state with an error: {}",
-                                        record
-                                            .get("error")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("no error given")
-                                    )));
-                                }
-                                _ => {
-                                    let _ = ready_tx.send(Ok(()));
-                                }
+                            if failed {
+                                let _ = ready_tx.send(Err(format!(
+                                    "the agent answered get_state with an error: {}",
+                                    error_text.as_deref().unwrap_or("no error given")
+                                )));
+                            } else {
+                                let _ = ready_tx.send(Ok(()));
+                                let _ = write_state(&state_path, "idle", "", 0);
                             }
                         }
-                        if let Some(err) = record.get("error").and_then(|v| v.as_str()) {
+                        let is_our_prompt = {
+                            let guard = pending_reader.lock();
+                            guard.as_ref().is_some_and(|(pid, _)| pid == id)
+                        };
+                        if let Some(err) = &error_text {
                             mirror(&format!("ERROR rpc: {err}"));
                         }
-                    }
-                    _ => {
-                        // Events: `agent_*`, `turn_*`, `message_*`, `tool_execution_*`, `queue_update`,
-                        // `compaction_*`, `auto_retry_*`, `extension_*` (`P:180-250`). The pane gets the
-                        // same line the reference mirrored, and the status work of parity 1/4 joins here.
-                        if let Some(kind) = record.get("type").and_then(|t| t.as_str()) {
-                            // Assistant prose arrives as `message_update`/`text_delta`, and that is the one
-                            // event whose payload the pane shows as text rather than as a name (`P:204-208`).
-                            if let Some(delta) = record
-                                .get("assistantMessageEvent")
-                                .and_then(|e| e.get("delta"))
-                                .and_then(|d| d.as_str())
-                            {
-                                print!("{delta}");
-                                let _ = std::io::stdout().flush();
-                            } else {
-                                mirror(kind);
+                        if failed {
+                            if let Some(err) = error_text {
+                                match decide_resume(is_our_prompt, turn_active, &err, attempts) {
+                                    Resume::Nothing(reason) => {
+                                        mirror(&format!("rpc error, nothing to resume: {reason}"));
+                                    }
+                                    Resume::Retry {
+                                        attempt,
+                                        delay_secs,
+                                        label,
+                                    } => {
+                                        attempts = attempt;
+                                        mirror(&format!(
+                                            "retry {attempt}/{MAX_RESUME_ATTEMPTS} in {delay_secs}s: {label} :: {err}"
+                                        ));
+                                        let _ = write_state(&state_path, "retrying", label, attempts);
+                                        let message =
+                                            pending_reader.lock().as_ref().map(|(_, m)| m.clone());
+                                        if let Some(message) = message {
+                                            let sender = to_child_reader.clone();
+                                            let pending_retry = Arc::clone(&pending_reader);
+                                            thread::spawn(move || {
+                                                thread::sleep(Duration::from_secs(delay_secs));
+                                                let id = format!(
+                                                    "runner-resume-{}-{attempt}",
+                                                    std::process::id()
+                                                );
+                                                *pending_retry.lock() =
+                                                    Some((id.clone(), message.clone()));
+                                                let _ = send(
+                                                    &sender,
+                                                    &serde_json::json!({
+                                                        "id": id,
+                                                        "type": "prompt",
+                                                        "message": message
+                                                    }),
+                                                );
+                                            });
+                                        }
+                                    }
+                                    Resume::Blocked(reason) => {
+                                        mirror(&format!("gave up: {reason} :: {err}"));
+                                        attempts += 1;
+                                        let _ =
+                                            write_state(&state_path, "blocked", reason, attempts);
+                                    }
+                                }
                             }
+                        } else if is_our_prompt {
+                            attempts = 0;
+                            *pending_reader.lock() = None;
+                            let _ = write_state(&state_path, "idle", "", 0);
+                        }
+                    }
+                    other => {
+                        let kind = other.unwrap_or("?");
+                        match kind {
+                            "turn_start" => turn_active = true,
+                            "turn_end" => turn_active = false,
+                            // omp's own bounded provider retry (`P:180-250`): log it, and do NOT stack a
+                            // second retry on top — if it succeeds the prompt response is a success.
+                            "auto_retry_start" => {
+                                mirror("provider retry in progress (omp's own)");
+                                let _ = write_state(&state_path, "retrying", "omp auto-retry", attempts);
+                            }
+                            "auto_retry_end" => mirror("provider retry finished"),
+                            // A real prompt, and the one place `needs_input` belongs. The pane cannot
+                            // answer a dialog (its input is a prompt), so it is cancelled the way the
+                            // reference cancels what it cannot present (`P:434-438`).
+                            "extension_ui_request" => {
+                                let _ = write_state(&state_path, "needs_input", "a dialog this pane cannot answer", attempts);
+                                mirror("a dialog arrived; this pane cannot answer it, cancelling it for the agent");
+                                if let Some(id) = record.get("id").and_then(|v| v.as_str()) {
+                                    let _ = send(
+                                        &to_child_reader,
+                                        &serde_json::json!({
+                                            "id": id,
+                                            "type": "extension_ui_response",
+                                            "cancelled": true
+                                        }),
+                                    );
+                                }
+                            }
+                            "agent_end" | "session_settled" => {
+                                let _ = write_state(&state_path, "idle", "", attempts);
+                            }
+                            _ => {}
+                        }
+                        if let Some(delta) = record
+                            .get("assistantMessageEvent")
+                            .and_then(|e| e.get("delta"))
+                            .and_then(|d| d.as_str())
+                        {
+                            // Assistant prose is the one payload an operator reads as text rather than
+                            // as an event name (`P:204-208`).
+                            print!("{delta}");
+                            let _ = std::io::stdout().flush();
+                        } else {
+                            mirror(kind);
                         }
                     }
                 }
@@ -277,7 +373,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     // The handshake done, ask for the state the pane and the daemon both need (`P:299`).
     send(&to_child, &serde_json::json!({"id": "runner-get-state", "type": "get_state"}))?;
 
-    let pane = spawn_pane_input(to_child.clone());
+    let pane = spawn_pane_input(to_child.clone(), Arc::clone(&pending));
     let exit = wait_child(&mut child);
     let _ = pane;
     let _ = writer;
@@ -399,12 +495,121 @@ pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<Stri
     ))
 }
 
+/// What a failure this runner sees *is*, so a dead turn is not mistaken for a prompt.
+///
+/// The defect this replaces is named and measured: the OpenRig activity store maps an omp
+/// `Notification`/`runtime_error` to `needs_input` (`agent-activity-store.js:262-265`), and `needs_input`
+/// is the one state that fails closed (`session-transport.ts:1893-1900`) — so a dead turn's own error
+/// report refuses the wakes it needs. Here a runtime error gets its own retryable classification, and
+/// `needs_input` is reserved for a real prompt. The same finding measured that an RPC error does **not**
+/// always kill the turn, so the resume keys on turn state, never on the presence of an error line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Failure {
+    /// The turn died on something a retry can plausibly fix (provider, transport, socket).
+    Retryable(&'static str),
+    /// The turn ended on something a retry cannot fix; a human or another seat must look.
+    Terminal(&'static str),
+}
+
+/// The measured signatures of a transport/provider failure (`FINDING-omp-runner-death-pattern`, and the
+/// scout's map of `pi-runner.js`): these two are omp's own rpc errors, the third is its socket close.
+pub const RETRYABLE_SIGNATURES: [(&str, &str); 8] = [
+    ("RPC response exceeded the transport limit", "omp's rpc response cap"),
+    ("rpc chunk payload exceeds the transport limit", "omp's rpc chunk cap"),
+    ("The socket connection was closed unexpectedly", "the agent socket closed"),
+    ("rate limit", "provider rate limit"),
+    ("overloaded", "provider overloaded"),
+    ("timed out", "timeout"),
+    ("ECONNRESET", "connection reset"),
+    ("fetch failed", "provider fetch failed"),
+];
+
+pub fn classify_failure(error: &str) -> Failure {
+    for (needle, label) in RETRYABLE_SIGNATURES {
+        if error.contains(needle) {
+            return Failure::Retryable(label);
+        }
+    }
+    Failure::Terminal("the agent refused the turn")
+}
+
+/// How many times this runner re-sends a turn that died retryably, and how long it waits between tries.
+pub const MAX_RESUME_ATTEMPTS: u32 = 3;
+
+pub fn resume_delay(attempt: u32) -> Duration {
+    // 1s, 2s, 4s — bounded, and the same shape for every retryable class.
+    Duration::from_secs(1u64 << attempt.min(3).saturating_sub(1).min(3))
+}
+
+/// The seat's own state, written where the daemon and `ps` can read it (the reference writes a
+/// `runner-state.json` beside the session for the same reason, `pi-runner-protocol.js:26`).
+pub fn write_state(state_path: &Path, state: &str, classification: &str, attempts: u32) -> Result<(), String> {
+    let payload = serde_json::json!({
+        "state": state,
+        "classification": classification,
+        "resume_attempts": attempts,
+        "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    });
+    if let Some(parent) = state_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("cannot create run dir: {e}"))?;
+    }
+    let text = serde_json::to_string_pretty(&payload).map_err(|e| format!("cannot encode state: {e}"))?;
+    let tmp = state_path.with_extension("json.tmp");
+    fs::write(&tmp, text).map_err(|e| format!("cannot write state: {e}"))?;
+    fs::rename(&tmp, state_path).map_err(|e| format!("cannot publish state: {e}"))
+}
+
+/// What to do about an rpc error, decided from the turn's state rather than from the error text alone.
+///
+/// Measured, and the reason this exists: an rpc error does **not** always kill the turn
+/// (`FINDING-omp-runner-death-pattern`), so a mid-turn error must never start a resume — that would
+/// double the work the live turn is already doing. Only a turn that has ended, on a failure this runner
+/// owns, is a candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resume {
+    Nothing(&'static str),
+    Retry {
+        attempt: u32,
+        delay_secs: u64,
+        label: &'static str,
+    },
+    Blocked(&'static str),
+}
+
+pub fn decide_resume(ours: bool, turn_active: bool, error: &str, failures_so_far: u32) -> Resume {
+    if !ours {
+        return Resume::Nothing("a response this runner did not ask for");
+    }
+    if turn_active {
+        return Resume::Nothing("the turn is still running");
+    }
+    match classify_failure(error) {
+        Failure::Terminal(label) => Resume::Blocked(label),
+        Failure::Retryable(label) => {
+            let attempt = failures_so_far + 1;
+            if attempt > MAX_RESUME_ATTEMPTS {
+                Resume::Blocked(label)
+            } else {
+                Resume::Retry {
+                    attempt,
+                    delay_secs: resume_delay(attempt).as_secs(),
+                    label,
+                }
+            }
+        }
+    }
+}
+
 /// The pane's input: typed lines become prompts, Ctrl-C aborts the turn, oversized input is refused in
 /// the reference's own words (`P:34-36, 100-121`).
-fn spawn_pane_input(to_child: Sender<String>) -> thread::JoinHandle<()> {
+fn spawn_pane_input(
+    to_child: Sender<String>,
+    pending: Arc<Mutex<Option<(String, String)>>>,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let stdin = std::io::stdin();
         let reader = BufReader::new(stdin.lock());
+        let mut prompts: u32 = 0;
         for line in reader.lines() {
             let line = match line {
                 Ok(l) => l,
@@ -415,9 +620,14 @@ fn spawn_pane_input(to_child: Sender<String>) -> thread::JoinHandle<()> {
                 continue;
             }
             let frame = if line.trim() == "\u{3}" || line.trim().is_empty() {
-                serde_json::json!({"id": "runner-pane-abort", "type": "abort"})
+                serde_json::json!({"id": format!("runner-pane-abort-{prompts}"), "type": "abort"})
             } else {
-                serde_json::json!({"id": "runner-pane-prompt", "type": "prompt", "message": line})
+                prompts += 1;
+                let id = format!("runner-pane-prompt-{prompts}");
+                // Remember it: a turn that dies retryably is resumed with THIS message, and its response
+                // is the one this runner owns.
+                *pending.lock() = Some((id.clone(), line.clone()));
+                serde_json::json!({"id": id, "type": "prompt", "message": line})
             };
             if let Err(e) = send(&to_child, &frame) {
                 mirror(&format!("ERROR pane input: {e}"));
@@ -529,5 +739,94 @@ mod tests {
             target.mailbox(Path::new("/state")),
             PathBuf::from("/state/rooms/roomA/run/dev.sock")
         );
+    }
+
+    /// The defect parity 1 exists for: a dead turn's own error report must NOT read as a prompt, and the
+    /// three signatures the finding measured must read as retryable.
+    #[test]
+    fn a_dead_turn_is_retryable_and_is_not_a_prompt() {
+        for (error, label) in [
+            (
+                "RPC response exceeded the transport limit",
+                "omp's rpc response cap",
+            ),
+            (
+                "rpc chunk payload exceeds the transport limit",
+                "omp's rpc chunk cap",
+            ),
+            (
+                "The socket connection was closed unexpectedly",
+                "the agent socket closed",
+            ),
+            ("429 rate limit exceeded", "provider rate limit"),
+        ] {
+            match classify_failure(error) {
+                Failure::Retryable(what) => assert_eq!(what, label, "{error}"),
+                Failure::Terminal(what) => panic!("{error} classified terminal ({what})"),
+            }
+        }
+        match classify_failure("unknown tool 'nope'") {
+            Failure::Terminal(what) => assert!(what.contains("refused"), "{what}"),
+            Failure::Retryable(what) => panic!("a refused turn is not retryable ({what})"),
+        }
+    }
+
+    /// The rule parity 1 turns on: a turn that is still running is never resumed from an error line, and
+    /// only a failure this runner owns is resumed at all.
+    #[test]
+    fn an_error_mid_turn_resumes_nothing() {
+        let err = "RPC response exceeded the transport limit";
+        assert_eq!(
+            decide_resume(true, true, err, 0),
+            Resume::Nothing("the turn is still running")
+        );
+        assert_eq!(
+            decide_resume(false, false, err, 0),
+            Resume::Nothing("a response this runner did not ask for")
+        );
+        assert_eq!(
+            decide_resume(true, false, err, 0),
+            Resume::Retry {
+                attempt: 1,
+                delay_secs: 1,
+                label: "omp's rpc response cap"
+            }
+        );
+        assert_eq!(
+            decide_resume(true, false, "unknown tool 'nope'", 0),
+            Resume::Blocked("the agent refused the turn")
+        );
+        // Bounded: the fourth failure of the same turn stops trying.
+        assert_eq!(
+            decide_resume(true, false, err, MAX_RESUME_ATTEMPTS),
+            Resume::Blocked("omp's rpc response cap")
+        );
+    }
+
+    #[test]
+    fn resume_attempts_are_bounded_and_back_off() {
+        assert_eq!(resume_delay(1), Duration::from_secs(1));
+        assert_eq!(resume_delay(2), Duration::from_secs(2));
+        assert_eq!(resume_delay(3), Duration::from_secs(4));
+        // Past the bound the schedule stops growing: a bounded retry must not become a busy loop.
+        assert_eq!(resume_delay(4), Duration::from_secs(4));
+        assert_eq!(resume_delay(MAX_RESUME_ATTEMPTS + 5), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn the_seat_state_file_is_published_atomically() {
+        let dir = std::env::temp_dir().join(format!("runner-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("dev.state.json");
+        write_state(&path, "retrying", "provider rate limit", 2).expect("write");
+        let read: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read")).expect("parse");
+        assert_eq!(read["state"], "retrying");
+        assert_eq!(read["classification"], "provider rate limit");
+        assert_eq!(read["resume_attempts"], 2);
+        assert!(read["updated_at"].as_str().is_some_and(|t| t.ends_with('Z')));
+        // no temp file survives the publish
+        assert!(!path.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
