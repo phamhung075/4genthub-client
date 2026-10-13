@@ -3,6 +3,30 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the message pass reads its seats from the runtime, and the read is proven unable to fall back
+
+### Changed
+- `sync messages --rig R` asks the runtime which seats the room has (`GetRoomStatus`) instead of parsing the node table
+  from `rig ps --nodes --rig R --json`. `rigNode` and `rigSeats` are DELETED rather than kept beside the new call. The
+  skip rule they carried survives as `seatSessionsFrom`, a pure function, and it now speaks the runtime's whole
+  vocabulary: `agent_socket_closed`, `agent_stdio_eof` and `agent_exited` join `stopped`, where the node table offered
+  one `sessionStatus` field and could only ever say `running` or not.
+- The fixture moved with the seam. The tests that need a room's seats answer `roomSeats` (the new package variable) in
+  the order the pass should take them, instead of writing a stub `rig` into PATH. `fakeRig` stays behind for the ONE
+  shape still unconverted — the single-session resolution, which still reads `rig ps --json` in connectorverb.go — so
+  its remaining use is itself a marker of the remaining work.
+
+### Verified
+- The tests can now fail in the direction that matters. RED-then-GREEN: with PATH emptied, putting `runRig` back into
+  `messagesPass` fails all three rig-shape tests with `exec: "rig": executable file not found in $PATH`; the reverted
+  tree is green. The OLD fixture could not fail that way — it installed a stub `rig`, and on this machine the live
+  `rig` would have answered a reversion, so a pass that had silently gone back to the node table would have delivered
+  through the real rig and the suite would have said nothing. `fakeRoom` empties PATH for exactly that reason.
+- `go build ./...`, `go vet ./internal/clientsync/` and `go test ./internal/clientsync/` are green; the 14 message-verb
+  tests pass, including `TestSeatSessionsFromSkipsEverySeatWithoutALivePrompt`, which holds the skip rule against the
+  runtime's death states. `runRig` no longer appears anywhere in the file. The verb's delivery site (`rig send`, the
+  second half of this unit) is still there and is next.
+
 ## 2026-10-13 — the relaunch goes to the runtime, and both activity readers are declared
 
 ### Changed

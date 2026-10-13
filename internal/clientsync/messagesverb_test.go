@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -309,6 +310,50 @@ func fakeRig(t *testing.T, psJSON string) {
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+// fakeRoom answers the verb's seat discovery from the RUNTIME seam, the way fakeRig answers it from a stub `rig` on
+// PATH - and the difference is the point: these tests no longer need a fake binary, because the verb no longer runs
+// one. The seats are given in the order the tests expect the pass to take them.
+//
+// IT ALSO EMPTIES PATH, and that is what makes these tests able to fail: with the stub `rig` gone and no tool on PATH,
+// a pass that went back to reading the node table cannot succeed, so a reversion is a RED test rather than a silent
+// delivery through the live rig this machine happens to be running.
+func fakeRoom(t *testing.T, seats ...seatSession) {
+	t.Helper()
+	previous := roomSeats
+	t.Cleanup(func() { roomSeats = previous })
+	roomSeats = func(room string) ([]seatSession, error) { return seats, nil }
+	t.Setenv("PATH", t.TempDir())
+}
+
+// seatSessionsFrom carries the skip rule, and it is proven here rather than only through a room: a seat that is not
+// running is skipped, whatever the reason - and the runtime's own death states are reasons too, so their mail waits
+// with the stopped seat's instead of being typed into a prompt that is not reading.
+func TestSeatSessionsFromSkipsEverySeatWithoutALivePrompt(t *testing.T) {
+	statuses := []clientruntime.SeatStatus{
+		{Seat: "lead", SessionName: "4genthub-min-lead@4genthub-min", State: "running"},
+		{Seat: "stopped", SessionName: "4genthub-min-stopped@4genthub-min", State: "stopped"},
+		{Seat: "dead", SessionName: "4genthub-min-dead@4genthub-min", State: "agent_socket_closed"},
+		{Seat: "eof", SessionName: "4genthub-min-eof@4genthub-min", State: "agent_stdio_eof"},
+		{Seat: "exited", SessionName: "4genthub-min-exited@4genthub-min", State: "agent_exited"},
+		{Seat: "ghost", SessionName: "", State: "running"},
+		{Seat: "", SessionName: "4genthub-min-nameless@4genthub-min", State: "running"},
+		{Seat: "other", SessionName: "4genthub-min-other@4genthub-min", State: "running"},
+	}
+	got := seatSessionsFrom(statuses)
+	want := []seatSession{
+		{seat: "lead", session: "4genthub-min-lead@4genthub-min"},
+		{seat: "other", session: "4genthub-min-other@4genthub-min"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("seats = %v, want only the two with a live prompt: %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("seat %d = %v, want %v (order included: the pass takes seats in the room's own order)", i, got[i], want[i])
+		}
+	}
+}
+
 // THE VERB MUST NOT GUESS WHICH PROMPT TO TYPE INTO, and this is the case that made the difference
 // matter: `rig ps --json` in this environment reports many sessions, and firstRigSession returns the
 // FIRST of them. A verb that typed into that answer would put an operator's message into somebody
@@ -368,7 +413,10 @@ func TestMessagesVerbRigPassDeliversEveryRunningSeat(t *testing.T) {
 		"4genthub-min/stopped": {message("m3", "stays pending")},
 	}}
 	_, sent, out := messagesFixture(t, cloud, nil)
-	fakeRig(t, `[{"logicalId":"4genthub-min.lead","canonicalSessionName":"4genthub-min-lead@4genthub-min","sessionStatus":"running"},{"logicalId":"4genthub-min.stopped","canonicalSessionName":"4genthub-min-stopped@4genthub-min","sessionStatus":"stopped"},{"logicalId":"4genthub-min.ghost","canonicalSessionName":"","sessionStatus":"running"},{"logicalId":"4genthub-min.other","canonicalSessionName":"4genthub-min-other@4genthub-min","sessionStatus":"running"}]`)
+	fakeRoom(t,
+		seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"},
+		seatSession{seat: "other", session: "4genthub-min-other@4genthub-min"},
+	)
 
 	var stdout, stderr strings.Builder
 	code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr)
@@ -424,7 +472,10 @@ func TestMessagesVerbRigPassIsolatesOneSeatFailure(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { sendToSession = previous })
-	fakeRig(t, `[{"logicalId":"4genthub-min.lead","canonicalSessionName":"4genthub-min-lead@4genthub-min","sessionStatus":"running"},{"logicalId":"4genthub-min.other","canonicalSessionName":"4genthub-min-other@4genthub-min","sessionStatus":"running"}]`)
+	fakeRoom(t,
+		seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"},
+		seatSession{seat: "other", session: "4genthub-min-other@4genthub-min"},
+	)
 
 	var stdout, stderr strings.Builder
 	code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr)
@@ -459,7 +510,7 @@ func TestMessagesVerbWatchBeatsEachPassAndExitsOnCancel(t *testing.T) {
 		"4genthub-min/lead": {message("m1", "hello lead")},
 	}}
 	_, sent, out := messagesFixture(t, cloud, nil)
-	fakeRig(t, `[{"logicalId":"4genthub-min.lead","canonicalSessionName":"4genthub-min-lead@4genthub-min","sessionStatus":"running"}]`)
+	fakeRoom(t, seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"})
 
 	var beaten []string
 	previousBeat := clientservices.WriteHeartbeat
@@ -510,7 +561,7 @@ func TestMessagesVerbRigShapeRefusals(t *testing.T) {
 	t.Run("a rig with no running seat", func(t *testing.T) {
 		cloud := &messageCloud{}
 		_, _, out := messagesFixture(t, cloud, nil)
-		fakeRig(t, `[{"logicalId":"4genthub-min.stopped","canonicalSessionName":"4genthub-min-stopped@4genthub-min","sessionStatus":"stopped"}]`)
+		fakeRoom(t)
 
 		var stdout, stderr strings.Builder
 		if code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr); code != clientcmd.ExitRemote {

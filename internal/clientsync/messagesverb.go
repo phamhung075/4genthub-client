@@ -29,7 +29,6 @@ package clientsync
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -42,6 +41,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -456,32 +456,38 @@ func oneLine(text string) string {
 	return flat
 }
 
-// rigNode is the part of a rig's node table (`rig ps --nodes --rig R --json`) the deliverer reads:
-// logicalId names the seat, canonicalSessionName the session `rig send` reaches it by, and
-// sessionStatus says whether there is a live prompt to type into.
-type rigNode struct {
-	LogicalID            string `json:"logicalId"`
-	CanonicalSessionName string `json:"canonicalSessionName"`
-	SessionStatus        string `json:"sessionStatus"`
-}
-
 // seatSession is one seat of a rig and the session its prompt lives in.
 type seatSession struct {
 	seat, session string
 }
 
-// rigSeats maps a rig's node table to the seats a pass may type into. A node that is not running is
-// skipped rather than typed into: a stopped session has no prompt reading it, so text typed there
-// would be acknowledged for a delivery nobody saw. Skipping is safe — the message stays pending, and
-// the pass after the watchdog has the seat back delivers it.
-func rigSeats(nodes []rigNode, rig string) []seatSession {
-	prefix := rig + "."
-	seats := make([]seatSession, 0, len(nodes))
-	for _, node := range nodes {
-		if !strings.HasPrefix(node.LogicalID, prefix) || node.CanonicalSessionName == "" || node.SessionStatus != "running" {
+// roomSeats is the ONE place this verb asks which seats a room has and where their prompts live. It is a package
+// variable for the same reason sendToSession is: the real one talks to the runtime, and a test must be able to answer
+// without one.
+//
+// IT REPLACES `rig ps --nodes --rig R --json`, which is where this verb failed in the field: the node table it read
+// carried logicalId/canonicalSessionName/sessionStatus, and the runtime's own room status carries the same three facts
+// (Seat, SessionName, State). The room IS the rig slug - the panel writes to the room named in the seat's address.
+var roomSeats = func(room string) ([]seatSession, error) {
+	statuses, err := clientruntime.NewClient("").GetRoomStatus(room)
+	if err != nil {
+		return nil, err
+	}
+	return seatSessionsFrom(statuses), nil
+}
+
+// seatSessionsFrom is the skip rule, kept pure so it is testable without a runtime: a seat that is not running is
+// skipped rather than typed into, because a stopped session has no prompt reading it and text typed there would be
+// acknowledged for a delivery nobody saw. Skipping is safe - the message stays pending, and the pass after the seat is
+// back delivers it. The same rule covers the runtime's own death states (agent_socket_closed, agent_stdio_eof,
+// agent_exited, stopped): none of them is "running", so their mail waits too.
+func seatSessionsFrom(statuses []clientruntime.SeatStatus) []seatSession {
+	seats := make([]seatSession, 0, len(statuses))
+	for _, status := range statuses {
+		if status.State != "running" || status.SessionName == "" || status.Seat == "" {
 			continue
 		}
-		seats = append(seats, seatSession{seat: strings.TrimPrefix(node.LogicalID, prefix), session: node.CanonicalSessionName})
+		seats = append(seats, seatSession{seat: status.Seat, session: status.SessionName})
 	}
 	return seats
 }
@@ -491,17 +497,11 @@ func rigSeats(nodes []rigNode, rig string) []seatSession {
 // non-zero on it. The room is the rig slug: the panel writes to the room named in the seat's own
 // address, and a rig and its room carry the same name.
 func messagesPass(ctx context.Context, baseURL, token string, parsed messagesArgs, stdout, stderr io.Writer) int {
-	out, err := runRig(ctx, "ps", "--nodes", "--rig", parsed.rig, "--json")
+	seats, err := roomSeats(parsed.rig)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync messages: %v\n", err)
 		return 1
 	}
-	var nodes []rigNode
-	if err := json.Unmarshal([]byte(out), &nodes); err != nil {
-		fmt.Fprintf(stderr, "4genteam sync messages: `rig ps --nodes --rig %s` did not answer with a node list: %v\n", parsed.rig, err)
-		return 1
-	}
-	seats := rigSeats(nodes, parsed.rig)
 	if len(seats) == 0 {
 		fmt.Fprintf(stderr, "4genteam sync messages: rig %s reports no running seat to deliver to\n", parsed.rig)
 		return 1
