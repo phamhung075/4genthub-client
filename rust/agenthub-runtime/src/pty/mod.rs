@@ -34,12 +34,31 @@ impl TerminalManager {
         cmd.args(["new-session", "-d", "-s", session_name, "-c"]);
         cmd.arg(cwd.as_os_str());
 
-        // Inject env variables into session
+        // Inject env variables into session. A denied key is dropped even when a caller supplied it: the
+        // default deny is the point, and "this seat needs to address another rig" is the case being closed.
         for (k, v) in env_vars {
+            if crate::env_is_denied(k) {
+                continue;
+            }
             cmd.env(k, v);
         }
 
-        cmd.arg(runtime_cmd);
+        // The pane command is exec'd through `env -u <key>` for every denied variable this process carries,
+        // so the runner — and every agent it spawns, which is what `scrub_env` covers — starts without the
+        // live rig's addressing. Doing it at exec rather than after the fact is deliberate:
+        // `/proc/<pid>/environ` is the environment the kernel was given, which is where the design's
+        // predicate is measured, and tmux hands a pane its session environment from the tmux *server* when
+        // the variable is not in the client's — a server the live rig may have started.
+        let denied = crate::denied_env_keys();
+        if denied.is_empty() {
+            cmd.arg(runtime_cmd);
+        } else {
+            cmd.arg("env");
+            for key in &denied {
+                cmd.arg("-u").arg(key);
+            }
+            cmd.arg(runtime_cmd);
+        }
 
         let output = cmd.output().map_err(|e| format!("failed to start tmux: {e}"))?;
         if !output.status.success() {

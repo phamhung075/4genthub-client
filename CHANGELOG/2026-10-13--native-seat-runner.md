@@ -80,8 +80,12 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
    the runner. No `{"type":"compact"}` exists anywhere in the OpenRig package; the frame is **ours**
    (omp does understand it — measured: `Nothing to compact (session too small)`).
 3. §1's table attributes the channel theft (pidfd_getfd) to the daemon's handling of the reference
-   runner. Measured: `pidfd_getfd` exists only in **this repo's** `context/mod.rs` — the theft is ours,
-   not the reference's, which never touches its runner's descriptors. That code is removed here.
+   runner. Measured: the pidfd cluster is not the daemon's, and it is not in this repo at all — it is
+   `src/context/mod.rs` in the **other checkout** (`agenthub_client`, HEAD f193f34, 229 lines: the `/proc`
+   + `ss` fd hunt, the raw `SYS_PIDFD_OPEN`/`SYS_PIDFD_GETFD` syscalls, `CAP_SYS_PTRACE`). This repo's
+   `context/mod.rs` is 131 lines at the gated commit 3546694 and contains **zero** pidfd references; the
+   legacy `rust/forcecompact` binary in this workspace does contain them, and is still reachable — see the
+   reachability note in the Removed section.
 4. §1's table says transcripts are captured with `tmux pipe-pane`; the measured reference rotates
    `capture-pane` (`transcript-store.js:195-196`, `node-launcher.js:97-107`).
 5. §2's named defect "the `--state-dir` default is not expanded" is already closed in this tree:
@@ -110,10 +114,21 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
   make a live provider fail on demand (see erratum 6).
 
 ### Removed
-- The `pidfd_getfd` compaction path (`src/context/mod.rs`, 94 lines: the `/proc` + `ss` fd hunt, the raw
-  `SYS_PIDFD_OPEN`/`SYS_PIDFD_GETFD` syscalls, `CAP_SYS_PTRACE`). The runner owns the channel, so the
-  daemon asks the runner instead of stealing a descriptor; a seat with no runner is a refusal naming the
-  seat, not a silent success.
+- The in-process compaction path this repo had (this repo's `context/mod.rs`, which is 131 lines at the
+  gated commit 3546694 and carries no pidfd reference): the runner owns the channel, so the daemon asks the
+  runner instead of reaching into another process; a seat with no runner is a refusal naming the seat, not a
+  silent success.
+
+  **Reachability, answered plainly (lead's question): the legacy pidfd path is STILL PRESENT AND REACHABLE.**
+  `rust/forcecompact` is a member of this workspace and builds with it, its binary is installed at
+  `~/.local/bin/forcecompact`, and OpenRig's own client invokes it — `4genteam compact-run --rig RIG
+  [--forcecompact PATH]`, with `4GENTEAM_FORCECOMPACT` to point at it, whose own error text reads "the
+  forcecompact helper is not on PATH … an omp seat past the hard limit cannot be force-compacted". So
+  "the descriptor theft is gone from the shipped set" is **not** true of the branch under gate while that
+  client path runs: the new runner's compaction is ptrace-free (a `{"type":"compact"}` frame the agent
+  handles itself), but the *client's* compaction supervisor still shells out to the ptrace helper. Retiring
+  it is a change in the OpenRig client and the operator's configuration, not in this row — routed, not
+  silently done here.
 
 ### Changed
 - The design's §1 describes the reference as owning a "socketpair"; the measured reference uses plain

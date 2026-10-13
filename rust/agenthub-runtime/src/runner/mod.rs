@@ -136,7 +136,19 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
 
     let runtime = AgentRuntime::from_str_loose(&seat.runtime);
     let seat_dir = seat_dir(state_dir, &target);
-    let argv = child_argv(&runtime, &seat_dir, &seat)?;
+    // A refusal to launch is a *config* outcome, and the caller must be able to tell it from a crash: the
+    // published death carries the refusal's own text, so a mistyped policy word names the word and a blank
+    // one says it is empty, instead of both reading as "died before readiness" (the lead's request).
+    let argv = match child_argv(&runtime, &seat_dir, &seat) {
+        Ok(argv) => argv,
+        Err(e) => {
+            let reason = format!("refusing to launch: {e}");
+            let path = state_file_path(state_dir, &target.room, &target.seat);
+            let _ = write_state(&path, "agent_exited", &reason, 0);
+            mirror(&reason);
+            return Ok(());
+        }
+    };
     let cwd = seat
         .cwd
         .clone()
