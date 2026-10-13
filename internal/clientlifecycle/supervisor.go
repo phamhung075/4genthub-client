@@ -298,6 +298,20 @@ func modTime(path string) float64 {
 	return float64(info.ModTime().UnixNano()) / 1e9
 }
 
+// rigIdle is a DECLARED EXCEPTION, and the declaration is the point: this is the ONE place in this package that
+// still asks the rig tool a question, because the answer is not on the runtime's surface yet. It reads
+// agentActivity.state out of `rig ps --nodes --rig RIG --json`, and agentActivity is produced OUTSIDE this client -
+// the same producer-absent/undetermined tri-state the U2 finding records - so converting it today would mean
+// inventing a state source rather than reading one. The supervisor's Nodes seam takes the SAME reading, so the
+// dependency is one reading in two places, not two mechanisms.
+//
+// WHAT RETIRES IT: a native activity read on the runtime's IPC surface. When that lands, this function becomes a call
+// like rigSay's, and this comment should be DELETED rather than annotated.
+//
+// The direction of every failure is deliberately the safe one: an unreadable tool, a malformed record, and a seat the
+// record does not mention all return false, and false means "not idle" to both callers - so a compaction that cannot
+// prove the seat is idle WAITS rather than racing a working turn. A check that failed open here would send /compact
+// into a running seat, which is the one outcome the gate exists to prevent.
 func rigIdle(rig, seat string) bool {
 	path, err := exec.LookPath("rig")
 	if err != nil {
@@ -321,33 +335,49 @@ func rigIdle(rig, seat string) bool {
 	return false
 }
 
-// rigSay sends a seat a message through the rig tool. A plain message waits for the seat to go idle,
-// which must not hold up the other seats, so it is started and released rather than waited on; a raw
-// one is the exact text (without it the tool wraps the message in a From/To envelope and a /compact
-// becomes plain text).
+// saySender is the "From" prefix a plain message carries, and it is REPRODUCED rather than invented: the client's own
+// seat send writes these words when the caller names no sender (`clientseat`'s send verb, defaultSender = "owner
+// session"), and the supervisor's messages are the same class - the client speaking to a seat it supervises. The
+// constant lives here instead of being exported from the verb package because a supervisor importing a verb package
+// for one string inverts the dependency; if a third writer appears, that is the moment to move it to the runtime
+// client, not before.
+const saySender = "owner session"
+
+// rigSay sends a seat one message through the RUNTIME, not through the rig tool. Two differences from the shell-out
+// it replaces, and both are deliberate:
+//
+//   - THE ENVELOPE is written HERE, because the runtime's send has none: it types the exact bytes it is given. A plain
+//     message is prefixed "From <sender>: " so the seat reads who spoke, which is what the CLI's envelope did; a raw
+//     message is the exact text, or a /compact arrives as prose the runner cannot act on.
+//
+//   - THE WAIT IS GONE, and its removal is declared rather than silent. The shell-out passed --wait-for-idle 120 - in a
+//     process it STARTED AND RELEASED, so this package never observed the outcome: a detached CLI that timed out
+//     failed where nobody was listening, which is the pretence of a guarantee rather than one. The runtime's send has
+//     no idle wait to escape (the same reason rigAbort's start-and-release dance was unnecessary), and BOTH idle
+//     readings on this machine are the same shell-out this unit removes: this file's rigIdle, and QuietWaiter's
+//     Activity - clientseat's seatActivity, which also runs `rig ps --nodes --json` and reads agentActivity.state. So
+//     honouring the wait would re-add the dependency being cut, in a second package.
+//
+//     EVERY CALLER THAT LOSES THE WAIT, and why each is safe. /compact (raw, on the urgent path) is gated by s.Idle at
+//     its own call site - the one place a race with a working seat matters - so the wait was redundant with a gate that
+//     was already there. The resume is sent after a WITNESSED compaction, which is a turn boundary, and text typed at a
+//     boundary is the next prompt, which is the resume's purpose. The notice and the warning are each latched once by
+//     state.told/state.warned and read whenever the seat next looks at its pane, so arriving later changes nothing
+//     except that they are no longer held behind a busy seat.
 func rigSay(rig, seat, text string, raw bool) {
-	path, err := exec.LookPath("rig")
-	if err != nil {
+	session := rig + "-" + seat + "@" + rig
+	if raw {
+		_ = runtimeSendText(session, text)
 		return
 	}
-	args := []string{"send", rig + "-" + seat + "@" + rig, text, "--wait-for-idle", "120"}
-	if raw {
-		args = append(args, "--raw")
-	}
-	cmd := exec.Command(path, args...)
-	if raw {
-		_ = cmd.Run()
-		return
-	}
-	if err := cmd.Start(); err == nil {
-		_ = cmd.Process.Release()
-	}
+	_ = runtimeSendText(session, "From "+saySender+": "+text)
 }
 
-// runtimeSendText is the ONE place ABORT types text into a seat's pane - NOT yet the package's only send: rigSay
-// ABOVE still builds its own `rig send`, and the remaining sites are converted one by one. A package-level variable
-// rather than an interface added for testing, which is the repo's rule, and it is what makes the no-envelope property
-// of rigAbort BELOW observable: the test replaces it and asserts the exact barrier text.
+// runtimeSendText is the ONE place this package types text into a seat's pane. It is a package-level variable rather
+// than an interface added for testing, which is the repo's rule, and it is what makes both sends' text observable:
+// rigSay ABOVE rebuilds the CLI's "From <sender>: " envelope for a plain message and sends a raw one bare, and
+// rigAbort BELOW sends the bare "/abort" keystroke. The one thing in this file that still reaches the rig tool is
+// rigIdle, which READS and types nothing (declared as an exception above).
 var runtimeSendText = func(session, text string) error {
 	return clientruntime.NewClient("").SendText(session, text)
 }

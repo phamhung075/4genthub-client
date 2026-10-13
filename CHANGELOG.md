@@ -3,6 +3,38 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the supervisor's sends go to the runtime, and rigIdle is declared rather than converted
+
+`clientlifecycle` sent every message by shelling out: `rigSay` ran `rig send <session> <text> --wait-for-idle 120
+[--raw]`, and `rigIdle` read agentActivity by running `rig ps --nodes`. The send is converted; the read is not, and now
+says why.
+
+### Changed
+- `rigSay` types through `runtimeSendText` — the seam `rigAbort` already uses, now this package's only send. The
+  runtime's send has no envelope, so the CALLER writes it: a plain message is prefixed `From owner session: `,
+  reproducing what the CLI added (`clientseat`'s send verb uses the same default sender), and a raw message travels bare
+  so `/compact` does not arrive as prose.
+- THE WAIT IS REMOVED AND DECLARED, with every caller that loses it enumerated. The shell-out's `--wait-for-idle 120` ran
+  in a process the old code STARTED AND RELEASED, so its outcome was never observed — the pretence of a guarantee. Both
+  idle readings on this machine are the same `rig ps --nodes` shell-out this unit removes (`rigIdle`, and
+  `QuietWaiter`'s `seatActivity`), so honouring the wait would re-add the dependency being cut. `/compact` is gated by
+  `s.Idle` at its own call site; the resume is sent at a turn boundary, where typed text is the next prompt; and the
+  notice and the warning are latched once by `state.told`/`state.warned` and read when the seat next looks at its pane.
+
+### Declared, not changed
+- `rigIdle` remains the one reader of the rig tool in this package, and now says so where it is: the answer is not on the
+  runtime's surface yet (the producer-absent/undetermined tri-state the U2 finding records), the supervisor's `Nodes`
+  seam takes the same reading, and every failure path returns false — an unreadable activity reads as "not idle", so a
+  compaction that cannot prove idleness WAITS rather than racing a working turn.
+
+### Verified
+- `TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare` asserts the EXACT session name and the EXACT envelope text,
+  so it fails if the envelope disappears or changes; `TestRigSayNeverShellsOutToTheRigTool` empties PATH and fails if a
+  rig-tool dependency returns. PROVEN, not asserted: re-adding `exec.LookPath("rig")` to `rigSay` turned it red with
+  "rigSay did not reach the runtime with no `rig` on PATH", and the mutation was reverted (0 `LookPath` in `rigSay`,
+  the declared one still in `rigIdle`).
+- gofmt clean, `go build ./...` exit 0, the three send tests by name PASS, package ok, module 23 ok / 0 failed.
+
 ## 2026-10-13 — the runtime socket gets one override, read at the one resolution point
 
 A client built from a branch has to reach a daemon built from the SAME branch while the owner's daemon keeps serving the

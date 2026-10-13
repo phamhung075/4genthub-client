@@ -345,3 +345,53 @@ func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
 			"not the keystroke the omp runner aborts a turn on", gotText)
 	}
 }
+
+// rigSay's two shapes, pinned the same way: a plain message carries the "From" envelope the CLI used to write, and a
+// raw one is the exact text - a /compact wrapped in an envelope arrives as prose the runner cannot act on.
+func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
+	previous := runtimeSendText
+	t.Cleanup(func() { runtimeSendText = previous })
+
+	var sessions, texts []string
+	runtimeSendText = func(session, text string) error {
+		sessions, texts = append(sessions, session), append(texts, text)
+		return nil
+	}
+
+	rigSay("room1", "alpha", "context was compacted", false)
+	rigSay("room1", "alpha", "/compact", true)
+
+	if len(texts) != 2 {
+		t.Fatalf("sends = %d, want 2", len(texts))
+	}
+	for i, session := range sessions {
+		if session != "room1-alpha@room1" {
+			t.Errorf("send %d session = %q, want the room's canonical session name room1-alpha@room1", i, session)
+		}
+	}
+	if want := "From " + saySender + ": context was compacted"; texts[0] != want {
+		t.Errorf("plain message = %q, want %q: the runtime's send types exactly the bytes it is given, so the caller "+
+			"writes the envelope the CLI used to add", texts[0], want)
+	}
+	if texts[1] != "/compact" {
+		t.Errorf("raw message = %q, want the bare /compact: an envelope arrives as a MESSAGE where the runner needs "+
+			"the command", texts[1])
+	}
+}
+
+// THE ABSENCE, pinned the way the seat-send conversion pinned its own: with no `rig` on PATH the send must still reach
+// the runtime. A fallback to the rig tool would return early and silently, which this test cannot see unless it
+// empties PATH.
+func TestRigSayNeverShellsOutToTheRigTool(t *testing.T) {
+	previous := runtimeSendText
+	t.Cleanup(func() { runtimeSendText = previous })
+
+	called := false
+	runtimeSendText = func(session, text string) error { called = true; return nil }
+	t.Setenv("PATH", t.TempDir())
+
+	rigSay("room1", "alpha", "hello", false)
+	if !called {
+		t.Fatal("rigSay did not reach the runtime with no `rig` on PATH: it shelled out to the rig tool instead")
+	}
+}
