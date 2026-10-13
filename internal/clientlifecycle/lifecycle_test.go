@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -121,7 +124,7 @@ func TestLogDirIsTheClientservicesComputation(t *testing.T) {
 func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 	var ran []string
 	restoreAll(t)
-	ensureDaemon = func(*clientcmd.Rig, io.Writer) error { return nil }
+	ensureDaemon = func(string, io.Writer) (string, error) { return "", nil }
 	spawnChild = func([]string, string) (supervisorChild, error) {
 		ran = append(ran, "spawn")
 		return diedChild{}, nil
@@ -155,8 +158,14 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	restoreAll(t)
 	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
 	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
-	ensureDaemon = func(*clientcmd.Rig, io.Writer) error { ran = append(ran, "ensureDaemon"); return nil }
-	ensureRig = func(*clientcmd.Rig, string, io.Writer) { ran = append(ran, "ensureRig") }
+	ensureDaemon = func(string, io.Writer) (string, error) {
+		ran = append(ran, "ensureDaemon")
+		return "/tmp/daemon.log", nil
+	}
+	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		ran = append(ran, "ensureRig")
+		return clientcmd.ExitOK
+	}
 	ensureForcecompact = func(io.Writer) { ran = append(ran, "ensureForcecompact") }
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
 	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startRigd"); return true }
@@ -170,12 +179,98 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	t.Setenv("HERDR_ENV", "")
 
 	var out, errOut bytes.Buffer
-	if code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"my-rig"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up returned %d (stderr: %q)", code, errOut.String())
 	}
 	want := []string{"ensureDaemon", "ensureRig", "ensureForcecompact", "recordRig", "startRigd", "waitSafeguards", "watch", "openUI", "herdr"}
 	if strings.Join(ran, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", ran, want)
+	}
+}
+
+// writeRoomDefinition writes the smallest team.json that can start a room: the room, one seat, and the two
+// empty collections the definition may carry. `up` must read its seats from here and nowhere else.
+func writeRoomDefinition(t *testing.T, room string) string {
+	t.Helper()
+	directory := t.TempDir()
+	body := `{"room":{"slug":"` + room + `"},` +
+		`"seats":[{"seat_key":"lead","seat_type":"developer","runtime":"omp"}],` +
+		`"links":[],"seat_overlays":{}}`
+	if err := os.WriteFile(filepath.Join(directory, "team.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+// A definition that names a different room is a caller error, and it is reported BEFORE the machine is
+// reached: `up other --team DIR` must not start a daemon or touch a seat on the way to saying so.
+func TestUpRefusesADefinitionThatNamesAnotherRoom(t *testing.T) {
+	restoreAll(t)
+	var started []string
+	ensureDaemon = func(string, io.Writer) (string, error) { started = append(started, "daemon"); return "", nil }
+	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		started = append(started, "room")
+		return clientcmd.ExitOK
+	}
+
+	var out, errOut bytes.Buffer
+	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{},
+		[]string{"other-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut)
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
+	}
+	if len(started) != 0 {
+		t.Errorf("a wrong room name reached the machine: %v", started)
+	}
+	if !strings.Contains(errOut.String(), "my-rig") {
+		t.Errorf("stderr did not name the room the definition defines: %q", errOut.String())
+	}
+}
+
+// --room-only is an INSTRUMENT, and this is the property that makes it one: the room's own verdict is the
+// exit code, and nothing after the room runs - no forcecompact check, no rigd, no bridge wait, no watch
+// view, no UI, no herdr. A run whose red could come from any of those is not evidence about the room.
+func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		room int
+		want int
+	}{
+		{"a room that came up", clientcmd.ExitOK, clientcmd.ExitOK},
+		{"a room that did not", clientcmd.ExitUnavailable, clientcmd.ExitUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var ran []string
+			restoreAll(t)
+			ensureDaemon = func(string, io.Writer) (string, error) {
+				ran = append(ran, "ensureDaemon")
+				return "/tmp/daemon.log", nil
+			}
+			ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+				ran = append(ran, "ensureRig")
+				return c.room
+			}
+			ensureForcecompact = func(io.Writer) { ran = append(ran, "ensureForcecompact") }
+			recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
+			startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startRigd"); return true }
+			waitSafeguards = func(string) ([]clientservices.Health, bool) {
+				ran = append(ran, "waitSafeguards")
+				return nil, true
+			}
+			runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
+			openUI = func(*clientcmd.Rig, io.Writer) { ran = append(ran, "openUI") }
+			runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
+
+			var out, errOut bytes.Buffer
+			code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{},
+				[]string{"my-rig", "--team", writeRoomDefinition(t, "my-rig"), "--room-only"}, &out, &errOut)
+			if code != c.want {
+				t.Fatalf("exit %d, want %d (stderr %q)", code, c.want, errOut.String())
+			}
+			if strings.Join(ran, ",") != "ensureDaemon,ensureRig" {
+				t.Errorf("--room-only ran %v, want only the daemon and the room", ran)
+			}
+		})
 	}
 }
 

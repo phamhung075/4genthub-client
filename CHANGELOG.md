@@ -3,6 +3,59 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — `up` starts a room from the local team definition, and `--room-only` says what it excludes
+
+`up` restored rooms through OpenRig (`rig up RIG --existing`) and started the runtime daemon with no state
+dir at all: `clientruntime.EnsureDaemon` spawns `agenthub-runtime --socket PATH daemon` and drops both
+streams, so the daemon landed on this machine's default state tree and a start that failed had nothing to
+read. A room that did not already exist could not be started by that path either: `StartRoomByName` sends
+only `{room, cwd}` and the runtime cannot invent seats.
+
+### Added
+- `internal/clientteam/roomspec.go`: `LoadRoomSpec(teamDir)` reads `<teamDir>/team.json` into a
+  `clientruntime.RoomSpec` — `room.slug` to the room, seats to `[]SeatSpec`, `links` to `[]SeatLink`,
+  `seat_overlays` to the overlays — beside `loadTeam`, because team.json has ONE reader. An unreadable
+  directory, a room with no slug, or a seat with no key is a usage error NAMING the directory.
+- `up RIG --team DIR [--state-dir DIR] [--room-only]`. `--team` is required and has no default, and the room
+  name must equal the definition's `room.slug` — the rule clientpolicy applies to its own `--rig`.
+  `--state-dir` resolves through `clientenv.ResolveStateRoot`. `--room-only` runs the room and stops: it
+  starts the daemon, starts the room from the definition, prints one line per seat, and EXCLUDES rigd, the
+  bridge, the watch view, the UI and herdr, whose failures are not this verb's verdict. The help carries the
+  acceptance invocation so a reader re-reads the signature instead of remembering it.
+- `internal/clientruntime/ipc.go`: `(*Client).Reachable()`, the reading `EnsureDaemon` now polls, named once
+  so a caller that starts the daemon itself — with its own state dir and log file — asks the same question.
+
+### Fixed
+- `up`'s daemon step passes an ABSOLUTE `--state-dir` and sends the daemon's own output to
+  `<stateDir>/daemon.log`, which is what lets a partial room name its log; the daemon is `detach`ed so it
+  outlives the verb.
+- `up`'s room step is `StartRoom(LoadRoomSpec(teamDir))`, a `GetRoomStatus` poll to a window held in a
+  variable, then one line per seat: exit `0` every seat running, `2` the arguments or the definition wrong,
+  `3` a seat not running with the seats and the daemon log path named — this repo's own `ExitUsage` and
+  `ExitUnavailable`, not new numbers.
+- `SeatSpec.PermissionPolicy` is a pointer. An OMITTED key means the documented unattended default and a
+  present-but-empty one is refused by name, and a plain string with `omitempty` cannot say both on the wire:
+  one of the two collapses into the other. `definedField` reads it for that reason (`optionalField` folds an
+  empty string into "absent", which is right for `model` and wrong here). The runtime's own `Option<String>`
+  is the other half of the same row.
+
+### Verified
+- `go vet ./internal/...` exits 0; `go test ./...` 23 packages ok, 0 failed; `gofmt -l` clean on every file
+  this change touches.
+- Live acceptance, scrubbed `HOME`, zero cloud environment, no `XDG_RUNTIME_DIR`:
+  `up u1demo --team DIR --state-dir DIR --room-only` printed `u1demo/solo: running` and exited 0. The tree it
+  wrote (`rooms/u1demo/spec.json`, `seats/`, `logs/`, `audit/`, `daemon.log`) is ALL under the `--state-dir`
+  it was given — the runtime materialised the spec from the bytes the client sent, which `StartRoomByName`
+  could not have done — and the per-process instrument is the daemon's own argv,
+  `agenthub-runtime --state-dir … --socket …/run/runtime.sock daemon`, under the scrubbed HOME. The `2` path
+  (`up other-room` against that definition) exits before the daemon is reached.
+- Declared limit: the live `3` partial verdict was NOT reproduced. Three seat shapes — runtime
+  `no-such-runtime`, cwd `/definitely/not/here`, and a non-omp seat — were each reported `running`, so a
+  started seat may never be reported not-running and the path is unforceable until the runtime stops
+  over-reporting readiness. The `3` verdict's evidence is the seam test and the code path, not a live run.
+- The full `up` was NOT run here: `recordRig` writes the SHARED rigd.json and `startRigd` starts this
+  machine's rigd, which is the owner's live state — the second reason `--room-only` exists.
+
 ## 2026-10-13 — the connector speaks TLS, and a test that dials proves it
 
 `DialConnector` never installed TLS: for an `https` base URL it mapped the scheme to `wss`, appended `:443`,

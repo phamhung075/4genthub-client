@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/clientteam"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
 
@@ -43,8 +45,16 @@ const (
 // snappy. It is a variable so the suite need not wait it out.
 var SupervisorStartGrace = 1500 * time.Millisecond
 
+// DaemonReadyWindow is how long a freshly started runtime daemon has to answer on its socket, and
+// RoomStartWindow how long a room's seats have to reach Running after StartRoom returns. Both are
+// variables for the same reason SupervisorStartGrace is: the suite must not have to wait them out.
+var (
+	DaemonReadyWindow = 10 * time.Second
+	RoomStartWindow   = 20 * time.Second
+)
+
 const (
-	upUsage         = "usage: 4genteam up RIG " + clientoffpeak.ModeFlagUsage
+	upUsage         = "usage: 4genteam up RIG --team DIR [--state-dir DIR] [--room-only] " + clientoffpeak.ModeFlagUsage
 	compactUsage    = "usage: 4genteam compact RIG " + clientoffpeak.ModeFlagUsage
 	stopUsage       = "usage: 4genteam stop RIG"
 	statusUsage     = "usage: 4genteam status RIG"
@@ -137,6 +147,9 @@ func requireRig(verb string, args []string, stderr io.Writer) (string, bool) {
 //
 // startBridge IS GONE FROM THIS LIST, and that is 7.1's removed path: `up` starts rigd, and rigd starts
 // the bridge. Two start paths for one safeguard would be two mechanisms.
+// ensureDaemon returns the log file the runtime daemon writes its own output to, and ensureRig returns the
+// room's verdict as this verb's exit code. Their signatures carry the state dir and the definition for one
+// reason beyond the work: the acceptance run has to be able to say WHICH of the two answered.
 var (
 	ensureDaemon       = ensureDaemonImpl
 	ensureRig          = ensureRigImpl
@@ -160,22 +173,120 @@ func (upCommand) NeedsRig() bool { return true }
 func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, upUsage,
-			"OpenRig daemon, the rig's seats, the status bridge, the compaction supervisor and the OpenRig UI, in that order.\n"+
-				"The DeepSeek peak gate runs BEFORE the seats are restored: with "+clientoffpeak.ModeEnv+" on (the default) a "+
-				"room whose seats run a deepseek/ model is refused at peak, and "+clientoffpeak.FlagAllowPeak+" skips the check "+
-				"for this run.")
+			"The runtime daemon, this rig's room and its seats, and then the OpenRig-era safeguards: rigd,\n"+
+				"which owns the compaction supervisor, the watchdog, the seat-message deliverer and the status\n"+
+				"bridge, and finally the watch view and the UI.\n"+
+				"The room's seats come from the LOCAL team definition: --team names the directory that holds\n"+
+				"team.json, and there is no default, so starting a room needs no cloud round trip.\n"+
+				"--room-only stops after the room: it starts the daemon, starts the room from the definition and\n"+
+				"prints one line per seat. It EXCLUDES rigd, the bridge, the watch view, the UI and herdr, whose\n"+
+				"failures are not this verb's verdict - and it must not be used to make a red go away.\n"+
+				"The acceptance invocation, so a reader re-reads the signature instead of remembering it:\n"+
+				"  4genteam up RIG --team DIR [--state-dir DIR] --room-only\n"+
+				"The DeepSeek peak gate is LOCAL (it reads the room's own node records) and runs BEFORE the seats\n"+
+				"are started: with "+clientoffpeak.ModeEnv+" on (the default) a room whose seats run a deepseek/\n"+
+				"model is refused at peak with exit 3, and "+clientoffpeak.FlagAllowPeak+" skips the check for\n"+
+				"this run.")
 		return clientcmd.ExitOK
 	}
 	allowPeak, rest := clientoffpeak.ModeFromFlags(args)
-	name, ok := requireRig("up", rest, stderr)
+	flags := flag.NewFlagSet("up", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	teamDir := flags.String("team", "", "the team definition directory that holds team.json (required)")
+	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else $"+clientenv.StateRootEnv+", else this machine's own")
+	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before rigd, the bridge, the watch view and the UI")
+	flagArgs, positional := splitFlagsAndPositional(rest)
+	for _, arg := range flagArgs {
+		if name := flagName(arg); name != "" && !upTakesFlag(name) {
+			fmt.Fprintf(stderr, "4genteam up: unknown argument %s. %s\n", arg, upUsage)
+			return clientcmd.ExitUsage
+		}
+	}
+	if err := flags.Parse(flagArgs); err != nil {
+		return clientcmd.ExitUsage
+	}
+	name, ok := requireRig("up", positional, stderr)
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	return runUp(rig, name, allowPeak, stdout, stderr)
+	if strings.TrimSpace(*teamDir) == "" {
+		fmt.Fprintf(stderr, "4genteam up: --team DIR is required - the room's seats are read from the team definition it holds, and there is no default. %s\n", upUsage)
+		return clientcmd.ExitUsage
+	}
+	root, err := clientenv.ResolveStateRoot(*stateDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	return runUp(rig, name, *teamDir, root, allowPeak, *roomOnly, stdout, stderr)
 }
 
-func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Writer) int {
-	if err := ensureDaemon(rig, stderr); err != nil {
+// splitFlagsAndPositional separates this verb's flags from its one positional, and puts the positionals
+// LAST: the flag package STOPS at the first bare word, so `up RIG --team DIR` - the order the usage line
+// documents, and the one a reader writes - would otherwise parse no flags at all and report the room name's
+// neighbour as an unexpected argument. clientpolicy's own parser carries this same warning for this same
+// reason, which is exactly why it is spelled out here rather than rediscovered.
+func splitFlagsAndPositional(args []string) (flagArgs, positional []string) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !isFlag(arg) {
+			positional = append(positional, arg)
+			continue
+		}
+		flagArgs = append(flagArgs, arg)
+		// A flag that takes a value takes its VALUE with it, so `--team DIR` is never read as a positional
+		// named DIR. `--team=DIR` carries its own value and needs no lookahead.
+		if upFlagTakesValue(flagName(arg)) && !strings.Contains(arg, "=") && i+1 < len(args) {
+			i++
+			flagArgs = append(flagArgs, args[i])
+		}
+	}
+	return flagArgs, positional
+}
+
+func isFlag(arg string) bool { return strings.HasPrefix(arg, "-") && arg != "-" }
+
+// flagName is a flag's name without its dashes and without any =value; "" for something that is not a flag.
+func flagName(arg string) string {
+	if !isFlag(arg) {
+		return ""
+	}
+	name := strings.TrimLeft(arg, "-")
+	if at := strings.Index(name, "="); at >= 0 {
+		name = name[:at]
+	}
+	return name
+}
+
+func upFlagTakesValue(name string) bool { return name == "team" || name == "state-dir" }
+
+// upTakesFlag is this verb's own flag list, so an argument it does not take is refused HERE with the
+// argument NAMED: the flag package's own message says `-any-time`, and the shape this replaces was a verb
+// that quietly ignored the extra argument.
+func upTakesFlag(name string) bool {
+	switch name {
+	case "team", "state-dir", "room-only", "h", "help":
+		return true
+	}
+	return false
+}
+
+func runUp(rig *clientcmd.Rig, name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, stderr io.Writer) int {
+	// The definition is read FIRST: a --team typo is a caller error, and it must be reported before a daemon
+	// is started or a seat is touched. The room name must be the room the file defines, which is the same
+	// rule clientpolicy applies to its own --rig.
+	spec, err := clientteam.LoadRoomSpec(teamDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	if spec.Room != name {
+		fmt.Fprintf(stderr, "4genteam up: %s defines the room %q, not %q - --rig must name the room the definition defines. %s\n",
+			teamDir, spec.Room, name, upUsage)
+		return clientcmd.ExitUsage
+	}
+	daemonLog, err := ensureDaemon(stateDir, stderr)
+	if err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
 		return clientcmd.ExitRemote
 	}
@@ -185,7 +296,14 @@ func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Wr
 	if code := PeakGate(rig, name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
-	ensureRig(rig, name, stderr)
+	if code := ensureRig(name, spec, daemonLog, stdout, stderr); code != clientcmd.ExitOK {
+		return code
+	}
+	// --room-only is an INSTRUMENT: it ends here, with the room's own verdict. The guard is deliberate - a
+	// red that comes from the bridge, the UI or herdr is not evidence about the room.
+	if roomOnly {
+		return clientcmd.ExitOK
+	}
 	ensureForcecompact(stderr)
 
 	// 7.5: a bridge refused for a missing AGENTHUB_URL or AGENTHUB_TOKEN is a FAILED `up`. The check runs
@@ -222,48 +340,132 @@ func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Wr
 	return clientcmd.ExitOK
 }
 
-func ensureDaemonImpl(rig *clientcmd.Rig, stderr io.Writer) error {
+// ensureDaemonImpl makes the runtime daemon reachable for a room whose state lives under stateDir, and
+// returns the log file the daemon's own output goes to.
+//
+// The client starts the daemon itself rather than calling clientruntime's EnsureDaemon: that helper spawns
+// `agenthub-runtime --socket PATH daemon` with NO --state-dir and both streams dropped, so the daemon would
+// land on this machine's default state tree and a start that failed would have nothing to read. `up` that
+// cannot name why a seat did not come up is the silence this client exists to remove.
+func ensureDaemonImpl(stateDir string, stderr io.Writer) (string, error) {
+	logPath := daemonLogPath(stateDir)
 	client := clientruntime.NewClient("")
-	if err := client.EnsureDaemon(context.Background()); err != nil {
-		if rig != nil {
-			if _, rErr := rig.Run(context.Background(), "daemon", "status"); rErr == nil {
-				return nil
-			}
-			if _, rErr := rig.Run(context.Background(), "daemon", "start"); rErr != nil {
-				return errors.New("the OpenRig daemon did not start (see: rig daemon logs)")
-			}
-			return nil
-		}
-		return fmt.Errorf("the agenthub-runtime daemon did not start: %w", err)
+	if client.Reachable() {
+		return logPath, nil
 	}
-	return nil
+	runtimeBin, err := runtimeBinary()
+	if err != nil {
+		return logPath, err
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return logPath, fmt.Errorf("cannot create the directory for the daemon's log: %w", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return logPath, fmt.Errorf("cannot write the daemon's log at %s: %w", logPath, err)
+	}
+	defer logFile.Close()
+	cmd := exec.Command(runtimeBin, "--state-dir", stateDir, "--socket", client.SocketPath, "daemon")
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return logPath, fmt.Errorf("cannot start agenthub-runtime: %w", err)
+	}
+	deadline := time.Now().Add(DaemonReadyWindow)
+	for time.Now().Before(deadline) {
+		if client.Reachable() {
+			return logPath, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return logPath, fmt.Errorf("agenthub-runtime did not answer on %s within %s - its own output is in %s",
+		client.SocketPath, DaemonReadyWindow, logPath)
 }
 
-func ensureRigImpl(rig *clientcmd.Rig, name string, stderr io.Writer) {
-	nodes := rigNodes(rig, name)
-	if len(nodes) > 0 {
-		allRunning := true
-		for _, node := range nodes {
-			if node["sessionStatus"] != "running" {
-				allRunning = false
-				break
-			}
-		}
-		if allRunning {
-			return
-		}
+// daemonLogPath is where the runtime daemon's own output goes: beside the state it serves, so a partial room
+// and the reason for it are read from one tree.
+func daemonLogPath(stateDir string) string { return filepath.Join(stateDir, "daemon.log") }
+
+// runtimeBinary is the runtime executable: PATH first, then the per-user install the OpenRig CLIs use.
+func runtimeBinary() (string, error) {
+	if found, err := exec.LookPath("agenthub-runtime"); err == nil {
+		return found, nil
 	}
+	local := filepath.Join(os.Getenv("HOME"), ".local", "bin", "agenthub-runtime")
+	if _, err := os.Stat(local); err == nil {
+		return local, nil
+	}
+	return "", errors.New("agenthub-runtime is not on PATH or in ~/.local/bin, and a room cannot start without it")
+}
+
+// ensureRigImpl starts the room from the definition's own spec and reads it back until every seat is
+// running or RoomStartWindow runs out.
+//
+// It returns the verb's verdict: ExitOK when every seat runs, and ExitUnavailable - naming the seats that
+// are not running AND the daemon's log path - when any does not. A room that is only partly up is "this
+// machine could not do it", which is what ExitUnavailable means in every other verb here; the seats come
+// from the caller because the runtime cannot invent them (StartRoom sends the whole spec, and its by-name
+// form sends only {room, cwd}).
+func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, stdout, stderr io.Writer) int {
 	client := clientruntime.NewClient("")
-	cwd, _ := os.Getwd()
-	if _, err := client.StartRoomByName(name, cwd); err != nil {
-		if rig != nil {
-			if _, rErr := rig.Run(context.Background(), "up", name, "--existing"); rErr != nil {
-				fmt.Fprintf(stderr, "4genteam: could not restore rig %s (see: rig up %s --existing)\n", name, name)
-			}
-			return
-		}
-		fmt.Fprintf(stderr, "4genteam: could not start room %s: %v\n", name, err)
+	seats, err := client.StartRoom(spec)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: could not start room %s: %v\n", name, err)
+		fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+		return clientcmd.ExitUnavailable
 	}
+	deadline := time.Now().Add(RoomStartWindow)
+	for {
+		seats = roomReadings(client, name, seats)
+		if allSeatsRunning(seats) || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if len(seats) == 0 {
+		fmt.Fprintf(stderr, "4genteam up: room %s reported no seats at all\n", name)
+		fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+		return clientcmd.ExitUnavailable
+	}
+	var late []string
+	for _, seat := range seats {
+		fmt.Fprintf(stdout, "%s/%s: %s\n", name, seat.Seat, seat.State)
+		if !seatRunning(seat) {
+			late = append(late, seat.Seat)
+		}
+	}
+	if len(late) > 0 {
+		fmt.Fprintf(stderr, "4genteam up: room %s is not up: %d of %d seat(s) are not running (%s)\n",
+			name, len(late), len(seats), strings.Join(late, ", "))
+		fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+		return clientcmd.ExitUnavailable
+	}
+	return clientcmd.ExitOK
+}
+
+// roomReadings is the room's current seats. A reading that fails keeps the last one the runtime gave: the
+// verdict must be about the seats, and an unreadable poll is not news that a seat died.
+func roomReadings(client *clientruntime.Client, name string, fallback []clientruntime.SeatStatus) []clientruntime.SeatStatus {
+	seats, err := client.GetRoomStatus(name)
+	if err != nil || len(seats) == 0 {
+		return fallback
+	}
+	return seats
+}
+
+func allSeatsRunning(seats []clientruntime.SeatStatus) bool {
+	for _, seat := range seats {
+		if !seatRunning(seat) {
+			return false
+		}
+	}
+	return len(seats) > 0
+}
+
+// seatRunning reads the runtime's state string case-insensitively: "Running" and "running" are the same
+// fact, and the runtime's own enum is the only thing that decides it.
+func seatRunning(seat clientruntime.SeatStatus) bool {
+	return strings.EqualFold(strings.TrimSpace(seat.State), "running")
 }
 
 // rigNodes is the ONE reading of a rig's node records here, so the gate and the restore cannot decide

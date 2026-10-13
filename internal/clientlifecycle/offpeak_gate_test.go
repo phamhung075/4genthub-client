@@ -10,6 +10,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -41,8 +42,14 @@ func gateEnv(t *testing.T, pin string) {
 func stubWholeUp(t *testing.T) *[]string {
 	t.Helper()
 	ran := &[]string{}
-	ensureDaemon = func(*clientcmd.Rig, io.Writer) error { *ran = append(*ran, "ensureDaemon"); return nil }
-	ensureRig = func(*clientcmd.Rig, string, io.Writer) { *ran = append(*ran, "ensureRig") }
+	ensureDaemon = func(string, io.Writer) (string, error) {
+		*ran = append(*ran, "ensureDaemon")
+		return "/tmp/daemon.log", nil
+	}
+	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		*ran = append(*ran, "ensureRig")
+		return clientcmd.ExitOK
+	}
 	ensureForcecompact = func(io.Writer) {}
 	// The room recorded and the authority started are the steps after the gate; a test about the gate
 	// asserts whether the RESUME ran, so these two are stubbed to no-ops that cannot touch this machine.
@@ -73,7 +80,7 @@ func TestUpRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha"}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}
@@ -123,7 +130,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 			t.Setenv(clientoffpeak.PinEnv, c.pin)
 			t.Setenv(clientoffpeak.ModeEnv, c.modeEnv)
 
-			args := append([]string{"room-alpha"}, c.extra...)
+			args := append([]string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, c.extra...)
 			var out, errOut bytes.Buffer
 			code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, args, &out, &errOut)
 			if code != c.want {
@@ -171,7 +178,7 @@ func TestUpTakesTheOneFlagTwice(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{},
-		[]string{clientoffpeak.FlagAllowPeak, "room-alpha", clientoffpeak.FlagAllowPeak}, &out, &errOut)
+		[]string{clientoffpeak.FlagAllowPeak, "room-alpha", clientoffpeak.FlagAllowPeak, "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0 (stderr %q)", code, errOut.String())
 	}
@@ -259,7 +266,7 @@ func TestTheGateIsSkippedWhenTheRoomCannotBeRead(t *testing.T) {
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha"}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0: an unreadable room must not be refused (stderr %q)", code, errOut.String())
 	}
@@ -277,7 +284,7 @@ func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 	gateEnv(t, "whenever")
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha"}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitUsage {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
 	}

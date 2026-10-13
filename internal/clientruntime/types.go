@@ -19,11 +19,15 @@ type SeatStatus struct {
 
 // SeatSpec is one seat in a room spec.
 type SeatSpec struct {
-	SeatKey          string            `json:"seat_key"`
-	SeatType         string            `json:"seat_type"`
-	Runtime          string            `json:"runtime"`
-	Model            *string           `json:"model,omitempty"`
-	PermissionPolicy string            `json:"permission_policy,omitempty"`
+	SeatKey  string  `json:"seat_key"`
+	SeatType string  `json:"seat_type"`
+	Runtime  string  `json:"runtime"`
+	Model    *string `json:"model,omitempty"`
+	// PermissionPolicy is the ONE field where absent and present-but-empty must not collapse: an omitted key
+	// means the documented unattended default, and an empty string is refused BY NAME by the runtime. A plain
+	// string with omitempty cannot say both on the wire, so this is a pointer: nil omits the key, and a
+	// pointer to "" sends it.
+	PermissionPolicy *string           `json:"permission_policy,omitempty"`
 	Cwd              *string           `json:"cwd,omitempty"`
 	AgentDir         *string           `json:"agent_dir,omitempty"`
 	Env              map[string]string `json:"env,omitempty"`

@@ -38,11 +38,21 @@ func NewClient(socketPath string) *Client {
 	return &Client{SocketPath: socketPath}
 }
 
+// Reachable reports whether something answers on this client's socket. It is the reading EnsureDaemon
+// polls, named once because a caller that starts the daemon ITSELF - with a state dir and a log file of
+// its own - has to poll the same question, and three copies of one dial would be three definitions of "up".
+func (c *Client) Reachable() bool {
+	conn, err := net.DialTimeout("unix", c.SocketPath, 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 // EnsureDaemon checks if the runtime daemon is reachable; if not, starts it.
 func (c *Client) EnsureDaemon(ctx context.Context) error {
-	conn, err := net.DialTimeout("unix", c.SocketPath, 300*time.Millisecond)
-	if err == nil {
-		_ = conn.Close()
+	if c.Reachable() {
 		return nil
 	}
 
@@ -66,11 +76,9 @@ func (c *Client) EnsureDaemon(ctx context.Context) error {
 	}
 
 	// Poll until ready, up to 3 seconds
-	start := time.Now()
-	for time.Since(start) < 3*time.Second {
-		conn, err := net.DialTimeout("unix", c.SocketPath, 200*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if c.Reachable() {
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
