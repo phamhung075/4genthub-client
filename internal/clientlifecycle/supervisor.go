@@ -306,7 +306,20 @@ func modTime(path string) float64 {
 // dependency is one reading in two places, not two mechanisms.
 //
 // WHAT RETIRES IT: a native activity read on the runtime's IPC surface. When that lands, this function becomes a call
-// like rigSay's, and this comment should be DELETED rather than annotated.
+// like rigSay's, and this comment should be DELETED rather than annotated. Until then the read is a CUTOVER
+// PRECONDITION rather than a retirement nicety, and the next reader needs the consequences stated rather than implied:
+// after the cutover there is no `rig` on PATH, LookPath fails, and this function answers FALSE FOREVER. Per runtime:
+//
+//   - omp seats are unaffected AT THE LIMIT: the urgent path compacts in-band through s.RPCCompact before either Idle
+//     check is reached. But the quiet-triggered compaction - a seat that has gone silent BELOW the warn limit - is
+//     gated on s.Idle, so it would never fire again for ANY runtime, omp included.
+//   - every other runtime is not compacted at all: at the hard limit `hard && !s.Idle(...)` takes the not-idle branch
+//     on every pass, so the seat is interrupted repeatedly (rate-limited by interruptGap) and never compacted, and
+//     below the hard limit the compact branch is simply unreachable.
+//
+// Nothing in the runtime covers this: its ForceCompact is ON DEMAND, and the thresholds live here (seatlog.CompactLimit),
+// not in the runtime. A future implementer who reads "returns false" as "still works" would ship the loudest silent
+// failure in this package.
 //
 // The direction of every failure is deliberately the safe one: an unreadable tool, a malformed record, and a seat the
 // record does not mention all return false, and false means "not idle" to both callers - so a compaction that cannot
