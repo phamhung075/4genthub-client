@@ -87,3 +87,23 @@ func TestSocketPathNeverResolvesTwoInputsToOneSocket(t *testing.T) {
 		t.Fatalf("a blank override is unset: got %s, want %s", got, derived)
 	}
 }
+
+// PRECEDENCE - an explicit path beats the variable, and the variable beats the HOME default. The failure mode this
+// guards is not the knob working NOWHERE; it is the knob working EVERYWHERE, because one resolution point means every
+// caller inherits the variable, and a caller that passed a path on purpose must still get that path.
+//
+// It is falsifiable in the way that matters: make the variable win inside NewClient and this test goes red.
+func TestExplicitPathBeatsTheOverride(t *testing.T) {
+	caller := filepath.Join(t.TempDir(), "caller.sock")
+	fromEnv := filepath.Join(t.TempDir(), "from-env.sock")
+	t.Setenv(RuntimeSocketEnv, fromEnv)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	if got := NewClient(caller).SocketPath; got != caller {
+		t.Fatalf("an explicit path lost to the variable: got %s, want %s", got, caller)
+	}
+	if got := NewClient("").SocketPath; got != fromEnv {
+		t.Fatalf("the variable lost to the HOME default: got %s, want %s", got, fromEnv)
+	}
+}

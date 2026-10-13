@@ -20,6 +20,11 @@ default path; without a knob there is no way to test the cutover before it happe
 - Unit legs in `internal/clientruntime/ipc_test.go`: unset → the derivation, unchanged (HOME and XDG_RUNTIME_DIR);
   set → the explicit path through both `DefaultSocketPath` and `NewClient("")`; both inputs present → ONE socket, the
   override, with the derivation NOT consulted; blank → the derivation.
+- Precedence, pinned and PROVEN falsifiable: an explicit path beats the variable, and the variable beats the HOME
+  default (`TestExplicitPathBeatsTheOverride`). Mutating `NewClient` so the variable wins over the explicit path makes
+  the test red with "an explicit path lost to the variable"; the mutation was reverted, and the test is green again.
+  The failure mode it guards is not the knob working nowhere but the knob working EVERYWHERE, because one resolution
+  point means every caller inherits the variable.
 - LIVE, the branch client and the installed runtime, a SCRUBBED HOME, nothing else in the environment. SET:
   `agenthub-runtime --socket <explicit>/rt.sock daemon` ran, the socket was PRESENT where the override named, the
   HOME-derived path was ABSENT (never both), and no other socket existed under the scrubbed HOME. UNSET: the
