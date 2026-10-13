@@ -203,9 +203,16 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     // turn that dies retryably is resumed from here (never from the sight of an error line alone).
     let state_path = state_file_path(state_dir, &target.room, &target.seat);
     let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    // Two reports of the *same* failure for the same prompt are one failure: the reviewer measured two
+    // copies of the message in flight and `resume_attempts` reaching 8 while the send bound held at 4. The
+    // key is the pending id plus the error text, so a retry that fails again is a *new* failure and still
+    // counts — the ladder is not weakened, only the double count is removed.
+    let failures_seen: Arc<Mutex<std::collections::HashSet<String>>> =
+        Arc::new(Mutex::new(std::collections::HashSet::new()));
     let ready = {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let pending_reader = Arc::clone(&pending);
+        let failures_reader = Arc::clone(&failures_seen);
         let to_child_reader = to_child.clone();
         let state_path = state_path.clone();
         thread::spawn(move || {
@@ -282,6 +289,19 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                         delay_secs,
                                         label,
                                     } => {
+                                        let key = format!(
+                                            "{}-{err}",
+                                            pending_reader
+                                                .lock()
+                                                .as_ref()
+                                                .map(|(pid, _)| pid.clone())
+                                                .unwrap_or_else(|| id.to_string())
+                                        );
+                                        if !failures_reader.lock().insert(key) {
+                                            mirror(&format!(
+                                                "failure already counted (attempt {attempt}/{MAX_RESUME_ATTEMPTS}); not sending a second copy: {label}"
+                                            ));
+                                        } else {
                                         attempts = attempt;
                                         mirror(&format!(
                                             "retry {attempt}/{MAX_RESUME_ATTEMPTS} in {delay_secs}s: {label} :: {err}"
@@ -310,10 +330,17 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                                 );
                                             });
                                         }
+                                        }
                                     }
                                     Resume::Blocked(reason) => {
                                         mirror(&format!("gave up: {reason} :: {err}"));
                                         attempts += 1;
+                                        // A terminal outcome ends this prompt's life here. Leaving it pending
+                                        // is how a *later* retryable error with a foreign id gets mistaken for
+                                        // this prompt's turn and schedules a re-send after the seat already
+                                        // published `blocked` - the durable record flipping blocked ->
+                                        // retrying (found by the reviewer reading this arm).
+                                        *pending_reader.lock() = None;
                                         let _ =
                                             write_state(&state_path, "blocked", reason, attempts);
                                     }

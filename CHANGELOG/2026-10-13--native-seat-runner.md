@@ -221,6 +221,24 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
   status is asked for**, not spontaneously — `GetRoomStatus` is what U3 calls.
 - `cargo test` in `rust/agenthub-runtime`: 34 passed, 0 failed.
 
+## Two guards on the resume path (found by the reviewer reading the code, not forced)
+
+### Fixed
+- **A terminal outcome now clears the pending prompt.** Only the success path cleared it, so after a
+  `blocked` publication a later retryable error with a foreign id was treated as that prompt's turn and
+  scheduled a re-send — the durable record flipping `blocked` -> `retrying` with nothing actually in flight.
+- **A duplicate failure frame for the same prompt is counted once.** Two reports of one failure used to
+  count as two: `resume_attempts` reached 8 while the send bound held at 4, and two independent retry
+  threads were scheduled, so two copies of the same message could be in flight. The key is the pending id
+  plus the error text, so a retry that fails again is a new failure and still counts — the ladder is not
+  weakened, only the double count removed.
+
+### Testing
+- `cargo test` in `rust/agenthub-runtime`: 34 passed, 0 failed. **Not forced, and said so**: both guards were
+  found by the reviewer reading this code, and reachability of the first needs a terminal error followed by
+  a retryable one, which neither of us could force with the frames available. The reviewer's B1s harness
+  frames are the place to try; nothing here is claimed as verified beyond compilation and the suite.
+
 ### Known gaps (updated)
 - **Respawn is not built** (deliberately out of scope, per the row): after a transport death the pinned
   prompt is re-sent down a dead channel, so parity 1's bounded ladder covers the **error-frame class**, not
