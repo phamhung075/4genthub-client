@@ -363,13 +363,21 @@ const saySender = "owner session"
 //     message is prefixed "From <sender>: " so the seat reads who spoke, which is what the CLI's envelope did; a raw
 //     message is the exact text, or a /compact arrives as prose the runner cannot act on.
 //
-//   - THE WAIT IS GONE, and its removal is declared rather than silent. The shell-out passed --wait-for-idle 120 - in a
-//     process it STARTED AND RELEASED, so this package never observed the outcome: a detached CLI that timed out
-//     failed where nobody was listening, which is the pretence of a guarantee rather than one. The runtime's send has
-//     no idle wait to escape (the same reason rigAbort's start-and-release dance was unnecessary), and BOTH idle
-//     readings on this machine are the same shell-out this unit removes: this file's rigIdle, and QuietWaiter's
-//     Activity - clientseat's seatActivity, which also runs `rig ps --nodes --json` and reads agentActivity.state. So
-//     honouring the wait would re-add the dependency being cut, in a second package.
+//   - THE WAIT IS GONE, and its removal is declared rather than silent. The shell-out passed --wait-for-idle 120, and
+//     WHAT THAT WAIT WAS WORTH DEPENDS ON WHICH SEND IT WAS, because the two shapes did not observe it equally:
+//
+//     FOR THE THREE PLAIN SENDS the wait was a PRETENCE. They were non-raw, so they ran `cmd.Start` + `Process.Release`
+//     with no `Wait`: a detached CLI that timed out failed where nobody was listening, and this package never observed
+//     its outcome at all - the pretence of a guarantee rather than one.
+//
+//     FOR /compact the wait was REDUNDANT, because raw was `cmd.Run`: that one DID observe its wait, and the call site
+//     already gates the send on s.Idle. So the removal costs that caller nothing it was actually relying on - which is
+//     a stronger reason than the pretence alone, and the reason the gate is named below rather than assumed.
+//
+//     The runtime's send has no idle wait to escape (the same reason rigAbort's start-and-release dance was
+//     unnecessary), and BOTH idle readings on this machine are the same shell-out this unit removes: this file's
+//     rigIdle, and QuietWaiter's Activity - clientseat's seatActivity, which also runs `rig ps --nodes --json` and reads
+//     agentActivity.state. So honouring the wait would re-add the dependency being cut, in a second package.
 //
 //     EVERY CALLER THAT LOSES THE WAIT, and why each is safe. /compact (raw, on the urgent path) is gated by s.Idle at
 //     its own call site - the one place a race with a working seat matters - so the wait was redundant with a gate that
