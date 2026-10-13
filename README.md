@@ -161,15 +161,14 @@ Every key lives in `~/.config/4genthub/.env` or the environment; only the first 
 |---|---|
 | `AGENTHUB_URL` | the server, for example `https://api.4genthub.com` |
 | `AGENTHUB_TOKEN` | your key; the one credential |
-| `OPENRIG_URL`, `OPENRIG_PORT` | the OpenRig daemon (default `http://127.0.0.1:7433`); the port variable wins if both are set |
-| `OPENRIG_STATE_ROOT` | the state root every verb that needs one resolves: `--state-root` where the verb takes it, else this, else `~/.openrig/state/omp`; a verb that can resolve none of the three refuses by name instead of guessing |
-| `OPENRIG_SKILLS_ROOT` | the skill-library checkout `team publish-skills` and `team drift-check` take their recorded paths from |
-| `OPENRIG_CLIENT_SKILLS` | this client's own skills tree, when no `--skills-root` flag is given; the default is `skills/` beside the binary, and `sync rig` refuses when there is no tree there |
+| `TYPESAFE_API_KEY` | TypeSafe AI System One token for validation gate evaluation (model `jev-1.13.0`) |
+| `TYPESAFE_BASE_URL` | TypeSafe AI base endpoint (default `https://api.typesafe.ai/v1`) |
+| `DEEPSEEK_API_KEY` | DeepSeek API key for model seats and offload jobs |
 | `4GENTEAM_FORCECOMPACT` | the force-compaction helper's path; blank means: find `forcecompact` on `PATH` |
 | `4GENTEAM_CLAUDE_PROJECTS` | a Claude Code projects directory to read session logs from, as the fallback for a `claude-code` seat |
 | `COMPACT_LIMIT_TOKENS` | context size at which a seat is told to find a safe point (150000) |
-| `COMPACT_WARN_TOKENS` | urgent size, compacted without waiting for quiet (250000) |
-| `COMPACT_HARD_TOKENS` | ceiling the supervisor treats as an emergency (300000) |
+| `COMPACT_WARN_TOKENS` | urgent size, compacted without waiting for quiet (200000) |
+| `COMPACT_HARD_TOKENS` | ceiling the supervisor treats as an emergency (250000) |
 | `COMPACT_QUIET_SECONDS` | seconds without output that count as quiet (15) |
 | `OFFPEAK_ONLY` | the DeepSeek peak gate: `1`/`on` (the default) refuses to start or resume a seat whose model is `deepseek/` at peak, `0`/`off` allows it; a value that is neither is refused by name, never read as the default |
 | `OFFPEAK_UTC` | pins the instant the schedule is read at (`YYYY-MM-DD HH:MM`, UTC) — for a test, or a machine whose clock you do not trust |

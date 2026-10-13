@@ -70,9 +70,9 @@ cp .env.sample ~/.config/4genthub/.env    # then fill in AGENTHUB_TOKEN
 ```
 
 Ask the user for the key; do not generate one, and do not put one in this file yourself. The
-sample also lists the optional settings (`OPENRIG_URL`, `OPENRIG_PORT`, the `COMPACT_*` limits,
-`OFFPEAK_ONLY`, `OPENRIG_SKILLS_ROOT`); a blank value means the default shown in the sample. Only the
-first two have to be set for the client to talk to the server.
+sample also lists the optional settings (`TYPESAFE_API_KEY`, `DEEPSEEK_API_KEY`, the `COMPACT_*` limits,
+and `OFFPEAK_ONLY`); a blank value means the default shown in the sample. Only the
+`AGENTHUB_URL` and `AGENTHUB_TOKEN` have to be set for the client to talk to the server.
 
 ### 1.4 Connect a project to the 4genthub MCP
 

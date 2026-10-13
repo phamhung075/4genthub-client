@@ -62,21 +62,17 @@ Required variables:
 AGENTHUB_URL=https://api.4genthub.com       # or your local/staging endpoint
 AGENTHUB_TOKEN=tok_...                     # User bearer token from 4genthub web UI
 
-# OpenRig Daemon Connection
-OPENRIG_URL=http://127.0.0.1:7433
-OPENRIG_PORT=7433
-OPENRIG_STATE_ROOT=/home/<user>/.openrig/state/omp
-
-# Skills Directory
-OPENRIG_CLIENT_SKILLS=/path/to/4genthub/agenthub_client/skills
-
 # Model Provider Credentials (for omp / headless DeepSeek seats)
 DEEPSEEK_API_KEY=sk-...
 
+# TypeSafe AI / Jev System One Validation Gate Credentials
+TYPESAFE_API_KEY=apikey_...
+TYPESAFE_BASE_URL=https://api.typesafe.ai/v1
+
 # Safeguards & Compaction thresholds
 COMPACT_LIMIT_TOKENS=150000
-COMPACT_WARN_TOKENS=180000
-COMPACT_HARD_TOKENS=200000
+COMPACT_WARN_TOKENS=200000
+COMPACT_HARD_TOKENS=250000
 COMPACT_QUIET_SECONDS=15
 OFFPEAK_ONLY=true
 ```
