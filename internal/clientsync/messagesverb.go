@@ -11,10 +11,12 @@
 //
 // WHERE A SESSION COMES FROM DEPENDS ON THE SHAPE, AND THE REFUSAL IS ABOUT GUESSING. No SERVER table
 // carries a seat's session — the store is keyed by (room, seat) and seat_status has no session column
-// — so the single-seat shape (room and seat) resolves what it has the way the connector verb does
-// (`--session <name>`, else the single session `rig ps --json` reports) and REFUSES when that is
-// ambiguous: typing an operator's message into the wrong prompt is worse than not delivering it,
-// because the wrong prompt is somebody else's. The rig shape (`--rig R`) derives each session from
+// — so the single-seat shape (room and seat) takes the session from `--session <name>` and REFUSES
+// without it: naming the prompt is the caller's job, and typing an operator's message into the wrong
+// prompt is worse than not delivering it, because the wrong prompt is somebody else's. THE MACHINE-WIDE
+// FALLBACK IS DELETED RATHER THAN REPAIRED: asking `rig ps --json` which sessions this machine runs was
+// an exec of the CLI this cutover removes, so it could not survive it in any world. The rig shape
+// (`--rig R`) derives each session from
 // THIS MACHINE's own node table instead — `rig ps --nodes --rig R --json` names every seat of the rig
 // and the canonical session it answers to — and skips a seat that is not running rather than typing
 // into a stopped session.
@@ -59,8 +61,8 @@ re-acknowledged rather than typed twice.
 Requires AGENTHUB_URL and AGENTHUB_TOKEN. The ack names this machine (its hostname) so the audit says
 which client typed the message.
 
-In the room-and-seat shape the session is --session <name>, or the single session ` + "`rig ps --json`" + ` reports;
-the verb refuses rather than guessing which prompt to type into.
+In the room-and-seat shape the session is --session <name>; the verb refuses without it rather than
+guessing which prompt to type into.
 
 In the --rig shape the room is the rig itself and every seat's own session is read from this machine's
 node table (` + "`rig ps --nodes --rig <rig> --json`" + `); a seat that is not running is skipped, and its messages
@@ -170,6 +172,11 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 	// runs was a shell-out to the CLI the cutover removes, so it could not survive it in any world, and the
 	// convenience it existed for is what the rig shape above already answers. THE MESSAGE IS THE INTERFACE HERE: this
 	// is a contract change, so the refusal names BOTH ways to say where a message goes and what each one takes.
+	//
+	// THE !dryRun HALF IS AN ORDERING DEPENDENCY, not a second rule: the `--rig` branch above RETURNS for a
+	// rig-shaped call, so this guard is only ever reached in the room-and-seat shape. A dry run needs no session
+	// because it types nothing. Move this block above the rig branch and a valid `--rig` call starts being refused;
+	// TestMessagesVerbRigPassDeliversEveryRunningSeat pins that.
 	session := parsed.session
 	if !parsed.dryRun && session == "" {
 		fmt.Fprintf(stderr, "4genteam sync messages: name the prompt this message goes to — --rig <room> delivers to every running seat of that room, or --session <name> types into one session\n")
