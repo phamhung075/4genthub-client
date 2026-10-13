@@ -1,6 +1,7 @@
 package clientruntime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -30,6 +31,9 @@ func (whoamiCommand) NeedsRig() bool  { return false }
 func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, "usage: 4genteam whoami [--json] [--session <name>]")
+		fmt.Fprintln(stdout, "\nReports the seat identity. On a rig the OpenRig daemon hosts (a shell carrying")
+		fmt.Fprintln(stdout, "OPENRIG_SESSION_NAME) it asks that daemon and prints its document; otherwise it asks the")
+		fmt.Fprintln(stdout, "native runtime's own rooms.")
 		return clientcmd.ExitOK
 	}
 	flags := flag.NewFlagSet("whoami", flag.ContinueOnError)
@@ -42,6 +46,32 @@ func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 	session := *sessionFlag
 	if session == "" {
 		session = os.Getenv("AGENTHUB_SESSION_NAME")
+	}
+
+	// A rig the OpenRig daemon hosts has no native room for this seat, so its daemon is asked FIRST and
+	// its document is what this verb prints. The native runtime stays the fallback for a shell that
+	// names no daemon, which leaves a native rig's behaviour exactly as it was.
+	openRigSeat := *sessionFlag
+	if openRigSeat == "" {
+		openRigSeat = openRigSession()
+	}
+	if openRigSeat != "" && openRigDaemonConfigured() {
+		raw, err := openRigWhoami(ctx, openRigSeat)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
+			return clientcmd.ExitUnavailable
+		}
+		if *jsonFlag {
+			out := raw
+			var indented bytes.Buffer
+			if json.Indent(&indented, raw, "", "  ") == nil {
+				out = indented.Bytes()
+			}
+			_, _ = stdout.Write(out)
+			_, _ = stdout.Write([]byte("\n"))
+			return clientcmd.ExitOK
+		}
+		return printOpenRigIdentity(stdout, raw)
 	}
 
 	client := NewClient("")
@@ -112,9 +142,11 @@ func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 
 type shimCommand struct{}
 
-func (shimCommand) Name() string    { return "rig-shim" }
-func (shimCommand) Summary() string { return "install ~/.local/bin/rig compatibility symlink to 4genteam" }
-func (shimCommand) NeedsRig() bool  { return false }
+func (shimCommand) Name() string { return "rig-shim" }
+func (shimCommand) Summary() string {
+	return "install ~/.local/bin/rig compatibility symlink to 4genteam"
+}
+func (shimCommand) NeedsRig() bool { return false }
 
 func (shimCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {

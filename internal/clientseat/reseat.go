@@ -156,12 +156,17 @@ func (sendCommand) NeedsRig() bool  { return false }
 
 const defaultSender = "owner session"
 
-func (sendCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		fmt.Fprintln(stdout, "usage: 4genteam send [--from NAME] RIG SEAT MESSAGE")
-		fmt.Fprintln(stdout, "\nSends MESSAGE to the seat with `rig send`, starting it with \"From NAME:\" so the seat knows who")
-		fmt.Fprintln(stdout, "wrote it (rig does not carry the sender when the call is not made from a seat shell). The text goes")
-		fmt.Fprintln(stdout, "to rig as one argument, so no shell expands backticks or $ in it. NAME defaults to \""+defaultSender+"\".")
+		fmt.Fprintln(stdout, "usage: 4genteam send SESSION MESSAGE")
+		fmt.Fprintln(stdout, "       4genteam send [--from NAME] RIG SEAT MESSAGE")
+		fmt.Fprintln(stdout, "\nSESSION is a canonical session name (`rig ps --nodes --json` names every seat's). It goes to the")
+		fmt.Fprintln(stdout, "OpenRig daemon, wrapped in the From/To/Sent envelope the OpenRig CLI sends and attributed to this")
+		fmt.Fprintln(stdout, "shell's OPENRIG_SESSION_NAME, which is the shape `rig send` has always meant.")
+		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape is the client's own: it sends MESSAGE to the seat with `rig send`,")
+		fmt.Fprintln(stdout, "starting it with \"From NAME:\" so the seat knows who wrote it (rig does not carry the sender")
+		fmt.Fprintln(stdout, "when the call is not made from a seat shell). The text goes to rig as one argument, so no shell")
+		fmt.Fprintln(stdout, "expands backticks or $ in it. NAME defaults to \""+defaultSender+"\".")
 		return clientcmd.ExitOK
 	}
 	flags := flag.NewFlagSet("send", flag.ContinueOnError)
@@ -170,8 +175,21 @@ func (sendCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdou
 	if err := flags.Parse(args); err != nil {
 		return clientcmd.ExitUsage
 	}
+
+	// `rig send SESSION MESSAGE` — the OpenRig CLI's own shape, and the shape this client's supervised
+	// message deliverer already calls. The daemon owns this machine's session table, so it is the party
+	// that resolves the name.
+	if flags.NArg() == 2 {
+		session, text := flags.Arg(0), flags.Arg(1)
+		if err := clientruntime.OpenRigSendMessage(ctx, session, text); err != nil {
+			return report(stderr, err)
+		}
+		fmt.Fprintf(stdout, "Sent to %s\n", session)
+		return clientcmd.ExitOK
+	}
+
 	if flags.NArg() < 3 {
-		fmt.Fprintln(stderr, "4genteam send: RIG, SEAT and MESSAGE are required")
+		fmt.Fprintln(stderr, "4genteam send: SESSION and MESSAGE, or RIG SEAT and MESSAGE, are required")
 		return clientcmd.ExitUsage
 	}
 	rig, seat := flags.Arg(0), flags.Arg(1)

@@ -3,6 +3,25 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — `rig send` and `rig whoami` work on a rig the OpenRig daemon hosts
+
+### Fixed
+- `rig send <session> <text>`: `internal/clientseat` accepted only `RIG SEAT MESSAGE`, so R7's drop-in promise (`NEXT-GEN2.md` §1.5 — "existing seat prompts and skills work without modification") failed at the first call. Measured on the live 4genthub-min rig: `rig send 4genthub-min-architect@4genthub-min "..."` → `4genteam send: RIG, SEAT and MESSAGE are required`, exit 2; the verb's own fallback shells `rig send <rig>-<seat>@<rig> <text>` (two arguments) through the binary that IS the shim, so it re-entered the same refusal. Two arguments are now that shape: the message goes to the OpenRig daemon's `POST /api/transport/send`, wrapped in the OpenRig CLI's own `From:`/`To:`/`Sent:` envelope and attributed to `OPENRIG_SESSION_NAME` through `X-OpenRig-Session`. The three-argument shape is unchanged.
+- `rig whoami`: the verb asked only the native runtime, whose room store (`~/.config/4genthub/rooms`) holds no row for a seat the OpenRig daemon started, and answered `seat identity could not be resolved from active rooms` (exit 3) on this rig. A shell that names a daemon (`OPENRIG_URL`, else `OPENRIG_PORT`) now asks it — `GET /api/whoami?sessionName=<OPENRIG_SESSION_NAME>` — and prints its document: `--json` prints the daemon's own bytes, the shape the OpenRig CLI returns. A shell naming no daemon keeps the native path unchanged.
+
+### Added
+- `internal/clientruntime/openrigdaemon.go` — `OpenRigSendMessage` plus the pieces both verbs share: the envelope renderer, the base URL (`OPENRIG_URL`, else the loopback address at `OPENRIG_PORT`), the optional `$OPENRIG_HOME/terminal-token` bearer (omitted when absent, as the CLI does), and the identity renderer.
+- The client's own fifth safeguard is unblocked by the same fix: `sync messages`' deliverer shells `rig send <session> <text>` (`internal/clientsync/messagesverb.go`) and was refused by that arity bug.
+
+### Tests
+- `internal/clientruntime/openrigdaemon_test.go`: the daemon is asked for the environment's session and receives the sender header; `--json` prints the daemon's document; a 404 becomes exit 3 naming the daemon's reason; the envelope is pinned byte for byte (stamp, `· gen <first8>`, the `@external` reply spelling, the `<unknown sender>` label); base-URL and token precedence.
+- `internal/clientseat/send_test.go`: two arguments post the envelope to `/api/transport/send` and name the session on stdout; the daemon's refusal exits non-zero; one argument is still a caller error and never reaches the daemon.
+
+### Verified
+- Live 4genthub-min rig, before (installed shim): `rig whoami --json` → exit 3, `seat identity could not be resolved from active rooms`; `rig send 4genthub-min-fe-dev@4genthub-min "probe"` → exit 2, `RIG, SEAT and MESSAGE are required`. After, built from this commit: `rig whoami --json` → exit 0 with the daemon's document (identity, four peers, transcript path); `rig send 4genthub-min-reviewer@4genthub-min "..."` → exit 0, `Sent to 4genthub-min-reviewer@4genthub-min`, and the receiver's own pane shows the envelope (`From: 4genthub-min-go-dev@4genthub-min`, `To: 4genthub-min-reviewer@4genthub-min`, `Sent: 10-13 18:56Z · gen 17ec5cb7`, `---`, text, `---`, `↩ Reply: rig send 4genthub-min-go-dev@4genthub-min "..."`).
+- `go build ./...`, `go vet ./...`, `go test ./...` exit 0 with every package ok; `gofmt -l .` reports only the two pre-existing files (`internal/clientoutbox/commands.go`, `internal/clientwatch/render_test.go`).
+- `internal/clientruntime/command.go` was run through `gofmt` while the branch was added, which normalizes the file's pre-existing drift (`shimCommand`/`queueCommand` method declarations); the other two drifted files are untouched.
+
 ## 2026-10-13 — `4genteam ps`, and the runtime-switch skills name the right `rig`
 
 ### Added
