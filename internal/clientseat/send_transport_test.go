@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
@@ -186,5 +187,115 @@ func TestSendNamesTheRuntimeWhenNoTransportAnswers(t *testing.T) {
 	}
 	if strings.Contains(errOut.String(), "is not answering") {
 		t.Errorf("the runtime-first refusal still blames the OpenRig daemon: %q", errOut.String())
+	}
+}
+
+// TestSendRigSeatShapeHonoursTheDaemonOnlySwitches PINS THE U3 GATE'S FALSIFICATION.
+//
+// `send RIG SEAT MESSAGE` used to call SendTextToSeat directly: every switch was parsed and then DROPPED, so
+// `--wait-for-idle 5` typed into a busy seat without waiting and `--verify` reported nothing at all. The switch
+// now decides the transport, exactly as it does for the SESSION shape, and the message goes to the seat's own
+// session name over the daemon. It fails on the pre-change code twice over: the daemon is never asked at all,
+// and the runtime IS - which the eval in the fake runtime's handler catches in the same run.
+func TestSendRigSeatShapeHonoursTheDaemonOnlySwitches(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var got map[string]any
+	daemonCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		daemonCalls++
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered","verified":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+
+	// A runtime IS answering here: that is the case a daemon-only switch has to override.
+	sock, requests := fakeRuntime(t, func(line string) string {
+		t.Errorf("the runtime was asked while a daemon-only switch named the daemon: %q", line)
+		return `{"ok":true,"data":{}}` + "\n"
+	})
+	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil,
+		[]string{"lab", "dev", "gate text", "--wait-for-idle", "5", "--verify"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("send RIG SEAT --wait-for-idle 5 --verify exit = %d, stderr = %q", code, errOut.String())
+	}
+	if daemonCalls != 1 {
+		t.Fatalf("%d requests reached the daemon, want exactly 1: the switches name a handshake only it runs", daemonCalls)
+	}
+	if got["session"] != "agenthub--lab--dev" {
+		t.Errorf("the daemon was asked for session %v, want the seat's own agenthub--lab--dev", got["session"])
+	}
+	if got["waitForIdleMs"] != float64(5000) {
+		t.Errorf("waitForIdleMs = %v, want 5000: --wait-for-idle 5 has to reach the party that waits", got["waitForIdleMs"])
+	}
+	if got["verify"] != true {
+		t.Errorf("verify = %v, want true", got["verify"])
+	}
+	select {
+	case line := <-requests:
+		t.Errorf("the runtime socket was written to as well: %q", line)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestSendRigSeatShapeRawSendsTheTextExactly: --raw on this shape drops the shape's own "From NAME:"
+// attribution, because raw means the text exactly; the daemon carries it as the text.
+func TestSendRigSeatShapeRawSendsTheTextExactly(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil,
+		[]string{"lab", "dev", "gate text", "--raw"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("send RIG SEAT --raw exit = %d, stderr = %q", code, errOut.String())
+	}
+	if got["text"] != "gate text" {
+		t.Errorf("text = %v, want the message exactly, with no From NAME: prefix", got["text"])
+	}
+}
+
+// TestSendRigSeatShapeNamesTheDaemonWhenASwitchForcedIt is the gate's second finding, pinned where it can be
+// falsified: a HEALTHY runtime and no daemon, with a switch that needed the daemon. The refusal must name that
+// switch and the daemon - and must NOT say "no runtime is answering", which was false here and aimed the reader
+// at a working transport.
+func TestSendRigSeatShapeNamesTheDaemonWhenASwitchForcedIt(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+	t.Setenv("OPENRIG_URL", "http://127.0.0.1:1")
+	sock, _ := fakeRuntime(t, func(string) string { return `{"ok":true,"data":{}}` + "\n" })
+	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil, []string{"lab", "dev", "gate text", "--verify"}, &out, &errOut)
+
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit = %d, want %d (the transport that could run this handshake is missing); stderr = %q",
+			code, clientcmd.ExitUnavailable, errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("a send that never happened reported %q", out.String())
+	}
+	for _, want := range []string{"--verify needs the OpenRig daemon", "nothing was sent"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
+		}
+	}
+	if strings.Contains(errOut.String(), "no runtime is answering") {
+		t.Errorf("the refusal blamed the runtime while the runtime was answering: %q", errOut.String())
 	}
 }

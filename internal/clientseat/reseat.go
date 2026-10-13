@@ -237,8 +237,12 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		fmt.Fprintln(stdout, "  --to/--pod/--rig/--host/--context are REFUSED: this shim sends to one local session")
 		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape is the client's own: it sends MESSAGE to that seat through the local")
 		fmt.Fprintln(stdout, "runtime, starting it with \"From NAME:\" so the seat knows who wrote it (a runtime call carries")
-		fmt.Fprintln(stdout, "no sender when it is not made from a seat shell). It does NOT shell out to `rig`: after this")
-		fmt.Fprintln(stdout, "client's rename that name is this binary. NAME defaults to \""+defaultSender+"\".")
+		fmt.Fprintln(stdout, "no sender when it is not made from a seat shell). When the line carries a switch only the daemon")
+		fmt.Fprintln(stdout, "runs — --verify, --force, --wait-for-idle, --dangerously-interact, --raw, --json — that switch")
+		fmt.Fprintln(stdout, "decides the transport, and the message goes to the same seat's session (agenthub--RIG--SEAT) over")
+		fmt.Fprintln(stdout, "the daemon; --raw drops the \"From NAME:\" prefix, because raw means the text exactly. A switch")
+		fmt.Fprintln(stdout, "neither transport can honour stops the send rather than being ignored. It does NOT shell out to")
+		fmt.Fprintln(stdout, "`rig`: after this client's rename that name is this binary. NAME defaults to \""+defaultSender+"\".")
 		return clientcmd.ExitOK
 	}
 
@@ -273,6 +277,20 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 	}
 	text := fmt.Sprintf("From %s: %s", from, strings.Join(positional[2:], " "))
 
+	// THE SAME RULE AS THE SESSION SHAPE, on the switches THIS shape cannot carry: one its transport cannot
+	// honour goes to the transport that can, and the send stops when neither can. Without this the switches
+	// below were PARSED AND DROPPED here - `--wait-for-idle` typed into a busy seat without waiting, and
+	// `--verify` reporting nothing at all, where reporting is the whole reason a caller passes it.
+	if switches := seatSendSwitches(opts); switches != "" {
+		// --raw means raw: no "From NAME:" prefix, because a caller who asked for the text exactly asked for
+		// the text exactly. Every other switch keeps this shape's own attribution.
+		body := text
+		if opts["raw"] == "true" {
+			body = strings.Join(positional[2:], " ")
+		}
+		return daemonSend(ctx, clientruntime.SeatSessionName(rig, seat), body, opts, switches, stdout, stderr)
+	}
+
 	// The seat send is the CLIENT'S OWN, and it goes through the local runtime: the fallback that shelled
 	// out to `rig send` is DELETED rather than repaired. After this client's own rename that name resolves
 	// to THIS binary (`~/.local/bin/rig` is a symlink to `4genteam`), so the "fallback" was a self-call: the
@@ -300,28 +318,53 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 func sendToSession(ctx context.Context, session, text string, opts map[string]string, stdout, stderr io.Writer) int {
 	switch clientruntime.ResolveTransport() {
 	case clientruntime.TransportRuntime:
-		if !sendNeedsDaemon(opts) {
-			return runtimeSend(session, text, opts, stdout, stderr)
+		// A daemon-only switch still routes to the daemon, even though the runtime could carry the text: the
+		// switch is a promise about what the send REPORTS, and only the daemon can keep it.
+		if switches := switchesNeedingDaemon(opts); switches != "" {
+			return daemonSend(ctx, session, text, opts, switches, stdout, stderr)
 		}
-		return daemonSend(ctx, session, text, opts, stdout, stderr)
+		return runtimeSend(session, text, opts, stdout, stderr)
 	case clientruntime.TransportDaemon:
-		return daemonSend(ctx, session, text, opts, stdout, stderr)
+		return daemonSend(ctx, session, text, opts, "", stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", clientruntime.FallbackMissing())
 		return clientcmd.ExitUnavailable
 	}
 }
 
-// sendNeedsDaemon reports whether the caller asked for an option only the OpenRig daemon runs. Any of those
-// flags present is enough: each one changes what the send is ALLOWED to report, so the transport has to be
-// the one that can report it.
-func sendNeedsDaemon(opts map[string]string) bool {
-	for _, name := range []string{"verify", "force", "wait-for-idle", "dangerously-interact"} {
-		if _, present := opts[name]; present {
-			return true
+// daemonOnlySwitches are the options only the OpenRig daemon runs, in the CLI's own order: each names a
+// handshake, or a route's own combination rules, that the runtime's SendText does not run. A send carrying one
+// has to travel on the daemon or stop.
+var daemonOnlySwitches = []string{"verify", "force", "wait-for-idle", "dangerously-interact"}
+
+// seatShapeSwitches is what the RIG SEAT shape's own seat send cannot carry: the daemon-only list PLUS --raw
+// and --json. The two lists differ because the transports do - the runtime path honours --raw and --json for
+// a SESSION (`runtimeSend` renders both), while `SendTextToSeat` takes no options at all and answers with an
+// error rather than a document. Same rule either way: the switch goes to the transport that honours it.
+var seatShapeSwitches = append(append([]string{}, daemonOnlySwitches...), "raw", "json")
+
+// switchesFrom names, in the CLI's spelling, the switches the caller passed from `names`, or "" for none. It
+// returns the NAMES as well as the fact because the refusal the send owes has to name the flag that stopped
+// it: "a daemon-only switch" would leave the reader to work out which one from the command line.
+func switchesFrom(opts map[string]string, names []string) string {
+	present := make([]string, 0, len(names))
+	for _, name := range names {
+		if _, ok := opts[name]; ok {
+			present = append(present, "--"+name)
 		}
 	}
-	return false
+	return strings.Join(present, ", ")
+}
+
+// switchesNeedingDaemon is one row of the SESSION shape's decision: which daemon-only switch, if any, forces
+// that send onto the daemon even when a runtime answers.
+func switchesNeedingDaemon(opts map[string]string) string {
+	return switchesFrom(opts, daemonOnlySwitches)
+}
+
+// seatSendSwitches is the RIG SEAT shape's version of the same question, on its own list.
+func seatSendSwitches(opts map[string]string) string {
+	return switchesFrom(opts, seatShapeSwitches)
 }
 
 // runtimeSend is the runtime half of the verb: the message goes through the socket, wrapped in the SAME
@@ -346,7 +389,11 @@ func runtimeSend(session, text string, opts map[string]string, stdout, stderr io
 // daemonSend is the daemon-backed half of the verb: it sends, surfaces the daemon's advisory, and — when
 // asked — its verification verdict, mirroring the CLI's exit codes (4xx → 1) rather than flattening every
 // answer into one.
-func daemonSend(ctx context.Context, session, text string, opts map[string]string, stdout, stderr io.Writer) int {
+//
+// `switches` is why this send had to come here: the daemon-only flags the caller passed, or "" when the
+// runtime simply did not answer. It exists for ONE sentence — the refusal below — because the two reasons a
+// send lands here need different words, and the wrong words send a reader to inspect a healthy transport.
+func daemonSend(ctx context.Context, session, text string, opts map[string]string, switches string, stdout, stderr io.Writer) int {
 	jsonOut := opts["json"] == "true"
 
 	options := clientruntime.SendOptions{
@@ -368,12 +415,17 @@ func daemonSend(ctx context.Context, session, text string, opts map[string]strin
 
 	result, status, err := clientruntime.OpenRigSend(ctx, session, text, options)
 	if err != nil {
-		// A daemon that could not be REACHED has not refused anything: with the runtime first, the transport
-		// that is missing is the runtime, so the refusal names it (and says the fallback was tried) rather
-		// than blaming a $OPENRIG_URL the send was never going to reach. A daemon that ANSWERED keeps its own
-		// words and its own code below.
+		// A daemon that could not be REACHED has not refused anything. WHICH transport is missing depends on
+		// why this send came here, and the two cases need different sentences: when a daemon-only switch
+		// forced it, the runtime answered and is healthy, so the refusal names the daemon and the flag that
+		// needs it; when the runtime itself did not answer, the missing transport IS the runtime and the
+		// refusal says that instead. A daemon that ANSWERED keeps its own words and its own code below.
 		if clientcmd.CodeOf(err, clientcmd.ExitRemote) == clientcmd.ExitUnavailable {
-			fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", clientruntime.FallbackMissing())
+			refusal := clientruntime.FallbackMissing()
+			if switches != "" {
+				refusal = clientruntime.DaemonSwitchMissing(switches)
+			}
+			fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", refusal)
 			return clientcmd.ExitUnavailable
 		}
 		fmt.Fprintf(stderr, "4genteam send: %v\n", err)
