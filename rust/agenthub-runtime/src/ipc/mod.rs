@@ -1,4 +1,3 @@
-use crate::context::send_force_compact;
 use crate::pty::TerminalManager;
 use crate::supervisor::RoomSupervisor;
 use crate::types::*;
@@ -128,7 +127,7 @@ impl IpcServer {
                 }
             }
 
-            IpcRequest::ForceCompact { session } => match send_force_compact(&session) {
+            IpcRequest::ForceCompact { session } => match crate::runner::request_compact(supervisor.state_dir(), &session) {
                 Ok(msg) => IpcResponse::success(serde_json::json!({"result": msg})),
                 Err(e) => IpcResponse::err(e),
             },
@@ -146,6 +145,72 @@ impl IpcServer {
                 }
                 IpcResponse::success(serde_json::to_value(rooms).unwrap())
             }
+
+            // The room's durable rail. Every arm opens the room's own store and answers with the row
+            // RE-READ from it, so what a caller is told is what the next read shows.
+            IpcRequest::QueueCreate { room, input } => match supervisor.queue_store(&room) {
+                Ok(store) => match store.create(input) {
+                    Ok(row) => serde_json::to_value(row)
+                        .map(IpcResponse::success)
+                        .unwrap_or_else(|e| IpcResponse::err(format!("serialize row: {e}"))),
+                    Err(e) => IpcResponse::err(e),
+                },
+                Err(e) => IpcResponse::err(e),
+            },
+
+            IpcRequest::QueueList { room, filter } => match supervisor.queue_store(&room) {
+                Ok(store) => match store.list(&filter) {
+                    Ok(rows) => serde_json::to_value(rows)
+                        .map(IpcResponse::success)
+                        .unwrap_or_else(|e| IpcResponse::err(format!("serialize rows: {e}"))),
+                    Err(e) => IpcResponse::err(e),
+                },
+                Err(e) => IpcResponse::err(e),
+            },
+
+            IpcRequest::QueueShow { room, qitem_id } => match supervisor.queue_store(&room) {
+                Ok(store) => match store.show(&qitem_id) {
+                    Ok(row) => serde_json::to_value(row)
+                        .map(IpcResponse::success)
+                        .unwrap_or_else(|e| IpcResponse::err(format!("serialize row: {e}"))),
+                    Err(e) => IpcResponse::err(e),
+                },
+                Err(e) => IpcResponse::err(e),
+            },
+
+            IpcRequest::QueueUpdate { room, input } => match supervisor.queue_store(&room) {
+                Ok(store) => match store.update(input) {
+                    Ok(row) => serde_json::to_value(row)
+                        .map(IpcResponse::success)
+                        .unwrap_or_else(|e| IpcResponse::err(format!("serialize row: {e}"))),
+                    Err(e) => IpcResponse::err(e),
+                },
+                Err(e) => IpcResponse::err(e),
+            },
+
+            IpcRequest::QueueClaim {
+                room,
+                qitem_id,
+                actor_session,
+            } => match supervisor.queue_store(&room) {
+                Ok(store) => match store.claim(&qitem_id, &actor_session) {
+                    Ok(row) => serde_json::to_value(row)
+                        .map(IpcResponse::success)
+                        .unwrap_or_else(|e| IpcResponse::err(format!("serialize row: {e}"))),
+                    Err(e) => IpcResponse::err(e),
+                },
+                Err(e) => IpcResponse::err(e),
+            },
+
+            IpcRequest::QueueClose { room, input } => match supervisor.queue_store(&room) {
+                Ok(store) => match store.close(input) {
+                    Ok(row) => serde_json::to_value(row)
+                        .map(IpcResponse::success)
+                        .unwrap_or_else(|e| IpcResponse::err(format!("serialize row: {e}"))),
+                    Err(e) => IpcResponse::err(e),
+                },
+                Err(e) => IpcResponse::err(e),
+            },
         }
     }
 }

@@ -1,17 +1,40 @@
 use crate::hooks::{HookBus, SeatEvent};
 use crate::pty::TerminalManager;
+use crate::queue::QueueStore;
 use crate::types::*;
 use chrono::Utc;
+use parking_lot::{Mutex, MutexGuard};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::{error, info, warn};
 
 pub struct RoomSupervisor {
     base_state_dir: PathBuf,
     active_rooms: Arc<Mutex<HashMap<String, RoomSpec>>>,
+    /// The room's queue store, opened on first use and held for as long as the daemon serves the room.
+    /// SQLite is the rail: one connection per room, the same object every verb reads, so a write is
+    /// visible to the next read without a re-open in between.
+    queue_stores: Arc<Mutex<HashMap<String, QueueStore>>>,
     hook_bus: HookBus,
+}
+
+/// A room's open queue store, borrowed from the supervisor's cache for the length of one verb. Derefs to
+/// the store, so a caller writes `store.create(input)` exactly as it would on an owned store.
+pub struct RoomQueueStore<'a> {
+    stores: MutexGuard<'a, HashMap<String, QueueStore>>,
+    room: String,
+}
+
+impl std::ops::Deref for RoomQueueStore<'_> {
+    type Target = QueueStore;
+
+    fn deref(&self) -> &QueueStore {
+        self.stores
+            .get(&self.room)
+            .expect("the store is inserted for this room before the borrow is handed out")
+    }
 }
 
 impl RoomSupervisor {
@@ -21,13 +44,43 @@ impl RoomSupervisor {
         Self {
             base_state_dir,
             active_rooms: Arc::new(Mutex::new(HashMap::new())),
+            queue_stores: Arc::new(Mutex::new(HashMap::new())),
             hook_bus,
         }
+    }
+
+    /// The root every room lives under; the IPC layer needs it to reach a seat's runner mailbox.
+    pub fn state_dir(&self) -> &Path {
+        &self.base_state_dir
     }
 
     /// Room state directory: ~/.config/4genthub/rooms/<room>/
     pub fn room_dir(&self, room: &str) -> PathBuf {
         self.base_state_dir.join("rooms").join(room)
+    }
+
+    /// The room's durable queue store.
+    ///
+    /// A room that was never started has no directory and no rail, so a queue verb against it is a refusal
+    /// naming the room — not an empty queue, which is the same untrue answer as a bare `[]` (Rule 2: no
+    /// answer where there is no record). A *stopped* room keeps its directory and its rows, and stays
+    /// readable.
+    pub fn queue_store(&self, room: &str) -> Result<RoomQueueStore<'_>, String> {
+        let room_dir = self.room_dir(room);
+        if !room_dir.is_dir() {
+            return Err(format!(
+                "no such room '{room}': {} is not a room directory",
+                room_dir.display()
+            ));
+        }
+        let mut stores = self.queue_stores.lock();
+        if !stores.contains_key(room) {
+            stores.insert(room.to_string(), QueueStore::open(&room_dir)?);
+        }
+        Ok(RoomQueueStore {
+            stores,
+            room: room.to_string(),
+        })
     }
 
     /// Derive standard session name: agenthub--<room>--<seat>
@@ -68,7 +121,7 @@ impl RoomSupervisor {
             }
         }
 
-        self.active_rooms.lock().unwrap().insert(room_name, final_spec);
+        self.active_rooms.lock().insert(room_name, final_spec);
         Ok(statuses)
     }
 
@@ -83,14 +136,26 @@ impl RoomSupervisor {
         let cwd_str = seat.cwd.as_deref().or(spec.cwd.as_deref()).unwrap_or(".");
         let cwd = PathBuf::from(cwd_str);
 
-        // Build command line according to runtime
+        // Build command line according to runtime. An omp seat's pane runs THIS binary as a runner, which
+        // spawns the agent and owns its channel (design §1: the runner replaces `pi-runner.js`); the other
+        // runtimes keep their own command until their native rpc paths exist.
         let runtime = AgentRuntime::from_str_loose(&seat.runtime);
-        let cmd = match runtime {
-            AgentRuntime::Omp => "omp".to_string(),
+        let cmd = match &runtime {
+            AgentRuntime::Omp => {
+                let self_exe = std::env::current_exe()
+                    .map_err(|e| format!("cannot resolve this binary's path: {e}"))?;
+                format!(
+                    "{} --state-dir {} runner {}/{}",
+                    self_exe.display(),
+                    self.base_state_dir.display(),
+                    room,
+                    seat.seat_key
+                )
+            }
             AgentRuntime::ClaudeCode => "claude --dangerously-skip-permissions".to_string(),
             AgentRuntime::Agy => "agy".to_string(),
             AgentRuntime::Codex => "codex".to_string(),
-            AgentRuntime::Custom(ref c) => c.clone(),
+            AgentRuntime::Custom(c) => c.clone(),
         };
 
         // Build environment variables
@@ -153,7 +218,10 @@ impl RoomSupervisor {
             }
         }
 
-        self.active_rooms.lock().unwrap().remove(room);
+        self.active_rooms.lock().remove(room);
+        // The room's store goes with its seats; the next verb for this room opens the file fresh, which is
+        // what makes a stopped room's rows durable-but-not-cached rather than lost.
+        self.queue_stores.lock().remove(room);
         Ok(())
     }
 

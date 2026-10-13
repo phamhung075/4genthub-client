@@ -8,6 +8,8 @@ mod context;
 mod hooks;
 mod ipc;
 mod pty;
+mod queue;
+mod runner;
 mod rules;
 mod skills;
 mod supervisor;
@@ -21,10 +23,13 @@ use supervisor::RoomSupervisor;
 #[command(name = "agenthub-runtime")]
 #[command(about = "Native Rust execution engine for 4genthub seats")]
 struct Cli {
+    /// Top-level state directory (rooms, specs, transcripts). `-s` is this one.
     #[arg(short, long, default_value = "~/.config/4genthub")]
     state_dir: String,
 
-    #[arg(short, long)]
+    /// IPC socket path. Long form only: `-s` already means `--state-dir`, and clap refuses two arguments
+    /// with the same short — the whole binary panicked before it could parse a subcommand.
+    #[arg(long)]
     socket: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -56,6 +61,11 @@ enum Commands {
     /// Force active compaction on an omp seat
     Compact {
         session: String,
+    },
+    /// Be a seat's foreground process: spawn its agent, own its channel, proxy its pane
+    Runner {
+        /// <room>/<seat>, as `4genteam ps` names a seat
+        target: String,
     },
 }
 
@@ -129,8 +139,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        Commands::Runner { target } => match runner::run(&state_path, &target) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("runner error: {e}");
+                std::process::exit(1);
+            }
+        },
+
         Commands::Compact { session } => {
-            match context::send_force_compact(&session) {
+            match runner::request_compact(&state_path, &session) {
                 Ok(res) => {
                     println!("{res}");
                     Ok(())

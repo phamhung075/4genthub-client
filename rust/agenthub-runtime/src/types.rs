@@ -1,3 +1,4 @@
+use crate::queue::{CloseInput, CreateInput, ListFilter, UpdateInput};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -240,6 +241,14 @@ pub enum IpcRequest {
     Whoami { session: Option<String>, pid: Option<u32> },
     ForceCompact { session: String },
     Ping,
+    /// The room's durable rail (design §3). The room names which store answers; the client renders the
+    /// rows and never opens the file, so the daemon stays the only writer.
+    QueueCreate { room: String, input: CreateInput },
+    QueueList { room: String, filter: ListFilter },
+    QueueShow { room: String, qitem_id: String },
+    QueueUpdate { room: String, input: UpdateInput },
+    QueueClaim { room: String, qitem_id: String, actor_session: String },
+    QueueClose { room: String, input: CloseInput },
 }
 
 /// IPC Response frames.
