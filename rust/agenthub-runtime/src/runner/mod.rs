@@ -224,6 +224,12 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
             let reader = BufReader::new(child_stdout);
             let mut announced_ready = false;
             let mut turn_active = false;
+            // Whether the agent itself has a retry in flight (`auto_retry_start` seen, no `auto_retry_end`
+            // yet). This is a LOCAL fact, not an inference about omp's frame order: the reviewer forced the
+            // sequence `turn_start -> auto_retry_start -> turn_end -> failed response` and the ladder fired
+            // 1/3, 2/3, 3/3 on top of the agent's own retry. Cleared on its end, so a failure arriving
+            // while the agent is still retrying never stacks ours onto it.
+            let mut agent_retrying = false;
             let mut attempts: u32 = 0;
             for line in reader.lines() {
                 let line = match line {
@@ -285,7 +291,11 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                     // runner recognises. Say so, then treat the pending prompt as the turn.
                                     mirror("rpc error without a matching id; treating the pending prompt as its turn");
                                 }
-                                match decide_resume(is_our_prompt, turn_active, has_pending, &err, attempts) {
+                                // `agent_retrying` folds into the same rule as "the turn is still running":
+                                // while the agent has its own retry in flight, this ladder must not start
+                                // one of its own. That makes the property local — a fact this runner
+                                // observed — instead of an inference about the order omp sends its frames.
+                                match decide_resume(is_our_prompt, turn_active || agent_retrying, has_pending, &err, attempts) {
                                     Resume::Nothing(reason) => {
                                         mirror(&format!("rpc error, nothing to resume: {reason}"));
                                     }
@@ -365,10 +375,14 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                             // omp's own bounded provider retry (`P:180-250`): log it, and do NOT stack a
                             // second retry on top — if it succeeds the prompt response is a success.
                             "auto_retry_start" => {
+                                agent_retrying = true;
                                 mirror("provider retry in progress (omp's own)");
                                 let _ = write_state(&state_path, "retrying", "omp auto-retry", attempts);
                             }
-                            "auto_retry_end" => mirror("provider retry finished"),
+                            "auto_retry_end" => {
+                                agent_retrying = false;
+                                mirror("provider retry finished");
+                            }
                             // A real prompt, and the one place `needs_input` belongs. The pane cannot
                             // answer a dialog (its input is a prompt), so it is cancelled the way the
                             // reference cancels what it cannot present (`P:434-438`).
@@ -793,15 +807,30 @@ pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<Stri
 /// `internal/clientpolicy/policy.go` states the same shape from the runner's side: "OpenRig launches an omp
 /// seat in exactly one of two postures - yolo, or always-ask which the managed runner auto-cancels".
 ///
-/// So the unattended posture belongs to `yolo`, to the materialised `builtin:yolo`, and to an **unspecified**
-/// policy - the last one is what the live rig's seats carry, and it must not be the posture that parks them.
+/// So the unattended posture belongs to `yolo`, to the materialised `builtin:yolo`, and to an **omitted**
+/// policy — the last as the documented default, not as a description of the live rig: the reviewer measured
+/// that the live rig's own seat specs carry `permission_policy: builtin:yolo` **explicitly**
+/// (`~/.openrig/agenthub-seats/4genthub-min/rig/rig-*.yaml`). Both spellings map to the same launch posture,
+/// and an **empty string is refused by name** above, because a blank field is a config accident far more
+/// often than a stated intent.
 /// The four restrictive words take `always-ask`, whose dialogs this runner does not leave hanging: a dialog
 /// it cannot present is answered cancelled (see the reader), which is the "auto-cancels" half of that
 /// sentence. Anything else is refused by name, because guessing a launch posture is what inverted this
 /// mapping in the first place.
 pub fn approval_mode(policy: &str) -> Result<&'static str, String> {
+    // An empty field is refused by name (the lead's ruling): a blank value is far likelier to be a config
+    // accident than a stated intent, and "blank means unattended" is the shape of an approval nobody meant
+    // to give. An *omitted* field still takes the documented unattended default.
+    if policy.trim().is_empty() {
+        return Err(
+            "permission policy is empty; refusing to guess a launch posture. Use one of \
+             locked|standard|open|yolo|none (or builtin:yolo), or omit the field to take the documented \
+             unattended default"
+                .to_string(),
+        );
+    }
     match policy.trim() {
-        "" | "yolo" | "builtin:yolo" => Ok("yolo"),
+        "yolo" | "builtin:yolo" => Ok("yolo"),
         "locked" | "standard" | "open" | "none" => Ok("always-ask"),
         other => Err(format!(
             "permission policy {other:?} is not one of locked|standard|open|yolo|none (nor builtin:yolo, \
@@ -1057,11 +1086,20 @@ mod tests {
     /// what the live rig's seats carry and an always-ask floor is what parks them.
     #[test]
     fn every_documented_policy_maps_and_an_unknown_one_is_refused() {
-        for policy in ["yolo", "builtin:yolo", "", "  "] {
+        for policy in ["yolo", "builtin:yolo"] {
             assert_eq!(approval_mode(policy).unwrap(), "yolo", "{policy:?}");
         }
         for policy in ["locked", "standard", "open", "none"] {
             assert_eq!(approval_mode(policy).unwrap(), "always-ask", "{policy:?}");
+        }
+        // A blank field is refused by name (the lead's ruling): "blank means unattended" is the shape of an
+        // approval nobody meant to give. An *omitted* field is a different thing and still takes the
+        // documented default — that is `child_argv` not calling this at all, which the seat specs' empty
+        // default cannot distinguish, so the refusal names the way out.
+        for policy in ["", "  "] {
+            let err = approval_mode(policy).unwrap_err();
+            assert!(err.contains("empty"), "{policy:?}: {err}");
+            assert!(err.contains("locked|standard|open|yolo|none"), "{policy:?}: {err}");
         }
         // "approve" is not in the repo's vocabulary - it was this module's own invention, which is how the
         // mapping came to be inverted. It is refused now, by name.

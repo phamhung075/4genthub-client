@@ -249,3 +249,42 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
   → `handed-off`, transitions recorded) and cannot complete hop 4.
 - Parity 2's remaining half: routing a native seat's `SendText` through the mailbox, and the chunk/stream
   reader (`seq`/`eof`, `truncated_stream` on a gap) are not built.
+
+## The isolation scrub, the auto-retry flag, and the empty-policy ruling
+
+### Fixed
+- **A seat's agent no longer inherits the live rig's addressing.** The runtime only *added* its own
+  `AGENTHUB_*` variables, so a room started the way the operator starts one handed its agent `OPENRIG_HOME`,
+  `OPENRIG_URL`, the activity-hook token, `OPENRIG_DB` and the session/node/transcript ids — an agent process
+  able to address the live daemon from inside a scratch room. `scrub_env` (`src/main.rs`) removes every
+  variable by prefix before the agent is spawned, so a new `OPENRIG_*` variable cannot leak by being
+  forgotten, and the seat's own `AGENTHUB_*`/`PI_CODING_AGENT_DIR` identity is untouched.
+  **Measured, with a daemon whose own environment carried nine `OPENRIG_*` variables**: the runner (the
+  daemon's child through tmux) still carries them, and the `omp` agent it spawns carries **none**, with
+  `AGENTHUB_*` and `PI_CODING_AGENT_DIR` intact — the controlled pair, parent has / child has not, differing
+  by exactly this call. *Correction to my own first two readings*: they reported the leak "unchanged" because
+  the pid they measured was the **runner**, not the agent; the agent was already clean.
+- **An empty permission policy is refused by name** (the lead's ruling). A blank field is a config accident
+  far more often than a stated intent, and "blank means unattended" is the shape of an approval nobody meant
+  to give; an *omitted* field still takes the documented unattended default. Forced live: `StartRoom` with
+  `permission_policy: ""` starts no seat and the seat is reported `stopped`, while `builtin:yolo` starts
+  normally.
+- **Auto-retry stacking is local now.** `auto_retry_start` sets a flag cleared on `auto_retry_end`, and the
+  ladder treats it as "the turn is still running", so our retry cannot fire on top of the agent's own. The
+  reviewer forced the old behaviour (`turn_start → auto_retry_start → turn_end → failed response` gave
+  1/3, 2/3, 3/3 while `auto_retry_start` sat in the same stream). The flag is not cleared on `turn_end`,
+  deliberately: that frame immediately precedes the failure in the forced sequence, so clearing there would
+  reproduce the bug.
+- **Record correction**: the fail-open rationale no longer claims an unspecified policy "is what the live
+  rig's seats carry". The reviewer measured those specs carry `builtin:yolo` **explicitly**; both spellings
+  map to the same posture, so the conclusion stands and the reason is now the true one.
+
+### Testing
+- `cargo test` in `rust/agenthub-runtime`: **34 passed, 0 failed** (the policy test now pins the refusal of
+  an empty or blank field and the omission default's separate spelling).
+- **Not forced, and named**: the auto-retry flag's own effect. The rule it feeds is unit-tested, but the flag
+  lives in the reader loop, so forcing it needs the reviewer's injected frame sequence — the same one that
+  exposed the bug — and the live probe here cannot fake an agent that retries.
+- **Observability limit**: when an empty policy refuses a launch, the caller's `StartRoom` detail reports the
+  seat dying before readiness, not the policy text; the named refusal is in the runner's own error (and in
+  the unit test). Surfacing that text in the caller is a separate, small change, not silently done here.
