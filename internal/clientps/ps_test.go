@@ -35,3 +35,10 @@ func TestRollupCountsAttention(t *testing.T) {
 		t.Fatalf("got %+v", rows)
 	}
 }
+
+func TestNodeRecordKeys(t *testing.T) {
+	seats := collect(t.Context(), []session{{name: "r-a@r"}}, "r")
+	if len(seats) != 1 || seats[0].LogicalID != "r.a" || seats[0].CanonicalName != "r-a@r" || seats[0].SessionStatus != "running" {
+		t.Fatalf("got %+v", seats)
+	}
+}

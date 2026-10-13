@@ -28,20 +28,27 @@ var quotaMarkers = []string{"Individual quota reached", "Out of credits", "rate 
 
 // Seat is one tmux-backed seat of a rig.
 type Seat struct {
-	Rig       string `json:"rig"`
-	Member    string `json:"member"`
-	Session   string `json:"session"`
-	Runtime   string `json:"runtime"`
-	Model     string `json:"model"`
-	Status    string `json:"status"`
-	Attached  bool   `json:"attached"`
-	Uptime    string `json:"uptime"`
-	Tokens    int    `json:"contextTokens"`
-	Limit     int    `json:"compactLimit"`
-	Activity  string `json:"activity"`
-	Error     string `json:"error"`
-	LogPath   string `json:"log"`
-	startedAt time.Time
+	Rig     string `json:"rig"`
+	Member  string `json:"member"`
+	Session string `json:"session"`
+	// The node-record keys every other verb reads from `ps --nodes --rig R --json`: a tmux session
+	// that exists is a running session, whatever the seat's own state (Status) says about its provider.
+	RigName       string `json:"rigName"`
+	LogicalID     string `json:"logicalId"`
+	CanonicalName string `json:"canonicalSessionName"`
+	SessionStatus string `json:"sessionStatus"`
+	StartupStatus string `json:"startupStatus"`
+	Runtime       string `json:"runtime"`
+	Model         string `json:"model"`
+	Status        string `json:"status"`
+	Attached      bool   `json:"attached"`
+	Uptime        string `json:"uptime"`
+	Tokens        int    `json:"contextTokens"`
+	Limit         int    `json:"compactLimit"`
+	Activity      string `json:"activity"`
+	Error         string `json:"error"`
+	LogPath       string `json:"log"`
+	startedAt     time.Time
 }
 
 // RigRow is the per-rig rollup.
@@ -72,7 +79,7 @@ func (command) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout,
 			"shows a provider quota or credit message is reported as `quota`.")
 		return clientcmd.ExitOK
 	}
-	view, asJSON, rig := "summary", false, ""
+	view, asJSON, rig, wantRig := "summary", false, "", false
 	for _, arg := range args {
 		switch arg {
 		case "--nodes":
@@ -83,7 +90,13 @@ func (command) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout,
 			view = "grid"
 		case "--json":
 			asJSON = true
+		case "--rig":
+			wantRig = true
 		default:
+			if wantRig {
+				rig, wantRig = arg, false
+				continue
+			}
 			if strings.HasPrefix(arg, "-") || rig != "" {
 				fmt.Fprintf(stderr, "4genteam ps: unexpected argument %q\n%s\n", arg, usage)
 				return clientcmd.ExitUsage
@@ -166,6 +179,8 @@ func collect(ctx context.Context, sessions []session, only string) []Seat {
 			Rig: rig, Member: member, Session: s.name, Runtime: snap.Runtime, Model: snap.Model,
 			Attached: s.attached, Uptime: since(s.created), Tokens: snap.ContextTokens,
 			Limit: snap.CompactLimit, LogPath: snap.LogPath, startedAt: s.created, Status: "running",
+			RigName: rig, LogicalID: rig + "." + member, CanonicalName: s.name,
+			SessionStatus: "running", StartupStatus: "ready",
 		}
 		if marker := quotaIn(transcriptFor(rig, s.name, snap.LogPath)); marker != "" {
 			seat.Status, seat.Error = "quota", marker
