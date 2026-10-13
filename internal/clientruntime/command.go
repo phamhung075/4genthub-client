@@ -489,7 +489,7 @@ func (captureCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, 
 	}
 
 	var doc struct {
-		OK      bool   `json:"ok"`
+		OK      *bool  `json:"ok"`
 		Content string `json:"content"`
 		Reason  string `json:"reason"`
 		Error   string `json:"error"`
@@ -498,7 +498,10 @@ func (captureCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, 
 		fmt.Fprintf(stderr, "4genteam capture: could not read the daemon's capture document: %v\n", err)
 		return clientcmd.ExitRemote
 	}
-	if !doc.OK {
+	// A refusal is reported by the transport's status (any non-2xx is already an error above) or by an
+	// explicit `ok:false` in a 2xx body. An absent `ok` is NOT a refusal: treating it as one reported a
+	// successful capture as a failure — the same class of untrue answer this row exists to remove.
+	if doc.OK != nil && !*doc.OK {
 		reason := strings.TrimSpace(doc.Reason)
 		if reason == "" {
 			reason = strings.TrimSpace(doc.Error)

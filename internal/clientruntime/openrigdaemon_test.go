@@ -645,6 +645,53 @@ func TestCaptureCommandSurfacesAPaneFailure(t *testing.T) {
 	}
 }
 
+// TestCaptureCommandReadsASuccessWithoutAnOkField: the transport's status is the refusal channel (any
+// non-2xx), and an absent `ok` in a 200 is NOT a refusal. Treating it as one reported a successful capture
+// as a failure — the reviewer's request-capture stub (a 200 whose body names the pane but omits `ok`)
+// exposed it. The daemon's real success shape is `{ok, sessionName, content, lines}`; this pins the
+// tolerant half so the strict half cannot come back.
+func TestCaptureCommandReadsASuccessWithoutAnOkField(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"sessionName":"peer@rig","content":"PANE-LINE\n"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := captureCommand{}.Run(context.Background(), nil, []string{"peer@rig"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("a 200 without ok exited %d, stderr = %q — a success was reported as a failure", code, errOut.String())
+	}
+	if out.String() != "PANE-LINE\n" {
+		t.Errorf("stdout = %q, want the pane verbatim", out.String())
+	}
+}
+
+// TestCaptureCommandRefusesAnOkFalseInA200Body: the same status tolerance must not swallow an explicit
+// refusal, which carries `ok:false` and a reason.
+func TestCaptureCommandRefusesAnOkFalseInA200Body(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":false,"reason":"transport_unavailable"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := captureCommand{}.Run(context.Background(), nil, []string{"peer@rig"}, &out, &errOut)
+
+	if code == 0 {
+		t.Fatalf("an explicit ok:false exited 0, stdout = %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "transport_unavailable") {
+		t.Errorf("stderr = %q, want the daemon's reason", errOut.String())
+	}
+}
+
 // TestCaptureCommandWithoutADaemon: no configured daemon is a refusal naming the missing configuration,
 // not an empty pane.
 func TestCaptureCommandWithoutADaemon(t *testing.T) {

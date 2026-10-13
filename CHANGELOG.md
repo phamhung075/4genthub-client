@@ -27,6 +27,12 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
   **before** the flag parser runs, so the flag spelling is not answered with a complaint about the write's
   own argument. (Only an undeclared flag on a *read*, e.g. `queue list --nope`, is answered by the parser.)
   Measured before: a write reported success while its note was unreadable anywhere the caller could look.
+- **`capture` reported a successful read as a failure when the body omitted `ok`.** The transport's status
+  is the refusal channel (any non-2xx is an error before the body is read) and the daemon's success shape is
+  `{ok, sessionName, content, lines}` — but a 200 body without an `ok` field was read as a refusal and
+  printed the raw payload to stderr with exit 1. An absent `ok` is now a success; only an explicit
+  `ok:false` is a refusal. (Found by the reviewer's request-capture stub, which names the pane `text` and
+  omits `ok`; the daemon's own keys were re-measured live to confirm the strict half still bites.)
 - **`send` dropped `deliveryId`.** The route reads it (`transport.js:76`) and the OpenRig CLI always sends
   one (`send.ts:475`, `deliveryId: randomUUID()`); the daemon uses it as this delivery's outbox id
   (`session-transport.js:1143`) and refuses a reuse that names other content instead of re-delivering it
@@ -83,6 +89,13 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
   It is only a true empty because the request reached a named daemon: a shell that names none exits 3 and
   prints no list at all. Named here because `[]` is the exact string this row exists to banish from the
   surface a seat reads.
+- **A `--raw` send is not a wrapped delivery, so a receiver cannot count it as one.** `--raw` (and
+  `--dangerously-interact`, which implies it) sends the text exactly, with no `From:`/`To:`/`Sent:`
+  envelope — the CLI's own semantics (`send.ts:474-475`: `raw = opts.raw || opts.dangerouslyInteract`, then
+  `outboundText = raw ? payload : wrapSendBody(...)`, and the envelope marker is omitted). The outbox row
+  still holds the text and the daemon still reports the delivery, but **consumption on the raw path is
+  unconfirmed**: a receiving harness that counts only enveloped sends sees a bare tag, and the shim's own
+  `--verify` note says the same in the CLI's words. Recorded rather than changed; `--raw` means exactly this.
 - **`deliveryId`'s effect, precisely.** With the typing guard off the id is inert: the outbox store mints
   its own row id (`outbox-<stamp>-<hash>`, measured live on this daemon), and the emitted send is unchanged.
   The id matters on the guarded path (the idempotency check at `session-transport.js:1160`) and for
