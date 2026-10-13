@@ -3,6 +3,28 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the machine-wide session fallback is deleted, so no verb shells out to choose a prompt
+
+### Changed
+- `sync messages` and `sync connector` no longer resolve a session from `rig ps --json` when none was named. That path was
+  an exec of the CLI this cutover removes, so it could not survive it, and the convenience it existed for is what `--rig`
+  already answers on the delivery path. Both verbs now REFUSE, and the message is the contract: `sync messages` names
+  `--rig <room>` (every running seat of that room) and `--session <name>` (one session); `sync connector` names
+  `--session <name>` (required). The refusal is produced without running anything.
+- Deleted with the fallback: `firstRigSession`, `candidateNames`, and the messages verb's candidate listing. What remains
+  of the candidate machinery serves `rigSeatFor`'s seat lookup - a DECLARED reach rather than a converted one (the parked
+  session-list action, DEPLOY-READY section 65) - and the definition and its consumer both say so.
+
+### Verified
+- RED first, from the empty PATH: with no `rig` on PATH the old code answered `rig ps --json failed: exec: "rig":
+  executable file not found in $PATH` with exit 3 (messages) and exit 1 (connector). The new tests
+  (`TestMessagesVerbRequiresAFlagAndSaysSoWithoutShellingOut`, `TestConnectorVerbRequiresASessionWithoutShellingOut`) fail
+  on the pre-change source exactly that way and pass after it: `ExitUsage`, both flags named, nothing typed, no ACK spent,
+  no socket opened. Proven by reverting only the two source files to `2812989`.
+- `TestMessagesVerbUsesTheOnlySessionTheRigReports` is deleted with the behaviour it pinned, and `fakeRig` - the stub
+  binary no remaining test needs - with it. `go build ./...`, `go vet ./internal/clientsync/` and the clientsync suite
+  are green; `gofmt -l` is empty.
+
 ## 2026-10-13 — the skip rule normalises the state word, so one padded reading cannot empty a pass
 
 ### Changed

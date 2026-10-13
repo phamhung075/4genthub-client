@@ -300,21 +300,9 @@ func TestMessagesVerbAsksForThePageItWasGiven(t *testing.T) {
 	}
 }
 
-// fakeRig puts a `rig` on PATH that answers `ps --json` with the given payload, so the verb's REAL
-// resolution path runs instead of a substituted function. The only other place this verb shells out to
-// rig is the local send, which the fixture replaces.
-func fakeRig(t *testing.T, psJSON string) {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "rig"), []byte("#!/bin/sh\necho '"+psJSON+"'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-// fakeRoom answers the verb's seat discovery from the RUNTIME seam, the way fakeRig answers it from a stub `rig` on
-// PATH - and the difference is the point: these tests no longer need a fake binary, because the verb no longer runs
-// one. The seats are given in the order the tests expect the pass to take them.
+// fakeRoom answers the verb's seat discovery from the RUNTIME seam rather than from a stub `rig` on PATH, and the
+// difference is the point: these tests no longer need a fake binary, because the verb no longer runs one. The seats
+// are given in the order the tests expect the pass to take them.
 //
 // IT ALSO EMPTIES PATH, and that is what makes these tests able to fail: with the stub `rig` gone and no tool on PATH,
 // a pass that went back to reading the node table cannot succeed, so a reversion is a RED test rather than a silent
@@ -421,52 +409,33 @@ func TestSeatSessionsFromSkipsEverySeatWithoutALivePrompt(t *testing.T) {
 	}
 }
 
-// THE VERB MUST NOT GUESS WHICH PROMPT TO TYPE INTO, and this is the case that made the difference
-// matter: `rig ps --json` in this environment reports many sessions, and firstRigSession returns the
-// FIRST of them. A verb that typed into that answer would put an operator's message into somebody
-// else's prompt — which this verb's own documentation calls worse than not delivering it. So no
-// --session and more than one candidate means REFUSE, and the refusal must name the candidates rather
-// than call the situation ambiguous.
-func TestMessagesVerbRefusesToGuessWhichSessionToTypeInto(t *testing.T) {
+// THE FLAG IS NOW REQUIRED, AND THE REFUSAL IS THE INTERFACE. This case used to resolve the session from
+// `rig ps --json` - refusing only when several candidates were running - and that whole path was a shell-out to the
+// CLI the cutover deletes, so it is gone rather than repaired. The user-visible contract is the message, so the
+// message names BOTH ways to say where a message goes and what each takes.
+//
+// THE PROOF IS THE EMPTY PATH: the old resolution could not produce this answer without asking the rig, so with no
+// `rig` anywhere it failed with a dial-shaped error. This refusal is produced without running anything.
+func TestMessagesVerbRequiresAFlagAndSaysSoWithoutShellingOut(t *testing.T) {
 	cloud := &messageCloud{pending: []map[string]any{message("m1", "hello")}}
 	_, sent, out := messagesFixture(t, cloud, nil)
-	fakeRig(t, `[{"sessionName":"alpha"},{"sessionName":"beta"}]`)
+	t.Setenv("PATH", t.TempDir())
 
 	var stdout, stderr strings.Builder
 	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--out", out}, &stdout, &stderr)
-	if code != clientcmd.ExitUnavailable {
-		t.Fatalf("exit = %d, want ExitUnavailable: %s", code, stderr.String())
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit = %d, want ExitUsage: %s", code, stderr.String())
 	}
 	if len(*sent) != 0 {
-		t.Fatalf("typed %v, want NOTHING typed while the session is ambiguous", *sent)
+		t.Fatalf("typed %v, want NOTHING typed when no prompt was named", *sent)
 	}
 	if calls := cloud.seen(); len(calls) != 0 {
 		t.Fatalf("calls = %v, want the cloud untouched: the refusal happens before the pull", calls)
 	}
-	for _, want := range []string{"alpha", "beta", "--session"} {
+	for _, want := range []string{"--rig <room>", "--session <name>"} {
 		if !strings.Contains(stderr.String(), want) {
-			t.Errorf("stderr = %q, want it to name %q", stderr.String(), want)
+			t.Errorf("stderr = %q, want it to name %q and what it takes", stderr.String(), want)
 		}
-	}
-}
-
-// AND WITH EXACTLY ONE SESSION THE MESSAGE STILL FLOWS. The refusal is about ambiguity, not about
-// requiring a flag: the resolution the connector verb uses stays usable when it is unambiguous.
-func TestMessagesVerbUsesTheOnlySessionTheRigReports(t *testing.T) {
-	cloud := &messageCloud{pending: []map[string]any{message("m1", "hello")}}
-	_, sent, out := messagesFixture(t, cloud, nil)
-	fakeRig(t, `[{"sessionName":"only-one"}]`)
-
-	var stdout, stderr strings.Builder
-	if code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--out", out}, &stdout, &stderr); code != 0 {
-		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
-	}
-	if got := strings.Join(*sent, ","); got != "only-one hello" {
-		t.Fatalf("typed %q, want the one session the rig reported", got)
-	}
-	want := []string{"GET", "SEND only-one hello", "ACK m1"}
-	if got := strings.Join(cloud.seen(), " | "); got != strings.Join(want, " | ") {
-		t.Fatalf("calls = %s\nwant    %s", got, strings.Join(want, " | "))
 	}
 }
 

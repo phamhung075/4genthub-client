@@ -26,7 +26,7 @@ import (
 const connectorUsage = `usage: 4genteam sync connector [--session <name>] [--connector-id <id>] [--lines <n>]
 
 Sends ONE local rig session to the cloud over /ws/connector.
-  --session <name>      the rig session to send; otherwise the first rig ps --json reports
+  --session <name>      the rig session to send (required)
   --connector-id <id>   the connector identity the server binds this socket to (default: hostname)
   --lines <n>           transcript lines to send, newest last (default 50)
 
@@ -99,12 +99,12 @@ func RunConnectorVerb(ctx context.Context, args []string, stdout, stderr io.Writ
 		connectorID = host
 	}
 
+	// THE MACHINE-WIDE FALLBACK IS DELETED HERE TOO, for the reason the messages verb states: it was a shell-out to
+	// the CLI the cutover removes, so it could not survive it. This surface has ONE way to name the session, so the
+	// refusal names it and says what it takes.
 	if session == "" {
-		session, err = firstRigSession(ctx)
-		if err != nil {
-			fmt.Fprintf(stderr, "sync connector: %v\n", err)
-			return clientcmd.ExitRemote
-		}
+		fmt.Fprintf(stderr, "sync connector: --session <name> is required — it names the local rig session this connector sends to the cloud\n")
+		return clientcmd.ExitUsage
 	}
 
 	// The seat this session belongs to, as `rig ps --json` reports it. When the rig names no entry for
@@ -197,10 +197,10 @@ func (c sessionCandidate) answersTo(session string) bool {
 // --session), rigName and logicalId, and NO plain "name" - so the previous key order fell through to
 // logicalId and the default path addressed sessions by an identifier the UI never shows.
 //
-// It exists separately from firstRigSession because FIRST is only a safe answer when there is exactly
-// one: this environment reports fourteen sessions, so a verb that types text into a prompt must be able
-// to see the whole set and refuse, rather than taking the first and hoping. That distinction is why the
-// extraction is here and the refusal is at the caller.
+// ITS ONE CALLER NOW IS rigSeatFor: the machine-wide fallback that asked this to CHOOSE a session is deleted,
+// because asking `rig ps --json` at all is the shell-out this cutover removes. This stays as a DECLARED reach
+// (routed with the session list in DEPLOY-READY section 65) until the runtime has a session-list action, and its
+// consumer carries the same declaration at its own definition.
 func rigSessionCandidates(ctx context.Context) ([]sessionCandidate, error) {
 	out, err := runRig(ctx, "ps", "--json")
 	if err != nil {
@@ -252,15 +252,6 @@ func parseRigPsSessions(out string) ([]sessionCandidate, error) {
 		result = append(result, c)
 	}
 	return result, nil
-}
-
-// candidateNames is the list a refusal prints: the names the verb would have had to choose between.
-func candidateNames(candidates []sessionCandidate) []string {
-	names := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		names = append(names, c.name)
-	}
-	return names
 }
 
 func sessionMaps(list []any) []map[string]any {
@@ -336,6 +327,10 @@ func sessionMember(entry map[string]any) string {
 // when it reports no entry naming it. A rig query that fails is not an error here: the session and
 // its transcript are still worth reporting, and a session with no seat is one the UI shows without
 // an input box.
+//
+// IT IS A DECLARED REACH, and the declaration says what retires it: the candidate list it reads comes from
+// `rig ps --json`, and the runtime has no session-list action (DEPLOY-READY section 65). The alternative to waiting is a
+// contract change - the frame simply carries no room or seat - which is a different decision from this unit's.
 func rigSeatFor(ctx context.Context, session string) (string, string) {
 	candidates, err := rigSessionCandidates(ctx)
 	if err != nil {
@@ -349,21 +344,9 @@ func rigSeatFor(ctx context.Context, session string) (string, string) {
 	return "", ""
 }
 
-// firstRigSession returns the FIRST session the rig reports. ITS BEHAVIOUR IS UNCHANGED by the
-// extraction above, deliberately: other verbs call it, and redefining what "the first" means for them
-// is a different change with a different blast radius. A verb that TYPES text into a prompt does not use
-// this — it reads the whole candidate set and refuses when it holds more than one.
-func firstRigSession(ctx context.Context) (string, error) {
-	candidates, err := rigSessionCandidates(ctx)
-	if err != nil {
-		return "", err
-	}
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("rig ps --json named no session this verb can send; pass --session <name>")
-	}
-	return candidates[0].name, nil
-}
-
+// rigTranscript reads a session's transcript through the CLI. It is a DECLARED reach rather than a converted one:
+// the runtime's IPC has no transcript action (see DEPLOY-READY section 65, the parked request alongside the session
+// list this file also needs), so this stays an exec until that action exists or this verb changes its contract.
 func rigTranscript(ctx context.Context, session string) (string, error) {
 	return runRig(ctx, "transcript", session)
 }

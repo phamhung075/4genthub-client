@@ -163,28 +163,17 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 		}
 		return clientcmd.ExitOK
 	}
-	// Whichever session to type into is resolved ONCE, before anything is pulled: a run that cannot
-	// deliver must not spend its ACKs. And it is resolved from the WHOLE candidate set rather than from
-	// the first entry: `rig ps --json` reports every session this machine runs (fourteen here), so
-	// taking the first would type an operator's message into somebody else's prompt — the one outcome
-	// worse than not delivering it.
+	// Whichever session to type into is resolved ONCE, before anything is pulled: a run that cannot deliver must
+	// not spend its ACKs.
+	//
+	// THE MACHINE-WIDE FALLBACK IS DELETED RATHER THAN REPAIRED. Asking `rig ps --json` which sessions this machine
+	// runs was a shell-out to the CLI the cutover removes, so it could not survive it in any world, and the
+	// convenience it existed for is what the rig shape above already answers. THE MESSAGE IS THE INTERFACE HERE: this
+	// is a contract change, so the refusal names BOTH ways to say where a message goes and what each one takes.
 	session := parsed.session
 	if !parsed.dryRun && session == "" {
-		candidates, err := rigSessionCandidates(ctx)
-		if err != nil {
-			fmt.Fprintf(stderr, "4genteam sync messages: %v\n", err)
-			return clientcmd.ExitUnavailable
-		}
-		if len(candidates) == 0 {
-			fmt.Fprintf(stderr, "4genteam sync messages: `rig ps --json` named no session to type into; pass --session <name>\n")
-			return clientcmd.ExitUnavailable
-		}
-		if len(candidates) > 1 {
-			fmt.Fprintf(stderr, "4genteam sync messages: %d sessions are running (%s), so this verb will not guess which prompt to type into — the wrong prompt is somebody else's. Name this seat's own with --session <name>\n",
-				len(candidates), strings.Join(candidateNames(candidates), ", "))
-			return clientcmd.ExitUnavailable
-		}
-		session = candidates[0].name
+		fmt.Fprintf(stderr, "4genteam sync messages: name the prompt this message goes to — --rig <room> delivers to every running seat of that room, or --session <name> types into one session\n")
+		return clientcmd.ExitUsage
 	}
 	done, err := syncSeatMessages(ctx, baseURL, token, parsed.room, parsed.seat, session, parsed.out, parsed.limit, parsed.dryRun, stdout, stderr)
 	if err != nil {

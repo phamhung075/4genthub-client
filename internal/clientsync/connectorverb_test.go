@@ -4,7 +4,13 @@
 // entries carry canonicalSessionName, rigName and logicalId and NO plain "name".
 package clientsync
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+)
 
 const rigPsJSON = `[
  {"rigId":"01M431AAP55S5KEAPB56QP0K2E","rigName":"room-b","logicalId":"room-b.supervisor","canonicalSessionName":"room-b-supervisor@room-b"},
@@ -51,8 +57,26 @@ func TestRigSessionCandidatesCarryTheSeatIdentity(t *testing.T) {
 		t.Errorf("answersTo matched another session's name")
 	}
 
-	// A shape the rig does not produce today still names its sessions rather than being dropped.
-	if names := candidateNames(candidates[2:]); len(names) != 1 || names[0] != "nodot" {
-		t.Errorf("candidateNames = %v, want [nodot]", names)
+	// A shape the rig does not produce today still names its session rather than being dropped.
+	if candidates[2].name != "nodot" {
+		t.Errorf("candidate name = %q, want nodot", candidates[2].name)
+	}
+}
+
+// THE SESSION IS REQUIRED AND THE PROOF IS THE EMPTY PATH. This verb used to take the FIRST session `rig ps --json`
+// reported; with no `rig` anywhere that fallback cannot produce the contract's own words, so the old behaviour fails
+// here and the new refusal passes without running anything - before any socket is opened.
+func TestConnectorVerbRequiresASessionWithoutShellingOut(t *testing.T) {
+	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
+	t.Setenv("AGENTHUB_TOKEN", "token")
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout, stderr strings.Builder
+	code := RunConnectorVerb(context.Background(), nil, &stdout, &stderr)
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit = %d, want ExitUsage: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--session <name>") {
+		t.Errorf("stderr = %q, want it to name --session <name> and what it takes", stderr.String())
 	}
 }
