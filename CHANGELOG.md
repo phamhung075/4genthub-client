@@ -3,6 +3,34 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the seat send goes to the runtime instead of shelling out to `rig`
+
+`sendCommand.Run`'s own `RIG SEAT MESSAGE` shape tried the native runtime send and then, on failure, fell
+back to `exec.LookPath("rig")` + `exec.Command(path, "send", <session>, <text>)`. On this machine `rig` is a
+symlink to THIS client, so the "fallback" was a self-call: the two-argument OpenRig form went back into the
+same verb, whose three-positional entry then refused it, and the reader got a failure report about a command
+nobody had asked for. The route is the FALLBACK — which is why the same failure appeared both on the
+installed binary and on a tip build; the tip build had no arity bug of its own, it delegated.
+
+### Changed
+- `internal/clientseat/reseat.go`: the seat send goes to the local runtime (`clientruntime.SendTextToSeat`),
+  and a refusal is reported as the runtime's own reason, naming the target it could not reach. The
+  `exec.LookPath("rig")` / `exec.Command` fallback is DELETED rather than repaired: after this client's rename
+  that name resolves to this binary.
+- `internal/clientseat/reseat.go`: the verb's help claimed the shape "sends MESSAGE to the seat with
+  `rig send`"; it now says the send goes through the local runtime and does not shell out to `rig`, with the
+  reason.
+
+### Verified
+- `gofmt -l internal/clientseat/` clean; `go build ./...` exit 0; `go test ./internal/clientseat/` ok;
+  `go test ./...` 23 packages ok, 0 failed — so the two-argument daemon path, `--verify`, `--wait-for-idle`,
+  `--json` and the refused-flag list are untouched.
+- The deletion is pinned as an ABSENCE, not as a message, by
+  `send_test.go:TestTheRigSeatMessageShapeNeverFallsBackToShellingOutToRig`, RUN BY NAME → PASS. It empties
+  `PATH`: with the fallback present the verb answers `"rig is not on PATH"` (the `exec.LookPath` failure), and
+  without it the only possible failure is the runtime's, which must name the target. A deletion nobody can
+  observe is a deletion nobody can defend; this makes the missing call fail a test.
+
 ## 2026-10-13 — an omitted permission policy takes the default, and a blank one is refused by name
 
 `SeatSpec.permission_policy` was `#[serde(default)] String`, so an ABSENT key arrived as `""` — and the

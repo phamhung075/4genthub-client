@@ -212,9 +212,10 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		fmt.Fprintln(stdout, "  --force                      back-compat no-op: a busy pane already sends-with-advisory")
 		fmt.Fprintln(stdout, "  --json                       print the daemon's answer as JSON")
 		fmt.Fprintln(stdout, "  --to/--pod/--rig/--host/--context are REFUSED: this shim sends to one local session")
-		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape is the client's own: it sends MESSAGE to the seat with `rig send`,")
-		fmt.Fprintln(stdout, "starting it with \"From NAME:\" so the seat knows who wrote it (rig does not carry the sender")
-		fmt.Fprintln(stdout, "when the call is not made from a seat shell). NAME defaults to \""+defaultSender+"\".")
+		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape is the client's own: it sends MESSAGE to that seat through the local")
+		fmt.Fprintln(stdout, "runtime, starting it with \"From NAME:\" so the seat knows who wrote it (a runtime call carries")
+		fmt.Fprintln(stdout, "no sender when it is not made from a seat shell). It does NOT shell out to `rig`: after this")
+		fmt.Fprintln(stdout, "client's rename that name is this binary. NAME defaults to \""+defaultSender+"\".")
 		return clientcmd.ExitOK
 	}
 
@@ -248,25 +249,20 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 	}
 	text := fmt.Sprintf("From %s: %s", from, strings.Join(positional[2:], " "))
 
-	// Try native runtime IPC send first
+	// The seat send is the CLIENT'S OWN, and it goes through the local runtime: the fallback that shelled
+	// out to `rig send` is DELETED rather than repaired. After this client's own rename that name resolves
+	// to THIS binary (`~/.local/bin/rig` is a symlink to `4genteam`), so the "fallback" was a self-call: the
+	// outer verb would hand the two-argument OpenRig form to itself and the inner refusal was what the user
+	// read - a failure report about a command nobody asked for. A send that the runtime refuses now reports
+	// the runtime's own reason, which is the only party that knows why.
 	rtClient := clientruntime.NewClient("")
-	if err := rtClient.SendTextToSeat(rig, seat, text); err == nil {
-		fmt.Fprintf(stdout, "Sent to %s/%s\n", rig, seat)
-		return clientcmd.ExitOK
-	}
-
-	path, err := exec.LookPath("rig")
-	if err != nil {
-		return report(stderr, &clientcmd.CodedError{Message: "rig is not on PATH", Code: clientcmd.ExitUnavailable})
-	}
-	done, err := exec.Command(path, "send", rig+"-"+seat+"@"+rig, text).CombinedOutput()
-	fmt.Fprint(stdout, string(done))
-	if err != nil {
+	if err := rtClient.SendTextToSeat(rig, seat, text); err != nil {
 		return report(stderr, &clientcmd.CodedError{
-			Message: fmt.Sprintf("rig send failed: %s", truncate(strings.TrimSpace(string(done)), 200)),
+			Message: fmt.Sprintf("could not send to %s/%s: %v", rig, seat, err),
 			Code:    ExitFailed,
 		})
 	}
+	fmt.Fprintf(stdout, "Sent to %s/%s\n", rig, seat)
 	return clientcmd.ExitOK
 }
 

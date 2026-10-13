@@ -15,6 +15,36 @@ import (
 // The R7 compatibility contract for `rig send` on a rig the OpenRig daemon hosts. Measured before this
 // change, the verb refused both shapes the promise names: `rig send <session> <text>` answered
 // "RIG, SEAT and MESSAGE are required", and its own fallback re-entered that same refusal.
+//
+// THE SELF-CALL, PINNED AS A REGRESSION: the RIG SEAT MESSAGE shape used to fall back to
+// `exec.Command(exec.LookPath("rig"), "send", ...)`, and `rig` on this machine is a SYMLINK TO THIS BINARY —
+// so the "fallback" handed the two-argument OpenRig form to itself, its own validation refused it, and the
+// user read a failure report about a command nobody asked for.
+//
+// PATH is emptied here, which is what makes this a test of the ABSENCE rather than of the message: with the
+// fallback in place the verb answers "rig is not on PATH" (`exec.LookPath` failing), and without it the
+// failure can only come from the runtime, named with the target it could not reach.
+func TestTheRigSeatMessageShapeNeverFallsBackToShellingOutToRig(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil,
+		[]string{"nosuchpod", "nosuchseat", "probe"}, &out, &errOut)
+
+	if strings.Contains(errOut.String(), "is not on PATH") || strings.Contains(out.String(), "is not on PATH") {
+		t.Fatalf("the verb fell back to shelling out to `rig`: stdout %q stderr %q", out.String(), errOut.String())
+	}
+	if code == 0 {
+		t.Fatalf("a send to a seat that does not exist exited 0; stdout %q", out.String())
+	}
+	// The failure must name the target it could not reach, so a reader can tell a refused send from one that
+	// never happened.
+	if !strings.Contains(errOut.String(), "nosuchpod/nosuchseat") {
+		t.Errorf("stderr does not name the target it could not reach: %q", errOut.String())
+	}
+}
+
 func TestSendWithASessionAndAMessageGoesToTheOpenRigDaemon(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
 
