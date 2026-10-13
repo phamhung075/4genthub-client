@@ -10,11 +10,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
-// DefaultSocketPath resolves the runtime Unix domain socket.
+// RuntimeSocketEnv names the override for the runtime's Unix socket. It exists because a client built from a
+// branch has to reach a daemon built from the SAME branch while the owner's daemon keeps serving the default
+// path - the only way the cutover gets tested before it happens. The NAME IS A CONTRACT rather than a discovery:
+// an owner's harness and a branch client meet on exactly this string, so it is exported and pinned by a test.
+const RuntimeSocketEnv = "OPENRIG_RUNTIME_SOCKET"
+
+// DefaultSocketPath resolves the runtime Unix domain socket: the override when it is set, else this machine's own
+// location. THIS IS THE ONE RESOLUTION POINT - NewClient("") is its only caller - so one socket is named by exactly
+// ONE input: a set override REPLACES the derivation rather than joining it, which is what keeps a branch client and
+// the branch daemon it starts on the same path instead of two.
+//
+// A blank value counts as unset, the rule this client's other environment variables already use: a copied .env that
+// blanked a switch is a normal thing to find, and a blank path would resolve to a socket in the working directory.
+// The derivation below is byte-for-byte unchanged for every machine that does not set the override.
 func DefaultSocketPath() string {
+	if explicit := strings.TrimSpace(os.Getenv(RuntimeSocketEnv)); explicit != "" {
+		return explicit
+	}
 	if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
 		return filepath.Join(runtimeDir, "agenthub.sock")
 	}

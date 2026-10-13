@@ -3,6 +3,29 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the runtime socket gets one override, read at the one resolution point
+
+A client built from a branch has to reach a daemon built from the SAME branch while the owner's daemon keeps serving the
+default path; without a knob there is no way to test the cutover before it happens on the owner's machine.
+
+### Added
+- `OPENRIG_RUNTIME_SOCKET` (`clientruntime.RuntimeSocketEnv`), read FIRST by `DefaultSocketPath()` — the ONE resolution
+  point `NewClient("")` reaches. A set override REPLACES the derivation rather than joining it, so one socket is named
+  by exactly ONE input and the client and the daemon it starts agree on the path. A blank value counts as unset, the
+  rule this client's other environment variables already use. The NAME IS A CONTRACT and is pinned by a test, because
+  an owner's harness and a branch client meet on exactly this string.
+- A machine that never sets the override resolves byte-for-byte as before, for both clauses of the derivation.
+
+### Verified
+- Unit legs in `internal/clientruntime/ipc_test.go`: unset → the derivation, unchanged (HOME and XDG_RUNTIME_DIR);
+  set → the explicit path through both `DefaultSocketPath` and `NewClient("")`; both inputs present → ONE socket, the
+  override, with the derivation NOT consulted; blank → the derivation.
+- LIVE, the branch client and the installed runtime, a SCRUBBED HOME, nothing else in the environment. SET:
+  `agenthub-runtime --socket <explicit>/rt.sock daemon` ran, the socket was PRESENT where the override named, the
+  HOME-derived path was ABSENT (never both), and no other socket existed under the scrubbed HOME. UNSET: the
+  HOME-derived `<HOME>/.config/4genthub/run/runtime.sock` was PRESENT.
+- Every daemon those legs started was killed with them, and the owner's runtime processes were not touched.
+
 ## 2026-10-13 — the abort keystroke goes to the runtime, with the bare text asserted
 
 `clientlifecycle.rigAbort` shelled out to `rig send <session> /abort --raw`. It now types the bare `/abort` through
