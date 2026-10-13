@@ -481,7 +481,10 @@ var roomSeats = func(room string) ([]seatSession, error) {
 func seatSessionsFrom(statuses []clientruntime.SeatStatus) []seatSession {
 	seats := make([]seatSession, 0, len(statuses))
 	for _, status := range statuses {
-		if status.State != "running" || status.SessionName == "" || status.Seat == "" {
+		// Trimmed and folded, the comparison clientlifecycle/lifecycle.go makes: the runtime's word is `running`, but
+		// an exact match turns a padded or differently-cased one into "not running" for EVERY seat at once - a pass
+		// that delivers nothing and reports nothing. Matching the sibling keeps one rule for one word.
+		if !strings.EqualFold(strings.TrimSpace(status.State), "running") || status.SessionName == "" || status.Seat == "" {
 			continue
 		}
 		seats = append(seats, seatSession{seat: status.Seat, session: status.SessionName})

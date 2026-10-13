@@ -3,6 +3,21 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the skip rule normalises the state word, so one padded reading cannot empty a pass
+
+### Changed
+- `seatSessionsFrom` compared `status.State != "running"` exactly, while the sibling consumer of the same word
+  (`clientlifecycle/lifecycle.go:468`) trims and folds it. An exact match turns a padded or differently-cased state into
+  "not running" for EVERY seat at once, so the pass would deliver nothing and report nothing - a silent empty pass
+  instead of a failure. It now compares `strings.EqualFold(strings.TrimSpace(status.State), "running")`: one rule for
+  one word, on the production site that already states the word.
+
+### Verified
+- RED first: the pure skip-rule test gained a seat whose state reads `  Running `, and it failed on the seat list
+  missing that seat while the three death states were still skipped. With the normalisation it passes;
+  `go build ./...`, `go vet ./internal/clientsync/` and the clientsync suite are green. The expectation message was
+  corrected as well - it still said "the two with a live prompt" from before the third seat existed.
+
 ## 2026-10-13 — the second activity reader now fails closed, so an unknown reading keeps waiting
 
 ### Changed

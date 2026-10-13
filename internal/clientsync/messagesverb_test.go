@@ -400,14 +400,19 @@ func TestSeatSessionsFromSkipsEverySeatWithoutALivePrompt(t *testing.T) {
 		{Seat: "ghost", SessionName: "", State: "running"},
 		{Seat: "", SessionName: "4genthub-min-nameless@4genthub-min", State: "running"},
 		{Seat: "other", SessionName: "4genthub-min-other@4genthub-min", State: "running"},
+		// The runtime's word is `running`, but a padded or differently-cased one is still that word: the sibling
+		// consumer (clientlifecycle/lifecycle.go) trims and folds before comparing, and matching it here is what
+		// keeps a formatting difference from skipping EVERY seat - which would deliver nothing, silently.
+		{Seat: "padded", SessionName: "4genthub-min-padded@4genthub-min", State: "  Running "},
 	}
 	got := seatSessionsFrom(statuses)
 	want := []seatSession{
 		{seat: "lead", session: "4genthub-min-lead@4genthub-min"},
 		{seat: "other", session: "4genthub-min-other@4genthub-min"},
+		{seat: "padded", session: "4genthub-min-padded@4genthub-min"},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("seats = %v, want only the two with a live prompt: %v", got, want)
+		t.Fatalf("seats = %v, want every seat whose state reads running, normalised: %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
