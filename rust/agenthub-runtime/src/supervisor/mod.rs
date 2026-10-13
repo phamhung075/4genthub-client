@@ -377,6 +377,39 @@ impl RoomSupervisor {
             } else {
                 SeatLifecycleState::Stopped
             };
+            // The reason, because "not running" alone is exactly the shape that let a dead turn look healthy
+            // (`SPEC` §4). The runner publishes the three death facts when it survives to see them; when the
+            // pane's teardown kills it first, the state file still claims `idle`/`running` — so the daemon,
+            // which owns this file's path too, replaces that claim with the death it can actually observe.
+            let state_path = room_dir.join("run").join(format!("{}.state.json", seat.seat_key));
+            let published = fs::read_to_string(&state_path)
+                .ok()
+                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string));
+            let detail = if alive {
+                None
+            } else {
+                match published {
+                    Some(s)
+                        if matches!(
+                            s.as_str(),
+                            "agent_socket_closed" | "agent_stdio_eof" | "agent_exited"
+                        ) =>
+                    {
+                        Some(s)
+                    }
+                    _ => {
+                        let reason = "agent_socket_closed: the pane ended without publishing a death";
+                        let _ = crate::runner::write_state(
+                            &state_path,
+                            "agent_socket_closed",
+                            "the pane ended without publishing a death",
+                            0,
+                        );
+                        Some(reason.to_string())
+                    }
+                }
+            };
 
             let logs_dir = room_dir.join("logs");
             let transcript_path = logs_dir.join(format!("{}.jsonl", seat.seat_key));
@@ -389,7 +422,7 @@ impl RoomSupervisor {
                 model: seat.model,
                 pid: None,
                 state,
-                detail: None,
+                detail,
                 started_at: None,
                 token_estimate: 0,
                 last_active: None,

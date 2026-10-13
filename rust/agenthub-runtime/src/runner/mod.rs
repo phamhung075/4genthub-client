@@ -174,12 +174,17 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
 
     // One writer owns the child's stdin; everything else posts frames to it over this channel.
     let (to_child, from_threads) = mpsc::channel::<String>();
+    let writer_state_path = state_file_path(state_dir, &target.room, &target.seat);
     let writer = thread::spawn(move || {
         let mut stdin = child_stdin;
+        let state_path = writer_state_path;
         for frame in from_threads {
             if let Err(e) = stdin.write_all(frame.as_bytes()).and_then(|_| stdin.flush()) {
-                // The child is gone; the reader below sees the exit and decides how to report it.
+                // The child's end of the channel is gone. That is a fact the runner must *publish*: a
+                // sealed pipe is not the same event as the child exiting, and a daemon that only sees its
+                // own mailbox connection close cannot tell them apart (`SPEC` §3).
                 warn!("runner: cannot write to the child: {e}");
+                let _ = write_state(&state_path, "agent_socket_closed", "the child's channel is gone", 0);
                 break;
             }
         }
@@ -369,6 +374,9 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                     }
                 }
             }
+            // The child's stdout ended. That is its own fact — the reader is the only party that can tell
+            // an EOF from a sealed pipe or an exit (`SPEC` §3) — so it is published, not just mirrored.
+            let _ = write_state(&state_path, "agent_stdio_eof", "the child's stdout ended", attempts);
             if !announced_ready {
                 let _ = ready_tx.send(Err("the child's stdout ended before the ready frame".into()));
             }
@@ -389,9 +397,19 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     match exit {
         Ok(code) => {
             mirror(&format!("EXITED {code}"));
+            // The last writer wins and the most specific fact is the exit. It is written on the main thread
+            // *after* the child is reaped, so it cannot lose a race with this process ending — which is what
+            // makes "the seat is not-running with a reason" true for a reader that arrives afterwards.
+            let _ = write_state(&state_path, "agent_exited", &format!("agent_exited({code})"), 0);
             Ok(())
         }
-        Err(e) => Err(e),
+        Err(e) => {
+            // A child killed by a signal, or one whose wait itself failed, has still *left*: publish it,
+            // because a seat the transport killed must never be readable as healthy afterwards.
+            mirror(&format!("EXITED {e}"));
+            let _ = write_state(&state_path, "agent_exited", &format!("agent_exited({e})"), 0);
+            Err(e)
+        }
     }
 }
 
@@ -471,7 +489,26 @@ fn serve_mailbox_stream(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let outcome = relay_frame(&value, &kind, &id, to_child, &state_path, target);
+        let mut outcome = relay_frame(&value, &kind, &id, to_child, &state_path, target);
+        // "The channel is closed" is true but not *which* death it was. The runner publishes that fact in
+        // its state file (`SPEC` §3), so the answer a caller gets and the file a reader finds agree, and
+        // neither side has to infer a cause from an error string.
+        if let Err(ref e) = outcome {
+            if e.contains("channel is closed") {
+                let published = fs::read_to_string(&state_path)
+                    .ok()
+                    .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+                    .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string));
+                if let Some(state) = published {
+                    if matches!(
+                        state.as_str(),
+                        "agent_socket_closed" | "agent_stdio_eof" | "agent_exited"
+                    ) {
+                        outcome = Err(state);
+                    }
+                }
+            }
+        }
         match (reply_to, outcome) {
             (Some(reply_to), outcome) => {
                 if let Err(e) = frame::reply(&reply_to, &id, outcome) {

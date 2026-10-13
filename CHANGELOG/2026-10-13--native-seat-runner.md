@@ -196,7 +196,38 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
   covers the directions where we own the bytes (daemon→agent, runner→daemon) and parity 1's retry covers
   what it cannot.
 
+## Publishing the socket-close death (`agent_socket_closed` / `agent_stdio_eof` / `agent_exited`)
+
+### Added
+- The runner now publishes each of the three facts it alone can tell apart (`SPEC` §3): a sealed pipe from
+  the writer thread (`agent_socket_closed`), the child's stdout ending (`agent_stdio_eof`), and the reaped
+  child on the main thread, last writer winning (`agent_exited(<code>)`). The mailbox's answer for a frame
+  that fails to relay reads the same state file, so the answer a caller gets and the file a reader finds
+  agree instead of each guessing from an error string.
+- `RoomSupervisor::get_room_status` reports the reason in `detail` and, when a seat's pane is gone while its
+  state file still claims `idle`/`running`, **replaces that stale claim** with `agent_socket_closed` — the
+  backstop that makes "not running with a reason" true even when nothing else got the chance to write.
+
+### Testing
+- **Shown failing before the fix**: `SIGKILL` on a live seat's `omp` child, then 4s later the state file still
+  read `{"state":"idle"}` and the mailbox was gone — the death was published by nothing.
+- **After the fix, same forcing run**: the daemon answers
+  `{"seat":"dev","state":"stopped","detail":"agent_socket_closed: the pane ended without publishing a death"}`
+  and the seat's file reads `{"state":"agent_socket_closed","classification":"the pane ended without
+  publishing a death"}` — the two agree, and no path leaves the seat `idle` or `running` after a death.
+- Measured and worth recording: in this environment the **pane's teardown kills the runner** before it can
+  write its own death line (the mailbox is refused and no runner-written state appears), which is why the
+  daemon-side backstop is the path that makes the record true. The death is therefore published **when the
+  status is asked for**, not spontaneously — `GetRoomStatus` is what U3 calls.
+- `cargo test` in `rust/agenthub-runtime`: 34 passed, 0 failed.
+
 ### Known gaps (updated)
-- Parity 2's **other half** and parity 4: the daemon's `SendText`/nudge path still needs routing to
-  `send_to_seat` for a native seat; the chunk/stream reader (`seq`/`eof`, `truncated_stream` on a gap) and
-  the socket-close publication (`agent_socket_closed`/`agent_stdio_eof`/`agent_exited`) are not built.
+- **Respawn is not built** (deliberately out of scope, per the row): after a transport death the pinned
+  prompt is re-sent down a dead channel, so parity 1's bounded ladder covers the **error-frame class**, not
+  channel deaths.
+- The lab found a separate defect in the room rail: `handed_off_to` is **terminal** on the runtime's queue, so
+  the row's successor can neither claim nor close it and `destination_session` keeps pointing at the seat
+  that handed it off. The lead→worker→reviewer flow therefore completes hops 1-3 (`pending` → `in-progress`
+  → `handed-off`, transitions recorded) and cannot complete hop 4.
+- Parity 2's remaining half: routing a native seat's `SendText` through the mailbox, and the chunk/stream
+  reader (`seq`/`eof`, `truncated_stream` on a gap) are not built.
