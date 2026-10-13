@@ -162,6 +162,17 @@ func (m *Manager) Pull(ctx context.Context, limit int) ([]LedgerEvent, error) {
 		}
 	}
 
+	// Prefetch resume briefs for active tasks in background (P6)
+	seenTasks := make(map[string]bool)
+	for _, e := range page.Events {
+		if e.TaskID != "" && !seenTasks[e.TaskID] {
+			seenTasks[e.TaskID] = true
+			go func(tID string) {
+				_, _ = m.Prefetch(context.Background(), tID)
+			}(e.TaskID)
+		}
+	}
+
 	return page.Events, nil
 }
 

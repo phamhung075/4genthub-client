@@ -2,6 +2,7 @@ package clientoutbox
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -37,7 +38,7 @@ func (outboxCommand) NeedsRig() bool  { return false }
 
 func (outboxCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) || len(args) == 0 {
-		fmt.Fprintln(stdout, "usage: 4genteam outbox <status|drain> [--path <outbox.json>]")
+		fmt.Fprintln(stdout, "usage: 4genteam outbox <status|drain|prefetch|cached> [--path <outbox.json>]")
 		return clientcmd.ExitOK
 	}
 
@@ -91,6 +92,36 @@ func (outboxCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 				fmt.Fprintf(stdout, "  ✗ Rejected: %s (task_seq: %d)\n", ans.Reason, ans.TaskSeq)
 			}
 		}
+		return clientcmd.ExitOK
+
+	case "prefetch":
+		if len(args) < 2 {
+			fmt.Fprintln(stderr, "usage: 4genteam outbox prefetch <task_id>")
+			return clientcmd.ExitUsage
+		}
+		taskID := args[1]
+		brief, err := mgr.Prefetch(ctx, taskID)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam outbox prefetch: %v\n", err)
+			return clientcmd.ExitUnavailable
+		}
+		fmt.Fprintf(stdout, "Prefetched & cached brief for task %s\n", brief.TaskID)
+		return clientcmd.ExitOK
+
+	case "cached":
+		if len(args) < 2 {
+			fmt.Fprintln(stderr, "usage: 4genteam outbox cached <task_id>")
+			return clientcmd.ExitUsage
+		}
+		taskID := args[1]
+		brief, err := GetCachedBrief(taskID)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam outbox cached: %v\n", err)
+			return clientcmd.ExitUnavailable
+		}
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(brief)
 		return clientcmd.ExitOK
 
 	default:
