@@ -8,12 +8,10 @@ package clientseat
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
@@ -132,19 +130,36 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 	return clientcmd.ExitOK, nil
 }
 
-// rigNodes is `rig ps --nodes --rig RIG --json`.
+// rigNodes is the room's node records, read from the LOCAL RUNTIME instead of from `rig ps --nodes`.
+//
+// The exec is gone, the capability is not: this is the client's own reading (clientruntime.GetRoomStatus,
+// the same one clientlifecycle's rigNodes takes), and it produces the SAME record shape the consumers
+// below already key on - `logicalId` for the seat match in reseatSeats, and `runtime`/`model` for the peak
+// gate - so nothing downstream learns a new vocabulary. After the client's own rename the exec was also a
+// self-call into the installed binary, which is the class this row exists to remove.
+//
+// Unlike the lifecycle gate, a failed read here is an ERROR rather than an empty reading: `reseat` is a
+// command that must be able to say why it will not restart a seat, and "no seats" and "could not ask"
+// are different answers.
 func rigNodes(rig string) ([]map[string]any, error) {
-	path, err := exec.LookPath("rig")
+	seats, err := clientruntime.NewClient("").GetRoomStatus(rig)
 	if err != nil {
-		return nil, &clientcmd.CodedError{Message: "rig is not on PATH", Code: clientcmd.ExitUnavailable}
+		return nil, &clientcmd.CodedError{
+			Message: fmt.Sprintf("could not read %s's seats from the local runtime: %v", rig, err),
+			Code:    ExitFailed,
+		}
 	}
-	out, err := exec.Command(path, "ps", "--nodes", "--rig", rig, "--json").Output()
-	if err != nil {
-		return nil, &clientcmd.CodedError{Message: fmt.Sprintf("rig ps --nodes failed: %v", err), Code: ExitFailed}
-	}
-	var nodes []map[string]any
-	if json.Unmarshal(out, &nodes) != nil {
-		return nil, &clientcmd.CodedError{Message: "rig ps --nodes --json did not answer with a node list", Code: ExitFailed}
+	nodes := make([]map[string]any, 0, len(seats))
+	for _, seat := range seats {
+		nodes = append(nodes, map[string]any{
+			"rigName":       rig,
+			"logicalId":     fmt.Sprintf("%s.%s", rig, seat.Seat),
+			"seat":          seat.Seat,
+			"runtime":       seat.Runtime,
+			"sessionStatus": seat.State,
+			"model":         seat.Model,
+			"pid":           seat.Pid,
+		})
 	}
 	return nodes, nil
 }

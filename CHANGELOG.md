@@ -3,6 +3,40 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — reseat reads the room from the local runtime instead of shelling out to `rig`
+
+`clientseat.rigNodes` was `rig ps --nodes --rig RIG --json` through `exec.LookPath("rig")` +
+`exec.Command`. It is now `clientruntime.GetRoomStatus` on the local runtime socket — the same reading
+`clientlifecycle`'s `rigNodes` takes.
+
+### Changed
+- `internal/clientseat/reseat.go`: `rigNodes` reads the room from the runtime and emits the SAME record shape.
+  This is a REPOINT rather than a rewrite, and the shape is the reason: `logicalId` is what `reseatSeats`
+  matches a named seat on, and `runtime`/`model` are what the peak gate reads — so NOTHING DOWNSTREAM LEARNS A
+  NEW VOCABULARY. A native call that changed the record shape would be a different change with a different risk.
+- `internal/clientseat/reseat.go`: `encoding/json` and `os/exec` became unused and were removed with the exec.
+- The exec was also a self-call after this client's own rename (`rig` resolves to `4genteam`), the same class
+  as the seat send in the entry below.
+
+### Two behaviours over one call — deliberate, and NOT to be "unified"
+`clientseat.rigNodes` returns an ERROR NAMING THE RIG when the read fails, while `clientlifecycle`'s `rigNodes`
+treats the SAME runtime call as an empty reading (and an unreadable reading must never be read as "this room is
+safe", which is why that one fails closed into a refusal elsewhere). Both are right for their consumer: `reseat`
+is a command that has to say WHY it will not restart a seat, and it cannot do that with an empty list. A later
+reader who does not know this is TWO BEHAVIOURS OVER ONE CALL will unify them and silently break reseat's
+refusal.
+
+### Verified
+- `gofmt -l internal/clientseat/` clean; `go build ./...` exit 0; `go test ./internal/clientseat/` ok;
+  `go test ./...` 23 packages ok, 0 failed.
+- `reseat_test.go:TestRigNodesNeverShellsOutToRig`, RUN BY NAME → PASS. It empties `PATH`, so the assertion is
+  about the ABSENCE of the exec rather than about a message: with the exec in place the function answers
+  `"rig is not on PATH"` (an `exec.LookPath` failure), and without it the only possible failure comes from the
+  runtime. A test that merely passes today records a property; this one fails if the exec comes back.
+- NOT in this change: `rigSay`/`rigAbort` (the next sites) MUST keep `--raw` — no From/To/Sent envelope —
+  because `/abort` depends on the LITERAL keystroke text reaching the pane; that must be pinned by a test that
+  FAILS if an envelope is added, not by one that passes today.
+
 ## 2026-10-13 — the seat send goes to the runtime instead of shelling out to `rig`
 
 `sendCommand.Run`'s own `RIG SEAT MESSAGE` shape tried the native runtime send and then, on failure, fell
