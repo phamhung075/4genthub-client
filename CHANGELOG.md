@@ -3,6 +3,40 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the connector speaks TLS, and a test that dials proves it
+
+`DialConnector` never installed TLS: for an `https` base URL it mapped the scheme to `wss`, appended `:443`,
+dialled a plain TCP socket and wrote the HTTP/1.1 upgrade onto it. The TLS terminator answered its own
+`400 The plain HTTP request was sent to HTTPS port`, so the handshake never reached the application, no
+session was ever registered, and `GET /api/v2/sessions` served `{"sessions": []}` for a machine whose rigd
+had been retrying for two days (`rigd.log`'s first line and its last are the same refusal, 5155 lines
+apart). It survived its gate because no test dialled: every rigd case replaces the `dialConnector` seam, and
+this file's tests are frame- and redaction-level by their own stated rule.
+
+### Fixed
+- `internal/clientsync/connector.go`: `DialConnector` wraps a `wss` socket in `crypto/tls` with the dialled
+  host as `ServerName` and ordinary certificate verification. `connectorTLS` is the seam a test replaces to
+  trust its own listener; there is no insecure mode and nothing sets `InsecureSkipVerify`. The handshake
+  runs under the deadline the dial already set, and a `ws://` base URL keeps the plaintext path unchanged.
+  The socket then needs a token carrying `sessions:write`: the server applies no scope default, so a token
+  minted without scopes is refused at the next step.
+
+### Tests
+- `internal/clientsync/connector_test.go`: `TestDialConnectorSpeaksTLSOverARealListener` stands up a real
+  `httptest.NewTLSServer` whose handler answers the upgrade by hand, so the client's `Sec-WebSocket-Accept`
+  check can only pass for a request that arrived inside the tunnel, and a plaintext dial cannot reach the
+  handler at all. It fails before the fix and passes after it.
+  `TestDialConnectorLeavesPlaintextAlone` is the control that `ws://` still dials plaintext.
+
+### Verified
+- `go test ./internal/clientsync/... -run 'TestDialConnectorSpeaksTLSOverARealListener|TestDialConnectorLeavesPlaintextAlone' -v`
+  exits 1 before the change and 0 after; `go build ./...` and `go vet ./internal/clientsync/...` exit 0;
+  the whole module `go test ./...` exits 0 with no failing package.
+- Credential-free, read-only probe against the deployed route: plaintext to `api.4genthub.com:443` answers
+  nginx's `400 … The plain HTTP request was sent to HTTPS port`, while TLS to `/ws/connector` answers the
+  application's own `400 Expected WebSocket upgrade` (`ws_mount.go:918`) - the transport the fixed client
+  now uses reaches the application rather than the terminator.
+
 ## 2026-10-13 — `4genteam ps`, and the runtime-switch skills name the right `rig`
 
 ### Added
