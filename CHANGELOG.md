@@ -3,6 +3,49 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — an omitted permission policy takes the default, and a blank one is refused by name
+
+`SeatSpec.permission_policy` was `#[serde(default)] String`, so an ABSENT key arrived as `""` — and the
+blank-refusal in `approval_mode` then swallowed the omitted case too: a seat that said nothing about its
+policy was refused, and the documented unattended default was unreachable. The client already sends the pair
+distinctly (`clientruntime.SeatSpec.PermissionPolicy` is a pointer for exactly this reason); the runtime's own
+type could not represent the difference, so the distinction died at the deserialization layer.
+
+### Fixed
+- `rust/agenthub-runtime/src/types.rs`: `SeatSpec.permission_policy` is `Option<String>`. serde gives `None`
+  for an absent key and `Some("")` for a present blank one, so the two stop collapsing.
+- `rust/agenthub-runtime/src/runner/mod.rs`: `approval_mode` takes `Option<&str>` — `None` returns `"yolo"`,
+  the documented unattended default; `Some("")` is still refused BY NAME, with the message that names the way
+  out. `child_argv` passes `seat.permission_policy.as_deref()`.
+
+### Verified
+- `cargo test` in `rust/agenthub-runtime`: 35 passed, 0 failed, 0 ignored.
+- The new `runner::tests::an_absent_policy_and_a_blank_one_deserialize_differently` was RUN BY NAME
+  (`cargo test deserialize_differently -- --nocapture` → 1 passed, 34 filtered), so the both-cases assertion
+  is proven rather than inferred: a JSON seat with no `permission_policy` key deserializes to `None` and
+  launches `yolo`, while a seat with `"permission_policy": ""` deserializes to `Some("")` and is refused with
+  the `empty` message. `runner::tests::every_documented_policy_maps_and_an_unknown_one_is_refused` now asserts
+  the omitted case too.
+- TOOLCHAIN — a reproducibility constraint, not a local quirk: this machine's rustup has NO default toolchain
+  (`rustup toolchain list` returns none although the directory exists), so the run went through
+  `/home/daihu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo` with `RUSTUP_TOOLCHAIN=stable`
+  set. A fresh box with no toolchain installed cannot run these tests at all.
+- `cargo fmt --check` reports ONE pre-existing diff, in `src/context/mod.rs` (a leading blank line). It is NOT
+  drift from this change and it is deliberately left alone: reformatting an unrelated file is how a fix
+  acquires a second, unreviewable subject.
+- The INSTALLED `agenthub-runtime` binary is unchanged, so live launch behaviour is unchanged until it is
+  rebuilt and reinstalled. That is a change to the owner's box — the ENDPOINT of this cutover rather than a
+  step inside it — and it does not block acceptance: a runtime built from the pinned commit launches side by
+  side via `--state-dir` and `--socket` without touching the installed one, which is exactly how the native
+  `up` acceptance already ran. The harness needs a build of the pinned commit, never the installed binary.
+- Repo and path, so nothing has to guess which checkout: this is the SAME repository as the native `up` commit
+  `354831d` — `agenthub_client` (remote `git@github.com:phamhung075/4genthub-client.git`, main checkout
+  `/home/daihu/__projects__/4genthub/agenthub_client`), branch `4genthub-min/u2-native-runner` in the linked
+  worktree `/home/daihu/.openrig/agenthub-seats/4genthub-min/wt/u2-native-runner`, with the crate at
+  `rust/agenthub-runtime/` inside it. `354831d` is NOT an ancestor of that repo's `HEAD`, so a reviewer builds
+  from the hash explicitly.
+- The reviewer's B1p check goes green by ITS OWN re-run of the two tests above, not by this note.
+
 ## 2026-10-13 — `up` starts a room from the local team definition, and `--room-only` says what it excludes
 
 `up` restored rooms through OpenRig (`rig up RIG --existing`) and started the runtime daemon with no state

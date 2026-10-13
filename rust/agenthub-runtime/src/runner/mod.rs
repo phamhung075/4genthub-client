@@ -99,7 +99,7 @@ fn child_argv(runtime: &AgentRuntime, seat_dir: &Path, seat: &SeatSpec) -> Resul
             // `--approval-mode` is the OMP spelling (`PR:224-225`); the seat's documented permission policy
             // decides it here, and an unknown word is refused rather than guessed (see `approval_mode`).
             argv.push("--approval-mode".to_string());
-            argv.push(approval_mode(&seat.permission_policy)?.to_string());
+            argv.push(approval_mode(seat.permission_policy.as_deref())?.to_string());
             if let Some(model) = seat.model.as_deref().filter(|m| !m.trim().is_empty()) {
                 argv.push("--model".to_string());
                 argv.push(model.to_string());
@@ -834,10 +834,15 @@ pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<Stri
 /// it cannot present is answered cancelled (see the reader), which is the "auto-cancels" half of that
 /// sentence. Anything else is refused by name, because guessing a launch posture is what inverted this
 /// mapping in the first place.
-pub fn approval_mode(policy: &str) -> Result<&'static str, String> {
-    // An empty field is refused by name (the lead's ruling): a blank value is far likelier to be a config
-    // accident than a stated intent, and "blank means unattended" is the shape of an approval nobody meant
-    // to give. An *omitted* field still takes the documented unattended default.
+pub fn approval_mode(policy: Option<&str>) -> Result<&'static str, String> {
+    // An OMITTED field takes the documented unattended default, and a PRESENT but blank one is refused by
+    // name (the lead's ruling): a blank value is far likelier to be a config accident than a stated intent,
+    // and "blank means unattended" is the shape of an approval nobody meant to give. The two used to
+    // collapse - a `String` with `#[serde(default)]` turned absence into "" - so the refusal swallowed the
+    // default. The type carries the difference now, so this function can honour both rules.
+    let Some(policy) = policy else {
+        return Ok("yolo");
+    };
     if policy.trim().is_empty() {
         return Err(
             "permission policy is empty; refusing to guess a launch posture. Use one of \
@@ -1075,7 +1080,7 @@ mod tests {
             seat_type: "developer".into(),
             runtime: "omp".into(),
             model: Some("deepseek/deepseek-flash:high".into()),
-            permission_policy: "builtin:yolo".into(),
+            permission_policy: Some("builtin:yolo".into()),
             cwd: None,
             agent_dir: None,
             env: Default::default(),
@@ -1104,25 +1109,57 @@ mod tests {
     #[test]
     fn every_documented_policy_maps_and_an_unknown_one_is_refused() {
         for policy in ["yolo", "builtin:yolo"] {
-            assert_eq!(approval_mode(policy).unwrap(), "yolo", "{policy:?}");
+            assert_eq!(approval_mode(Some(policy)).unwrap(), "yolo", "{policy:?}");
         }
         for policy in ["locked", "standard", "open", "none"] {
-            assert_eq!(approval_mode(policy).unwrap(), "always-ask", "{policy:?}");
+            assert_eq!(approval_mode(Some(policy)).unwrap(), "always-ask", "{policy:?}");
         }
+        // An OMITTED field is not a blank one, and the two used to collapse: a `String` with
+        // `#[serde(default)]` turned absence into "", so the blank-refusal below swallowed the documented
+        // default. The type carries the difference now, and BOTH cases are asserted here because a check
+        // that tried only one of them could not see the difference at all.
+        assert_eq!(
+            approval_mode(None).unwrap(),
+            "yolo",
+            "an omitted policy takes the documented unattended default"
+        );
         // A blank field is refused by name (the lead's ruling): "blank means unattended" is the shape of an
-        // approval nobody meant to give. An *omitted* field is a different thing and still takes the
-        // documented default — that is `child_argv` not calling this at all, which the seat specs' empty
-        // default cannot distinguish, so the refusal names the way out.
+        // approval nobody meant to give, and the refusal names the way out.
         for policy in ["", "  "] {
-            let err = approval_mode(policy).unwrap_err();
+            let err = approval_mode(Some(policy)).unwrap_err();
             assert!(err.contains("empty"), "{policy:?}: {err}");
             assert!(err.contains("locked|standard|open|yolo|none"), "{policy:?}: {err}");
         }
         // "approve" is not in the repo's vocabulary - it was this module's own invention, which is how the
         // mapping came to be inverted. It is refused now, by name.
-        let err = approval_mode("approve").unwrap_err();
+        let err = approval_mode(Some("approve")).unwrap_err();
         assert!(err.contains("approve"), "{err}");
         assert!(err.contains("locked|standard|open|yolo|none"), "{err}");
+    }
+
+    /// The layer the bug actually lived in: an ABSENT key and a key holding `""` must arrive as DIFFERENT
+    /// values, because one takes the documented unattended default and the other is refused by name. The old
+    /// `#[serde(default)] String` could not represent the difference at all - absence became `""`.
+    #[test]
+    fn an_absent_policy_and_a_blank_one_deserialize_differently() {
+        let omitted: SeatSpec = serde_json::from_str(
+            r#"{"seat_key":"dev","seat_type":"developer","runtime":"omp"}"#,
+        )
+        .expect("a seat with no permission_policy must deserialize");
+        assert_eq!(omitted.permission_policy, None);
+        assert_eq!(
+            approval_mode(omitted.permission_policy.as_deref()).unwrap(),
+            "yolo",
+            "omitted takes the documented default"
+        );
+
+        let blank: SeatSpec = serde_json::from_str(
+            r#"{"seat_key":"dev","seat_type":"developer","runtime":"omp","permission_policy":""}"#,
+        )
+        .expect("a seat with a blank permission_policy must deserialize");
+        assert_eq!(blank.permission_policy, Some(String::new()));
+        let err = approval_mode(blank.permission_policy.as_deref()).unwrap_err();
+        assert!(err.contains("empty"), "{err}");
     }
 
     #[test]
@@ -1132,7 +1169,7 @@ mod tests {
             seat_type: "developer".into(),
             runtime: "claude-code".into(),
             model: None,
-            permission_policy: String::new(),
+            permission_policy: None,
             cwd: None,
             agent_dir: None,
             env: Default::default(),

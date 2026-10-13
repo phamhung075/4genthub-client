@@ -114,8 +114,12 @@ pub struct SeatSpec {
     pub seat_type: String,
     pub runtime: String,
     pub model: Option<String>,
-    #[serde(default)]
-    pub permission_policy: String,
+    /// `None` means the key was ABSENT, which takes the documented unattended default; `Some("")` means it was
+    /// present and blank, which `approval_mode` refuses by name. The difference has to live in the TYPE: a
+    /// plain `String` with `#[serde(default)]` folds an absent key into `""`, so the empty-refusal swallowed
+    /// the omitted case and both spellings were refused. The client sends the pair distinctly for this reason
+    /// (`clientruntime.SeatSpec.PermissionPolicy` is a pointer).
+    pub permission_policy: Option<String>,
     pub cwd: Option<String>,
     pub agent_dir: Option<String>,
     #[serde(default)]
