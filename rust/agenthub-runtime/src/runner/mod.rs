@@ -256,7 +256,13 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                         }
                         if failed {
                             if let Some(err) = error_text {
-                                match decide_resume(is_our_prompt, turn_active, &err, attempts) {
+                                let has_pending = pending_reader.lock().is_some();
+                                if !is_our_prompt && has_pending && !turn_active {
+                                    // The measured correlation gap: omp answered an error without an id this
+                                    // runner recognises. Say so, then treat the pending prompt as the turn.
+                                    mirror("rpc error without a matching id; treating the pending prompt as its turn");
+                                }
+                                match decide_resume(is_our_prompt, turn_active, has_pending, &err, attempts) {
                                     Resume::Nothing(reason) => {
                                         mirror(&format!("rpc error, nothing to resume: {reason}"));
                                     }
@@ -596,8 +602,14 @@ pub fn write_state(state_path: &Path, state: &str, classification: &str, attempt
 ///
 /// Measured, and the reason this exists: an rpc error does **not** always kill the turn
 /// (`FINDING-omp-runner-death-pattern`), so a mid-turn error must never start a resume — that would
-/// double the work the live turn is already doing. Only a turn that has ended, on a failure this runner
-/// owns, is a candidate.
+/// double the work the live turn is already doing.
+///
+/// The second rule is the lead's follow-up to the gate, and it is the same lie this cutover exists to
+/// remove: an error this runner classifies but does **not** own used to leave the seat published as
+/// `idle` — a seat that looks healthy and is not. Ownership therefore follows the classification: if the
+/// turn is not running, the seat is not healthy, whatever the response's id says. A retryable error with a
+/// pending prompt is resumed even when the id did not line up (the correlation gap is logged, not hidden);
+/// a retryable error with no turn to resume, and any terminal error, publishes `blocked`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resume {
     Nothing(&'static str),
@@ -609,16 +621,26 @@ pub enum Resume {
     Blocked(&'static str),
 }
 
-pub fn decide_resume(ours: bool, turn_active: bool, error: &str, failures_so_far: u32) -> Resume {
-    if !ours {
-        return Resume::Nothing("a response this runner did not ask for");
-    }
+pub fn decide_resume(
+    ours_by_id: bool,
+    turn_active: bool,
+    has_pending_prompt: bool,
+    error: &str,
+    failures_so_far: u32,
+) -> Resume {
     if turn_active {
+        // The live turn owns the error; the seat is healthy and nothing here may touch it.
         return Resume::Nothing("the turn is still running");
     }
+    let ours = ours_by_id || has_pending_prompt;
     match classify_failure(error) {
         Failure::Terminal(label) => Resume::Blocked(label),
         Failure::Retryable(label) => {
+            if !ours {
+                // Nothing to re-send, and a seat that is not running must not read as healthy: blocked,
+                // named, rather than idle.
+                return Resume::Blocked("a retryable failure with no turn to resume");
+            }
             let attempt = failures_so_far + 1;
             if attempt > MAX_RESUME_ATTEMPTS {
                 Resume::Blocked(label)
@@ -824,33 +846,44 @@ mod tests {
     }
 
     /// The rule parity 1 turns on: a turn that is still running is never resumed from an error line, and
-    /// only a failure this runner owns is resumed at all.
+    /// an error that leaves the turn dead must never leave the seat published as healthy.
     #[test]
     fn an_error_mid_turn_resumes_nothing() {
         let err = "RPC response exceeded the transport limit";
         assert_eq!(
-            decide_resume(true, true, err, 0),
+            decide_resume(true, true, true, err, 0),
             Resume::Nothing("the turn is still running")
         );
         assert_eq!(
-            decide_resume(false, false, err, 0),
-            Resume::Nothing("a response this runner did not ask for")
-        );
-        assert_eq!(
-            decide_resume(true, false, err, 0),
+            decide_resume(true, false, true, err, 0),
             Resume::Retry {
                 attempt: 1,
                 delay_secs: 1,
                 label: "omp's rpc response cap"
             }
         );
+        // The id did not line up, but a prompt is pending and the turn is not running: still resumed, and
+        // the caller logs the mismatch.
         assert_eq!(
-            decide_resume(true, false, "unknown tool 'nope'", 0),
+            decide_resume(false, false, true, err, 0),
+            Resume::Retry {
+                attempt: 1,
+                delay_secs: 1,
+                label: "omp's rpc response cap"
+            }
+        );
+        // Nothing pending and nothing running: blocked, not silently idle - the seat is not healthy.
+        assert_eq!(
+            decide_resume(false, false, false, err, 0),
+            Resume::Blocked("a retryable failure with no turn to resume")
+        );
+        assert_eq!(
+            decide_resume(true, false, false, "unknown tool 'nope'", 0),
             Resume::Blocked("the agent refused the turn")
         );
         // Bounded: the fourth failure of the same turn stops trying.
         assert_eq!(
-            decide_resume(true, false, err, MAX_RESUME_ATTEMPTS),
+            decide_resume(true, false, true, err, MAX_RESUME_ATTEMPTS),
             Resume::Blocked("omp's rpc response cap")
         );
     }

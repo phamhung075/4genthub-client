@@ -52,6 +52,27 @@
 - A prompt's `id` is unique per pane line and remembered, so a response is correlated with the message it
   belongs to and a resume re-sends exactly that message.
 
+### Changed (the lead's follow-up to the gate: ownership follows the classification)
+An error the runner classified but did not own used to leave the seat published as `idle` — a seat that looks
+healthy and is not, which is the same lie this cutover exists to remove, and the measurement that made it
+concrete was a **retryable** death that would never have resumed. `decide_resume(ours_by_id, turn_active,
+has_pending_prompt, error, failures)` is now the whole rule:
+
+1. the turn is still running -> nothing is resumed and the healthy seat is untouched;
+2. otherwise, **any** error means the seat is not healthy: a terminal one publishes `blocked` with its
+   classification whatever the response's id said;
+3. a retryable error with a pending prompt is resumed even when the id did not line up — the mismatch is
+   logged (`rpc error without a matching id; treating the pending prompt as its turn`) instead of swallowed;
+4. a retryable error with no turn to resume publishes `blocked` ("a retryable failure with no turn to
+   resume") rather than leaving an `idle` seat behind.
+
+Forced on the exact measured case (a scratch room whose `omp` has no provider credential, so the response is
+the id-less `No API key found for deepseek`): the pane now reads
+`gave up: the agent refused the turn :: No API key found for deepseek.` and the seat's state file reads
+`{"state": "blocked", "classification": "the agent refused the turn", "resume_attempts": 1}` — where before
+the fix the same run left `idle` and said `nothing to resume: a response this runner did not ask for`. The
+id-mismatch branch itself is unit-tested; in this run the id matched, which is recorded rather than implied.
+
 ### Design errata carried here (architect seat wedged; the lead asked for these in the change record)
 1. §1 says the reference's runner owns a **socketpair**; the measured reference uses plain pipes on
    fd 0/1/2 (`pi-runner.js:818-822`). Ownership is the property that matters.
