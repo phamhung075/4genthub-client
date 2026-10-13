@@ -146,12 +146,17 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
 
     // The supervisor already put AGENTHUB_* and PI_CODING_AGENT_DIR into this process's environment when
     // it launched the pane, so the child inherits the seat's identity rather than a second copy of it.
-    let mut child = Command::new(&seat.runtime)
+    let mut launch = Command::new(&seat.runtime);
+    launch
         .args(&argv)
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit()) // the pane: the human sees omp's own errors
+        .stderr(Stdio::inherit()); // the pane: the human sees omp's own errors
+    // Default deny, before anything is spawned: the agent must not inherit the live rig's addressing, which
+    // the daemon's own environment would otherwise hand it (`crate::scrub_env` states the measurement).
+    crate::scrub_env(&mut launch);
+    let mut child = launch
         .spawn()
         .map_err(|e| format!("cannot spawn '{}': {e}", seat.runtime))?;
     info!(

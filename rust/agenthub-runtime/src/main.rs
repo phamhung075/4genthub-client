@@ -20,6 +20,34 @@ use hooks::HookBus;
 use ipc::IpcServer;
 use supervisor::RoomSupervisor;
 
+/// The environment a seat's agent is allowed to see: everything the runtime was given, **minus** anything
+/// that addresses another rig.
+///
+/// Default deny, by prefix, because the failure this prevents is one of omission: the runtime only *adds*
+/// its own `AGENTHUB_*` variables, so without this a room started the way the operator starts one hands its
+/// agent the live rig's addressing - `OPENRIG_HOME`, `OPENRIG_URL`, the activity-hook token, `OPENRIG_DB`,
+/// and the session/node/transcript ids - and an agent process can then reach the live daemon from inside a
+/// scratch room. Measured before this existed: nine `OPENRIG_*` variables were visible in the agent's own
+/// `/proc/<pid>/environ`.
+pub const ENV_DENY_PREFIXES: [&str; 1] = ["OPENRIG_"];
+
+pub fn env_is_denied(key: &str) -> bool {
+    ENV_DENY_PREFIXES.iter().any(|p| key.starts_with(p))
+}
+
+/// Remove every denied variable from a child's environment. Callers are the two places the runtime starts
+/// something: the tmux client that becomes a seat's pane, and the agent the runner spawns.
+pub fn scrub_env(command: &mut std::process::Command) -> &mut std::process::Command {
+    let denied: Vec<String> = std::env::vars()
+        .map(|(key, _)| key)
+        .filter(|key| env_is_denied(key))
+        .collect();
+    for key in denied {
+        command.env_remove(key);
+    }
+    command
+}
+
 #[derive(Parser)]
 #[command(name = "agenthub-runtime")]
 #[command(about = "Native Rust execution engine for 4genthub seats")]
