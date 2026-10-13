@@ -32,7 +32,7 @@ type reseatDeps struct {
 
 func defaultReseatDeps(stateRoot string) *reseatDeps {
 	return &reseatDeps{
-		nodes:     rigNodes,
+		nodes:     roomNodes,
 		waitQuiet: func(rig, seat string) bool { return NewQuietWaiter(stateRoot).Wait(rig, seat) },
 		relaunch:  relaunch,
 		getenv:    os.Getenv,
@@ -130,7 +130,13 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 	return clientcmd.ExitOK, nil
 }
 
-// rigNodes is the room's node records, read from the LOCAL RUNTIME instead of from `rig ps --nodes`.
+// roomNodes is the room's node records, read from the LOCAL RUNTIME instead of from `rig ps --nodes`.
+//
+// NAMED roomNodes, NOT rigNodes, ON PURPOSE: clientlifecycle has a function of the older name that takes the SAME
+// runtime call and has the OPPOSITE failure contract - it treats an unreadable read as EMPTY, because its gate must
+// never read an unreadable poll as a seat death. Two same-named functions in two packages with opposite contracts is
+// a trap whose only guard would be a commit message, and later readers do not read those. Whichever name you arrived
+// from, the other is one grep away and deliberately different.
 //
 // The exec is gone, the capability is not: this is the client's own reading (clientruntime.GetRoomStatus,
 // the same one clientlifecycle's rigNodes takes), and it produces the SAME record shape the consumers
@@ -141,7 +147,7 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 // Unlike the lifecycle gate, a failed read here is an ERROR rather than an empty reading: `reseat` is a
 // command that must be able to say why it will not restart a seat, and "no seats" and "could not ask"
 // are different answers.
-func rigNodes(rig string) ([]map[string]any, error) {
+func roomNodes(rig string) ([]map[string]any, error) {
 	seats, err := clientruntime.NewClient("").GetRoomStatus(rig)
 	if err != nil {
 		return nil, &clientcmd.CodedError{

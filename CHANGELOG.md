@@ -3,6 +3,22 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the two room readers stop sharing a name that hides opposite contracts
+
+`clientseat`'s room reader and `clientlifecycle`'s room reader were both called `rigNodes` and take the SAME runtime
+call with OPPOSITE failure contracts: one returns an error naming the rig, the other treats an unreadable read as
+empty. Nothing but a commit message guarded the difference, and later readers do not read those.
+
+### Changed
+- `internal/clientseat/reseat.go`: the reader is `roomNodes` (reached through `reseatDeps.nodes`, so the rename is
+  contained to this file and its test). Behavior is unchanged.
+- Both definitions now carry a cross-reference to the other, naming the opposite contract. Whichever name a reader
+  arrives from, the other is one grep away and deliberately different.
+
+### Verified
+- `gofmt -l internal/clientseat/` clean; `go build ./...` exit 0; `go test ./internal/clientseat/` ok; the renamed
+  `TestRoomNodesNeverShellsOutToRig` RUN BY NAME → PASS; `go test ./...` 23 packages ok, 0 failed.
+
 ## 2026-10-13 — reseat reads the room from the local runtime instead of shelling out to `rig`
 
 `clientseat.rigNodes` was `rig ps --nodes --rig RIG --json` through `exec.LookPath("rig")` +

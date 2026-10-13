@@ -472,6 +472,10 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 // from different things. A read that fails, or answers something that is not a list, gives NO nodes: the
 // caller's next step fails loudly on its own, and an unreadable reading must never be read as "this room
 // is safe".
+//
+// The clientseat package reads the SAME runtime call as roomNodes, with the OPPOSITE contract: there a failed read is
+// an ERROR naming the rig, because `reseat` has to say why it will not restart a seat. The names differ on purpose -
+// two same-named functions with opposite contracts is a trap whose only guard would be a commit message.
 var rigNodes = func(rig *clientcmd.Rig, name string) []map[string]any {
 	client := clientruntime.NewClient("")
 	seats, err := client.GetRoomStatus(name)

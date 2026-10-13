@@ -13,11 +13,11 @@ import (
 // assertion is about the ABSENCE of the call rather than about a message: with the exec in place the
 // function answers "rig is not on PATH" (an exec.LookPath failure), and without it the only possible
 // failure comes from the local runtime.
-func TestRigNodesNeverShellsOutToRig(t *testing.T) {
+func TestRoomNodesNeverShellsOutToRig(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("OPENRIG_HOME", t.TempDir())
 
-	nodes, err := rigNodes("nosuchrig")
+	nodes, err := roomNodes("nosuchrig")
 	if err != nil && strings.Contains(err.Error(), "is not on PATH") {
 		t.Fatalf("rigNodes shelled out to `rig`: %v", err)
 	}
