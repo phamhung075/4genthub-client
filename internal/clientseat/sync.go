@@ -15,6 +15,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // SyncRigArgs is the adopt step's command: THIS binary's own `sync rig`, so the pinning rules (never
@@ -209,7 +210,16 @@ func (w QuietWaiter) Wait(rig, seat string) bool {
 
 func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
-// seatActivity is seat_activity: the runtime's own word on whether the seat is running.
+// seatActivity is seat_activity, and it is the SECOND reader of the same answer rigIdle reads - so it is a DECLARED
+// EXCEPTION for the same reason, with the same retirement: agentActivity is produced outside this client, there is no
+// native activity read on the runtime's surface yet, and that native read is the CUTOVER PRECONDITION the rigIdle
+// declaration names. One read retires both, and both declarations should then be DELETED rather than annotated.
+//
+// ITS CONSUMER IS QuietWaiter, and the direction of failure here is the OPPOSITE of rigIdle's: Wait asks
+// Activity(...) != "running", and every failure path here answers "", which is not "running" - so an unreadable
+// activity reads as NOT RUNNING and the wait falls through to its stillness clause alone (the seat's own file's mtime).
+// That is a real signal rather than a wrong answer, but it is strictly weaker than the two-clause reading, and after
+// the cutover it is the only clause left. Named here rather than left for a reader to discover: this one fails OPEN.
 func seatActivity(rig, seat string) string {
 	path, err := exec.LookPath("rig")
 	if err != nil {
@@ -254,81 +264,47 @@ func secondsSinceLastWrite(stateRoot, rig, seat string) float64 {
 	return nowSeconds() - newest
 }
 
-// relaunch stops the seat's session and asks OpenRig to launch it again, so it loads the snapshot it is
+// restartSeat is the ONE place this package asks the runtime to start a seat again. It is a variable for the same
+// reason clientlifecycle's runtimeSendText is: a test replaces it to assert WHICH room and seat were asked for, and to
+// prove that no shell-out can hide behind it.
+var restartSeat = func(rig, seat string) error {
+	_, err := clientruntime.NewClient("").RestartSeat(rig, seat)
+	return err
+}
+
+// deliverSeatSkills is a variable because the function it stands for writes into the REAL account's seat store
+// (~/.openrig/agenthub-seats), which is resolved from the passwd entry rather than $HOME - so a test that ran the real
+// one would write into the owner's tree. Everything else about it is deliverSkillsDefault's.
+var deliverSeatSkills = deliverSkillsDefault
+
+// relaunch stops the seat's session and asks the runtime to start it again, so it loads the snapshot it is
 // now pinned to.
+//
+// THE RUNTIME TAKES THE RESTART OVER, and four pieces of the old code are DELETED rather than kept around the new call:
+//
+//   - `rig launch <rigId> <rig.seat>` becomes the runtime's RestartSeat, which is stop_seat followed by start_seat
+//     from the room's own spec - the same two steps, taken by the party that owns the session.
+//   - THE CLIENT'S OWN `tmux kill-session` AND THE 4s SLEEP are gone: the runtime's restart stops the session itself,
+//     so the client reaching into tmux was the client doing the runtime's job, and the sleep existed to let a session
+//     the client had just killed go away before asking for the launch.
+//   - `rigID` (a `rig ps --json` call that existed only to find the id argument) and `sessionComesUp` (a three-minute
+//     tmux poll) are gone with it: neither had another caller.
+//   - THE "did not respond in time" TOLERANCE IS GONE, and this is the one behaviour change worth naming: it existed
+//     because the CLI gave up after 5s while the launch landed anyway, so the code polled tmux to find out. A socket
+//     call has no such failure mode - the reply IS the outcome, or the call reports why - so a failure is now the
+//     runtime's own reason instead of being inferred from a session appearing, which is the shape that let a no-op
+//     look like a success elsewhere this evening.
 func relaunch(rig, seat string) error {
-	session := rig + "-" + seat + "@" + rig
-	if err := deliverSkillsDefault(rig, seat); err != nil {
+	if err := deliverSeatSkills(rig, seat); err != nil {
 		return err
 	}
-	if tmux, err := exec.LookPath("tmux"); err == nil {
-		_ = exec.Command(tmux, "kill-session", "-t", session).Run()
-	}
-	time.Sleep(4 * time.Second)
-	path, err := exec.LookPath("rig")
-	if err != nil {
+	if err := restartSeat(rig, seat); err != nil {
 		return &clientcmd.CodedError{
-			Message: "rig is not on PATH, and relaunching a seat needs it",
-			Code:    clientcmd.ExitUnavailable,
-		}
-	}
-	id, err := rigID(path, rig)
-	if err != nil {
-		return err
-	}
-	if done, err := exec.Command(path, "launch", id, rig+"."+seat).CombinedOutput(); err != nil {
-		// A slow daemon answers after rig's 5 s timeout, and the launch still lands ("outcome UNKNOWN").
-		// The session coming up is the answer, not the reply.
-		if strings.Contains(string(done), "did not respond in time") && sessionComesUp(session) {
-			return nil
-		}
-		return &clientcmd.CodedError{
-			Message: fmt.Sprintf("rig launch %s.%s failed: %s", rig, seat, truncate(strings.TrimSpace(string(done)), 200)),
+			Message: fmt.Sprintf("could not relaunch %s/%s: %v", rig, seat, err),
 			Code:    ExitFailed,
 		}
 	}
 	return nil
-}
-
-// sessionComesUp is true when the tmux session exists within 3 minutes.
-func sessionComesUp(session string) bool {
-	tmux, err := exec.LookPath("tmux")
-	if err != nil {
-		return false
-	}
-	for i := 0; i < 90; i++ {
-		if exec.Command(tmux, "has-session", "-t", session).Run() == nil {
-			return true
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return false
-}
-
-func rigID(rigPath, rig string) (string, error) {
-	out, err := exec.Command(rigPath, "ps", "--json").Output()
-	if err != nil {
-		return "", &clientcmd.CodedError{Message: fmt.Sprintf("rig ps --json failed: %v", err), Code: ExitFailed}
-	}
-	var entries []map[string]any
-	if json.Unmarshal(out, &entries) != nil {
-		var wrapper struct {
-			Rigs []map[string]any `json:"rigs"`
-		}
-		if json.Unmarshal(out, &wrapper) != nil {
-			return "", &clientcmd.CodedError{Message: "rig ps --json did not answer with a rig list", Code: ExitFailed}
-		}
-		entries = wrapper.Rigs
-	}
-	for _, entry := range entries {
-		if entry["name"] != rig {
-			continue
-		}
-		if id, ok := entry["rigId"].(string); ok && id != "" {
-			return id, nil
-		}
-	}
-	return "", &clientcmd.CodedError{Message: fmt.Sprintf("no running rig named %q", rig), Code: ExitFailed}
 }
 
 // logf writes a timed line. It is a variable so a test can silence it.

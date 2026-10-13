@@ -3,6 +3,36 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the relaunch goes to the runtime, and both activity readers are declared
+
+### Changed
+- `relaunch` asks the runtime to start the seat again (`RestartSeat` = `stop_seat` then `start_seat` from the room's own
+  spec) instead of `rig launch <rigId> <rig.seat>`. FOUR pieces of the old code are DELETED rather than kept around the
+  new call: the client's own `tmux kill-session` and its 4s sleep (the runtime's restart stops the session itself, so the
+  client was doing the runtime's job), and `rigID` (a `rig ps --json` call that existed only to find the id argument)
+  with `sessionComesUp` (a three-minute tmux poll), neither of which had another caller. The "did not respond in time"
+  tolerance goes with the CLI that produced it: it existed because the CLI gave up after 5s while the launch landed
+  anyway, and the code then inferred the outcome from a session appearing — a socket call's reply IS the outcome, so a
+  failure is now the runtime's own reason.
+- Two seams, variables for the repo's own reason: `restartSeat` (the test asserts which room and seat are asked for, and
+  that no shell-out hides behind it) and `deliverSeatSkills`, which stands for a function that writes into the REAL
+  account's seat store — a test running the real one would write into the owner's tree.
+
+### Declared, not changed
+- `seatActivity` is the SECOND reader of `agentActivity` (`rigIdle` is the first) and is declared in the same words:
+  same producer-absent gap, same retirement (the native activity read, which is the cutover precondition), and the
+  comment says to DELETE it then rather than annotate it. It also records the direction of failure, which is the
+  OPPOSITE of `rigIdle`'s: `QuietWaiter` asks `!= "running"`, and every failure path here answers `""` — so an unreadable
+  activity reads as NOT RUNNING and the wait falls through to its stillness clause alone. This one FAILS OPEN, and the
+  comment says so instead of leaving it to be discovered.
+
+### Verified
+- `TestRelaunchAsksTheRuntimeForTheSeatAndNeverShellsOut` empties PATH, so a returned shell-out cannot find its tool and
+  the test goes red; `TestRelaunchDeliversSkillsBeforeItStartsTheSeat` fails if the seat is started without them; and
+  `TestRelaunchReportsTheRuntimesRefusal` requires the runtime's reason to survive into the error.
+- gofmt clean, `go build ./...` exit 0, the relaunch tests BY NAME all PASS (with the pre-existing
+  `TestRelaunchQuietRestartsOnlyTheSeatsThatChangedAndAreQuiet` untouched), `./internal/clientseat/` ok, module 23 ok.
+
 ## 2026-10-13 — the supervisor's sends go to the runtime, and rigIdle is declared rather than converted
 
 `clientlifecycle` sent every message by shelling out: `rigSay` ran `rig send <session> <text> --wait-for-idle 120
