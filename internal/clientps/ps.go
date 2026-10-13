@@ -1,0 +1,383 @@
+// Package clientps is `4genteam ps`: what a room's seats are doing right now, read from local tmux
+// sessions and each seat's own transcript. It needs no OpenRig daemon.
+package clientps
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientwatch"
+)
+
+const usage = "usage: 4genteam ps [RIG] [--nodes | --compact | --grid] [--json]"
+
+// quotaMarkers are the provider messages a seat prints when it cannot answer; any of them in the
+// transcript tail means the seat is waiting at its prompt for a reason that is not its own.
+var quotaMarkers = []string{"Individual quota reached", "Out of credits", "rate limit", "usage limit"}
+
+// Seat is one tmux-backed seat of a rig.
+type Seat struct {
+	Rig       string `json:"rig"`
+	Member    string `json:"member"`
+	Session   string `json:"session"`
+	Runtime   string `json:"runtime"`
+	Model     string `json:"model"`
+	Status    string `json:"status"`
+	Attached  bool   `json:"attached"`
+	Uptime    string `json:"uptime"`
+	Tokens    int    `json:"contextTokens"`
+	Limit     int    `json:"compactLimit"`
+	Activity  string `json:"activity"`
+	Error     string `json:"error"`
+	LogPath   string `json:"log"`
+	startedAt time.Time
+}
+
+// RigRow is the per-rig rollup.
+type RigRow struct {
+	Rig     string `json:"rig"`
+	Seats   int    `json:"seats"`
+	Attn    int    `json:"attention"`
+	Status  string `json:"status"`
+	Uptime  string `json:"uptime"`
+	started time.Time
+}
+
+type command struct{}
+
+// Commands registers `ps`.
+func Commands() []clientcmd.Command { return []clientcmd.Command{command{}} }
+
+func (command) Name() string { return "ps" }
+func (command) Summary() string {
+	return "the seats of a room: summary, --nodes, --compact, --grid, --json"
+}
+func (command) NeedsRig() bool { return false }
+
+func (command) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+	if clientcmd.HelpRequested(args) {
+		fmt.Fprintln(stdout, usage)
+		fmt.Fprintln(stdout, "\nRead from local tmux sessions and the seats' transcripts. A seat whose transcript tail "+
+			"shows a provider quota or credit message is reported as `quota`.")
+		return clientcmd.ExitOK
+	}
+	view, asJSON, rig := "summary", false, ""
+	for _, arg := range args {
+		switch arg {
+		case "--nodes":
+			view = "nodes"
+		case "--compact":
+			view = "compact"
+		case "--grid":
+			view = "grid"
+		case "--json":
+			asJSON = true
+		default:
+			if strings.HasPrefix(arg, "-") || rig != "" {
+				fmt.Fprintf(stderr, "4genteam ps: unexpected argument %q\n%s\n", arg, usage)
+				return clientcmd.ExitUsage
+			}
+			rig = arg
+		}
+	}
+	sessions, err := listSessions(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam ps: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
+	seats := collect(ctx, sessions, rig)
+	if asJSON {
+		return writeJSON(stdout, stderr, view, seats)
+	}
+	switch view {
+	case "nodes":
+		renderNodes(stdout, seats)
+	case "compact":
+		renderCompact(stdout, seats)
+	case "grid":
+		renderGrid(stdout, seats)
+	default:
+		renderSummary(stdout, rollup(seats))
+	}
+	return clientcmd.ExitOK
+}
+
+type session struct {
+	name     string
+	created  time.Time
+	attached bool
+}
+
+func listSessions(ctx context.Context) ([]session, error) {
+	out, err := exec.CommandContext(ctx, "tmux", "list-sessions", "-F",
+		"#{session_name}\t#{session_created}\t#{session_attached}").Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && strings.Contains(string(exitErr.Stderr), "no server running") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("tmux list-sessions failed: %w", err)
+	}
+	var sessions []session
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.Split(line, "\t")
+		if len(parts) != 3 {
+			continue
+		}
+		epoch, _ := strconv.ParseInt(parts[1], 10, 64)
+		sessions = append(sessions, session{name: parts[0], created: time.Unix(epoch, 0), attached: parts[2] != "0"})
+	}
+	return sessions, nil
+}
+
+// splitSession reads `<rig>-<member>@<rig>`, the name every seat session carries.
+func splitSession(name string) (rig, member string, ok bool) {
+	at := strings.LastIndex(name, "@")
+	if at < 0 {
+		return "", "", false
+	}
+	rig = name[at+1:]
+	rest := name[:at]
+	if !strings.HasPrefix(rest, rig+"-") {
+		return "", "", false
+	}
+	return rig, strings.TrimPrefix(rest, rig+"-"), true
+}
+
+func collect(ctx context.Context, sessions []session, only string) []Seat {
+	var seats []Seat
+	for _, s := range sessions {
+		rig, member, ok := splitSession(s.name)
+		if !ok || (only != "" && rig != only) {
+			continue
+		}
+		snap := clientwatch.SeatSnapshot(ctx, rig, member)
+		seat := Seat{
+			Rig: rig, Member: member, Session: s.name, Runtime: snap.Runtime, Model: snap.Model,
+			Attached: s.attached, Uptime: since(s.created), Tokens: snap.ContextTokens,
+			Limit: snap.CompactLimit, LogPath: snap.LogPath, startedAt: s.created, Status: "running",
+		}
+		if marker := quotaIn(transcriptFor(rig, s.name, snap.LogPath)); marker != "" {
+			seat.Status, seat.Error = "quota", marker
+		}
+		seat.Activity = activity(snap.LogPath)
+		seats = append(seats, seat)
+	}
+	sort.Slice(seats, func(i, j int) bool {
+		if seats[i].Rig != seats[j].Rig {
+			return seats[i].Rig < seats[j].Rig
+		}
+		return seats[i].Member < seats[j].Member
+	})
+	return seats
+}
+
+// transcriptFor prefers the terminal transcript, because a provider error is printed to the terminal
+// and not always written to the session log.
+func transcriptFor(rig, session, fallback string) string {
+	home, err := clientenv.RealHome()
+	if err == nil {
+		path := filepath.Join(home, ".openrig", "transcripts", rig, session+".log")
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return fallback
+}
+
+func quotaIn(path string) string {
+	tail := tailOf(path, 4096)
+	for _, marker := range quotaMarkers {
+		if strings.Contains(tail, marker) {
+			return marker
+		}
+	}
+	return ""
+}
+
+// activity is how long ago the seat's log last changed: idle seats are the interesting ones.
+func activity(path string) string {
+	if path == "" {
+		return "-"
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "-"
+	}
+	return since(info.ModTime()) + " ago"
+}
+
+func tailOf(path string, n int64) string {
+	if path == "" {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	offset := info.Size() - n
+	if offset < 0 {
+		offset = 0
+	}
+	buf := make([]byte, info.Size()-offset)
+	read, _ := f.ReadAt(buf, offset)
+	return strings.ToValidUTF8(string(buf[:read]), "")
+}
+
+func since(t time.Time) string {
+	d := time.Since(t).Round(time.Minute)
+	switch {
+	case d < time.Minute:
+		return "<1m"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	return fmt.Sprintf("%dd", int(d.Hours())/24)
+}
+
+func rollup(seats []Seat) []RigRow {
+	byRig := map[string]*RigRow{}
+	var order []string
+	for _, s := range seats {
+		row, ok := byRig[s.Rig]
+		if !ok {
+			row = &RigRow{Rig: s.Rig, Status: "running", started: s.startedAt}
+			byRig[s.Rig] = row
+			order = append(order, s.Rig)
+		}
+		row.Seats++
+		if s.Status != "running" {
+			row.Attn++
+			row.Status = "attention"
+		}
+		if s.startedAt.Before(row.started) {
+			row.started = s.startedAt
+		}
+	}
+	sort.Strings(order)
+	rows := make([]RigRow, 0, len(order))
+	for _, rig := range order {
+		byRig[rig].Uptime = since(byRig[rig].started)
+		rows = append(rows, *byRig[rig])
+	}
+	return rows
+}
+
+func writeJSON(stdout, stderr io.Writer, view string, seats []Seat) int {
+	var payload any = seats
+	if view == "summary" {
+		payload = rollup(seats)
+	}
+	body, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam ps: cannot print the rows: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
+	fmt.Fprintln(stdout, string(body))
+	return clientcmd.ExitOK
+}
+
+// cell pads to width and truncates with an ellipsis, so one long value cannot shift its neighbours.
+func cell(value string, width int) string {
+	runes := []rune(value)
+	if value == "" {
+		runes, value = []rune("-"), "-"
+	}
+	if len(runes) > width {
+		return string(runes[:width-1]) + "…"
+	}
+	return value + strings.Repeat(" ", width-len(runes))
+}
+
+func row(widths []int, values ...string) string {
+	var b strings.Builder
+	for i, v := range values {
+		b.WriteString(cell(v, widths[i]))
+		b.WriteByte(' ')
+	}
+	return strings.TrimRight(b.String(), " ")
+}
+
+func renderSummary(w io.Writer, rows []RigRow) {
+	seats, attn := 0, 0
+	for _, r := range rows {
+		seats += r.Seats
+		attn += r.Attn
+	}
+	fmt.Fprintf(w, "%d rig(s) · %d seat(s) · %d need(s) attention\n\n", len(rows), seats, attn)
+	widths := []int{30, 6, 5, 11, 11}
+	fmt.Fprintln(w, row(widths, "RIG", "SEATS", "ATTN", "STATUS", "UPTIME"))
+	for _, r := range rows {
+		fmt.Fprintln(w, row(widths, r.Rig, strconv.Itoa(r.Seats), strconv.Itoa(r.Attn), r.Status, r.Uptime))
+	}
+}
+
+func ctxCell(s Seat) string {
+	if s.Tokens == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%dk", s.Tokens/1000)
+}
+
+// renderNodes prints the node table. Columns whose source (the OpenRig registry) no longer exists are
+// not invented: they were dropped, and the columns that remain are the ones a local read can fill.
+func renderNodes(w io.Writer, seats []Seat) {
+	widths := []int{22, 14, 34, 8, 22, 9, 11, 9, 7, 12, 30}
+	fmt.Fprintln(w, row(widths, "RIG", "MEMBER", "SESSION", "RUNTIME", "MODEL", "STATUS", "ATTACHED", "UPTIME", "CTX", "ACTIVITY", "ERROR"))
+	for _, s := range seats {
+		fmt.Fprintln(w, row(widths, s.Rig, s.Member, s.Session, s.Runtime, s.Model, s.Status,
+			strconv.FormatBool(s.Attached), s.Uptime, ctxCell(s), s.Activity, s.Error))
+	}
+}
+
+func renderCompact(w io.Writer, seats []Seat) {
+	widths := []int{22, 38, 9, 14, 7, 30}
+	fmt.Fprintln(w, row(widths, "RIG", "SESSION", "STATUS", "ACTIVITY", "CTX", "REASON"))
+	for _, s := range seats {
+		fmt.Fprintln(w, row(widths, s.Rig, s.Session, s.Status, s.Activity, ctxCell(s), s.Error))
+	}
+}
+
+func meter(tokens, limit, width int) string {
+	if limit <= 0 {
+		return strings.Repeat("░", width)
+	}
+	filled := tokens * width / limit
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+func renderGrid(w io.Writer, seats []Seat) {
+	const inner = 44
+	line := func(text string) string { return "│ " + cell(text, inner) + " │" }
+	for _, s := range seats {
+		fmt.Fprintln(w, "┌─"+strings.Repeat("─", inner)+"─┐")
+		fmt.Fprintln(w, line(s.Member+"  ["+s.Status+"]"))
+		fmt.Fprintln(w, line(s.Rig+" · "+s.Runtime+" · "+s.Model))
+		fmt.Fprintln(w, line(fmt.Sprintf("ctx %s %s/%s", meter(s.Tokens, s.Limit, 20), ctxCell(s), fmt.Sprintf("%dk", s.Limit/1000))))
+		fmt.Fprintln(w, line("up "+s.Uptime+" · active "+s.Activity))
+		if s.Error != "" {
+			fmt.Fprintln(w, line("✗ "+s.Error))
+		}
+		fmt.Fprintln(w, "└─"+strings.Repeat("─", inner)+"─┘")
+	}
+}

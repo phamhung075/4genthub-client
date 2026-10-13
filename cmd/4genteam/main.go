@@ -33,6 +33,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientoutbox"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
+	"github.com/phamhung075/4genthub-client/internal/clientps"
 	"github.com/phamhung075/4genthub-client/internal/clientrestore"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientseat"
@@ -111,6 +112,7 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientrestore.Commands()...)
 	registry = append(registry, clientruntime.Commands()...)
 	registry = append(registry, clientoutbox.Commands()...)
+	registry = append(registry, clientps.Commands()...)
 	return append(registry,
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])", false),
 	)
@@ -138,13 +140,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		case "queue":
 			args[0] = "queue"
 		case "ps":
-			args[0] = "status"
+			args[0] = "ps"
 		case "compact":
 			args[0] = "compact"
 		case "up":
 			args[0] = "up"
 		case "down":
 			args[0] = "stop"
+		}
+	}
+
+	// `status` is the safeguard rows; the node views of a room are `ps`.
+	if len(args) > 0 && args[0] == "status" {
+		for _, arg := range args[1:] {
+			if arg == "--nodes" || arg == "--compact" || arg == "--grid" {
+				args[0] = "ps"
+			}
 		}
 	}
 
