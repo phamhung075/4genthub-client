@@ -320,3 +320,28 @@ func TestTheResumeIsSentWhenTheGateIsOff(t *testing.T) {
 		t.Errorf("sent = %v, want exactly the resume text while the gate is off", *sent)
 	}
 }
+
+// THE PROPERTY, PINNED THE WAY IT HAS TO BE PINNED: this FAILS IF AN ENVELOPE APPEARS rather than recording that
+// none is there today. rigAbort's text is the runner's keystroke, so the assertion is on the EXACT string - a
+// "From NAME:" prefix would arrive as a MESSAGE where the runner needs "/abort", which is the difference between
+// aborting a turn and sending a seat a note about aborting one.
+func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
+	previous := runtimeSendText
+	t.Cleanup(func() { runtimeSendText = previous })
+
+	var gotSession, gotText string
+	runtimeSendText = func(session, text string) error {
+		gotSession, gotText = session, text
+		return nil
+	}
+
+	rigAbort("room1", "alpha")
+
+	if gotSession != "room1-alpha@room1" {
+		t.Errorf("session = %q, want the room's canonical session name room1-alpha@room1", gotSession)
+	}
+	if gotText != "/abort" {
+		t.Errorf("barrier text = %q, want the bare /abort: an envelope or any other text arrives as a MESSAGE, "+
+			"not the keystroke the omp runner aborts a turn on", gotText)
+	}
+}

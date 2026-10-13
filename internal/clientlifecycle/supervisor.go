@@ -15,6 +15,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
@@ -343,17 +344,26 @@ func rigSay(rig, seat, text string, raw bool) {
 	}
 }
 
-// rigAbort sends /abort, the one pane text the omp runner turns into an abort of the running turn. It is
-// sent without waiting for idle, because the seat is working by definition.
+// runtimeSendText is the ONE place this package types text into a seat's pane. A package-level variable rather
+// than an interface added for testing, which is the repo's rule, and it is what makes the no-envelope property
+// of rigAbort BELOW observable: the test replaces it and asserts the exact barrier text.
+var runtimeSendText = func(session, text string) error {
+	return clientruntime.NewClient("").SendText(session, text)
+}
+
+// rigAbort sends /abort, the one pane text the omp runner turns into an abort of the running turn, and it goes
+// out WITHOUT the From/To envelope the send verb adds: a sender prefix would arrive as a MESSAGE and the runner
+// would see text where it needs a keystroke, so the bare "/abort" is the contract, not a detail. It is sent
+// without waiting for idle, because the seat is working by definition - and the runtime's send has no idle wait
+// to escape, so the old start-and-release dance is unnecessary rather than dropped.
 func rigAbort(rig, seat string) {
-	path, err := exec.LookPath("rig")
-	if err != nil {
-		return
-	}
-	cmd := exec.Command(path, "send", rig+"-"+seat+"@"+rig, "/abort", "--raw")
-	if err := cmd.Start(); err == nil {
-		_ = cmd.Process.Release()
-	}
+	// The error is DELIBERATELY discarded, and it is the deliberate kind rather than an oversight: the caller is
+	// aborting a turn that is already running, so a refusal has nothing useful to do here - the seat is being
+	// interrupted either way, and the supervisor's next step is its own interrupt/escalation ladder, not a retry of
+	// this keystroke. The old code discarded it too (Start + Release), so this is not a new silence. The alternative
+	// is a supervisor log line, which this function cannot reach without a logger seam of its own: if a reader needs
+	// the refusal visible, THAT seam is the change to make - not a silent retry here.
+	_ = runtimeSendText(rig+"-"+seat+"@"+rig, "/abort")
 }
 
 func tmuxInterrupt(rig, seat string) {

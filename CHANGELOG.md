@@ -3,6 +3,31 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the abort keystroke goes to the runtime, with the bare text asserted
+
+`clientlifecycle.rigAbort` shelled out to `rig send <session> /abort --raw`. It now types the bare `/abort` through
+`clientruntime.SendText` — no `From`/`To` envelope, because a sender prefix arrives as a MESSAGE where the runner needs
+a keystroke.
+
+### Changed
+- `internal/clientlifecycle/supervisor.go`: `rigAbort` sends through `runtimeSendText`, a package-level seam (the
+  repo's rule: seams are variables, not interfaces added for testing). The old start-and-release dance is
+  UNNECESSARY rather than dropped: the runtime's send has no idle wait to escape, so it was the CLI's, not the call's.
+- The discarded error is DELIBERATELY discarded, and the comment says so: the caller is aborting a turn that is
+  already running, so a refusal has nothing useful to do here, and the supervisor's next step is its own
+  interrupt/escalation ladder rather than a retry of this keystroke. The old code discarded it too. The alternative —
+  a supervisor log line — needs a logger seam this function does not have, and that seam is the change to make if the
+  refusal ever needs to be visible.
+
+### Verified
+- `internal/clientlifecycle/supervisor_test.go`: `TestRigAbortSendsTheBareKeystrokeWithNoEnvelope` asserts the EXACT
+  session name (`rig-seat@rig`) and the EXACT barrier text (`/abort`), so it FAILS IF AN ENVELOPE APPEARS instead of
+  recording today's behaviour. RUN BY NAME → PASS.
+- That file's diff is +25/−0 — all additions. A test-file change with ZERO deletions of lines its author did not write
+  is the property that makes a write-tool accident visible, and it is the check to ask for rather than a promise.
+- `gofmt -l internal/clientlifecycle/` clean; `go build ./...` exit 0; `go test ./internal/clientlifecycle/` ok with
+  its pre-existing tests intact; `go test ./...` 23 packages ok, 0 failed.
+
 ## 2026-10-13 — the two room readers stop sharing a name that hides opposite contracts
 
 `clientseat`'s room reader and `clientlifecycle`'s room reader were both called `rigNodes` and take the SAME runtime
