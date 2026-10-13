@@ -5,14 +5,25 @@ description: Switch ONE seat of a team rig to another runtime/LLM (e.g. architec
 
 # Switch one seat's runtime / LLM
 
-`rig launch` and `rig remove` act on a node but cannot change a running node's runtime, and editing `rig.yaml` does not touch a live seat. The working path is a **variant spec** plus a rig teardown and rebuild. Example: an architect seat moved from `claude-code`/`opus` to `omp`/`deepseek/deepseek-flash`.
+`rig launch` and `rig remove` (OpenRig CLI only, see below) act on a node but cannot change a running node's runtime, and editing `rig.yaml` does not touch a live seat. The working path is a **variant spec** plus a rig teardown and rebuild. Example: an architect seat moved from `claude-code`/`opus` to `omp`/`deepseek/deepseek-flash`.
+
+## Which `rig`: the shim or OpenRig itself
+
+`rig` on PATH is a symlink to `4genteam`. It answers only `whoami`, `send`, `queue`, `ps`, `compact`, `up` and `down`, and its `down` is `4genteam stop` (machine-wide), not a rig teardown. Everything that works on a rig spec or a node (`down --delete`, `up <spec>.yaml`, `capture`, `launch`, `parked`, `provider signals`) needs the OpenRig CLI itself, so call it by path:
+
+```bash
+OPENRIG="node $HOME/__projects__/openrig/packages/cli/dist/index.js"
+$OPENRIG ps --nodes --rig <rig> --json     # runtime, model, sessionStatus, startupStatus per seat
+```
+
+`4genteam ps <rig> [--nodes|--compact|--grid|--json]` reads tmux and the seat transcripts, marks a seat `quota` when its transcript tail shows a quota or credit message, and answers the `rig ps --nodes --rig R --json` contract.
 
 ## Gate: the teardown needs the owner
 
-`rig down <rig> --delete --force` kills **every** seat in the rig, not just the one switching, and the permission guard blocks it until the owner explicitly approves that rig's teardown. Before asking:
+`$OPENRIG down <rig> --delete --force` kills **every** seat in the rig, not just the one switching, and the permission guard blocks it until the owner explicitly approves that rig's teardown. Before asking:
 
-1. `rig ps --nodes --rig <rig> --json`: every seat's `runtime`, `model`, `startupStatus`, `activity`.
-2. `rig capture <rig>-<seat>@<rig> --lines 25` for each working seat. **Do not tear down over a seat that is mid-task** (a rebase, a commit, a deploy) without telling the owner what will be interrupted.
+1. `$OPENRIG ps --nodes --rig <rig> --json`: every seat's `runtime`, `model`, `startupStatus`, `activity`.
+2. `$OPENRIG capture <rig>-<seat>@<rig> --lines 25` for each working seat. **Do not tear down over a seat that is mid-task** (a rebase, a commit, a deploy) without telling the owner what will be interrupted.
 3. Ask the owner (ask_question): switch now / wait for the busy seat / start the seat as a separate rig. Then proceed only on an explicit yes.
 
 ## Steps
@@ -38,19 +49,19 @@ description: Switch ONE seat of a team rig to another runtime/LLM (e.g. architec
    # and relink if needed: ln -sfn ~/.config/deepseek/env <L>/.env or ln -sfn ~/.config/4genthub/.env <L>/.env
    ```
    **Pitfall seen live:** `<L>/.env` pointed at `~/.config/4genthub/.env` when it lacked `DEEPSEEK_API_KEY`, or `~/.config/deepseek/env` was missing its `.env` sibling, so the rebuild left omp seats on `runtime_error: No API key found for deepseek`, and `rig send` refused with "interactive prompt (runtime_error)". Ensure `~/.config/4genthub/.env` and `~/.config/deepseek/.env` both contain `DEEPSEEK_API_KEY`. Also ensure the global tmux environment has `DEEPSEEK_API_KEY` set (`tmux set-environment -g DEEPSEEK_API_KEY <key>`).
-3. **Dry-run**: `cd <L>/rig && rig up rig-<seat>-<runtime>.yaml --plan` expects `resolve_spec: ok`, `preflight: ok` (yolo `full_bypass` warnings are expected).
+3. **Dry-run**: `cd <L>/rig && $OPENRIG up rig-<seat>-<runtime>.yaml --plan` expects `resolve_spec: ok`, `preflight: ok` (yolo `full_bypass` warnings are expected).
 4. **Switch** (after the owner's yes):
-   `rig down <rig> --delete --force` (prints a snapshot id), then launch the new spec and bring up the supervisor stack with `4genteam up`:
+   `$OPENRIG down <rigId> --snapshot --force --delete --json` (prints a snapshot id; if it answers `deleteBlocked` because no tmux server runs, see the throwaway-session step in rig-runtime-switch), then launch the new spec and bring up the supervisor stack with `4genteam up`:
    ```bash
-   rig up <L>/rig/rig-<seat>-<runtime>.yaml --yes
+   $OPENRIG up <L>/rig/rig-<seat>-<runtime>.yaml --yes
    4genteam up <rig> [--allow-peak]
    ```
-   **Never stop at bare `rig up`**: always run `4genteam up <rig>` immediately afterwards to start `rigd`, the auto-compaction loop, the watchdog, and the status bridge.
+   **Never stop at `$OPENRIG up`**: always run `4genteam up <rig>` immediately afterwards to start `rigd`, the auto-compaction loop, the watchdog, and the status bridge.
 5. **Verify with a measurement**, not silence:
    ```bash
-   rig ps --nodes --rig <rig> --json    # every node runtime/model/startupStatus=ready
-   rig ps --nodes --rig <rig>           # REASON must not read runtime_error
-   rig capture <rig>-<seat>@<rig> --lines 10
+   $OPENRIG ps --nodes --rig <rig> --json    # every node runtime/model/startupStatus=ready
+   $OPENRIG ps --nodes --rig <rig>           # REASON must not read runtime_error
+   $OPENRIG capture <rig>-<seat>@<rig> --lines 10
    ```
    If REASON is `runtime_error`, read the capture: a missing key is step 2; fix it and repeat step 4.
 6. **Brief the seats.** The rebuilt seats are fresh sessions with no memory. Send each busy or relevant seat a kickoff:
@@ -66,4 +77,4 @@ Repeat with the original runtime and model, repoint `<L>/.env` to its recorded o
 
 ## Relaying to a seat that refuses (`interactive prompt`)
 
-`rig send` refuses when a pane sits at a prompt. Read `rig capture` first: if it shows only error text and no menu, `--dangerously-interact --reason "<why>"` stages the text without submitting it, and `rig send` will not accept a bare Enter (`message is empty`). Submit it with `tmux send-keys -t '<session>' Enter`. Never do this over a real selection or approval dialog.
+`rig send` refuses when a pane sits at a prompt. Read `$OPENRIG capture` first: if it shows only error text and no menu, `--dangerously-interact --reason "<why>"` stages the text without submitting it, and `rig send` will not accept a bare Enter (`message is empty`). Submit it with `tmux send-keys -t '<session>' Enter`. Never do this over a real selection or approval dialog.

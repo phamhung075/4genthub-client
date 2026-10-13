@@ -3,6 +3,16 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — `4genteam ps`, and the runtime-switch skills name the right `rig`
+
+### Added
+- `4genteam ps [RIG] [--nodes|--compact|--grid|--json]` (`internal/clientps`), reading tmux and the seat transcripts. A seat whose transcript tail shows a quota or credit message reads `quota`. `--nodes --rig R --json` answers the node-record keys the other verbs read (`logicalId`, `canonicalSessionName`, `sessionStatus`, `startupStatus`, `runtime`, `model`).
+- `clientwatch.SeatSnapshot`, the exported log, runtime, model and context-token read that `ps` shares with `watch`.
+
+### Changed
+- The `rig` symlink maps `ps` to `ps` (it mapped to `status`), and `status --nodes|--compact|--grid` routes to `ps`.
+- `skills/client/rig-runtime-switch` and `seat-runtime-switch`: `rig` on PATH is the 4genteam shim, so spec and node operations call the OpenRig CLI by path (`$OPENRIG`). `sync switch` only records the occupant, `seat reseat` must not be used to change a runtime (it left a seat dead), and a teardown blocked by "no server running" is cleared with a throwaway tmux session.
+
 ## 2026-10-13 — the seat-message deliverer ran only when a human typed it; it is now the fifth supervised safeguard
 
 ### Fixed
