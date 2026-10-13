@@ -157,8 +157,15 @@ pub struct SeatStatus {
     pub session_name: String,
     pub runtime: String,
     pub model: Option<String>,
+    /// The pid tmux returned when it created the session - **a record, not proof of liveness**. A seat that
+    /// dies keeps this number in whatever was recorded about it; what proves a seat is up is its state file
+    /// (`runner::state_file_path`) for an omp seat, or its session still existing for the other runtimes.
     pub pid: Option<u32>,
     pub state: SeatLifecycleState,
+    /// Why a seat is not running, when it is not. A start that failed names its reason here instead of
+    /// leaving a caller to guess from a `stopped` with no explanation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub token_estimate: usize,
     pub last_active: Option<DateTime<Utc>>,

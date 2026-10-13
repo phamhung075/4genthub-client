@@ -8,7 +8,19 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{error, info, warn};
+
+/// How long a seat is given to prove it is actually up before `start_seat` refuses to call it running. The
+/// signal is the seat's own state file (`runner::state_file_path`), which the runner publishes only after the
+/// agent answered the transport handshake; a seat that dies takes its tmux session with it, so the loop
+/// normally exits in well under a second either way. Named, because it is the window U1's exit-code contract
+/// has to be built on: 0 only when every seat is running, and a seat that never proved itself is not.
+const SEAT_READY_WINDOW_SECS: u64 = 20;
+
+/// What the runtimes without a runner get: their signal is only that the session survived, so the window is
+/// a grace period, not a handshake. Short, because it proves nothing about the agent inside the pane.
+const NON_OMP_READY_GRACE_MS: u64 = 1500;
 
 pub struct RoomSupervisor {
     base_state_dir: PathBuf,
@@ -111,18 +123,67 @@ impl RoomSupervisor {
         let _ = fs::write(&spec_file, spec_json);
 
         let mut statuses = Vec::new();
+        let mut failures = Vec::new();
 
         for seat in &final_spec.seats {
             match self.start_seat(&room_name, seat, &final_spec) {
                 Ok(status) => statuses.push(status),
                 Err(e) => {
+                    // A seat that did not come up is reported as one: a caller must never have to infer a
+                    // dead seat from an absent row. Design §6.2 point 5 says a partial start never exits 0,
+                    // and this is the status that makes that buildable.
                     error!("failed to start seat {}: {e}", seat.seat_key);
+                    failures.push(format!("{}: {e}", seat.seat_key));
+                    statuses.push(Self::failed_seat_status(&self.base_state_dir, &room_name, seat, e));
                 }
             }
         }
 
+        if statuses.iter().all(|s| s.state == SeatLifecycleState::Dead) {
+            // Nothing came up, so the room has no rail to answer queue verbs from: it is not made active,
+            // and the caller is told which seats failed and why.
+            return Err(format!(
+                "room {room_name} started no seat ({} of {}): {}",
+                failures.len(),
+                final_spec.seats.len(),
+                failures.join("; ")
+            ));
+        }
+
         self.active_rooms.lock().insert(room_name, final_spec);
         Ok(statuses)
+    }
+
+    /// The status of a seat that did not come up: named, dead, no pid claimed, and its reason carried so the
+    /// caller can say what happened instead of guessing from an absence.
+    fn failed_seat_status(
+        base_state_dir: &Path,
+        room: &str,
+        seat: &SeatSpec,
+        reason: String,
+    ) -> SeatStatus {
+        SeatStatus {
+            room: room.to_string(),
+            seat: seat.seat_key.clone(),
+            session_name: Self::session_name(room, &seat.seat_key),
+            runtime: seat.runtime.clone(),
+            model: seat.model.clone(),
+            pid: None,
+            state: SeatLifecycleState::Dead,
+            detail: Some(reason),
+            started_at: None,
+            token_estimate: 0,
+            last_active: None,
+            transcript_path: Some(
+                base_state_dir
+                    .join("rooms")
+                    .join(room)
+                    .join("logs")
+                    .join(format!("{}.jsonl", seat.seat_key))
+                    .to_string_lossy()
+                    .to_string(),
+            ),
+        }
     }
 
     /// Start a single seat.
@@ -173,6 +234,59 @@ impl RoomSupervisor {
         // Launch tmux session
         let pid = TerminalManager::launch_session(&session_name, &cwd, &cmd, &env)?;
 
+        // A launch is not liveness. The pid tmux just handed back is a **record** of the session it created,
+        // and the pane's process may already be gone - a seat whose runtime command does not exist came back
+        // `running` with a pid and no session seconds later. So wait for proof that the seat actually got up
+        // before saying so. An omp seat proves it with its state file
+        // (`runner::state_file_path`), which its runner publishes only after the agent answered the transport
+        // handshake; the other runtimes have no runner and prove less - their signal is the session still
+        // existing after a grace period, which is stated here rather than passed off as handshake proof.
+        let (signal, window) = match &runtime {
+            AgentRuntime::Omp => (
+                Some(crate::runner::state_file_path(
+                    &self.base_state_dir,
+                    room,
+                    &seat.seat_key,
+                )),
+                Duration::from_secs(SEAT_READY_WINDOW_SECS),
+            ),
+            _ => (None, Duration::from_millis(NON_OMP_READY_GRACE_MS)),
+        };
+        let deadline = std::time::Instant::now() + window;
+        loop {
+            if signal.as_ref().is_some_and(|path| path.exists()) {
+                break;
+            }
+            if !TerminalManager::is_session_alive(&session_name) {
+                return Err(format!(
+                    "seat {room}/{} died before it reported readiness (its pane is gone within {}; pid {pid} \
+                     was the session record tmux returned)",
+                    seat.seat_key,
+                    if signal.is_some() {
+                        format!("{SEAT_READY_WINDOW_SECS}s")
+                    } else {
+                        format!("{NON_OMP_READY_GRACE_MS}ms")
+                    }
+                ));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(match signal {
+                    Some(path) => format!(
+                        "seat {room}/{} did not report readiness within {SEAT_READY_WINDOW_SECS}s (no {}); \
+                         not reporting it as running",
+                        seat.seat_key,
+                        path.display()
+                    ),
+                    None => format!(
+                        "seat {room}/{} has no runtime handshake to wait for, and its session did not \
+                         survive {NON_OMP_READY_GRACE_MS}ms; not reporting it as running",
+                        seat.seat_key
+                    ),
+                });
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
         // Transcript log path
         let logs_dir = room_dir.join("logs");
         let _ = fs::create_dir_all(&logs_dir);
@@ -186,6 +300,7 @@ impl RoomSupervisor {
             model: seat.model.clone(),
             pid: Some(pid),
             state: SeatLifecycleState::Running,
+            detail: None,
             started_at: Some(Utc::now()),
             token_estimate: 0,
             last_active: Some(Utc::now()),
@@ -271,6 +386,7 @@ impl RoomSupervisor {
                 model: seat.model,
                 pid: None,
                 state,
+                detail: None,
                 started_at: None,
                 token_estimate: 0,
                 last_active: None,

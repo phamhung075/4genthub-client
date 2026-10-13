@@ -95,13 +95,10 @@ fn child_argv(runtime: &AgentRuntime, seat_dir: &Path, seat: &SeatSpec) -> Resul
                 "--session-dir".to_string(),
                 seat_dir.join("sessions").to_string_lossy().to_string(),
             ];
-            // `--approval-mode` is the OMP spelling (`PR:224-225`); a seat's permission policy names it.
+            // `--approval-mode` is the OMP spelling (`PR:224-225`); the seat's documented permission policy
+            // decides it here, and an unknown word is refused rather than guessed (see `approval_mode`).
             argv.push("--approval-mode".to_string());
-            argv.push(if seat.permission_policy == "approve" {
-                "yolo".to_string()
-            } else {
-                "always-ask".to_string()
-            });
+            argv.push(approval_mode(&seat.permission_policy)?.to_string());
             if let Some(model) = seat.model.as_deref().filter(|m| !m.trim().is_empty()) {
                 argv.push("--model".to_string());
                 argv.push(model.to_string());
@@ -193,7 +190,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     // The RPC reader: responses are answered to a pending id, events are mirrored to the pane.
     // The RPC reader: responses answer a pending id, events drive the pane and the seat's state, and a
     // turn that dies retryably is resumed from here (never from the sight of an error line alone).
-    let state_path = target.mailbox(state_dir).with_extension("state.json");
+    let state_path = state_file_path(state_dir, &target.room, &target.seat);
     let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
     let ready = {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
@@ -495,6 +492,42 @@ pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<Stri
     ))
 }
 
+/// What `--approval-mode` an omp seat is launched with, from the seat's documented permission policy.
+///
+/// The vocabulary is the operator's own (`docs/AGENT-SETUP.md:389`: `locked|standard|open|yolo|none`, where
+/// "`yolo` means the seat runs unattended with no approval prompts"), and the value the client actually
+/// materialises is `builtin:yolo` (`internal/clientsync/rigverb.go:62`), whose comment gives the reason:
+/// without a full-bypass launch "omp's always-ask floor cancels approvals headlessly and the seat parks".
+/// `internal/clientpolicy/policy.go` states the same shape from the runner's side: "OpenRig launches an omp
+/// seat in exactly one of two postures - yolo, or always-ask which the managed runner auto-cancels".
+///
+/// So the unattended posture belongs to `yolo`, to the materialised `builtin:yolo`, and to an **unspecified**
+/// policy - the last one is what the live rig's seats carry, and it must not be the posture that parks them.
+/// The four restrictive words take `always-ask`, whose dialogs this runner does not leave hanging: a dialog
+/// it cannot present is answered cancelled (see the reader), which is the "auto-cancels" half of that
+/// sentence. Anything else is refused by name, because guessing a launch posture is what inverted this
+/// mapping in the first place.
+pub fn approval_mode(policy: &str) -> Result<&'static str, String> {
+    match policy.trim() {
+        "" | "yolo" | "builtin:yolo" => Ok("yolo"),
+        "locked" | "standard" | "open" | "none" => Ok("always-ask"),
+        other => Err(format!(
+            "permission policy {other:?} is not one of locked|standard|open|yolo|none (nor builtin:yolo, \
+             nor empty); refusing to guess a launch posture"
+        )),
+    }
+}
+
+/// Where a seat's own state is published. One spelling for the runner that writes it and the supervisor that
+/// waits for it, so a second path cannot drift into existence.
+pub fn state_file_path(state_dir: &Path, room: &str, seat: &str) -> PathBuf {
+    state_dir
+        .join("rooms")
+        .join(room)
+        .join("run")
+        .join(format!("{seat}.state.json"))
+}
+
 /// What a failure this runner sees *is*, so a dead turn is not mistaken for a prompt.
 ///
 /// The defect this replaces is named and measured: the OpenRig activity store maps an omp
@@ -688,7 +721,7 @@ mod tests {
             seat_type: "developer".into(),
             runtime: "omp".into(),
             model: Some("deepseek/deepseek-flash:high".into()),
-            permission_policy: "approve".into(),
+            permission_policy: "builtin:yolo".into(),
             cwd: None,
             agent_dir: None,
             env: Default::default(),
@@ -708,6 +741,25 @@ mod tests {
                 "deepseek/deepseek-flash:high",
             ]
         );
+    }
+
+    /// The gate finding, as a table: the documented vocabulary (`docs/AGENT-SETUP.md:389`), the value the
+    /// client materialises (`internal/clientsync/rigverb.go:62`), the unspecified case, and a word the repo
+    /// does not define. The unattended posture must be what an unspecified policy yields, because that is
+    /// what the live rig's seats carry and an always-ask floor is what parks them.
+    #[test]
+    fn every_documented_policy_maps_and_an_unknown_one_is_refused() {
+        for policy in ["yolo", "builtin:yolo", "", "  "] {
+            assert_eq!(approval_mode(policy).unwrap(), "yolo", "{policy:?}");
+        }
+        for policy in ["locked", "standard", "open", "none"] {
+            assert_eq!(approval_mode(policy).unwrap(), "always-ask", "{policy:?}");
+        }
+        // "approve" is not in the repo's vocabulary - it was this module's own invention, which is how the
+        // mapping came to be inverted. It is refused now, by name.
+        let err = approval_mode("approve").unwrap_err();
+        assert!(err.contains("approve"), "{err}");
+        assert!(err.contains("locked|standard|open|yolo|none"), "{err}");
     }
 
     #[test]
