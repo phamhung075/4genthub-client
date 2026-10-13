@@ -67,6 +67,11 @@ impl TerminalManager {
             cmd.arg(wrapped);
         }
 
+        // The tmux *client* is ours and short-lived, but it is a process of this launch and it carries the
+        // daemon's environment: measured, it held the nine OPENRIG_* variables while the runner and the agent
+        // it starts were clean. Scrubbing it here costs nothing and leaves no process in the launch carrying
+        // the live rig's addressing.
+        crate::scrub_env(&mut cmd);
         let output = cmd.output().map_err(|e| format!("failed to start tmux: {e}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
