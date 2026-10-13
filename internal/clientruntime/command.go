@@ -35,9 +35,11 @@ func (whoamiCommand) NeedsRig() bool  { return false }
 func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, "usage: 4genteam whoami [--json] [--full] [--session <name>]")
-		fmt.Fprintln(stdout, "\nReports the seat identity. On a rig the OpenRig daemon hosts (a shell carrying")
-		fmt.Fprintln(stdout, "OPENRIG_SESSION_NAME) it asks that daemon and prints its document; otherwise it asks the")
-		fmt.Fprintln(stdout, "native runtime's own rooms.")
+		fmt.Fprintln(stdout, "\nReports the seat identity. The runtime's own socket is asked FIRST — it is this client's")
+		fmt.Fprintln(stdout, "transport and needs no OpenRig daemon — and only when no runtime answers is a rig the")
+		fmt.Fprintln(stdout, "OpenRig daemon hosts asked, as the fallback the live rig still runs. With neither, the")
+		fmt.Fprintln(stdout, "seat's own environment (AGENTHUB_ROOM/AGENTHUB_SEAT, or OPENRIG_SESSION_NAME) is the")
+		fmt.Fprintln(stdout, "identity, so `whoami --json` works with no daemon at all.")
 		fmt.Fprintln(stdout, "\nWith --json the document is the identity-recovery allowlist the OpenRig CLI prints by default;")
 		fmt.Fprintln(stdout, "--full prints the daemon's complete payload instead.")
 		return clientcmd.ExitOK
@@ -54,12 +56,23 @@ func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 
 	session := *sessionFlag
 	if session == "" {
-		session = os.Getenv("AGENTHUB_SESSION_NAME")
+		session = os.Getenv(agentHubSessionEnv)
 	}
 
-	// A rig the OpenRig daemon hosts has no native room for this seat, so its daemon is asked FIRST and
-	// its document is what this verb prints. The native runtime stays the fallback for a shell that
-	// names no daemon, which leaves a native rig's behaviour exactly as it was.
+	// THE TRANSPORT SEAM, RUNTIME FIRST. The runtime socket is asked before anything else, because it is
+	// this client's own transport: a machine with a runtime and no OpenRig daemon resolves identity here,
+	// which is what `whoami --json` has to do. Only the identity verb's ANSWER is taken from it — a runtime
+	// that answers with a refusal ("could not be resolved from active rooms") has not answered this
+	// question, and whoami's job is to RECOVER an identity, so the chain below continues rather than
+	// reporting one transport's mood.
+	if ResolveTransport() == TransportRuntime {
+		if resp, err := NewClient("").Whoami(session); err == nil {
+			return printWhoami(stdout, stderr, resp, *jsonFlag)
+		}
+	}
+
+	// A rig the OpenRig daemon hosts has no native room for this seat, so its daemon is asked SECOND, as
+	// the fallback the live rig still runs, and its document is what this verb prints when it answers.
 	openRigSeat := *sessionFlag
 	if openRigSeat == "" {
 		openRigSeat = openRigSession()
@@ -70,74 +83,86 @@ func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 		// out of both, so the daemon also skips the contextUsage/runtimeContext compute.
 		raw, err := openRigWhoami(ctx, openRigSeat, !full)
 		if err != nil {
-			fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
-			// CodeOf keeps the raiser's own code: a 404 from the daemon is ExitRemote (1, the CLI's
-			// answer for an unknown session), and "no daemon is configured" or "not answering" stays the
-			// platform-matrix refusal (3) that no reachable daemon can turn into an answer.
-			return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
-		}
-		if *jsonFlag {
-			// The document is printed as it arrived (the CLI prints the payload, not a pretty-print of
-			// it), and the compact projection is the CLI's allowlist — see projectCompactWhoami.
-			out := raw
-			if !full {
-				out = projectCompactWhoami(raw)
+			// A daemon that ANSWERED — it refused this session — has answered: report its words with the
+			// raiser's own code (a 404 is ExitRemote, 1, the CLI's answer for an unknown session). Only a
+			// daemon that is merely ABSENT (no configuration, or no answer at all) leaves the chain below
+			// to recover the identity without it.
+			if clientcmd.CodeOf(err, clientcmd.ExitUnavailable) != clientcmd.ExitUnavailable {
+				fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
+				return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
 			}
-			_, _ = stdout.Write(out)
-			_, _ = stdout.Write([]byte("\n"))
-			return clientcmd.ExitOK
-		}
-		return printOpenRigIdentity(stdout, raw)
-	}
-
-	client := NewClient("")
-	// If daemon is not running, ensure it starts
-	if err := client.EnsureDaemon(ctx); err != nil {
-		// Fallback: build response from local env if present
-		room := os.Getenv("AGENTHUB_ROOM")
-		seat := os.Getenv("AGENTHUB_SEAT")
-		role := os.Getenv("AGENTHUB_ROLE")
-		runtime := os.Getenv("AGENTHUB_RUNTIME")
-		if room != "" && seat != "" {
-			resp := WhoamiResponse{
-				ResolvedBy: "environment",
-				Identity: WhoamiIdentity{
-					RigName:     room,
-					MemberId:    seat,
-					Runtime:     runtime,
-					SessionName: fmt.Sprintf("agenthub--%s--%s", room, seat),
-					LogicalId:   seat,
-					Role:        role,
-				},
-				Peers: []WhoamiPeer{},
-				Edges: WhoamiEdges{
-					Outgoing: []WhoamiEdgeTarget{},
-					Incoming: []WhoamiEdgeTarget{},
-				},
-				Transcript: WhoamiTranscript{
-					Enabled: true,
-				},
-			}
+		} else {
 			if *jsonFlag {
-				data, _ := json.MarshalIndent(resp, "", "  ")
-				_, _ = stdout.Write(data)
+				// The document is printed as it arrived (the CLI prints the payload, not a pretty-print of
+				// it), and the compact projection is the CLI's allowlist — see projectCompactWhoami.
+				out := raw
+				if !full {
+					out = projectCompactWhoami(raw)
+				}
+				_, _ = stdout.Write(out)
 				_, _ = stdout.Write([]byte("\n"))
-			} else {
-				fmt.Fprintf(stdout, "Rig:  %s\nSeat: %s\nRole: %s\n", room, seat, role)
+				return clientcmd.ExitOK
 			}
-			return clientcmd.ExitOK
+			return printOpenRigIdentity(stdout, raw)
 		}
-		fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
-		return clientcmd.ExitUnavailable
 	}
 
-	resp, err := client.Whoami(session)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
-		return clientcmd.ExitUnavailable
+	// NO DAEMON AND NO RUNTIME ANSWER: the seat's own environment IS the identity. This is the path that
+	// makes `whoami --json` work on a machine with no daemon at all — a native seat states AGENTHUB_ROOM /
+	// AGENTHUB_SEAT, and a seat the OpenRig daemon hosts states its identity as OPENRIG_SESSION_NAME
+	// ("<seat>@<rig>"). The runtime is NOT started here as a side effect: booting a daemon to answer an
+	// identity question would make the answer depend on a process this verb could have left alone.
+	if resp, ok := seatEnvIdentity(); ok {
+		return printWhoami(stdout, stderr, &resp, *jsonFlag)
 	}
 
-	if *jsonFlag {
+	fmt.Fprintf(stderr, "4genteam whoami: %s; no seat environment names this seat either (set %s and %s, or %s)\n",
+		RuntimeMissing(""), agentHubRoomEnv, agentHubSeatEnv, openRigSessionEnv)
+	return clientcmd.ExitUnavailable
+}
+
+// seatEnvIdentity builds the identity document from the seat's own environment, and reports whether there
+// was one to build. It reads the SAME pair the runtime's own `environment` fallback reads (AGENTHUB_ROOM /
+// AGENTHUB_SEAT / AGENTHUB_ROLE / AGENTHUB_RUNTIME) and, for a seat those do not name, the OpenRig seat's
+// session name, which carries both halves in one string.
+//
+// resolvedBy stays "environment": that field is the reader's only way to tell an identity the daemon
+// resolved from one this shell asserted, and dressing a guess up as a daemon answer is the class of
+// untruth this verb exists to avoid.
+func seatEnvIdentity() (WhoamiResponse, bool) {
+	room, seat, session, ok := seatEnvParts()
+	if !ok {
+		return WhoamiResponse{}, false
+	}
+	runtime := strings.TrimSpace(os.Getenv(agentHubRuntimeEnv))
+	if runtime == "" {
+		runtime = strings.TrimSpace(os.Getenv(openRigRuntimeEnv))
+	}
+	return WhoamiResponse{
+		ResolvedBy: "environment",
+		Identity: WhoamiIdentity{
+			RigName:     room,
+			MemberId:    seat,
+			Runtime:     runtime,
+			SessionName: session,
+			LogicalId:   seat,
+			Role:        strings.TrimSpace(os.Getenv(agentHubRoleEnv)),
+		},
+		Peers: []WhoamiPeer{},
+		Edges: WhoamiEdges{
+			Outgoing: []WhoamiEdgeTarget{},
+			Incoming: []WhoamiEdgeTarget{},
+		},
+		Transcript: WhoamiTranscript{
+			Enabled: true,
+		},
+	}, true
+}
+
+// printWhoami is the ONE rendering of the client's own identity document, so the runtime's answer and the
+// seat's environment print the same way: --json the document, otherwise the fields a reader is looking for.
+func printWhoami(stdout, stderr io.Writer, resp *WhoamiResponse, asJSON bool) int {
+	if asJSON {
 		data, err := json.MarshalIndent(resp, "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
@@ -145,14 +170,13 @@ func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 		}
 		_, _ = stdout.Write(data)
 		_, _ = stdout.Write([]byte("\n"))
-	} else {
-		fmt.Fprintf(stdout, "Rig:     %s\n", resp.Identity.RigName)
-		fmt.Fprintf(stdout, "Seat:    %s\n", resp.Identity.MemberId)
-		fmt.Fprintf(stdout, "Role:    %s\n", resp.Identity.Role)
-		fmt.Fprintf(stdout, "Runtime: %s\n", resp.Identity.Runtime)
-		fmt.Fprintf(stdout, "Session: %s\n", resp.Identity.SessionName)
+		return clientcmd.ExitOK
 	}
-
+	fmt.Fprintf(stdout, "Rig:     %s\n", resp.Identity.RigName)
+	fmt.Fprintf(stdout, "Seat:    %s\n", resp.Identity.MemberId)
+	fmt.Fprintf(stdout, "Role:    %s\n", resp.Identity.Role)
+	fmt.Fprintf(stdout, "Runtime: %s\n", resp.Identity.Runtime)
+	fmt.Fprintf(stdout, "Session: %s\n", resp.Identity.SessionName)
 	return clientcmd.ExitOK
 }
 
@@ -258,18 +282,20 @@ func (queueCommand) Name() string    { return "queue" }
 func (queueCommand) Summary() string { return "queue compatibility shim for seat and bridge tasks" }
 func (queueCommand) NeedsRig() bool  { return false }
 
-// queueCommand answers `rig queue` from the OpenRig daemon's OWN queue, so a seat on a daemon-hosted
-// rig learns what it actually owes. It never renders an empty list to stand in for a measurement it did
-// not make: with no daemon configured it says so and exits non-zero, a daemon failure is reported rather
-// than flattened to `[]`, and a queue WRITE is refused by name instead of being answered as though it
-// had run. `show` and `transitions` exist because a note the queue accepts does not ride the row: it
-// lands in the row's transition log, which is the only surface that carries it.
+// queueCommand answers `rig queue` from the RUNTIME's own rail — its room store is where a seat's work
+// actually sits — and falls back to the OpenRig daemon's queue only when no runtime answers. It never
+// renders an empty list to stand in for a measurement it did not make: with neither transport it names the
+// runtime that is missing and exits non-zero, a daemon failure is reported rather than flattened to `[]`,
+// and a queue WRITE is refused by name instead of being answered as though it had run. `show` and
+// `transitions` exist because a note the queue accepts does not ride the row: it lands in the row's
+// transition log, which is the only surface that carries it.
 func (queueCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, queueUsage)
-		fmt.Fprintln(stdout, "\nlist (the default) prints the active rows the OpenRig daemon holds for this seat's")
-		fmt.Fprintln(stdout, "session, or for --destination's. show and transitions read one row and its log. With")
-		fmt.Fprintln(stdout, "no daemon configured the verb reports that nothing was measured, never an empty queue.")
+		fmt.Fprintln(stdout, "\nlist (the default) prints the active rows this seat's RUNTIME holds for its room")
+		fmt.Fprintln(stdout, "and session, or for --destination's; when no runtime answers, a rig's OpenRig daemon")
+		fmt.Fprintln(stdout, "is asked instead. show and transitions read one row and its log. With neither")
+		fmt.Fprintln(stdout, "transport the verb reports that nothing was measured, never an empty queue.")
 		fmt.Fprintln(stdout, "Writes (create/claim/update/block/resolve/handoff/inbox/outbox) are the OpenRig CLI's;")
 		fmt.Fprintln(stdout, "this shim refuses them by name rather than reporting a write it did not make.")
 		return clientcmd.ExitOK
@@ -321,15 +347,80 @@ const queueUsage = `usage: 4genteam queue [list] [--json] [--destination <dest>]
        4genteam queue show <qitemId> [--json]
        4genteam queue transitions <qitemId> [--json]`
 
-// queueList is the default read: THIS seat's active rows on the daemon, rendered one line each. An empty
-// document is only ever reported as a measurement of a named session against a named daemon.
+// queueList is the default read: THIS seat's active rows, rendered one line each. An empty document is only
+// ever reported as a measurement of a named session against a named transport.
+//
+// THE TRANSPORT IS RESOLVED FIRST, and the runtime wins. A runtime that answers is the transport this seat
+// actually has: its room store holds the rail, and reading it needs no OpenRig daemon at all. The daemon's
+// own queue is read only when no runtime answers, and when neither transport is there the refusal names the
+// RUNTIME — because with the runtime first, a dead $OPENRIG_URL is not what stopped this verb.
 func queueList(ctx context.Context, destination string, asJSON bool, stdout, stderr io.Writer) int {
+	switch ResolveTransport() {
+	case TransportRuntime:
+		return queueListRuntime(destination, asJSON, stdout, stderr)
+	case TransportDaemon:
+		return queueListDaemon(ctx, destination, asJSON, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "4genteam queue: %s; nothing was measured\n", FallbackMissing())
+		return clientcmd.ExitUnavailable
+	}
+}
+
+// queueListRuntime reads the room's active rows through the runtime socket. The ROOM comes from the seat's
+// own environment (AGENTHUB_ROOM, else the rig half of OPENRIG_SESSION_NAME) and the destination from the
+// caller — or from this seat's native session name, which is the one shape the runtime's rail is keyed on.
+//
+// A room this seat cannot name is still ASKED FOR: the runtime refuses it by name, and its refusal is the
+// measurement's answer. Guessing an empty queue here would be the false reading this verb exists to avoid.
+func queueListRuntime(destination string, asJSON bool, stdout, stderr io.Writer) int {
+	room, seat, _, _ := seatEnvParts()
+	if destination == "" {
+		// The destination default is this seat's NATIVE session name — the runtime's rail is keyed on the
+		// session names the client's own convention renders ("agenthub--<room>--<seat>", the same name
+		// SendTextToSeat addresses) — and it stays empty when this shell names no seat, so the filter
+		// narrows nothing rather than narrowing to a name nobody used.
+		destination = seatEnvSessionName(room, seat)
+	}
+	filter := QueueListFilter{ActiveOnly: true}
+	if destination != "" {
+		filter.DestinationSession = &destination
+	}
+	// The frame is the one Client.QueueList writes (room + filter); it is written at the frame because
+	// `--json` prints the runtime's OWN document, and the typed read drops the answer's bytes.
+	resp, err := NewClient("").Call("QueueList", map[string]any{"room": room, "filter": filter})
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: the runtime at %s refused it: %v\n", DefaultSocketPath(), err)
+		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
+	}
+	if asJSON {
+		_, _ = stdout.Write(runtimeJSONDocument(resp.Data))
+		_, _ = stdout.Write([]byte("\n"))
+		return clientcmd.ExitOK
+	}
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: could not read the runtime's queue document: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	var rows []QueueRow
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: could not read the runtime's queue document: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	if len(rows) == 0 {
+		fmt.Fprintf(stdout, "Measured 0 pending items for %s on the runtime at %s.\n", orDash(destination), DefaultSocketPath())
+		return clientcmd.ExitOK
+	}
+	for _, row := range rows {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", row.QitemID, orDash(row.State), orDash(row.SourceSession), row.Summary)
+	}
+	return clientcmd.ExitOK
+}
+
+// queueListDaemon is the fallback read: the OpenRig daemon's own queue for this seat's session.
+func queueListDaemon(ctx context.Context, destination string, asJSON bool, stdout, stderr io.Writer) int {
 	if destination == "" {
 		destination = openRigSession()
-	}
-	if !openRigDaemonConfigured() {
-		fmt.Fprintf(stderr, "4genteam queue: no OpenRig daemon is configured in this environment (set %s or %s); nothing was measured\n", openRigURLEnv, openRigPortEnv)
-		return clientcmd.ExitUnavailable
 	}
 	query := url.Values{}
 	query.Set("destinationSession", destination)
@@ -337,8 +428,7 @@ func queueList(ctx context.Context, destination string, asJSON bool, stdout, std
 	query.Set("compact", "1")
 	raw, err := openRigRequest(ctx, "GET", "/api/queue/list?"+query.Encode(), nil)
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam queue: %v\n", err)
-		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
+		return queueFallbackFailed(err, stderr)
 	}
 	if asJSON {
 		printDaemonJSON(stdout, raw)
@@ -366,19 +456,82 @@ func queueList(ctx context.Context, destination string, asJSON bool, stdout, std
 
 // queueReadOne reads a single row (`show`) or its transition log (`transitions`). The log is where a note
 // lives: `update --note` writes it there and the row document carries no note field at all.
+//
+// The transport resolves exactly as `list` resolves it, and the same refusal applies: with neither a runtime
+// nor a configured daemon, the thing named as missing is the RUNTIME.
 func queueReadOne(ctx context.Context, sub, qitemID string, asJSON bool, stdout, stderr io.Writer) int {
-	if !openRigDaemonConfigured() {
-		fmt.Fprintf(stderr, "4genteam queue: no OpenRig daemon is configured in this environment (set %s or %s); nothing was measured\n", openRigURLEnv, openRigPortEnv)
+	switch ResolveTransport() {
+	case TransportRuntime:
+		return queueReadOneRuntime(sub, qitemID, asJSON, stdout, stderr)
+	case TransportDaemon:
+		return queueReadOneDaemon(ctx, sub, qitemID, asJSON, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "4genteam queue: %s; nothing was measured\n", FallbackMissing())
 		return clientcmd.ExitUnavailable
 	}
+}
+
+// queueReadOneRuntime reads one row of the room's rail from the runtime. Both subcommands are ONE call: the
+// runtime answers `show` with the row's transition log inside it, which is where a note lands — the daemon
+// needs a second route for that log, the runtime does not.
+func queueReadOneRuntime(sub, qitemID string, asJSON bool, stdout, stderr io.Writer) int {
+	room, _, _, _ := seatEnvParts()
+	resp, err := NewClient("").Call("QueueShow", map[string]string{"room": room, "qitem_id": qitemID})
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: the runtime at %s refused it: %v\n", DefaultSocketPath(), err)
+		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
+	}
+	if asJSON {
+		_, _ = stdout.Write(runtimeJSONDocument(resp.Data))
+		_, _ = stdout.Write([]byte("\n"))
+		return clientcmd.ExitOK
+	}
+	raw, err := json.Marshal(resp.Data)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: could not read the runtime's row document: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	var row QueueRow
+	if err := json.Unmarshal(raw, &row); err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: could not read the runtime's row document: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	if sub == "show" {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", orDash(row.QitemID), orDash(row.State), orDash(row.SourceSession), row.Summary)
+		if blockedOn := readOptional(row.BlockedOn); blockedOn != "" {
+			fmt.Fprintf(stdout, "blockedOn: %s\n", blockedOn)
+		}
+		if reason := readOptional(row.ClosureReason); reason != "" {
+			fmt.Fprintf(stdout, "closed: %s -> %s\n", reason, orDash(readOptional(row.ClosureTarget)))
+		}
+		fmt.Fprintf(stdout, "tsUpdated: %s\n", orDash(row.TsUpdated))
+		return clientcmd.ExitOK
+	}
+	for _, transition := range row.Transitions {
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", orDash(transition.Ts), orDash(transition.State), orDash(transition.ActorSession), strings.ReplaceAll(transition.TransitionNote, "\n", " "))
+	}
+	return clientcmd.ExitOK
+}
+
+// readOptional is an optional string field as the empty string when it is absent: the row's Options are
+// pointers precisely so "unset" and "set to empty" stay different questions, and a reader that flattened
+// both to one value would answer them the same way.
+func readOptional(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// queueReadOneDaemon is the fallback read: the OpenRig daemon's row, or its transition route for the log.
+func queueReadOneDaemon(ctx context.Context, sub, qitemID string, asJSON bool, stdout, stderr io.Writer) int {
 	path := "/api/queue/" + url.PathEscape(qitemID)
 	if sub == "transitions" {
 		path += "/transitions"
 	}
 	raw, err := openRigRequest(ctx, "GET", path, nil)
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam queue: %v\n", err)
-		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
+		return queueFallbackFailed(err, stderr)
 	}
 	if asJSON {
 		printDaemonJSON(stdout, raw)
@@ -423,6 +576,23 @@ func queueReadOne(ctx context.Context, sub, qitemID string, asJSON bool, stdout,
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", orDash(transition.TS), orDash(transition.State), orDash(transition.ActorSession), strings.ReplaceAll(transition.TransitionNote, "\n", " "))
 	}
 	return clientcmd.ExitOK
+}
+
+// queueFallbackFailed reports the OpenRig fallback's failure. Two failures, two answers, because they are
+// not the same event:
+//
+//   - a daemon that ANSWERED (a 4xx/5xx refusal) has answered — its words are reported exactly as they were
+//     before, with its status and its own code;
+//   - a daemon that could NOT be reached is not an answer. With the runtime first, the transport that is
+//     missing is the runtime, so the refusal names IT (and says the fallback was tried), instead of blaming
+//     a $OPENRIG_URL the shim was never going to reach.
+func queueFallbackFailed(err error, stderr io.Writer) int {
+	if clientcmd.CodeOf(err, clientcmd.ExitRemote) == clientcmd.ExitUnavailable {
+		fmt.Fprintf(stderr, "4genteam queue: %s; nothing was measured\n", FallbackMissing())
+		return clientcmd.ExitUnavailable
+	}
+	fmt.Fprintf(stderr, "4genteam queue: %v\n", err)
+	return clientcmd.CodeOf(err, clientcmd.ExitRemote)
 }
 
 // printDaemonJSON writes the daemon's document as it arrived, indented when it is JSON. --json prints the

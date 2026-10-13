@@ -3,6 +3,50 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the shim's verbs resolve the RUNTIME socket first, and the seat's own environment is the last identity
+
+### Changed
+- `whoami`, `queue` and `send` resolve their transport through ONE seam, `internal/clientruntime/transport.go`
+  (`ResolveTransport`): a runtime that answers on `DefaultSocketPath()` carries the request, the OpenRig HTTP
+  path is asked only when no runtime answers, and with neither the refusal NAMES THE RUNTIME
+  (`FallbackMissing`) instead of the OpenRig daemon. The old order resolved from the seat environment, so a
+  shell carrying `OPENRIG_SESSION_NAME` went straight to HTTP. Measured on this machine with
+  `OPENRIG_URL=http://127.0.0.1:1` and the runtime up: `whoami --json` exited 3 and `queue list` exited 3,
+  both answering "the OpenRig daemon at http://127.0.0.1:1 is not answering". After the change `whoami --json`
+  exits 0 with the seat identity and `queue list` reaches the runtime, whose own answer is what the caller
+  reads. `internal/clientruntime/queue.go` and `ipc.go` are untouched: no wire method was missing.
+- `whoami` RECOVERS an identity instead of reporting one transport's mood: the runtime is asked first, a
+  runtime that cannot place this seat falls through to the daemon, and with no daemon at all the seat's own
+  environment IS the document (`resolved_by: environment`) — `AGENTHUB_ROOM`/`AGENTHUB_SEAT` when a native seat
+  states both, otherwise `<seat>@<rig>` from `OPENRIG_SESSION_NAME`. Booting the runtime is no longer a side
+  effect of asking who we are (`EnsureDaemon` left this verb). One rendering (`printWhoami`) prints both
+  sources, so the runtime path and the environment path cannot drift apart.
+- `queue` reads the runtime's rail — `QueueList`, and `QueueShow` for both `show` and `transitions`, whose
+  note-carrying log rides the row — with the room taken from the seat environment and the destination
+  defaulting to this seat's native session name. The daemon's `/api/queue/*` path is kept for a machine with no
+  runtime, and a daemon that ANSWERED keeps its own words and exit code; only a daemon that could not be
+  reached is reported as the missing RUNTIME.
+- `send <session> <text>` goes through the runtime socket in the SAME From/To/Sent envelope the daemon path
+  sends, so the pane text a receiver reads does not depend on the transport. The switches only the daemon can
+  honour (`--verify`, `--force`, `--wait-for-idle`, `--dangerously-interact`) still route to the daemon even
+  when a runtime answers, because reporting `--verify` over a transport with no verification handshake would
+  be a check that never ran.
+
+### Verified
+- The U3 acceptance instrument, run from the seat shell (the full before/after output, the build and the test
+  results, are in `CHANGELOG/2026-10-14--shim-runtime-first.md`):
+  `OPENRIG_URL=http://127.0.0.1:1 4genteam whoami --json` → exit 0 with the seat identity;
+  `OPENRIG_URL=http://127.0.0.1:1 4genteam queue list` → the runtime's own answer, never the removed sentence.
+- `go test ./internal/clientruntime/ ./internal/clientseat/ -count=1` → ok; `go build ./...`, `go vet` and
+  `gofmt -l` clean. Eight new tests were run against the pre-change verb files (swapped in from `HEAD`) and
+  fail there, then pass with the change: `TestQueueListPrefersTheRuntimeEvenWhenADaemonIsUp`,
+  `TestQueueListNamesTheRuntimeWhenNothingAnswersEither`, `TestQueueListReportsTheRuntimesOwnRefusalBySocket`,
+  `TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoDaemonAtAll`,
+  `TestWhoamiPrefersTheRuntimesIdentityOverTheDaemon`, `TestSendPrefersTheRuntimeSocket`,
+  `TestSendJsonPrintsTheRuntimesOwnAnswer`, `TestSendNamesTheRuntimeWhenNoTransportAnswers`.
+- The daemon-path tests in both packages now PIN the runtime away (`noRuntimeSocket`), because the seam asks
+  the runtime first and a unit test must not be answered by whatever runtime the developer's shell has.
+
 ## 2026-10-13 — `up` reads the room before it starts it, and the client gains a room-scoped verb group
 
 ### Added

@@ -24,6 +24,7 @@ const whoamiDoc = `{"resolvedBy":"session_name","identity":{"rigName":"4genthub-
 // identity rides the sender header, and --json prints the daemon's own document.
 func TestWhoamiAsksTheOpenRigDaemonAndPrintsItsDocument(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir()) // no terminal-token: exercises the no-bearer path
+	noRuntimeSocket(t)                    // the DAEMON path is the contract under test here
 
 	var gotPath, gotSession, gotSender string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +78,7 @@ func TestWhoamiAsksTheOpenRigDaemonAndPrintsItsDocument(t *testing.T) {
 // TestWhoamiWithoutJsonNamesTheSeatAndPod covers the bare verb, which a seat runs by hand.
 func TestWhoamiWithoutJsonNamesTheSeatAndPod(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the DAEMON path is the contract under test here
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(whoamiDoc))
 	}))
@@ -100,6 +102,7 @@ func TestWhoamiWithoutJsonNamesTheSeatAndPod(t *testing.T) {
 // platform-matrix refusal, which is now reserved for a daemon that cannot be reached at all.
 func TestWhoamiReportsTheDaemonsRefusalAsTheCLIsExitCode(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the DAEMON's refusal is the answer under test here
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"error":"Session 'nope@rig' not found in any managed rig."}`))
@@ -383,6 +386,7 @@ const whoamiCompactableDoc = `{"resolvedBy":"session_name","identity":{"rigName"
 // --full prints the daemon's document as it arrived rather than a re-encoding of it.
 func TestWhoamiAsksForTheCompactProjectionAndPrintsTheAllowlist(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the DAEMON's compact projection is the contract under test here
 	var queries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		queries = append(queries, r.URL.RawQuery)
@@ -453,6 +457,7 @@ func TestTerminalTokenPreference(t *testing.T) {
 func TestQueueCommandReadsDaemonRows(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
 
+	noRuntimeSocket(t) // no runtime here: this test exercises the daemon fallback
 	var gotPath, gotDest, gotActive, gotCompact string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -491,6 +496,7 @@ func TestQueueCommandReadsDaemonRows(t *testing.T) {
 // against THIS daemon, not as the old false sentence.
 func TestQueueCommandMeasuresAnEmptyQueue(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // no runtime here: the empty document must come from the daemon
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[]`))
 	}))
@@ -522,6 +528,7 @@ func TestQueueCommandMeasuresAnEmptyQueue(t *testing.T) {
 // the missing configuration, never a queue-looking empty answer.
 func TestQueueCommandWithoutADaemonIsNotAnEmptyQueue(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // neither transport: this is the refusal, not a fallback
 	t.Setenv("OPENRIG_URL", "")
 	t.Setenv("OPENRIG_PORT", "")
 	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
@@ -548,6 +555,7 @@ func TestQueueCommandWithoutADaemonIsNotAnEmptyQueue(t *testing.T) {
 // TestQueueCommandSurfacesADaemonFailure: a daemon that refuses is reported, and never flattened to [].
 func TestQueueCommandSurfacesADaemonFailure(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the daemon is the transport under test here
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":"queue store unavailable"}`))
@@ -721,6 +729,7 @@ func TestCaptureCommandWithoutADaemon(t *testing.T) {
 // note field at all, so the shim must read the log or a caller can never see what was recorded.
 func TestQueueTransitionsPrintsTheNotesTheRowDoesNotCarry(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the daemon's transition route is the transport under test here
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -749,6 +758,7 @@ func TestQueueTransitionsPrintsTheNotesTheRowDoesNotCarry(t *testing.T) {
 // TestQueueShowReadsOneRow: the row read names the row, its state and why it is where it is.
 func TestQueueShowReadsOneRow(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the daemon's row route is the transport under test here
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -824,6 +834,7 @@ func TestQueueRefusesAWriteSubcommandWithoutTouchingTheDaemon(t *testing.T) {
 // TestQueueJSONPrintsTheDaemonsOwnDocument: --json is the daemon's bytes, not a re-encode of a struct.
 func TestQueueJSONPrintsTheDaemonsOwnDocument(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // --json here is the DAEMON's document; the runtime has its own test
 	document := `[{"qitemId":"qitem-aaa","fieldsElided":["body"],"pickup":{"state":"working"}}]`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(document))

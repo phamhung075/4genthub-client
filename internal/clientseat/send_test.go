@@ -47,6 +47,7 @@ func TestTheRigSeatMessageShapeNeverFallsBackToShellingOutToRig(t *testing.T) {
 
 func TestSendWithASessionAndAMessageGoesToTheOpenRigDaemon(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the DAEMON path is the fallback contract under test here
 
 	var gotPath, gotSender string
 	var got map[string]string
@@ -87,6 +88,7 @@ func TestSendWithASessionAndAMessageGoesToTheOpenRigDaemon(t *testing.T) {
 // like a delivery.
 func TestSendReportsTheDaemonsRefusalAndExitsNonZero(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the DAEMON's refusal is the answer under test here
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"ok":false,"error":"Session 'ghost@r' not found. Check session names with: rig ps --nodes"}`))
@@ -188,6 +190,7 @@ func TestSendTakesTheDocumentedFlagsOnEitherSideOfTheMessage(t *testing.T) {
 // prints it; the shim dropped it.
 func TestSendSurfacesTheDaemonsAdvisory(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the DAEMON's advisory is the signal under test here
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true,"sessionName":"4genthub-min-reviewer@4genthub-min","warning":"target pane appears mid-task; sent anyway (busy is advisory, not a block)."}`))
 	}))
@@ -298,6 +301,7 @@ func TestSendVerifyPrintsTheDaemonsVerdictAndNamesTheProbeItDoesNotRun(t *testin
 // about.
 func TestSendRetainedIsNotADelivery(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // the DAEMON's retained outcome is the answer under test here
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true,"outcome":"retained","warning":"delivery quota full"}`))
 	}))
@@ -354,6 +358,7 @@ func TestSendWaitForIdleReachesTheRouteInMilliseconds(t *testing.T) {
 // TestSendJsonPrintsTheDaemonsAnswer: --json is the daemon's own document, not a re-encode of it.
 func TestSendJsonPrintsTheDaemonsAnswer(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
+	noRuntimeSocket(t) // --json here is the DAEMON's answer; the runtime has its own test
 	const answer = `{"ok":true,"sessionName":"peer@r","outcome":"delivered","warning":"busy"}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(answer))

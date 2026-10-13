@@ -221,9 +221,11 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, "usage: 4genteam send SESSION MESSAGE [options]")
 		fmt.Fprintln(stdout, "       4genteam send [--from NAME] RIG SEAT MESSAGE")
-		fmt.Fprintln(stdout, "\nSESSION is a canonical session name (`rig ps --nodes --json` names every seat's). It goes to the")
-		fmt.Fprintln(stdout, "OpenRig daemon, wrapped in the From/To/Sent envelope the OpenRig CLI sends and attributed to this")
-		fmt.Fprintln(stdout, "shell's OPENRIG_SESSION_NAME, which is the shape `rig send` has always meant.")
+		fmt.Fprintln(stdout, "\nSESSION is a canonical session name (`rig ps --nodes --json` names every seat's). It goes to")
+		fmt.Fprintln(stdout, "the runtime's own socket — this client's transport — wrapped in the From/To/Sent envelope the")
+		fmt.Fprintln(stdout, "OpenRig CLI sends and attributed to this shell's OPENRIG_SESSION_NAME, which is the shape")
+		fmt.Fprintln(stdout, "`rig send` has always meant. When no runtime answers, a rig's OpenRig daemon is asked instead;")
+		fmt.Fprintln(stdout, "the switches below that name a handshake only the daemon runs always go to the daemon.")
 		fmt.Fprintln(stdout, "\nOptions, wherever they appear on the line, are the OpenRig CLI's own:")
 		fmt.Fprintln(stdout, "  --verify                     the daemon re-confirms the snippet in its post-send capture")
 		fmt.Fprintln(stdout, "  --wait-for-idle <seconds>    wait for the target to be idle before typing")
@@ -253,10 +255,11 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 	}
 
 	// `rig send SESSION MESSAGE` — the OpenRig CLI's own shape, and the shape this client's supervised
-	// message deliverer already calls. The daemon owns this machine's session table, so it is the party
-	// that resolves the name.
+	// message deliverer already calls. THE TRANSPORT IS RESOLVED, RUNTIME FIRST: the runtime socket is this
+	// client's own, so it carries the message when it answers, and the daemon stays the fallback the live
+	// rig still runs.
 	if len(positional) == 2 {
-		return daemonSend(ctx, positional[0], positional[1], opts, stdout, stderr)
+		return sendToSession(ctx, positional[0], positional[1], opts, stdout, stderr)
 	}
 
 	if len(positional) < 3 {
@@ -287,6 +290,59 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 	return clientcmd.ExitOK
 }
 
+// sendToSession delivers one message to one session over the transport this machine actually has.
+//
+// THE RUNTIME GOES FIRST, and the daemon is the fallback the live rig still runs. The one exception is a
+// switch only the daemon can honour — --verify, --force, --wait-for-idle, --dangerously-interact — each of
+// which names a handshake or a route's own combination rules that the runtime's SendText does not run.
+// Answering --verify over the runtime would report a verification that was never performed, so those route
+// to the daemon even when a runtime answers; that is the reason the fallback is kept rather than deleted.
+func sendToSession(ctx context.Context, session, text string, opts map[string]string, stdout, stderr io.Writer) int {
+	switch clientruntime.ResolveTransport() {
+	case clientruntime.TransportRuntime:
+		if !sendNeedsDaemon(opts) {
+			return runtimeSend(session, text, opts, stdout, stderr)
+		}
+		return daemonSend(ctx, session, text, opts, stdout, stderr)
+	case clientruntime.TransportDaemon:
+		return daemonSend(ctx, session, text, opts, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", clientruntime.FallbackMissing())
+		return clientcmd.ExitUnavailable
+	}
+}
+
+// sendNeedsDaemon reports whether the caller asked for an option only the OpenRig daemon runs. Any of those
+// flags present is enough: each one changes what the send is ALLOWED to report, so the transport has to be
+// the one that can report it.
+func sendNeedsDaemon(opts map[string]string) bool {
+	for _, name := range []string{"verify", "force", "wait-for-idle", "dangerously-interact"} {
+		if _, present := opts[name]; present {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeSend is the runtime half of the verb: the message goes through the socket, wrapped in the SAME
+// From/To/Sent envelope the daemon path sends, so the pane text a receiver reads does not depend on which
+// transport carried it. `--json` prints the runtime's own answer document.
+func runtimeSend(session, text string, opts map[string]string, stdout, stderr io.Writer) int {
+	raw, err := clientruntime.RuntimeSendText(session, text, clientruntime.SendOptions{
+		Raw: opts["raw"] == "true",
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam send: the runtime at %s refused it: %v\n", clientruntime.DefaultSocketPath(), err)
+		return clientcmd.ExitRemote
+	}
+	if opts["json"] == "true" {
+		_, _ = stdout.Write(append(raw, '\n'))
+		return clientcmd.ExitOK
+	}
+	fmt.Fprintf(stdout, "Sent to %s\n", session)
+	return clientcmd.ExitOK
+}
+
 // daemonSend is the daemon-backed half of the verb: it sends, surfaces the daemon's advisory, and — when
 // asked — its verification verdict, mirroring the CLI's exit codes (4xx → 1) rather than flattening every
 // answer into one.
@@ -312,6 +368,14 @@ func daemonSend(ctx context.Context, session, text string, opts map[string]strin
 
 	result, status, err := clientruntime.OpenRigSend(ctx, session, text, options)
 	if err != nil {
+		// A daemon that could not be REACHED has not refused anything: with the runtime first, the transport
+		// that is missing is the runtime, so the refusal names it (and says the fallback was tried) rather
+		// than blaming a $OPENRIG_URL the send was never going to reach. A daemon that ANSWERED keeps its own
+		// words and its own code below.
+		if clientcmd.CodeOf(err, clientcmd.ExitRemote) == clientcmd.ExitUnavailable {
+			fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", clientruntime.FallbackMissing())
+			return clientcmd.ExitUnavailable
+		}
 		fmt.Fprintf(stderr, "4genteam send: %v\n", err)
 		return report(stderr, err)
 	}
