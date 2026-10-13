@@ -311,6 +311,12 @@ impl RoomSupervisor {
             ),
             _ => (None, Duration::from_millis(NON_OMP_READY_GRACE_MS)),
         };
+        // Which proof this seat can give decides what the status may CLAIM. An omp seat proves itself with its
+        // state file, which its runner publishes only once the agent answered the transport handshake, so RUNNING
+        // there means an agent is talking. The other runtimes publish no readiness channel at all: the grace period
+        // shows the pane is still there and nothing more, so a live process whose agent is unconfigured looks
+        // exactly like one that is working. The status says which of the two it is, below.
+        let proven_by_state_file = signal.is_some();
         let deadline = std::time::Instant::now() + window;
         loop {
             if signal.as_ref().is_some_and(|path| path.exists()) {
@@ -329,19 +335,23 @@ impl RoomSupervisor {
                 ));
             }
             if std::time::Instant::now() >= deadline {
-                return Err(match signal {
-                    Some(path) => format!(
-                        "seat {room}/{} did not report readiness within {SEAT_READY_WINDOW_SECS}s (no {}); \
-                         not reporting it as running",
-                        seat.seat_key,
-                        path.display()
-                    ),
-                    None => format!(
-                        "seat {room}/{} has no runtime handshake to wait for, and its session did not \
-                         survive {NON_OMP_READY_GRACE_MS}ms; not reporting it as running",
-                        seat.seat_key
-                    ),
-                });
+                match signal {
+                    Some(path) => {
+                        return Err(format!(
+                            "seat {room}/{} did not report readiness within {SEAT_READY_WINDOW_SECS}s (no {}); \
+                             not reporting it as running",
+                            seat.seat_key,
+                            path.display()
+                        ))
+                    }
+                    // The other runtimes have no runner that could hand a readiness word back, so the proof they
+                    // can give is the one taken above: the session is STILL ALIVE after the grace period. Reaching
+                    // this point means that check passed on this very iteration, so the seat is up - and the grace
+                    // exists to catch the seat that dies inside it, which the pane check above already refuses by
+                    // name. This arm used to return a survival verdict here; it now ends the wait instead, which is
+                    // what the paragraph above always said the non-omp signal was.
+                    None => break,
+                }
             }
             std::thread::sleep(Duration::from_millis(100));
         }
@@ -359,7 +369,17 @@ impl RoomSupervisor {
             model: seat.model.clone(),
             pid: Some(pid),
             state: SeatLifecycleState::Running,
-            detail: None,
+            // RUNNING means the seat is up, and the detail says up ON WHAT EVIDENCE: absent for an omp seat, whose
+            // state file is the agent's own word, and stated for the others, where the only fact taken was that the
+            // pane outlived the grace and no agent has confirmed anything.
+            detail: if proven_by_state_file {
+                None
+            } else {
+                Some(format!(
+                    "pane alive after {NON_OMP_READY_GRACE_MS}ms; this runtime publishes no readiness channel, so a \
+                     live but unconfigured agent is indistinguishable from a working one"
+                ))
+            },
             started_at: Some(Utc::now()),
             token_estimate: 0,
             last_active: Some(Utc::now()),
@@ -819,6 +839,80 @@ mod tests {
             .to_string(),
         )
         .expect("state file");
+    }
+
+    /// A room spec whose single seat runs a shell command, so the probe is driven by a REAL tmux pane and not an
+    /// omp runner: the runtime string is what selects the branch under test.
+    fn startable_spec(room: &str, seat: &str, runtime: &str) -> RoomSpec {
+        serde_json::from_value(serde_json::json!({
+            "room": room,
+            "seats": [{"seat_key": seat, "seat_type": "developer", "runtime": runtime}],
+            "links": []
+        }))
+        .expect("room spec")
+    }
+
+    /// The LIVE direction of the non-omp readiness proof. Those runtimes have no runner to publish a readiness
+    /// word, so their proof is the session STILL existing after the grace period - the paragraph in `start_seat`
+    /// says exactly that, and the code used to contradict it by returning a survival refusal at the deadline.
+    ///
+    /// RED without the fix: the old arm returned `Err(.. its session did not survive 1500ms)` for a pane it had
+    /// just watched, alive, on the iteration before.
+    #[tokio::test]
+    async fn a_live_non_omp_seat_is_running_once_its_grace_has_passed() {
+        let dir = scratch("probe-live");
+        let room = format!("probe-live-{}", std::process::id());
+        let key = seat_key("probe-live");
+        let spec = startable_spec(&room, &key, "sleep 30");
+        let supervisor = supervisor_at(&dir);
+
+        let status = supervisor
+            .start_seat(&room, &spec.seats[0], &spec)
+            .expect("a live non-omp pane must be called running once its grace has passed");
+        assert_eq!(status.state, SeatLifecycleState::Running);
+        assert!(TerminalManager::is_session_alive(&RoomSupervisor::session_name(
+            &room, &key
+        )));
+        // And RUNNING must not read as more than it is: no readiness channel was consulted for this runtime, so
+        // the status has to say so rather than let a live-but-unconfigured agent pass as a working one.
+        assert!(
+            status
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("no readiness channel")),
+            "a non-omp seat must not be reported as simply running, got detail {:?}",
+            status.detail
+        );
+
+        let _ = supervisor.stop_seat(&room, &key);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The DEAD direction, and the honesty half of the same fix: a non-omp seat whose pane is gone must STILL be
+    /// refused, and the refusal must name what actually happened rather than a survival verdict nothing measured.
+    /// This stays GREEN across the fix, which is the point - direction (ii) must not be traded away for (i).
+    #[tokio::test]
+    async fn a_dead_non_omp_seat_is_refused_by_its_real_cause() {
+        let dir = scratch("probe-dead");
+        let room = format!("probe-dead-{}", std::process::id());
+        let key = seat_key("probe-dead");
+        let spec = startable_spec(&room, &key, "no-such-program-agenthub-probe");
+        let supervisor = supervisor_at(&dir);
+
+        let err = supervisor
+            .start_seat(&room, &spec.seats[0], &spec)
+            .expect_err("a pane that is gone must not be reported as running");
+        assert!(
+            err.contains("died before it reported readiness"),
+            "the refusal must name the real cause, got: {err}"
+        );
+        assert!(
+            !err.contains("did not survive"),
+            "a survival verdict is the defect this fix removes, got: {err}"
+        );
+
+        let _ = supervisor.stop_seat(&room, &key);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// The freshness the daemon reports is the seat's OWN (`updated_at`, the runner's stamp), not the
