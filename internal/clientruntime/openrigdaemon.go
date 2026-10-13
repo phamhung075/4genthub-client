@@ -87,6 +87,12 @@ type SendOptions struct {
 	// Raw sends the text exactly, with no From/To/Sent envelope (the CLI's `--raw`, and what
 	// --dangerously-interact implies).
 	Raw bool
+	// Sender is the identity the envelope is written AS, for a caller whose own environment cannot carry
+	// it: the message deliverer runs OUTSIDE any seat shell and delivers text a human wrote, so it must
+	// send AS that human rather than as the seat the deliverer happens to run under. This is what the
+	// exec it replaces did by stamping the child's OPENRIG_SESSION_NAME. Blank means the caller's own
+	// session, which is the plain `rig send`.
+	Sender string
 }
 
 // SendResult is the daemon's answer to a send, in the daemon's own field names. `Warning` is not noise:
@@ -127,7 +133,11 @@ func OpenRigSend(ctx context.Context, session, text string, opts SendOptions) (S
 	if opts.Raw {
 		payload["text"] = text
 	} else {
-		payload["text"] = openRigSendBody(openRigSession(), session, text, time.Now(), openRigGeneration())
+		sender := opts.Sender
+		if sender == "" {
+			sender = openRigSession()
+		}
+		payload["text"] = openRigSendBody(sender, session, text, time.Now(), openRigGeneration())
 	}
 	if opts.Verify {
 		payload["verify"] = true

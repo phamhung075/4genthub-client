@@ -33,7 +33,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -83,36 +82,34 @@ const humanSeatSession = "human@kernel"
 // real one types the text into a session on this machine, which no test can do — and no other machine
 // can do at all, which is the whole reason the cloud stores the text instead of delivering it.
 //
-// The envelope is left ON (no --raw): From/To/Sent is the shape the pane already renders, and it is
-// what tells the seat who wrote the text. The sender itself is carried in the environment —
-// `rig send` reads OPENRIG_SESSION_NAME — so the deliverer, which runs outside any seat shell, stamps
-// the human's session on every delivery.
+// IT TAKES THE ROUTE `rig send` ITSELF TAKES. The envelope is rendered by the CLI's own body renderer,
+// so a delivered message reaches the pane in exactly the wrapper a human's own send produces, and there
+// is no child process left to outrun or to fail for a reason of its own.
+//
+// THE SENDER IS GIVEN RATHER THAN INHERITED, and that is the one thing the exec it replaces had to do by
+// hand: the deliverer runs OUTSIDE any seat shell and the text is the human's, so the envelope must say
+// human@kernel — where the exec stamped OPENRIG_SESSION_NAME onto the child's environment to get the
+// same effect.
 var sendToSession = func(ctx context.Context, session, text string) error {
-	cmd := exec.CommandContext(ctx, "rig", "send", session, text)
-	cmd.Env = humanSenderEnv(os.Environ())
-	done, err := cmd.CombinedOutput()
+	result, status, err := clientruntime.OpenRigSend(ctx, session, text, clientruntime.SendOptions{Sender: humanSeatSession})
 	if err != nil {
-		detail := oneLine(strings.TrimSpace(string(done)))
-		if detail == "" {
-			detail = err.Error()
-		}
-		return fmt.Errorf("rig send %s: %s", session, detail)
+		return fmt.Errorf("send to %s: %w", session, err)
+	}
+	if status < 200 || status > 299 || !result.OK {
+		return fmt.Errorf("send to %s: %s", session, deliveryRefusal(result, status))
 	}
 	return nil
 }
 
-// humanSenderEnv stamps the human's session name onto a delivery's environment, replacing the older
-// spelling rather than appending a duplicate: two OPENRIG_SESSION_NAME entries would leave the winner
-// to exec's order, and the sender must be the human every time.
-func humanSenderEnv(environ []string) []string {
-	stamped := make([]string, 0, len(environ)+1)
-	for _, pair := range environ {
-		if strings.HasPrefix(pair, "OPENRIG_SESSION_NAME=") || strings.HasPrefix(pair, "RIGGED_SESSION_NAME=") {
-			continue
+// deliveryRefusal is the daemon's own words for a refusal, with the status as the last resort: a body this
+// build could not read is still reported rather than flattened into a bare code.
+func deliveryRefusal(result clientruntime.SendResult, status int) string {
+	for _, detail := range []string{result.Detail, result.Error, result.Warning} {
+		if strings.TrimSpace(detail) != "" {
+			return oneLine(detail)
 		}
-		stamped = append(stamped, pair)
 	}
-	return append(stamped, "OPENRIG_SESSION_NAME="+humanSeatSession)
+	return fmt.Sprintf("the daemon answered HTTP %d", status)
 }
 
 // seatMessage is one pulled message, as the pull describes it.

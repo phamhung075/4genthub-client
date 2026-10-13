@@ -5,13 +5,15 @@
 // same text twice (the one duplicate at-least-once allows, and what the ledger is for).
 //
 // What this does NOT prove, stated rather than implied: that the real server's pull and ack behave as
-// scripted here (that is the httpapp package's tests, against the real handlers), and that a real `rig
-// send` reaches a real session (that needs a running seat, which is the row's end-to-end check).
+// scripted here (that is the httpapp package's tests, against the real handlers), and that a real daemon
+// send lands in a real seat's pane (the stub daemon proves the request the verb makes, not the pane it
+// reaches — that is the row's end-to-end check).
 package clientsync
 
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -323,6 +325,66 @@ func fakeRoom(t *testing.T, seats ...seatSession) {
 	t.Cleanup(func() { roomSeats = previous })
 	roomSeats = func(room string) ([]seatSession, error) { return seats, nil }
 	t.Setenv("PATH", t.TempDir())
+}
+
+// THE DELIVERY GOES TO THE DAEMON, AND THE ENVELOPE IS THE CLI'S OWN. This test runs the REAL sendToSession - the
+// fixture's substitute is taken back - against a stub daemon, with no `rig` on PATH. A reversion to the exec fails
+// twice over: the tool is not on PATH, and nothing would reach the stub.
+//
+// The sender is the point of the assertions: the deliverer runs outside any seat shell, and the decoy session in
+// OPENRIG_SESSION_NAME is what a caller who inherited its identity would write. The envelope must name the human.
+func TestMessagesVerbDeliversThroughTheDaemonWithTheCLIEnvelope(t *testing.T) {
+	const decoy = "4genthub-min-go-dev@4genthub-min"
+	var got struct {
+		Session string `json:"session"`
+		Text    string `json:"text"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/transport/send" {
+			t.Errorf("path = %q, want the transport send route", r.URL.Path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("reading the request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("request body = %s, want the send payload: %v", body, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"sessionName":"4genthub-min-lead@4genthub-min","outcome":"delivered","verified":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", decoy)
+	t.Setenv("PATH", t.TempDir())
+
+	cloud := &messageCloud{bySeat: map[string][]map[string]any{
+		"4genthub-min/lead": {message("m1", "hello lead")},
+	}}
+	realDelivery := sendToSession
+	_, _, out := messagesFixture(t, cloud, nil)
+	sendToSession = realDelivery
+	fakeRoom(t, seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"})
+
+	var stdout, stderr strings.Builder
+	if code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
+	}
+	if got.Session != "4genthub-min-lead@4genthub-min" {
+		t.Errorf("delivered to session %q, want the seat's session", got.Session)
+	}
+	if !strings.Contains(got.Text, "hello lead") {
+		t.Errorf("envelope = %q, want the message body in it", got.Text)
+	}
+	if !strings.Contains(got.Text, "From: "+humanSeatSession) {
+		t.Errorf("envelope = %q, want it written AS %s", got.Text, humanSeatSession)
+	}
+	if strings.Contains(got.Text, decoy) {
+		t.Errorf("envelope = %q, want the deliverer's own session absent from the sender", got.Text)
+	}
+	if !strings.Contains(stdout.String(), "4genthub-min/lead: 1 delivered, 0 re-acked, 0 failed") {
+		t.Errorf("report = %q, want the delivery counted", stdout.String())
+	}
 }
 
 // seatSessionsFrom carries the skip rule, and it is proven here rather than only through a room: a seat that is not

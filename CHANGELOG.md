@@ -3,6 +3,33 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the delivery goes to the daemon, and the envelope keeps the human's name
+
+### Changed
+- `sync messages` delivers through the OpenRig daemon (`clientruntime.OpenRigSend`, the route `rig send` itself takes)
+  instead of exec'ing `rig send`. The envelope is rendered by the client's own body renderer, so a delivered message
+  reaches a pane in exactly the wrapper a human's own send produces — and there is no child process left to outrun or
+  to fail for a reason of its own. `humanSenderEnv` is DELETED with the exec, because the environment stamping it did
+  exists to make a child process say the right thing.
+- One addition to `clientruntime.SendOptions`: `Sender`. `OpenRigSend` writes the envelope AS `openRigSession()`, which
+  is right for a caller in a seat shell and wrong for this one: the deliverer runs outside any seat shell and the text
+  is the human's, so the envelope must say `human@kernel`. The exec got that by stamping `OPENRIG_SESSION_NAME` onto
+  the child; the option gets it without a child. Blank keeps the old meaning, so `rig send` itself is unchanged.
+- A delivery the daemon refuses is reported in the daemon's own words — `Detail`, else `Error`, else `Warning`, else
+  the HTTP status — rather than flattened into a bare code.
+
+### Verified
+- `TestMessagesVerbDeliversThroughTheDaemonWithTheCLIEnvelope` runs the REAL delivery (the fixture's substitute is
+  taken back) against a stub daemon, with PATH emptied and a decoy in `OPENRIG_SESSION_NAME`. It asserts the route, the
+  recipient session, the message body, `From: human@kernel`, and the decoy's ABSENCE. RED-then-GREEN: dropping the
+  explicit sender fails it with the envelope the deliverer's own seat would have written,
+  `From: 4genthub-min-go-dev@4genthub-min`; restored, green.
+- The live leg is blocked on the READ's commodity question — the native room store holds no row for a seat the OpenRig
+  daemon started, so `GetRoomStatus` refuses with `cannot read room spec` — and not on this change. The stub daemon
+  proves the request the verb makes, not the pane it reaches; the test file says so in its own header.
+- `go build ./...`, `go vet ./internal/clientsync/ ./internal/clientruntime/` and `go test ./...` are green: 23
+  packages ok. No exec and no `runRig` remains in messagesverb.go.
+
 ## 2026-10-13 — the message pass reads its seats from the runtime, and the read is proven unable to fall back
 
 ### Changed
