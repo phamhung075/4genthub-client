@@ -18,7 +18,7 @@ func TestASeatIsBehindWhenItsPinDiffersOrIsMissing(t *testing.T) {
 
 func TestWaitUntilQuietReturnsTrueOnceTheSeatIsIdleAndStill(t *testing.T) {
 	waiter := QuietWaiter{
-		Activity:     func(string, string) string { return "idle" },
+		Activity:     func(string, string) (string, bool) { return "idle", true },
 		Since:        func(string, string) float64 { return 99 },
 		Sleep:        func(float64) {},
 		Clock:        func() float64 { return 0 },
@@ -32,7 +32,7 @@ func TestWaitUntilQuietReturnsTrueOnceTheSeatIsIdleAndStill(t *testing.T) {
 func TestWaitUntilQuietGivesUpOnASeatThatNeverStopsRunning(t *testing.T) {
 	now := 0.0
 	waiter := QuietWaiter{
-		Activity:     func(string, string) string { return "running" },
+		Activity:     func(string, string) (string, bool) { return "running", true },
 		Since:        func(string, string) float64 { return 99 },
 		Sleep:        func(seconds float64) { now += seconds },
 		Clock:        func() float64 { return now },
@@ -46,7 +46,7 @@ func TestWaitUntilQuietGivesUpOnASeatThatNeverStopsRunning(t *testing.T) {
 func TestWaitUntilQuietDoesNotCountASeatThatJustWrote(t *testing.T) {
 	now := 0.0
 	waiter := QuietWaiter{
-		Activity:     func(string, string) string { return "idle" },
+		Activity:     func(string, string) (string, bool) { return "idle", true },
 		Since:        func(string, string) float64 { return 2 },
 		Sleep:        func(seconds float64) { now += seconds },
 		Clock:        func() float64 { return now },
@@ -54,6 +54,59 @@ func TestWaitUntilQuietDoesNotCountASeatThatJustWrote(t *testing.T) {
 	}
 	if waiter.Wait("rig", "s") {
 		t.Error("a seat that just wrote was reported quiet")
+	}
+}
+
+// AN UNREADABLE ACTIVITY KEEPS WAITING, and this is the test that fails if the direction is ever flipped back. The
+// empty reading is not the answer "not running" - it is the absence of an answer, and the seat may be mid-turn while
+// the read simply cannot say. The seat here is perfectly still and the clock runs out, so the activity clause is the
+// only thing deciding: proceeding would reseat a live seat.
+func TestWaitUntilQuietDoesNotProceedOnAnActivityItCouldNotRead(t *testing.T) {
+	now := 0.0
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "", false },
+		Since:        func(string, string) float64 { return 999 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
+	if waiter.Wait("rig", "s") {
+		t.Error("an unreadable activity was accepted as quiet: the wait fell through to the stillness clause alone")
+	}
+}
+
+// AND THE OTHER HALF OF THE SEAM: a reading that HAPPENED but carried no word is still not "not running". The second
+// answer is what separates the two - false means nobody could ask (no CLI, the call failed, the seat is not in the
+// table), true-with-no-word means the table answered and had nothing to say about this seat. Both keep waiting; the
+// difference is named so that a later reader cannot collapse them back into one empty string.
+func TestWaitUntilQuietDoesNotProceedOnAWordlessReading(t *testing.T) {
+	now := 0.0
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "", true },
+		Since:        func(string, string) float64 { return 999 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
+	if waiter.Wait("rig", "s") {
+		t.Error("a reading that carried no word was accepted as quiet")
+	}
+}
+
+// AND THE OTHER SIDE OF THE SAME RULE, so that the fix is not over-tightened into requiring the word "idle": a
+// POSITIVE reading that is not "running" is quiet when the session has been still - a seat waiting for input is not
+// mid-turn either.
+func TestWaitUntilQuietProceedsOnANonRunningReadingItDidRead(t *testing.T) {
+	now := 0.0
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "needs_input", true },
+		Since:        func(string, string) float64 { return 99 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
+	if !waiter.Wait("rig", "s") {
+		t.Error("a seat that is not running (needs_input) and has been still was not reported quiet")
 	}
 }
 

@@ -3,6 +3,33 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — the second activity reader now fails closed, so an unknown reading keeps waiting
+
+### Changed
+- `QuietWaiter`'s activity seam carries TWO answers instead of one: the word the seat is doing, and whether the read
+  happened at all. `seatActivity` answers `("", false)` when there is no `rig` on PATH, the call fails, the node table
+  will not parse, or the table does not list the seat; it answers `(state, true)` when it did read a node, including a
+  node that carries no word.
+- `quietOnce` is the single place the comparison is written, and both halves of the double reading go through it. It
+  needs a POSITIVE answer - a read that happened, a word, and not `running` - so an unreadable activity no longer
+  presents as the same empty string that would pass `!= "running"`. Before this, an unknown reading released the wait
+  onto the stillness clause alone (the seat's own session mtime), and a reseat could proceed past a seat that was
+  actually mid-turn.
+- The declaration now states the direction the code implements - THIS ONE FAILS CLOSED, the same direction `rigIdle`
+  declares - and names the consequence rather than leaving it to be discovered: after the cutover, with no CLI to
+  read, every call answers false, so a reseat waits out its deadline and then does NOT proceed. That indefinite wait
+  is why the native activity read is the cutover PRECONDITION rather than a nicety, and it is what makes the two
+  declared exceptions consistent instead of opposite.
+
+### Verified
+- The change's licence was that NO test pinned the failing-open reading, so the direction is now pinned by two tests
+  that fail on the OLD behaviour. Reverting `quietOnce` to `activity != "running"` - what the code did before this
+  commit - fails exactly those two, `...DoesNotProceedOnAnActivityItCouldNotRead` and
+  `...DoesNotProceedOnAWordlessReading`, while the three older wait tests keep passing: neither unfalsifiable nor
+  over-tightened. One further test holds the other side, so a positive non-running word (`needs_input`) still counts
+  as quiet when the session has been still.
+- `go build ./...`, `go vet ./internal/clientseat/` and `go test ./internal/clientseat/` are green.
+
 ## 2026-10-13 — the delivery goes to the daemon, and the envelope keeps the human's name
 
 ### Changed

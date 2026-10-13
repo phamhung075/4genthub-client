@@ -170,8 +170,12 @@ func truncate(text string, limit int) string {
 
 // QuietWaiter is wait_until_quiet: true once the seat is not running and its session has been still for
 // QuietSeconds, twice in a row. Every read is a field, so the suite needs no rig and no clock.
+//
+// Activity's TWO answers are not one: the word the seat is doing, and whether the read happened at all. They are
+// separate because "" is a word a broken read and a wordless node both produce, and an unknown activity must NOT be
+// read as "not running" - see quietOnce, which is where that rule is written.
 type QuietWaiter struct {
-	Activity func(rig, seat string) string
+	Activity func(rig, seat string) (string, bool)
 	Since    func(rig, seat string) float64
 	Sleep    func(seconds float64)
 	Clock    func() float64
@@ -197,15 +201,34 @@ func NewQuietWaiter(stateRoot string) QuietWaiter {
 func (w QuietWaiter) Wait(rig, seat string) bool {
 	deadline := w.Clock() + w.WaitSeconds
 	for w.Clock() < deadline {
-		if w.Activity(rig, seat) != "running" && w.Since(rig, seat) >= w.QuietSeconds {
+		if w.quietOnce(rig, seat) {
 			w.Sleep(w.PollSeconds)
-			if w.Activity(rig, seat) != "running" && w.Since(rig, seat) >= w.QuietSeconds {
+			if w.quietOnce(rig, seat) {
 				return true
 			}
 		}
 		w.Sleep(w.PollSeconds)
 	}
 	return false
+}
+
+// quietOnce is ONE reading of the two clauses - the seat is not running AND its session has been still for the quiet
+// window - and the only place the activity comparison is written.
+//
+// AN UNREADABLE ACTIVITY IS NOT "NOT RUNNING", and the seam says which is which: Activity's second answer is false
+// when no activity could be read at all (no `rig` on PATH, the ps call failed, the seat missing from the node table),
+// and that false KEEPS THE WAIT GOING rather than releasing it. The empty word is refused even when the read DID
+// happen, because a wordless reading is still not the answer "not running". Testing `!= "running"` alone accepted
+// both, which left the stillness clause - the seat's own session mtime - deciding by itself: a reseat could proceed
+// past a seat that is actually mid-turn. So the clause needs a POSITIVE answer: a read that happened, a word, and
+// not "running". Any other word it did read (idle, needs_input) counts, because a seat waiting for input is not
+// mid-turn either.
+func (w QuietWaiter) quietOnce(rig, seat string) bool {
+	activity, read := w.Activity(rig, seat)
+	if !read || activity == "" || activity == "running" {
+		return false
+	}
+	return w.Since(rig, seat) >= w.QuietSeconds
 }
 
 func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
@@ -215,23 +238,25 @@ func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 // native activity read on the runtime's surface yet, and that native read is the CUTOVER PRECONDITION the rigIdle
 // declaration names. One read retires both, and both declarations should then be DELETED rather than annotated.
 //
-// ITS CONSUMER IS QuietWaiter, and the direction of failure here is the OPPOSITE of rigIdle's: Wait asks
-// Activity(...) != "running", and every failure path here answers "", which is not "running" - so an unreadable
-// activity reads as NOT RUNNING and the wait falls through to its stillness clause alone (the seat's own file's mtime).
-// That is a real signal rather than a wrong answer, but it is strictly weaker than the two-clause reading, and after
-// the cutover it is the only clause left. Named here rather than left for a reader to discover: this one fails OPEN.
-func seatActivity(rig, seat string) string {
+// ITS CONSUMER IS QuietWaiter, and the direction of failure here is the SAME as rigIdle's, written in the same form:
+// THIS ONE FAILS CLOSED. The seam carries the difference rather than leaving it to be guessed: this function's second
+// value is FALSE whenever it could not read at all, and QuietWaiter keeps waiting on that answer instead of reading it
+// as "not running". The consequence is stated rather than left to be discovered: AFTER THE CUTOVER, with no CLI to
+// read, every call answers false and a reseat waits out its deadline and then does NOT proceed. That indefinite wait
+// is why the native activity read is the cutover PRECONDITION rather than a nicety - not compaction alone - and both
+// declared exceptions are now consistent in direction.
+func seatActivity(rig, seat string) (string, bool) {
 	path, err := exec.LookPath("rig")
 	if err != nil {
-		return ""
+		return "", false
 	}
 	out, err := exec.Command(path, "ps", "--nodes", "--rig", rig, "--json").Output()
 	if err != nil {
-		return ""
+		return "", false
 	}
 	var nodes []map[string]any
 	if json.Unmarshal(out, &nodes) != nil {
-		return ""
+		return "", false
 	}
 	for _, node := range nodes {
 		if node["logicalId"] != rig+"."+seat {
@@ -239,9 +264,9 @@ func seatActivity(rig, seat string) string {
 		}
 		activity, _ := node["agentActivity"].(map[string]any)
 		state, _ := activity["state"].(string)
-		return state
+		return state, true
 	}
-	return ""
+	return "", false
 }
 
 // secondsSinceLastWrite is seconds_since_last_write: how long the seat's session files have been still.
