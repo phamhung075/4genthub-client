@@ -274,6 +274,14 @@ func (queueCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, st
 		fmt.Fprintln(stdout, "this shim refuses them by name rather than reporting a write it did not make.")
 		return clientcmd.ExitOK
 	}
+	// A subcommand this verb does not read is refused BY NAME before anything else runs, so the flag
+	// spelling of a write (`queue update <id> --state done`) gets the same refusal the bare spelling gets,
+	// instead of an unknown-flag message about the write's own argument.
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") && !queueReadSubcommands[args[0]] {
+		fmt.Fprintf(stderr, "4genteam queue: %q is not a read this shim performs; it reads the queue (list, show, transitions). Queue writes (create/claim/update/block/resolve/handoff/inbox/outbox) are the OpenRig CLI's own. Nothing was read or written.\n", args[0])
+		return clientcmd.ExitUsage
+	}
+
 	opts, rest, err := SplitFlags(args, []FlagSpec{{Name: "json"}, {Name: "destination", Value: true}})
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam queue: %v; nothing was read\n", err)
@@ -299,12 +307,15 @@ func (queueCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, st
 		}
 		return queueReadOne(ctx, sub, rest[0], asJSON, stdout, stderr)
 	default:
-		// The measured failure this refusal exists for: `queue update <id> --note ...` printing a success
-		// while the note went nowhere the caller could read. A verb that cannot do the thing says so.
 		fmt.Fprintf(stderr, "4genteam queue: %q is not a read this shim performs; it reads the queue (list, show, transitions). Queue writes (create/claim/update/block/resolve/handoff/inbox/outbox) are the OpenRig CLI's own. Nothing was read or written.\n", sub)
 		return clientcmd.ExitUsage
 	}
 }
+
+// queueReadSubcommands are the reads this verb performs. Every other first word is a write (or a typo),
+// and both are refused by name: the measured failure this refusal exists for is `queue update <id>
+// --note ...` reporting success while the note went nowhere the caller could read.
+var queueReadSubcommands = map[string]bool{"list": true, "show": true, "transitions": true}
 
 const queueUsage = `usage: 4genteam queue [list] [--json] [--destination <dest>]
        4genteam queue show <qitemId> [--json]

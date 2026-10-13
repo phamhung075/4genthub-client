@@ -735,11 +735,14 @@ func TestQueueRefusesAWriteSubcommandWithoutTouchingTheDaemon(t *testing.T) {
 		args      []string
 		wantInErr string
 	}{
-		// The flag spelling is refused by the parser (an option no verb declares is never text); the bare
-		// subcommand is refused by name. Both exit 2, both send nothing.
-		{[]string{"update", "qitem-aaa", "--note", "a note"}, "unknown flag --note"},
+		// A write is refused by name in both spellings (bare and flag-carrying) — the flag spelling must not
+		// be answered with a complaint about the write's own argument — while an undeclared flag on a read is
+		// refused by the parser, since no verb declares `--nope`.
+		{[]string{"update", "qitem-aaa", "--note", "a note"}, "not a read this shim performs"},
+		{[]string{"update", "qitem-aaa", "--state", "done"}, "not a read this shim performs"},
 		{[]string{"update", "qitem-aaa"}, "not a read this shim performs"},
 		{[]string{"claim", "qitem-aaa"}, "not a read this shim performs"},
+		{[]string{"list", "--nope"}, "unknown flag --nope"},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			t.Setenv("OPENRIG_HOME", t.TempDir())

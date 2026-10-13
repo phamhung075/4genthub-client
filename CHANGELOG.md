@@ -21,10 +21,12 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
 - **The list's own parameter was dropped.** The route reads `destinationSession`; `--destination` now
   reaches it, so `rig queue --destination 4genthub-min-reviewer@4genthub-min` answers with that seat's rows
   (live). Same class as the defect, in the same verb, found by reading the route rather than the output.
-- **A queue write is refused by name.** `rig queue update <id> --note ...`, `claim`, `block` and the rest are
-  writes this shim does not perform: exit 2, nothing sent, stderr naming the write and pointing at the
-  OpenRig CLI. Measured before: a write reported success while its note was unreadable anywhere the caller
-  could look. (An undeclared flag like `--note` is refused even earlier, by the parser.)
+- **A queue write is refused by name, in both its spellings.** `queue update <id> --note ...`,
+  `queue update <id> --state done`, `claim`, `block` and the rest are writes this shim does not perform:
+  exit 2, nothing sent, stderr naming the write and pointing at the OpenRig CLI — the subcommand is judged
+  **before** the flag parser runs, so the flag spelling is not answered with a complaint about the write's
+  own argument. (Only an undeclared flag on a *read*, e.g. `queue list --nope`, is answered by the parser.)
+  Measured before: a write reported success while its note was unreadable anywhere the caller could look.
 - **`send` dropped `deliveryId`.** The route reads it (`transport.js:76`) and the OpenRig CLI always sends
   one (`send.ts:475`, `deliveryId: randomUUID()`); the daemon uses it as this delivery's outbox id
   (`session-transport.js:1143`) and refuses a reuse that names other content instead of re-delivering it
@@ -75,6 +77,12 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
   recorded its sender-side outbox row.
 
 ### Named, not silently fixed
+- **`queue list --json` prints `[]` for an empty queue.** That is the daemon's own document, printed
+  verbatim — the same rule the rest of this shim follows for `--json` — and the *human* form is the one that
+  carries the named measurement (`Measured 0 pending items for <session> on the OpenRig daemon at <url>.`).
+  It is only a true empty because the request reached a named daemon: a shell that names none exits 3 and
+  prints no list at all. Named here because `[]` is the exact string this row exists to banish from the
+  surface a seat reads.
 - **`deliveryId`'s effect, precisely.** With the typing guard off the id is inert: the outbox store mints
   its own row id (`outbox-<stamp>-<hash>`, measured live on this daemon), and the emitted send is unchanged.
   The id matters on the guarded path (the idempotency check at `session-transport.js:1160`) and for
