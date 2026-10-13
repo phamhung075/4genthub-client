@@ -22,6 +22,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
@@ -30,8 +31,10 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientfeedback"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientoutbox"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
 	"github.com/phamhung075/4genthub-client/internal/clientrestore"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientseat"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientteam"
@@ -106,6 +109,8 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientfeedback.Commands()...)
 	registry = append(registry, clientevidence.Commands()...)
 	registry = append(registry, clientrestore.Commands()...)
+	registry = append(registry, clientruntime.Commands()...)
+	registry = append(registry, clientoutbox.Commands()...)
 	return append(registry,
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])", false),
 	)
@@ -123,6 +128,26 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	// Map invocations via the `rig` compatibility shim:
+	if len(os.Args) > 0 && filepath.Base(os.Args[0]) == "rig" && len(args) > 0 {
+		switch args[0] {
+		case "whoami":
+			args[0] = "whoami"
+		case "send":
+			args[0] = "send"
+		case "queue":
+			args[0] = "queue"
+		case "ps":
+			args[0] = "status"
+		case "compact":
+			args[0] = "compact"
+		case "up":
+			args[0] = "up"
+		case "down":
+			args[0] = "stop"
+		}
+	}
+
 	if len(args) == 0 {
 		// No argument means `up`, as the Python client did.
 		args = []string{"up"}

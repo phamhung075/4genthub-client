@@ -379,3 +379,46 @@ func sortedCalls(calls [][]string) []string {
 	sort.Strings(out)
 	return out
 }
+
+func TestAgyTranscriptEventsAndTokens(t *testing.T) {
+	plannerJSON := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","input_tokens":21000,"cache_read_tokens":500,"output_tokens":250,"thinking":"Need to check rig whoami","tool_calls":[{"name":"run_command","args":{"CommandLine":"rig whoami --json","Cwd":"/home"}}],"content":"Running identity check"}`
+	rendered := events(plannerJSON, 200, true, 25)
+	if len(rendered) < 3 {
+		t.Fatalf("expected at least 3 rendered events (think, say, toolCall), got %d: %v", len(rendered), rendered)
+	}
+	hasThink := false
+	hasSay := false
+	hasTool := false
+	for _, line := range rendered {
+		if strings.Contains(line, "~ think") && strings.Contains(line, "Need to check rig whoami") {
+			hasThink = true
+		}
+		if strings.Contains(line, "▸ say") && strings.Contains(line, "Running identity check") {
+			hasSay = true
+		}
+		if strings.Contains(line, "run_command") && strings.Contains(line, "rig whoami --json") {
+			hasTool = true
+		}
+	}
+	if !hasThink || !hasSay || !hasTool {
+		t.Errorf("missing components: think=%v say=%v tool=%v", hasThink, hasSay, hasTool)
+	}
+
+	toks := contextTokens(plannerJSON)
+	if toks == nil || *toks != 21750 {
+		t.Errorf("got tokens %v, want 21750", toks)
+	}
+
+	genericJSON := `{"step_index":2,"source":"MODEL","type":"GENERIC","status":"DONE","content":"Output: OK\n"}`
+	renderedGeneric := events(genericJSON, 200, false, 25)
+	if len(renderedGeneric) != 1 || !strings.Contains(renderedGeneric[0], "Output: OK") {
+		t.Errorf("generic render mismatch: %v", renderedGeneric)
+	}
+
+	inputJSON := `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"hello agy agent"}`
+	renderedInput := events(inputJSON, 200, true, 25)
+	if len(renderedInput) != 1 || !strings.Contains(renderedInput[0], "hello agy agent") {
+		t.Errorf("input render mismatch: %v", renderedInput)
+	}
+}
+

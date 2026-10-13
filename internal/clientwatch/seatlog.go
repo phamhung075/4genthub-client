@@ -20,8 +20,9 @@ import (
 // says a reader sees.
 
 var (
-	claudeSessionID = regexp.MustCompile(`--(?:session-id|resume) ([0-9a-f-]{36})`)
-	modelInLog      = regexp.MustCompile(`"model":"([^"]+)"`)
+	claudeSessionID  = regexp.MustCompile(`--(?:session-id|resume) ([0-9a-f-]{36})`)
+	modelInLog       = regexp.MustCompile(`"model":"([^"]+)"`)
+	geminiModelInLog = regexp.MustCompile(`(Gemini [0-9.]+ Flash(?:\s*\([^)]+\))?)`)
 )
 
 func claudeProjects() string {
@@ -30,6 +31,50 @@ func claudeProjects() string {
 		return ""
 	}
 	return filepath.Join(home, ".claude", "projects")
+}
+
+// agyLog resolves the session log of an Antigravity CLI / Gemini seat.
+func agyLog(ctx context.Context, rig, seat string) string {
+	home, err := clientenv.RealHome()
+	if err != nil {
+		return ""
+	}
+
+	// 1. Check native agenthub room logs: ~/.config/4genthub/rooms/<rig>/logs/<seat>.jsonl
+	nativeLog := filepath.Join(home, ".config", "4genthub", "rooms", rig, "logs", seat+".jsonl")
+	if info, err := os.Stat(nativeLog); err == nil && !info.IsDir() {
+		return nativeLog
+	}
+
+	// 2. Search ~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl
+	// matching session target
+	sessionTarget := fmt.Sprintf("%s-%s@%s", rig, seat, rig)
+	brainGlob := filepath.Join(home, ".gemini", "antigravity-cli", "brain", "*", ".system_generated", "logs", "transcript.jsonl")
+	matches, _ := filepath.Glob(brainGlob)
+	var candidates []string
+	buf := make([]byte, 4096)
+	for _, p := range matches {
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		n, _ := f.Read(buf)
+		_ = f.Close()
+		if n > 0 && strings.Contains(string(buf[:n]), sessionTarget) {
+			candidates = append(candidates, p)
+		}
+	}
+	if len(candidates) > 0 {
+		return newestByModTime(candidates)
+	}
+
+	// 3. Fallback to ~/.openrig/transcripts/<rig>/<rig>-<seat>@<rig>.log
+	fallbackLog := filepath.Join(home, ".openrig", "transcripts", rig, fmt.Sprintf("%s-%s@%s.log", rig, seat, rig))
+	if info, err := os.Stat(fallbackLog); err == nil && !info.IsDir() {
+		return fallbackLog
+	}
+
+	return ""
 }
 
 // newestSession is the most recently written sessions/*.jsonl under one seat's state directory.
@@ -81,14 +126,17 @@ func newestByModTime(paths []string) string {
 	return paths[len(paths)-1]
 }
 
-// seatLog is (the newest session log, the runtime) of a seat: omp state first, else the Claude Code
-// log. A seat with neither yields an empty path and no runtime.
+// seatLog is (the newest session log, the runtime) of a seat: omp state first, then agy, else Claude Code.
+// A seat with neither yields an empty path and no runtime.
 func seatLog(ctx context.Context, root, rig, seat string) (string, string) {
 	seatDir := filepath.Join(root, fmt.Sprintf("%s-%s@%s", rig, seat, rig))
 	if info, err := os.Stat(seatDir); err == nil && info.IsDir() {
 		if session := newestSession(seatDir); session != "" {
 			return session, "omp"
 		}
+	}
+	if agy := agyLog(ctx, rig, seat); agy != "" {
+		return agy, "agy"
 	}
 	return claudeLog(ctx, rig, seat), "claude"
 }
@@ -109,6 +157,19 @@ func contextTokens(line string) *int {
 			return after
 		}
 	}
+	// Check agy / top-level token fields (input_tokens + cache_read_tokens + output_tokens)
+	sumAgy := 0
+	hasAgy := false
+	for _, key := range []string{"input_tokens", "cache_read_tokens", "output_tokens"} {
+		if part := numberValueOrFloat(record, key); part != nil {
+			sumAgy += *part
+			hasAgy = true
+		}
+	}
+	if hasAgy && sumAgy > 0 {
+		return &sumAgy
+	}
+
 	message, _ := record.get("message")
 	msg, ok := message.(*orderedJSONObject)
 	if !ok {
@@ -183,10 +244,14 @@ func seatModel(logPath string) string {
 		return ""
 	}
 	found := modelInLog.FindAllStringSubmatch(string(raw[:read]), -1)
-	if len(found) == 0 {
-		return ""
+	if len(found) > 0 {
+		return found[len(found)-1][1]
 	}
-	return found[len(found)-1][1]
+	foundGemini := geminiModelInLog.FindAllStringSubmatch(string(raw[:read]), -1)
+	if len(foundGemini) > 0 {
+		return foundGemini[len(foundGemini)-1][1]
+	}
+	return ""
 }
 
 // readLines is the whole log as lines, for the initial replay.

@@ -1,0 +1,24 @@
+[package]
+name = "agenthub-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Native Rust execution engine for 4genthub seats: PTYs, context, skills, rules, and hooks"
+
+[dependencies]
+tokio = { version = "1.40", features = ["full"] }
+portable-pty = "0.8"
+nix = { version = "0.29", features = ["process", "signal", "fs", "term"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+regex = "1.10"
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.10", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

@@ -26,6 +26,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
@@ -222,11 +223,18 @@ func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Wr
 }
 
 func ensureDaemonImpl(rig *clientcmd.Rig, stderr io.Writer) error {
-	if _, err := rig.Run(context.Background(), "daemon", "status"); err == nil {
-		return nil
-	}
-	if _, err := rig.Run(context.Background(), "daemon", "start"); err != nil {
-		return errors.New("the OpenRig daemon did not start (see: rig daemon logs)")
+	client := clientruntime.NewClient("")
+	if err := client.EnsureDaemon(context.Background()); err != nil {
+		if rig != nil {
+			if _, rErr := rig.Run(context.Background(), "daemon", "status"); rErr == nil {
+				return nil
+			}
+			if _, rErr := rig.Run(context.Background(), "daemon", "start"); rErr != nil {
+				return errors.New("the OpenRig daemon did not start (see: rig daemon logs)")
+			}
+			return nil
+		}
+		return fmt.Errorf("the agenthub-runtime daemon did not start: %w", err)
 	}
 	return nil
 }
@@ -245,8 +253,16 @@ func ensureRigImpl(rig *clientcmd.Rig, name string, stderr io.Writer) {
 			return
 		}
 	}
-	if _, err := rig.Run(context.Background(), "up", name, "--existing"); err != nil {
-		fmt.Fprintf(stderr, "4genteam: could not restore rig %s (see: rig up %s --existing)\n", name, name)
+	client := clientruntime.NewClient("")
+	cwd, _ := os.Getwd()
+	if _, err := client.StartRoomByName(name, cwd); err != nil {
+		if rig != nil {
+			if _, rErr := rig.Run(context.Background(), "up", name, "--existing"); rErr != nil {
+				fmt.Fprintf(stderr, "4genteam: could not restore rig %s (see: rig up %s --existing)\n", name, name)
+			}
+			return
+		}
+		fmt.Fprintf(stderr, "4genteam: could not start room %s: %v\n", name, err)
 	}
 }
 
@@ -255,15 +271,35 @@ func ensureRigImpl(rig *clientcmd.Rig, name string, stderr io.Writer) {
 // caller's next step fails loudly on its own, and an unreadable reading must never be read as "this room
 // is safe".
 var rigNodes = func(rig *clientcmd.Rig, name string) []map[string]any {
-	out, err := rig.Run(context.Background(), "ps", "--nodes", "--rig", name, "--json")
-	if err != nil {
-		return nil
+	client := clientruntime.NewClient("")
+	seats, err := client.GetRoomStatus(name)
+	if err == nil && len(seats) > 0 {
+		var nodes []map[string]any
+		for _, seat := range seats {
+			nodes = append(nodes, map[string]any{
+				"rigName":       name,
+				"logicalId":     fmt.Sprintf("%s.%s", name, seat.Seat),
+				"seat":          seat.Seat,
+				"runtime":       seat.Runtime,
+				"sessionStatus": seat.State,
+				"model":         seat.Model,
+				"pid":           seat.Pid,
+			})
+		}
+		return nodes
 	}
-	var nodes []map[string]any
-	if json.Unmarshal([]byte(out), &nodes) != nil {
-		return nil
+	if rig != nil {
+		out, err := rig.Run(context.Background(), "ps", "--nodes", "--rig", name, "--json")
+		if err != nil {
+			return nil
+		}
+		var nodes []map[string]any
+		if json.Unmarshal([]byte(out), &nodes) != nil {
+			return nil
+		}
+		return nodes
 	}
-	return nodes
+	return nil
 }
 
 // PeakGate is the DeepSeek peak gate for every verb in the client that starts or resumes a room's seats

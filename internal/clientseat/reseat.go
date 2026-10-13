@@ -19,6 +19,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // reseatDeps is what reseat touches outside its arguments, as fields so the suite needs no rig and no wait.
@@ -175,6 +176,14 @@ func (sendCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdou
 	}
 	rig, seat := flags.Arg(0), flags.Arg(1)
 	text := fmt.Sprintf("From %s: %s", *from, strings.Join(flags.Args()[2:], " "))
+
+	// Try native runtime IPC send first
+	rtClient := clientruntime.NewClient("")
+	if err := rtClient.SendTextToSeat(rig, seat, text); err == nil {
+		fmt.Fprintf(stdout, "Sent to %s/%s\n", rig, seat)
+		return clientcmd.ExitOK
+	}
+
 	path, err := exec.LookPath("rig")
 	if err != nil {
 		return report(stderr, &clientcmd.CodedError{Message: "rig is not on PATH", Code: clientcmd.ExitUnavailable})

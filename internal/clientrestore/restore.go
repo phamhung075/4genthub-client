@@ -10,6 +10,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // briefSendTimeout is the shell's `timeout 40 rig send`. A brief is text typed into a seat's terminal
@@ -48,8 +49,18 @@ func newRestorer(rig *clientcmd.Rig, log *teeLog) (*restorer, error) {
 		log:    log,
 		briefs: briefs,
 		send: func(ctx context.Context, session, text string) error {
-			_, err := rig.Run(ctx, "send", session, text)
-			return err
+			parts := strings.Split(session, "--")
+			if len(parts) == 3 && parts[0] == "agenthub" {
+				room, seat := parts[1], parts[2]
+				if err := clientruntime.NewClient("").SendTextToSeat(room, seat, text); err == nil {
+					return nil
+				}
+			}
+			if rig != nil {
+				_, err := rig.Run(ctx, "send", session, text)
+				return err
+			}
+			return nil
 		},
 		wall: watchWall,
 	}
