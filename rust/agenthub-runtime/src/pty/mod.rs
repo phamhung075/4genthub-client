@@ -49,15 +49,22 @@ impl TerminalManager {
         // `/proc/<pid>/environ` is the environment the kernel was given, which is where the design's
         // predicate is measured, and tmux hands a pane its session environment from the tmux *server* when
         // the variable is not in the client's — a server the live rig may have started.
+        // `runtime_cmd` arrives as ONE string and tmux hands it to the shell, so the wrapper has to stay a
+        // single string too: passing `env` as its own argv element makes `env` treat the whole command as a
+        // program name, and the pane dies instantly (which is how the first version of this failed - visible
+        // as a room that starts no seat at all).
         let denied = crate::denied_env_keys();
         if denied.is_empty() {
             cmd.arg(runtime_cmd);
         } else {
-            cmd.arg("env");
+            let mut wrapped = String::from("env");
             for key in &denied {
-                cmd.arg("-u").arg(key);
+                wrapped.push_str(" -u ");
+                wrapped.push_str(key);
             }
-            cmd.arg(runtime_cmd);
+            wrapped.push(' ');
+            wrapped.push_str(runtime_cmd);
+            cmd.arg(wrapped);
         }
 
         let output = cmd.output().map_err(|e| format!("failed to start tmux: {e}"))?;

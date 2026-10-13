@@ -144,6 +144,11 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
         Err(e) => {
             let reason = format!("refusing to launch: {e}");
             let path = state_file_path(state_dir, &target.room, &target.seat);
+            // The seat's directory may not exist yet (nothing has launched), and a refusal that cannot be
+            // published is exactly the gap this closes: measured, the first version left no state file at all.
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
             let _ = write_state(&path, "agent_exited", &reason, 0);
             mirror(&reason);
             return Ok(());
