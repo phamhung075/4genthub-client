@@ -193,6 +193,32 @@ func (ledgerCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 			len(answers), len(events), store.Cursor())
 		return clientcmd.ExitOK
 
+	case "work":
+		machine := ""
+		if len(args) > 1 {
+			machine = args[1]
+		}
+		if machine == "" {
+			machine = "4genthub-min"
+		}
+		work, err := mgr.FetchWork(ctx, machine)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam ledger work: %v\n", err)
+			return clientcmd.ExitUnavailable
+		}
+		fmt.Fprintf(stdout, "Found %d work items for room %s:\n", len(work), machine)
+		for _, w := range work {
+			claimed := "unclaimed"
+			if w.ClaimedBy != nil && *w.ClaimedBy != "" {
+				claimed = "claimed by " + *w.ClaimedBy
+			}
+			fmt.Fprintf(stdout, "  [%s] task %s: %s (assignee: %s, %s)\n", w.Status, w.ID, w.Title, w.Assignee, claimed)
+		}
+		if err := mgr.WakeSeatsForWork(ctx, machine, work); err != nil {
+			fmt.Fprintf(stderr, "4genteam ledger work wake: %v\n", err)
+		}
+		return clientcmd.ExitOK
+
 	default:
 		fmt.Fprintf(stderr, "unknown ledger action: %s\n", action)
 		return clientcmd.ExitUsage

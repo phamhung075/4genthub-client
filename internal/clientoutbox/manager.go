@@ -229,6 +229,8 @@ func extractWakeTarget(ev LedgerEvent) (room, seat, brief string) {
 		verdict, _ := ev.Payload["verdict"].(string)
 		reasons, _ := ev.Payload["reasons"].(string)
 		brief = fmt.Sprintf("\n[agenthub:wake] Task %s gate verdict: %s (%s). Please review and proceed.\n", ev.TaskID, verdict, reasons)
+	case "context_updated":
+		brief = fmt.Sprintf("\n[agenthub:wake] Task %s context updated. Refresh and resume: manage_task action=resume task_id=%s\n", ev.TaskID, ev.TaskID)
 	default:
 		brief = fmt.Sprintf("\n[agenthub:wake] Task %s event: %s. manage_task action=resume task_id=%s\n", ev.TaskID, ev.Kind, ev.TaskID)
 	}
@@ -253,4 +255,68 @@ func (m *Manager) Sync(ctx context.Context) ([]Answer, []LedgerEvent, error) {
 	}
 
 	return answers, events, nil
+}
+
+// WorkItem represents a task ready for execution by a seat in a room (O7).
+type WorkItem struct {
+	ID                 string   `json:"id"`
+	Title              string   `json:"title"`
+	Status             string   `json:"status"`
+	Assignee           string   `json:"assignee"`
+	ClaimedBy          *string  `json:"claimed_by"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	Scope              []string `json:"scope"`
+}
+
+// FetchWork retrieves open work for a machine from GET /api/v2/machines/{machine}/work.
+func (m *Manager) FetchWork(ctx context.Context, machine string) ([]WorkItem, error) {
+	endpoint := fmt.Sprintf("%s/api/v2/machines/%s/work", m.BaseURL, machine)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build work request: %w", err)
+	}
+	if m.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+m.Token)
+	}
+
+	resp, err := m.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch work request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("server answered HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var work []WorkItem
+	if err := json.NewDecoder(resp.Body).Decode(&work); err != nil {
+		return nil, fmt.Errorf("failed to parse work response: %w", err)
+	}
+	return work, nil
+}
+
+// WakeSeatsForWork wakes assigned seats for unclaimed open work items (O7).
+// Claiming suppresses duplicate wakeups.
+func (m *Manager) WakeSeatsForWork(ctx context.Context, machine string, work []WorkItem) error {
+	for _, item := range work {
+		if item.ClaimedBy != nil && *item.ClaimedBy != "" {
+			continue // Claiming suppresses duplicate wakeups!
+		}
+		parts := strings.SplitN(item.Assignee, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		room, seat := parts[0], parts[1]
+		wakeText := fmt.Sprintf("\n[agenthub:wake] Work available on task %s (%s). To claim: manage_task action=claim task_id=%s seat=%s/%s\n",
+			item.ID, item.Title, item.ID, room, seat)
+		if m.OnWake != nil {
+			m.OnWake(room, seat, wakeText)
+		}
+		if m.Runtime != nil {
+			_ = m.Runtime.SendTextToSeat(room, seat, wakeText)
+		}
+	}
+	return nil
 }

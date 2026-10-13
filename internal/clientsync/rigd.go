@@ -86,6 +86,11 @@ type RigDaemonOptions struct {
 	// Pending TAKES the state changes since the last call: latest wins per (safeguard, rig), which is the
 	// frame's own contract - no seq, no cursor, no ack.
 	Pending func() []clientservices.Health
+
+	// AllowRemoteCommands enables opt-in execution of commands from /ws/connector (D4/F5)
+	AllowRemoteCommands bool
+	AllowedRooms        []string
+	OnCommand           func(ctx context.Context, action, room, seat string, args map[string]any) (string, error)
 }
 
 // sessionStream is one local session's position in its source.
@@ -252,6 +257,9 @@ func (d *RigDaemon) connectAndServe(ctx context.Context) error {
 // frame the real one writes.
 func (d *RigDaemon) hello() (Ready, error) {
 	caps := []string{CapabilityIngest, CapabilitySafeguards}
+	if d.opts.AllowRemoteCommands {
+		caps = append(caps, CapabilityCommands)
+	}
 	if err := d.sock.WriteFrame(helloFrame(d.opts.ConnectorID, ClientVersion, caps)); err != nil {
 		return Ready{}, err
 	}
@@ -648,6 +656,8 @@ func (d *RigDaemon) handle(frame map[string]any) error {
 		}
 		d.opts.Log(fmt.Sprintf("the server reported an error (code %q): %s", code, message))
 		return nil
+	case "command":
+		return d.handleRemoteCommand(frame)
 	case "":
 		d.opts.Log("the server sent a frame with no type; ignoring it")
 		return nil
@@ -658,6 +668,94 @@ func (d *RigDaemon) handle(frame map[string]any) error {
 		}
 		return nil
 	}
+}
+
+// handleRemoteCommand evaluates security guardrails and executes opt-in remote commands (D4/F5).
+func (d *RigDaemon) handleRemoteCommand(frame map[string]any) error {
+	cmdID, _ := frame["command_id"].(string)
+	issuerKind, _ := frame["issuer_kind"].(string)
+	scope, _ := frame["token_scope"].(string)
+	action, _ := frame["action"].(string)
+	room, _ := frame["room"].(string)
+	seat, _ := frame["seat"].(string)
+	args, _ := frame["args"].(map[string]any)
+
+	refusalCode := ""
+	refusalMsg := ""
+
+	if !d.opts.AllowRemoteCommands {
+		refusalCode = "REMOTE_COMMANDS_DISABLED"
+		refusalMsg = "Remote execution via connector is disabled by local configuration"
+	} else if issuerKind != "human" {
+		refusalCode = "UNAUTHORIZED_ISSUER"
+		refusalMsg = fmt.Sprintf("Issuer %q not permitted; only human operators may issue commands", issuerKind)
+	} else if !strings.Contains(scope, "sessions:command") {
+		refusalCode = "SCOPE_INSUFFICIENT"
+		refusalMsg = "Token scope must include 'sessions:command'"
+	} else if action != "send_to_seat" && action != "up" && action != "down" {
+		refusalCode = "DISALLOWED_COMMAND"
+		refusalMsg = fmt.Sprintf("Action %q is not in the allowed command whitelist", action)
+	} else if len(d.opts.AllowedRooms) > 0 {
+		allowed := false
+		for _, r := range d.opts.AllowedRooms {
+			if r == room {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			refusalCode = "UNRECOGNIZED_ROOM"
+			refusalMsg = fmt.Sprintf("Room %q is not in the allowed rooms whitelist", room)
+		}
+	}
+
+	resultFrame := map[string]any{
+		"type":       "command_result",
+		"command_id": cmdID,
+	}
+
+	if refusalCode != "" {
+		resultFrame["success"] = false
+		resultFrame["refusal_code"] = refusalCode
+		resultFrame["message"] = refusalMsg
+		if d.opts.Log != nil {
+			d.opts.Log(fmt.Sprintf("[remote-command:refused] id=%s issuer=%s action=%s room=%s/%s code=%s msg=%s",
+				cmdID, issuerKind, action, room, seat, refusalCode, refusalMsg))
+		}
+		return d.sock.WriteFrame(resultFrame)
+	}
+
+	// Execute command via OnCommand callback
+	var out string
+	var execErr error
+	if d.opts.OnCommand != nil {
+		out, execErr = d.opts.OnCommand(context.Background(), action, room, seat, args)
+	} else {
+		refusalCode = "NO_EXECUTOR"
+		refusalMsg = "No local command executor configured"
+		resultFrame["success"] = false
+		resultFrame["refusal_code"] = refusalCode
+		resultFrame["message"] = refusalMsg
+		return d.sock.WriteFrame(resultFrame)
+	}
+
+	if execErr != nil {
+		resultFrame["success"] = false
+		resultFrame["message"] = execErr.Error()
+		if d.opts.Log != nil {
+			d.opts.Log(fmt.Sprintf("[remote-command:error] id=%s action=%s room=%s/%s err=%v",
+				cmdID, action, room, seat, execErr))
+		}
+	} else {
+		resultFrame["success"] = true
+		resultFrame["output"] = out
+		if d.opts.Log != nil {
+			d.opts.Log(fmt.Sprintf("[remote-command:success] id=%s action=%s room=%s/%s",
+				cmdID, action, room, seat))
+		}
+	}
+
+	return d.sock.WriteFrame(resultFrame)
 }
 
 // transcriptLines is the source's text as lines. A trailing newline is not a line.

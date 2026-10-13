@@ -52,6 +52,8 @@ const (
 	// CapabilitySafeguards is 7.6's addition. A `safeguard` frame is sent ONLY after ready echoes this
 	// one, which is what keeps a frame from a later phase impossible against this server.
 	CapabilitySafeguards = "safeguards"
+	// CapabilityCommands is phase 5's remote execution capability (D4/F5): command execution over /ws/connector.
+	CapabilityCommands = "commands"
 
 	// SessionRunning and SessionStopped are the two values of `session.state`.
 	SessionRunning = "running"
