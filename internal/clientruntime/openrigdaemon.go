@@ -67,13 +67,93 @@ const senderFallback = "<unknown sender>"
 // one that reports the daemon is not answering.
 const openRigTimeout = 30 * time.Second
 
-// OpenRigSendMessage delivers one message to one session through the OpenRig daemon: the shape
-// `rig send <session> <text>` promises, and the shape this client's message deliverer already calls.
-// The daemon resolves the session name against this machine's own session table and refuses an unknown
-// one, so a typo is reported rather than typed into the wrong prompt.
-func OpenRigSendMessage(ctx context.Context, session, text string) error {
-	envelope := openRigSendBody(openRigSession(), session, text, time.Now(), openRigGeneration())
-	return openRigPost(ctx, "/api/transport/send", map[string]string{"session": session, "text": envelope})
+// SendOptions is the send verb's option set: the flags the OpenRig CLI documents, named as the route
+// names them (the daemon's SendOpts). The zero value is the plain `rig send <session> <text>`.
+type SendOptions struct {
+	// Verify asks the daemon to re-confirm the snippet in its own post-send capture. The daemon answers
+	// with `outcome`/`verified` — the strong positive is outcome "delivered", which means the text AND
+	// the Enter landed and the capture re-confirmed the snippet (daemon/domain/session-transport.d.ts).
+	Verify bool
+	// Force is the CLI's back-compat no-op: a mid-task pane already sends-with-advisory. It rides the
+	// body so the daemon's own combination rules (force cannot combine with wait-for-idle) stay the
+	// authority rather than being re-implemented here.
+	Force bool
+	// WaitForIdleMs is the CLI's `--wait-for-idle <seconds>`, in the route's unit. 0 means not asked.
+	WaitForIdleMs int
+	// DangerouslyInteract types the text as prompt keystrokes; the daemon requires Reason and audits it.
+	DangerouslyInteract bool
+	Reason              string
+	// Raw sends the text exactly, with no From/To/Sent envelope (the CLI's `--raw`, and what
+	// --dangerously-interact implies).
+	Raw bool
+}
+
+// SendResult is the daemon's answer to a send, in the daemon's own field names. `Warning` is not noise:
+// it is the only signal a seat gets that its message went into a pane that was not reading (the
+// readiness guard sends-with-advisory as of OPR.0.4.3.28), and the CLI surfaces it by design.
+type SendResult struct {
+	OK                bool
+	SessionName       string
+	Outcome           string // delivered | rendered-unconfirmed | failed | retained
+	Verified          bool
+	HasVerified       bool
+	PromptInteraction string // enter-sent | unverified — means consumption was NOT established
+	Warning           string
+	Error             string
+	// Detail is the answer's own words on one line, kept for a body this build could not read, so a
+	// refusal is reported rather than turned into a bare status.
+	Detail string
+	// Raw is the answer exactly as it arrived. `--json` prints these bytes rather than a re-encode of
+	// them, which is the only way the shim's stdout can be the daemon's document.
+	Raw []byte
+}
+
+// OpenRigSend delivers one message to one session through the OpenRig daemon and returns the daemon's
+// answer with the HTTP status, so the caller can surface a warning and mirror the CLI's exit codes
+// (4xx → 1, 5xx → 2) instead of flattening every answer into one code. The daemon resolves the session
+// name against this machine's own session table and refuses an unknown one, so a typo is reported
+// rather than typed into the wrong prompt.
+func OpenRigSend(ctx context.Context, session, text string, opts SendOptions) (SendResult, int, error) {
+	payload := map[string]any{"session": session}
+	if opts.Raw {
+		payload["text"] = text
+	} else {
+		payload["text"] = openRigSendBody(openRigSession(), session, text, time.Now(), openRigGeneration())
+	}
+	if opts.Verify {
+		payload["verify"] = true
+	}
+	if opts.Force {
+		payload["force"] = true
+	}
+	if opts.WaitForIdleMs > 0 {
+		payload["waitForIdleMs"] = opts.WaitForIdleMs
+	}
+	if opts.DangerouslyInteract {
+		payload["dangerouslyInteract"] = true
+		payload["reason"] = opts.Reason
+	}
+
+	raw, status, err := openRigCall(ctx, "POST", "/api/transport/send", payload)
+	result := SendResult{Detail: daemonDetail(raw), Raw: raw}
+	var decoded struct {
+		OK                bool   `json:"ok"`
+		SessionName       string `json:"sessionName"`
+		Outcome           string `json:"outcome"`
+		Verified          *bool  `json:"verified"`
+		PromptInteraction string `json:"promptInteraction"`
+		Warning           string `json:"warning"`
+		Error             string `json:"error"`
+	}
+	if json.Unmarshal(raw, &decoded) == nil {
+		result.OK, result.SessionName, result.Outcome = decoded.OK, decoded.SessionName, decoded.Outcome
+		if decoded.Verified != nil {
+			result.Verified, result.HasVerified = *decoded.Verified, true
+		}
+		result.PromptInteraction = decoded.PromptInteraction
+		result.Warning, result.Error = decoded.Warning, decoded.Error
+	}
+	return result, status, err
 }
 
 // openRigSession is the session name this shell's environment claims, or "" when the shell is not a
@@ -130,12 +210,16 @@ func openRigTerminalToken() string {
 	return strings.TrimSpace(string(raw))
 }
 
-// openRigRequest performs one request against the daemon and returns its body as it arrived, so a verb
-// that must show the daemon's own document can show it rather than a re-encode of it.
-func openRigRequest(ctx context.Context, method, path string, payload any) ([]byte, error) {
+// openRigCall performs one request against the daemon and returns the body as it arrived, the HTTP
+// status, and — only for a transport failure — an error.
+//
+// The status is the caller's business because two verbs must mirror the CLI: `send` reads a `warning`
+// out of a SUCCESS body (dropping it was a gate finding), and an unknown session must end at exit 1
+// (the daemon answers 404; the CLI exits 1) rather than at this package's generic code.
+func openRigCall(ctx context.Context, method, path string, payload any) ([]byte, int, error) {
 	base := openRigDaemonURL()
 	if base == "" {
-		return nil, &clientcmd.CodedError{
+		return nil, 0, &clientcmd.CodedError{
 			Message: "no OpenRig daemon is configured in this environment (set " + openRigURLEnv + " or " + openRigPortEnv + ")",
 			Code:    clientcmd.ExitUnavailable,
 		}
@@ -145,14 +229,14 @@ func openRigRequest(ctx context.Context, method, path string, payload any) ([]by
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
-			return nil, &clientcmd.CodedError{Message: fmt.Sprintf("cannot encode the request: %v", err), Code: clientcmd.ExitRemote}
+			return nil, 0, &clientcmd.CodedError{Message: fmt.Sprintf("cannot encode the request: %v", err), Code: clientcmd.ExitRemote}
 		}
 		body = bytes.NewReader(encoded)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, base+path, body)
 	if err != nil {
-		return nil, &clientcmd.CodedError{Message: fmt.Sprintf("%s %s: %v", method, path, err), Code: clientcmd.ExitRemote}
+		return nil, 0, &clientcmd.CodedError{Message: fmt.Sprintf("%s %s: %v", method, path, err), Code: clientcmd.ExitRemote}
 	}
 	req.Header.Set("Accept", "application/json")
 	if payload != nil {
@@ -167,7 +251,7 @@ func openRigRequest(ctx context.Context, method, path string, payload any) ([]by
 
 	resp, err := (&http.Client{Timeout: openRigTimeout}).Do(req)
 	if err != nil {
-		return nil, &clientcmd.CodedError{
+		return nil, 0, &clientcmd.CodedError{
 			Message: fmt.Sprintf("the OpenRig daemon at %s is not answering: %v", base, err),
 			Code:    clientcmd.ExitUnavailable,
 		}
@@ -175,27 +259,43 @@ func openRigRequest(ctx context.Context, method, path string, payload any) ([]by
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &clientcmd.CodedError{Message: fmt.Sprintf("%s %s: %v", method, path, err), Code: clientcmd.ExitRemote}
+		return nil, resp.StatusCode, &clientcmd.CodedError{Message: fmt.Sprintf("%s %s: %v", method, path, err), Code: clientcmd.ExitRemote}
 	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	return raw, resp.StatusCode, nil
+}
+
+// openRigRequest is openRigCall for the callers that only want a document: a non-2xx becomes an error
+// carrying the daemon's own words.
+//
+// The code is ExitRemote (1) for both a 4xx refusal and a 5xx failure. The CLI numbers a 5xx as 2, but 2
+// is this client's ExitUsage — "the verb exists and the arguments are wrong" — so spending it on a
+// server failure would tell the caller the wrong story; the 404 case the gate named (exit 1) is matched
+// exactly, and the 5xx divergence is named in the change record rather than hidden behind the reuse.
+func openRigRequest(ctx context.Context, method, path string, payload any) ([]byte, error) {
+	raw, status, err := openRigCall(ctx, method, path, payload)
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status > 299 {
 		return nil, &clientcmd.CodedError{
-			Message: fmt.Sprintf("%s %s: the daemon refused it (HTTP %d) %s", method, path, resp.StatusCode, daemonDetail(raw)),
+			Message: fmt.Sprintf("%s %s: the daemon refused it (HTTP %d) %s", method, path, status, daemonDetail(raw)),
 			Code:    clientcmd.ExitRemote,
 		}
 	}
 	return raw, nil
 }
 
-// openRigPost is openRigRequest with a JSON body.
-func openRigPost(ctx context.Context, path string, payload any) error {
-	_, err := openRigRequest(ctx, "POST", path, payload)
-	return err
-}
-
 // openRigWhoami resolves one session's identity from the daemon, returning the daemon's document
-// unchanged.
-func openRigWhoami(ctx context.Context, session string) ([]byte, error) {
-	return openRigRequest(ctx, "GET", "/api/whoami?sessionName="+url.QueryEscape(session), nil)
+// unchanged. `compact` asks the daemon for its own compact projection — the CLI sends `compact=1` by
+// default (`if (!full) params.set("compact", "1")`) — rather than asking for the full payload and
+// dropping fields here, which would also pay for the contextUsage/runtimeContext compute the daemon
+// skips in compact mode.
+func openRigWhoami(ctx context.Context, session string, compact bool) ([]byte, error) {
+	query := "?sessionName=" + url.QueryEscape(session)
+	if compact {
+		query += "&compact=1"
+	}
+	return openRigRequest(ctx, "GET", "/api/whoami"+query, nil)
 }
 
 // daemonDetail is the daemon's own `error` field when it sent one, else its body, on one line.
@@ -219,15 +319,21 @@ func daemonDetail(raw []byte) string {
 // ones — the pane text is a receiver's whole account of who wrote the message, so the shim owes it the
 // same prose rather than a lookalike.
 func openRigSendBody(sender, recipient, body string, stamp time.Time, generation string) string {
-	label := strings.TrimSpace(sender)
-	if label == "" {
+	// The label is rendered EXACTLY as it arrived — the CLI's twin is
+	// `sender.trim().length > 0 ? sender : SENDER_FALLBACK`, i.e. only the blank TEST is on the trimmed
+	// value (gate finding m4: the shim rendered the trimmed one).
+	label := sender
+	if strings.TrimSpace(label) == "" {
 		label = senderFallback
 	}
 	header := []string{"From: " + label, "To: " + recipient}
 	if !stamp.IsZero() {
+		// The generation is rendered by PRESENCE and truncated to eight characters, which is the CLI's
+		// condition (`meta.genUuid && meta.genUuid.length > 0 ? slice(0, 8) : ""`). Gate finding m3: the
+		// `len >= 8` test this replaces dropped a 1-7 character generation the CLI renders.
 		suffix := ""
-		if len(generation) >= 8 {
-			suffix = " · gen " + generation[:8]
+		if generation != "" {
+			suffix = " · gen " + firstEight(generation)
 		}
 		header = append(header, "Sent: "+stamp.UTC().Format("01-02 15:04")+"Z"+suffix)
 	}
@@ -236,6 +342,15 @@ func openRigSendBody(sender, recipient, body string, stamp time.Time, generation
 		reply = `↩ Reply if needed: rig queue create --destination ` + label + ` --body "..." --verify`
 	}
 	return strings.Join(append(header, "---", body, "---", reply), "\n")
+}
+
+// firstEight is the CLI's `value.slice(0, 8)`: the first eight characters, or the whole value when it is
+// shorter. It is a truncation, never a filter.
+func firstEight(value string) string {
+	if len(value) > 8 {
+		return value[:8]
+	}
+	return value
 }
 
 // printOpenRigIdentity renders the daemon's document the way `rig whoami` renders it: the identity

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -94,8 +95,10 @@ func TestWhoamiWithoutJsonNamesTheSeatAndPod(t *testing.T) {
 	}
 }
 
-// TestWhoamiReportsTheDaemonsRefusalAsUnavailable keeps a wrong session name from looking like a seat.
-func TestWhoamiReportsTheDaemonsRefusalAsUnavailable(t *testing.T) {
+// TestWhoamiReportsTheDaemonsRefusalAsTheCLIsExitCode: an unknown session is the daemon's 404, and the
+// CLI ends on 1 for it (whoami.ts: `if (res.status >= 400) process.exitCode = 1`) — not on this package's
+// platform-matrix refusal, which is now reserved for a daemon that cannot be reached at all.
+func TestWhoamiReportsTheDaemonsRefusalAsTheCLIsExitCode(t *testing.T) {
 	t.Setenv("OPENRIG_HOME", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -108,8 +111,8 @@ func TestWhoamiReportsTheDaemonsRefusalAsUnavailable(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := whoamiCommand{}.Run(context.Background(), nil, []string{"--json"}, &out, &errOut)
 
-	if code != 3 {
-		t.Fatalf("exit = %d, want the platform-matrix refusal 3", code)
+	if code != 1 {
+		t.Fatalf("exit = %d, want the CLI's 1 for a refused whoami", code)
 	}
 	if out.Len() != 0 {
 		t.Errorf("a refused whoami printed a document anyway: %q", out.String())
@@ -138,9 +141,12 @@ func TestSendMessagePostsTheOpenRigEnvelopeToTheDaemon(t *testing.T) {
 	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
 	t.Setenv(openRigGenerationEnv, "17ec5cb7-771b-4dd6-8fd0-b59dbde19a46")
 
-	err := OpenRigSendMessage(context.Background(), "4genthub-min-fe-dev@4genthub-min", "no action needed")
+	result, status, err := OpenRigSend(context.Background(), "4genthub-min-fe-dev@4genthub-min", "no action needed", SendOptions{})
 	if err != nil {
-		t.Fatalf("OpenRigSendMessage: %v", err)
+		t.Fatalf("OpenRigSend: %v", err)
+	}
+	if status != http.StatusOK || !result.OK {
+		t.Fatalf("status = %d, ok = %v, want a readable 200", status, result.OK)
 	}
 	if gotPath != "/api/transport/send" {
 		t.Errorf("posted to %q, want /api/transport/send", gotPath)
@@ -188,12 +194,18 @@ func TestSendMessageReportsTheDaemonsRefusal(t *testing.T) {
 	t.Setenv("OPENRIG_URL", srv.URL)
 	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
 
-	err := OpenRigSendMessage(context.Background(), "ghost@rig", "hello")
-	if err == nil {
-		t.Fatal("an unknown session was reported as delivered")
+	result, status, err := OpenRigSend(context.Background(), "ghost@rig", "hello", SendOptions{})
+	if err != nil {
+		t.Fatalf("a 404 is the daemon answering, not a transport failure: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Check session names with: rig ps --nodes") {
-		t.Errorf("error = %q, want the daemon's own reason", err.Error())
+	if status != http.StatusNotFound {
+		t.Fatalf("status = %d, want the daemon's 404", status)
+	}
+	if result.OK {
+		t.Error("an unknown session was read as delivered")
+	}
+	if !strings.Contains(result.Error, "Check session names with: rig ps --nodes") {
+		t.Errorf("error = %q, want the daemon's own reason", result.Error)
 	}
 }
 
@@ -232,6 +244,21 @@ func TestSendBodyIsTheOpenRigCLIsProse(t *testing.T) {
 	if !strings.Contains(external, `↩ Reply if needed: rig queue create --destination human@external`) {
 		t.Errorf("an @external sender got the seat reply hint: %q", external)
 	}
+
+	// Gate finding m4: the label is rendered EXACTLY as it arrived — the CLI's twin is
+	// `sender.trim().length > 0 ? sender : SENDER_FALLBACK`, so only the blank TEST is on the trimmed
+	// value, which is why the fallback line above and this one differ.
+	padded := openRigSendBody("  padded@rig  ", "go-dev@rig", "x", stamp, "")
+	if !strings.Contains(padded, "From:   padded@rig  \n") {
+		t.Errorf("a padded sender label was trimmed: %q", padded)
+	}
+
+	// Gate finding m3: the generation is rendered by PRESENCE and truncated to eight characters, so a
+	// short one is rendered rather than dropped.
+	short := openRigSendBody("lead@rig", "go-dev@rig", "x", stamp, "abc")
+	if !strings.Contains(short, "Sent: 10-13 18:50Z · gen abc") {
+		t.Errorf("a generation shorter than eight characters was dropped: %q", short)
+	}
 }
 
 // TestDaemonURLPrecedence: OPENRIG_URL wins, OPENRIG_PORT is the loopback fallback, and neither means
@@ -251,6 +278,151 @@ func TestDaemonURLPrecedence(t *testing.T) {
 	t.Setenv("OPENRIG_URL", "http://127.0.0.1:9001/")
 	if got := openRigDaemonURL(); got != "http://127.0.0.1:9001" {
 		t.Errorf("OPENRIG_URL = %q, want it to win and lose its trailing slash", got)
+	}
+}
+
+// TestSplitFlagsTakesAnOptionFromEitherSideOfThePositionals is the root of gate finding M1: Go's flag
+// package stops at the first positional, so `rig send <session> 'text' --verify` — the form the daemon's
+// own whoami prints as commands.sendExamples — parsed as rig=<session>, seat="text", message="--verify"
+// and delivered nothing to the named seat.
+func TestSplitFlagsTakesAnOptionFromEitherSideOfThePositionals(t *testing.T) {
+	specs := []FlagSpec{{Name: "verify"}, {Name: "reason", Value: true}}
+
+	cases := []struct {
+		name    string
+		args    []string
+		want    map[string]string
+		wantPos []string
+	}{
+		{"trailing", []string{"seat@rig", "text", "--verify"}, map[string]string{"verify": "true"}, []string{"seat@rig", "text"}},
+		{"leading", []string{"--verify", "seat@rig", "text"}, map[string]string{"verify": "true"}, []string{"seat@rig", "text"}},
+		{"between the positionals", []string{"seat@rig", "--verify", "text"}, map[string]string{"verify": "true"}, []string{"seat@rig", "text"}},
+		{"value after", []string{"seat@rig", "text", "--reason", "why"}, map[string]string{"reason": "why"}, []string{"seat@rig", "text"}},
+		{"value joined with =", []string{"seat@rig", "text", "--reason=why"}, map[string]string{"reason": "why"}, []string{"seat@rig", "text"}},
+		{"terminator", []string{"seat@rig", "--", "--verify"}, map[string]string{}, []string{"seat@rig", "--verify"}},
+		{"a lone dash is positional", []string{"-", "--verify"}, map[string]string{"verify": "true"}, []string{"-"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, positional, err := SplitFlags(tc.args, specs)
+			if err != nil {
+				t.Fatalf("SplitFlags(%q): %v", tc.args, err)
+			}
+			if !reflect.DeepEqual(positional, tc.wantPos) {
+				t.Errorf("positionals = %q, want %q", positional, tc.wantPos)
+			}
+			if !reflect.DeepEqual(opts, tc.want) {
+				t.Errorf("options = %v, want %v", opts, tc.want)
+			}
+		})
+	}
+
+	// An option this verb does not declare is REFUSED, never handed on as text — the whole reason this
+	// helper exists rather than the flag package.
+	if _, _, err := SplitFlags([]string{"seat@rig", "text", "--nope"}, specs); err == nil {
+		t.Error("an undeclared flag was accepted as a positional")
+	}
+	if _, _, err := SplitFlags([]string{"seat@rig", "--reason"}, specs); err == nil {
+		t.Error("a value-taking flag with no value was accepted")
+	}
+	if _, _, err := SplitFlags([]string{"--verify=yes", "x"}, specs); err == nil {
+		t.Error("a value was accepted for a flag that takes none")
+	}
+}
+
+// TestOpenRigSendCarriesTheOptionedFlags: every flag the verb implements reaches the route under the name
+// the route reads (transport.js's body keys), and --raw is the one that changes what is delivered.
+func TestOpenRigSendCarriesTheOptionedFlags(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	_, status, err := OpenRigSend(context.Background(), "peer@rig", "text", SendOptions{Verify: true, Force: true, WaitForIdleMs: 30000})
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("OpenRigSend: status %d, err %v", status, err)
+	}
+	if got["verify"] != true || got["force"] != true || got["waitForIdleMs"] != float64(30000) {
+		t.Errorf("body = %v, want verify/force/waitForIdleMs as the route names them", got)
+	}
+	if text, _ := got["text"].(string); !strings.HasPrefix(text, "From: 4genthub-min-go-dev@4genthub-min\n") {
+		t.Errorf("an optioned send lost its envelope: %q", text)
+	}
+	if _, present := got["dangerouslyInteract"]; present {
+		t.Error("dangerouslyInteract was sent although the caller did not ask for it")
+	}
+
+	_, _, err = OpenRigSend(context.Background(), "peer@rig", "text", SendOptions{Raw: true})
+	if err != nil {
+		t.Fatalf("OpenRigSend raw: %v", err)
+	}
+	if got["text"] != "text" {
+		t.Errorf("--raw delivered %q, want the text exactly", got["text"])
+	}
+
+	_, _, err = OpenRigSend(context.Background(), "peer@rig", "text", SendOptions{DangerouslyInteract: true, Reason: "why", Raw: true})
+	if err != nil {
+		t.Fatalf("OpenRigSend interact: %v", err)
+	}
+	if got["dangerouslyInteract"] != true || got["reason"] != "why" {
+		t.Errorf("body = %v, want the interactive override with its audit reason", got)
+	}
+}
+
+// whoamiCompactableDoc carries a field inside the CLI's compact allowlist AND three outside it
+// (attachmentType, contextUsage, commands); one peer carries a label that the projection drops.
+const whoamiCompactableDoc = `{"resolvedBy":"session_name","identity":{"rigName":"r","logicalId":"r.go-dev","podId":"p","podNamespace":"ns","memberId":"go-dev","sessionName":"r-go-dev@r","runtime":"omp","attachmentType":"tmux"},"peers":[{"logicalId":"r.lead","sessionName":"r-lead@r","runtime":"omp","label":"lead"}],"contextUsage":{"tokens":1},"commands":{"captureExamples":["rig capture r-lead@r"]}}`
+
+// TestWhoamiAsksForTheCompactProjectionAndPrintsTheAllowlist covers gate findings m1 and the --json nit:
+// the CLI sends compact=1 by default and projects the answer to its identity-recovery allowlist, and
+// --full prints the daemon's document as it arrived rather than a re-encoding of it.
+func TestWhoamiAsksForTheCompactProjectionAndPrintsTheAllowlist(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		_, _ = w.Write([]byte(whoamiCompactableDoc))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "r-go-dev@r")
+
+	var out, errOut bytes.Buffer
+	code := whoamiCommand{}.Run(context.Background(), nil, []string{"--json"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
+	}
+	if len(queries) != 1 || !strings.Contains(queries[0], "compact=1") {
+		t.Errorf("first query = %v, want compact=1 by default", queries)
+	}
+	doc := out.String()
+	for _, kept := range []string{`"sessionName":"r-go-dev@r"`, `"logicalId":"r.lead"`} {
+		if !strings.Contains(doc, kept) {
+			t.Errorf("the projection dropped %s: %s", kept, doc)
+		}
+	}
+	for _, dropped := range []string{"contextUsage", "commands", "attachmentType", `"label"`} {
+		if strings.Contains(doc, dropped) {
+			t.Errorf("the projection kept %s, which is outside the allowlist: %s", dropped, doc)
+		}
+	}
+
+	out.Reset()
+	errOut.Reset()
+	code = whoamiCommand{}.Run(context.Background(), nil, []string{"--json", "--full"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("--full exit = %d, stderr = %q", code, errOut.String())
+	}
+	if len(queries) != 2 || strings.Contains(queries[1], "compact") {
+		t.Errorf("--full asked for the compact document: %v", queries)
+	}
+	if out.String() != whoamiCompactableDoc+"\n" {
+		t.Errorf("--full printed %q, want the daemon's own bytes", out.String())
 	}
 }
 

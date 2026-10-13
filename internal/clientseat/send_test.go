@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
 // The R7 compatibility contract for `rig send` on a rig the OpenRig daemon hosts. Measured before this
@@ -69,6 +71,9 @@ func TestSendReportsTheDaemonsRefusalAndExitsNonZero(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("an unknown session exited 0; stdout = %q", out.String())
 	}
+	if code != clientcmd.ExitRemote {
+		t.Errorf("exit = %d, want %d — the CLI's code for a refused send", code, clientcmd.ExitRemote)
+	}
 	if out.Len() != 0 {
 		t.Errorf("stdout = %q, want nothing reported as sent", out.String())
 	}
@@ -95,5 +100,245 @@ func TestSendWithTooFewArgumentsIsRefusedBeforeAnyDelivery(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "are required") {
 		t.Errorf("stderr = %q, want it to name what is missing", errOut.String())
+	}
+}
+
+// TestSendTakesTheDocumentedFlagsOnEitherSideOfTheMessage is gate finding M1's own measurement, run
+// through the verb: `rig send <session> 'text' --verify` is the form the daemon's whoami prints as
+// commands.sendExamples, and the shim used to read it as rig=<session>, seat="text", message="--verify"
+// and deliver nothing to the named seat (Go's flag package stops at the first positional).
+func TestSendTakesTheDocumentedFlagsOnEitherSideOfTheMessage(t *testing.T) {
+	const target = "4genthub-min-reviewer@4genthub-min"
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"the daemon's own trailing form", []string{target, "GATE PROBE: verify is parsed", "--verify"}},
+		{"leading", []string{"--verify", target, "GATE PROBE: verify is parsed"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OPENRIG_HOME", t.TempDir())
+			var got map[string]any
+			calls := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				_ = json.NewDecoder(r.Body).Decode(&got)
+				_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered","verified":true}`))
+			}))
+			defer srv.Close()
+			t.Setenv("OPENRIG_URL", srv.URL)
+			t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+			var out, errOut bytes.Buffer
+			code := sendCommand{}.Run(context.Background(), nil, tc.args, &out, &errOut)
+
+			if code != 0 {
+				t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
+			}
+			if calls != 1 {
+				t.Fatalf("%d requests reached the daemon, want exactly one", calls)
+			}
+			if got["session"] != target {
+				t.Errorf("delivered to %v, want the named seat %s", got["session"], target)
+			}
+			if got["verify"] != true {
+				t.Errorf("verify = %v, want the flag carried through, not consumed", got["verify"])
+			}
+			text, _ := got["text"].(string)
+			if !strings.Contains(text, "GATE PROBE: verify is parsed") || strings.Contains(text, "--verify") {
+				t.Errorf("delivered text = %q, want the message with no flag inside it", text)
+			}
+		})
+	}
+}
+
+// TestSendSurfacesTheDaemonsAdvisory is gate finding M2: the readiness guard sends-with-advisory, so that
+// warning is the only signal a seat gets that its message went into a pane that was not reading. The CLI
+// prints it; the shim dropped it.
+func TestSendSurfacesTheDaemonsAdvisory(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"sessionName":"4genthub-min-reviewer@4genthub-min","warning":"target pane appears mid-task; sent anyway (busy is advisory, not a block)."}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil, []string{"4genthub-min-reviewer@4genthub-min", "probe"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
+	}
+	want := "Sent to 4genthub-min-reviewer@4genthub-min\nAdvisory: target pane appears mid-task; sent anyway (busy is advisory, not a block).\n"
+	if out.String() != want {
+		t.Errorf("stdout = %q, want the advisory the daemon sent", out.String())
+	}
+}
+
+// TestSendRefusesTheFlagsItCannotHonour: --to/--pod/--rig/--host/--context address a surface this local
+// shim does not have, so they STOP the send. The alternative — taking the flag and sending anyway — is
+// the silent no-delivery the gate was about.
+func TestSendRefusesTheFlagsItCannotHonour(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		t.Errorf("a refused flag still reached the daemon: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil,
+		[]string{"4genthub-min-fe-dev@4genthub-min", "text", "--to", "a@r,b@r"}, &out, &errOut)
+
+	if code != 2 {
+		t.Fatalf("exit = %d, want the caller-error code 2", code)
+	}
+	if calls != 0 {
+		t.Errorf("%d requests reached the daemon, want none", calls)
+	}
+	if out.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing reported as sent", out.String())
+	}
+	if !strings.Contains(errOut.String(), "--to") || !strings.Contains(errOut.String(), "nothing was sent") {
+		t.Errorf("stderr = %q, want it to name the flag and say nothing was sent", errOut.String())
+	}
+}
+
+// TestSendRefusesAnUnknownFlag: an option this verb does not know is refused rather than handed on as
+// message text.
+func TestSendRefusesAnUnknownFlag(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	t.Setenv("OPENRIG_URL", "http://127.0.0.1:1")
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil, []string{"peer@r", "text", "--nope"}, &out, &errOut)
+
+	if code != 2 {
+		t.Fatalf("exit = %d, want the caller-error code 2", code)
+	}
+	if !strings.Contains(errOut.String(), "--nope") {
+		t.Errorf("stderr = %q, want it to name the flag", errOut.String())
+	}
+}
+
+// TestSendVerifyPrintsTheDaemonsVerdictAndNamesTheProbeItDoesNotRun: --verify carries into the request,
+// and the verdict printed is the daemon's own re-confirmation — with the client-side consumption probe
+// named as not run, in the CLI's own words, rather than a bare `Verified: yes`.
+func TestSendVerifyPrintsTheDaemonsVerdictAndNamesTheProbeItDoesNotRun(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"ok":true,"sessionName":"peer@r","outcome":"delivered","verified":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil, []string{"peer@r", "probe", "--verify"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
+	}
+	if got["verify"] != true {
+		t.Errorf("verify = %v, want it carried into the request", got["verify"])
+	}
+	for _, want := range []string{
+		"Sent to peer@r\n",
+		"Verified: yes\n",
+		"Delivery: delivered (message landed; render confirmed)\n",
+		"Note: the pane-effect check could not run (",
+		"the verdict above is transport-level only.\n",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("stdout = %q, want it to contain %q", out.String(), want)
+		}
+	}
+}
+
+// TestSendRetainedIsNotADelivery: a `retained` outcome is the daemon saying it did NOT deliver, and the
+// CLI gives it its own line. Reporting it as `Sent to ...` would be the exact dishonesty this row is
+// about.
+func TestSendRetainedIsNotADelivery(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"outcome":"retained","warning":"delivery quota full"}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil, []string{"peer@r", "probe"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
+	}
+	if out.String() != "Retained, not delivered to peer@r. delivery quota full\n" {
+		t.Errorf("stdout = %q, want the CLI's retained line", out.String())
+	}
+}
+
+// TestSendWaitForIdleReachesTheRouteInMilliseconds, and a non-positive value stops before the network.
+func TestSendWaitForIdleReachesTheRouteInMilliseconds(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil, []string{"peer@r", "probe", "--wait-for-idle", "30"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
+	}
+	if got["waitForIdleMs"] != float64(30000) {
+		t.Errorf("waitForIdleMs = %v, want 30000 for --wait-for-idle 30", got["waitForIdleMs"])
+	}
+
+	// A non-positive value is the caller's error and never reaches the network.
+	calls := 0
+	unreached := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
+	defer unreached.Close()
+	t.Setenv("OPENRIG_URL", unreached.URL)
+	code = sendCommand{}.Run(context.Background(), nil, []string{"peer@r", "probe", "--wait-for-idle", "0"}, &out, &errOut)
+	if code != 2 {
+		t.Errorf("exit = %d, want the caller-error code 2 for --wait-for-idle 0", code)
+	}
+	if calls != 0 {
+		t.Errorf("%d requests reached the daemon, want none", calls)
+	}
+}
+
+// TestSendJsonPrintsTheDaemonsAnswer: --json is the daemon's own document, not a re-encode of it.
+func TestSendJsonPrintsTheDaemonsAnswer(t *testing.T) {
+	t.Setenv("OPENRIG_HOME", t.TempDir())
+	const answer = `{"ok":true,"sessionName":"peer@r","outcome":"delivered","warning":"busy"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(answer))
+	}))
+	defer srv.Close()
+	t.Setenv("OPENRIG_URL", srv.URL)
+	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(), nil, []string{"peer@r", "probe", "--json"}, &out, &errOut)
+
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
+	}
+	if out.String() != answer+"\n" {
+		t.Errorf("stdout = %q, want the daemon's answer verbatim", out.String())
 	}
 }

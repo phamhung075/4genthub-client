@@ -1,7 +1,6 @@
 package clientruntime
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -30,18 +29,23 @@ func (whoamiCommand) NeedsRig() bool  { return false }
 
 func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		fmt.Fprintln(stdout, "usage: 4genteam whoami [--json] [--session <name>]")
+		fmt.Fprintln(stdout, "usage: 4genteam whoami [--json] [--full] [--session <name>]")
 		fmt.Fprintln(stdout, "\nReports the seat identity. On a rig the OpenRig daemon hosts (a shell carrying")
 		fmt.Fprintln(stdout, "OPENRIG_SESSION_NAME) it asks that daemon and prints its document; otherwise it asks the")
 		fmt.Fprintln(stdout, "native runtime's own rooms.")
+		fmt.Fprintln(stdout, "\nWith --json the document is the identity-recovery allowlist the OpenRig CLI prints by default;")
+		fmt.Fprintln(stdout, "--full prints the daemon's complete payload instead.")
 		return clientcmd.ExitOK
 	}
 	flags := flag.NewFlagSet("whoami", flag.ContinueOnError)
 	jsonFlag := flags.Bool("json", false, "print as JSON")
 	sessionFlag := flags.String("session", "", "specific session name")
+	fullFlag := flags.Bool("full", false, "print the complete payload instead of the compact projection")
+	verboseFlag := flags.Bool("verbose", false, "the CLI's synonym for --full")
 	if err := flags.Parse(args); err != nil {
 		return clientcmd.ExitUsage
 	}
+	full := *fullFlag || *verboseFlag
 
 	session := *sessionFlag
 	if session == "" {
@@ -56,16 +60,23 @@ func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 		openRigSeat = openRigSession()
 	}
 	if openRigSeat != "" && openRigDaemonConfigured() {
-		raw, err := openRigWhoami(ctx, openRigSeat)
+		// Compact by default, exactly as the CLI asks the daemon (`if (!full) params.set("compact", "1")`,
+		// whoami.ts) and then projects the answer to the identity-recovery allowlist below. --full opts
+		// out of both, so the daemon also skips the contextUsage/runtimeContext compute.
+		raw, err := openRigWhoami(ctx, openRigSeat, !full)
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
-			return clientcmd.ExitUnavailable
+			// CodeOf keeps the raiser's own code: a 404 from the daemon is ExitRemote (1, the CLI's
+			// answer for an unknown session), and "no daemon is configured" or "not answering" stays the
+			// platform-matrix refusal (3) that no reachable daemon can turn into an answer.
+			return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
 		}
 		if *jsonFlag {
+			// The document is printed as it arrived (the CLI prints the payload, not a pretty-print of
+			// it), and the compact projection is the CLI's allowlist — see projectCompactWhoami.
 			out := raw
-			var indented bytes.Buffer
-			if json.Indent(&indented, raw, "", "  ") == nil {
-				out = indented.Bytes()
+			if !full {
+				out = projectCompactWhoami(raw)
 			}
 			_, _ = stdout.Write(out)
 			_, _ = stdout.Write([]byte("\n"))
@@ -138,6 +149,62 @@ func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 	}
 
 	return clientcmd.ExitOK
+}
+
+// projectCompactWhoami is the OpenRig CLI's identity-recovery allowlist (whoami.ts
+// projectCompactWhoami): exactly the fields the boot and compaction-restore contracts treat as ground
+// truth. It is an ALLOWLIST rather than a denylist — the CLI's reason is worth keeping, because it is
+// the difference between a stable boot path and one that grows with the payload's payload: a field the
+// daemon adds later defaults to --full instead of silently re-bloating every boot.
+//
+// The daemon's document is the authority on its own JSON, so a body this build cannot read is printed
+// as it arrived rather than replaced by an empty projection.
+func projectCompactWhoami(raw []byte) []byte {
+	var doc map[string]any
+	if json.Unmarshal(raw, &doc) != nil {
+		return raw
+	}
+	projected := map[string]any{}
+	for _, key := range []string{"resolvedBy", "peersNote", "edges"} {
+		if value, ok := doc[key]; ok {
+			projected[key] = value
+		}
+	}
+	if identity, ok := doc["identity"].(map[string]any); ok {
+		projected["identity"] = pickFields(identity, "rigName", "nodeId", "logicalId", "podId", "podNamespace", "memberId", "sessionName", "runtime")
+	}
+	if peers, ok := doc["peers"].([]any); ok {
+		kept := make([]any, 0, len(peers))
+		for _, peer := range peers {
+			if fields, ok := peer.(map[string]any); ok {
+				kept = append(kept, pickFields(fields, "logicalId", "sessionName", "runtime"))
+				continue
+			}
+			kept = append(kept, peer)
+		}
+		projected["peers"] = kept
+	}
+	if transcript, ok := doc["transcript"].(map[string]any); ok {
+		projected["transcript"] = pickFields(transcript, "path", "tailCommand")
+	}
+	encoded, err := json.Marshal(projected)
+	if err != nil {
+		return raw
+	}
+	return encoded
+}
+
+// pickFields keeps the named fields and nothing else. Go marshals a map in key order rather than
+// insertion order, so the projection's FIELD SET is the CLI's while its key order is canonical — named
+// in the change record rather than passed off as byte-identical stdout.
+func pickFields(fields map[string]any, names ...string) map[string]any {
+	kept := make(map[string]any, len(names))
+	for _, name := range names {
+		if value, ok := fields[name]; ok {
+			kept[name] = value
+		}
+	}
+	return kept
 }
 
 type shimCommand struct{}
