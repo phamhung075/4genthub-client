@@ -2,7 +2,7 @@
 name: room-decision-request
 description: "Use when a room lead or agent needs an owner/human decision. Structures the brief and options, creates the queue item with --destination human-operator@external, mirrors to cloud/web dashboard, and blocks the working row until resolved."
 metadata:
-  openrig:
+  agenthub:
     stage: factory-approved
     audience: room leads and agents
     sibling_skills:
@@ -20,9 +20,9 @@ Use this skill when an autonomous team lead (or seat) reaches a genuine decision
 When a room needs an owner decision:
 1. **Author the brief & questions**: Prepare a concise Markdown brief (`<name>-body.md`) and a structured JSON questions file (`<name>-questions.json`).
 2. **Create the decision queue item**: Use `rig queue create` targeting `--destination human-operator@external`.
-3. **Automatic Cloud & Web UI Mirror**: The OpenRig daemon mirrors the ask up to the cloud (`/api/v2/openrig/decisions`).
-4. **Owner Interaction**: The owner sees the request in the web dashboard sidebar under **Decision Requests** (with visual pulse animation and badges), clicks the option, and validates.
-5. **Daemon Drain & Unpark**: The daemon automatically pulls the recorded answer (`GET /api/v2/openrig/decisions/answers`), unparks the local queue item (`pending` → `done`, `closureReason: no-follow-on`), and notifies the lead.
+3. **Automatic Cloud & Jev AI Evaluation**: 4genthub routes the ask to Jev AI (`jev-1.13.0` via TypeSafe AI System One). If confidence is $\ge 0.8$, Jev auto-answers immediately; if $< 0.8$, it appears in the web dashboard under **Decision Requests**.
+4. **Owner Interaction**: For decisions with confidence $< 0.8$, the owner reviews the request in the web dashboard sidebar under **Decision Requests** (with visual pulse animation and badges), clicks the option, and validates.
+5. **Client Drain & Unpark**: The client supervisor automatically pulls recorded answers (`GET /api/v2/openrig/decisions/answers`), unparks the local queue item (`pending` → `done`, `closureReason: no-follow-on`), and notifies the seat.
 
 ## Step-by-Step Instructions
 
@@ -94,8 +94,8 @@ Do **not** block on the human address; block on the specific `decision-qitem-id`
 
 ### 4. Resuming After Resolution
 
-When the owner validates their choice on the dashboard:
-1. The daemon pulls the answer.
+When Jev AI auto-selects (confidence $\ge 0.8$) or the owner validates their choice on the dashboard:
+1. The client supervisor pulls the recorded answer from 4genthub.
 2. The decision queue item transitions to `done` (`closureReason: "no-follow-on"`).
 3. The reply row is emitted to your seat containing `humanAnswers`:
    ```json

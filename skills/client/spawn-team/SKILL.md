@@ -1,24 +1,24 @@
 ---
 name: spawn-team
-description: Continue or spawn an agent team — any OpenRig rig, any project — with one command, or spawn an in-session Claude Code team with the Proxy Pattern. Team lead fetches agent configs from MCP and injects them into teammate prompts (since team agents cannot access MCP tools).
+description: Continue or spawn an agent team with 4genteam, or spawn an in-session Claude Code team with the Proxy Pattern. Team lead fetches agent configs from MCP and injects them into teammate prompts (since team agents cannot access MCP tools).
 ---
 
 # Spawn / Continue Team Skill
 
 Two ways to run a team, and the two are not exclusive:
 
-- **An OpenRig rig** — the durable form: seats in tmux, state in the daemon, survives restarts and resumes each seat's own session. **ALWAYS launch or restore using `4genteam up <rig> [--allow-peak]` or `4genteam continue <rig>`. NEVER use bare `rig up` to launch/resume a rig**, because bare `rig up` bypasses the entire client lifecycle: `rigd`, the compaction supervisor (`auto compact`), the `watchdog`, the status `bridge`, and the styled `watch` grid. See the sections below.
+- **A team rig** — the durable form: seats in tmux supervised by 4genteam, survives restarts and resumes each seat's own session. **ALWAYS launch or restore using `4genteam up <rig> [--allow-peak]` or `4genteam continue <rig>`. NEVER use bare `rig up` to launch/resume a rig**, because bare `rig up` bypasses the entire client lifecycle: `rigd`, the compaction supervisor (`auto compact`), the `watchdog`, the status `bridge`, and the styled `watch` grid. See the sections below.
 - **An in-session Claude Code team** — the Proxy Pattern below: teammates spawned from the current session, sharing its terminal.
 
-**Only the in-session team below needs the lead to fetch each agent's configuration and inject it into the teammate's prompt** — a Claude Code teammate spawned by the `Task` tool does not inherit MCP connections. **A rig is the other case and needs none of that**: OpenRig renders each seat's own `agent.yaml` and guidance at launch, and a seat has its own MCP whenever its render carries mcp blocks — measured 2026-10-10 on `<RIG>`, where a seat resolves `mcp__agenthub_http__*` and `mcp__deepseek__*`. That is why a seat's own `AGENTS.md` tells it to drive `manage_task` itself instead of waiting for a lead to hand it configuration.
+**Only the in-session team below needs the lead to fetch each agent's configuration and inject it into the teammate's prompt** — a Claude Code teammate spawned by the `Task` tool does not inherit MCP connections. **A rig is the other case and needs none of that**: 4genteam renders each seat's own `agent.yaml` and guidance at launch, and a seat has its own MCP whenever its render carries mcp blocks — measured 2026-10-10 on `<RIG>`, where a seat resolves `mcp__agenthub_http__*` and `mcp__deepseek__*`. That is why a seat's own `AGENTS.md` tells it to drive `manage_task` itself instead of waiting for a lead to hand it configuration.
 
 ## Start or continue a team — always via `4genteam`
 
-### 1. Start full stack (daemon + seats + rigd + auto-compact + bridge + watch wall):
+### 1. Start full stack (seats + rigd + auto-compact + watchdog + bridge + watch wall):
 ```bash
 4genteam up <rig> [--allow-peak]
 ```
-`4genteam up` starts the entire supervisor stack in order: OpenRig daemon, seat sessions, `rigd` (which supervises the `compact` loop and `watchdog`), status `bridge`, and automatically opens `4genteam watch`.
+`4genteam up` starts the entire supervisor stack in order: seat sessions, `rigd` (which supervises the `compact` loop and `watchdog`), status `bridge`, and automatically opens `4genteam watch`.
 
 ### 2. Continue / restore an existing team with brief:
 ```bash

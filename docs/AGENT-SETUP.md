@@ -22,9 +22,7 @@ Commands run in the project directory unless a step says otherwise.
 |---|---|---|---|
 | 4genthub | the hosted service: accounts, rooms, seats, tasks, and the web app | `curl -fsS <SERVER-URL>/health` answers | the `version` field of that answer |
 | 4genthub MCP | the same service over MCP, at `<SERVER-URL>/mcp` | the agent's MCP client lists the `agenthub_http` tools | the `initialize` result's `serverInfo` |
-| `4genteam` | this repository's client: sync, supervisor, status bridge, watch view, team | `4genteam --help` exits 0 | the verb list it prints |
-| OpenRig | the local orchestrator that runs seats in terminals; its CLI is `rig` | `rig --version` exits 0 | the number it prints |
-| OpenRig daemon | the local control plane `rig` talks to, on `127.0.0.1:7433` | `rig daemon status` prints `Daemon running on port 7433` | — |
+| `4genteam` | client supervisor: sync, safeguards, status bridge, watch view, team | `4genteam --help` exits 0 | the verb list it prints |
 | tmux | hosts the seat terminals | `tmux -V` exits 0 | the number it prints |
 | herdr | the terminal provider the watch grid is displayed in | `herdr --version` exits 0 | the number it prints |
 
@@ -35,8 +33,7 @@ is `https://www.4genthub.com/`) and for the account's key. Both are theirs to gi
 
 ```bash
 4genteam --help            # the client; prints the verb list
-rig --version              # the OpenRig CLI
-rig daemon status          # if it is not running: rig daemon start
+4genteam doctor            # reports safeguard stack health (rigd, compact, watchdog, bridge)
 tmux -V
 herdr --version
 curl -fsS <SERVER-URL>/health

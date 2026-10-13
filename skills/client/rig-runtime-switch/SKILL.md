@@ -1,6 +1,6 @@
 ---
 name: rig-runtime-switch
-description: Switch an OpenRig rig to another runtime variant (e.g. claude-code to omp/DeepSeek) to keep a parked team working through a usage limit, revive its companion rigs, and open it on herdr to watch. Use when rig seats sit on a rate-limit dialog or a runtime pool is exhausted.
+description: Switch a team rig to another runtime variant (e.g. claude-code to omp/DeepSeek) to keep a parked team working through a usage limit, revive its companion rigs, and open it on herdr to watch. Use when rig seats sit on a rate-limit dialog or a runtime pool is exhausted.
 ---
 
 # Rig Runtime Switch — keep a team working through a limit

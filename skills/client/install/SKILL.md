@@ -40,15 +40,14 @@ If `bridge` reports `silent` or `doctor` exits `3`, run:
 ## 2. Environment Files Detection & Setup
 
 The client expects configuration in fixed locations under the user's home directory — the **passwd**
-home, not `$HOME`. Inside a seat pane OpenRig points `HOME` at the seat's own state directory
-(measured in a seat: `HOME=/home/<user>/.openrig/state/omp/<seat>@<rig>`), so `~/.config/4genthub/.env`
-and `~/.openrig/daemon.json` resolve to nothing there while the real files sit under the passwd home.
+home, not `$HOME`. Inside a seat pane `HOME` may point at the seat's own state directory,
+so `~/.config/4genthub/.env` resolves to the passwd home.
 The client resolves machine paths the same way (`internal/clientenv/env.go`, `RealHome()`). Resolve it
 once and use it:
 
 ```bash
 HOME_REAL="$(getent passwd "$(id -u)" | cut -d: -f6)"
-ls -l "$HOME_REAL/.openrig/daemon.json" "$HOME_REAL/.config/4genthub/.env"
+ls -l "$HOME_REAL/.config/4genthub/.env"
 ```
 
 Through §2 and §3, a `~` in a machine-level path (daemon, config, seat store) means `$HOME_REAL`.
@@ -118,18 +117,9 @@ HOME_REAL="$(getent passwd "$(id -u)" | cut -d: -f6)"
 echo "=== 1. Creating Config Directories ==="
 mkdir -p "$HOME_REAL/.config/4genthub"
 mkdir -p "$HOME_REAL/.config/deepseek"
-mkdir -p "$HOME_REAL/.openrig/agenthub-seats"
 chmod 700 "$HOME_REAL/.config/4genthub" "$HOME_REAL/.config/deepseek"
 
-echo "=== 2. Checking OpenRig Daemon ==="
-if [ ! -f "$HOME_REAL/.openrig/daemon.json" ]; then
-    echo "[!] OpenRig daemon is not running. Starting daemon..."
-    rig daemon start || true
-else
-    echo "[✓] OpenRig daemon active (PID $(jq .pid "$HOME_REAL/.openrig/daemon.json" 2>/dev/null || cat "$HOME_REAL/.openrig/daemon.json"))"
-fi
-
-echo "=== 3. Checking DeepSeek Provider Key ==="
+echo "=== 2. Checking DeepSeek Provider Key ==="
 if [ -f "$HOME_REAL/.config/deepseek/env" ]; then
     cp -n "$HOME_REAL/.config/deepseek/env" "$HOME_REAL/.config/deepseek/.env" || true
     echo "[✓] $HOME_REAL/.config/deepseek/env present"
@@ -137,7 +127,7 @@ else
     echo "[!] Warning: $HOME_REAL/.config/deepseek/env not found. Create it with DEEPSEEK_API_KEY=..."
 fi
 
-echo "=== 4. Checking Global Tmux Environment ==="
+echo "=== 3. Checking Global Tmux Environment ==="
 if command -v tmux >/dev/null 2>&1; then
     if [ -f "$HOME_REAL/.config/deepseek/env" ]; then
         set -a; source "$HOME_REAL/.config/deepseek/env"; set +a
@@ -146,7 +136,7 @@ if command -v tmux >/dev/null 2>&1; then
     fi
 fi
 
-echo "=== 5. Running Safeguards Doctor ==="
+echo "=== 4. Running Safeguards Doctor ==="
 4genteam doctor || echo "[i] Review doctor output above for any silent or missing services."
 ```
 

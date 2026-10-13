@@ -1,6 +1,6 @@
 ---
 name: watch-team
-description: Open or reopen the live view of an OpenRig room — a herdr grid with one pane per seat plus a lead window with an input pane. Use whenever the user asks to "spawn grid", "give watch grid", "show me grid", "open the grid", "reopen grid watch", "watch the team", "show me the agents", "watch session", or after any restore, relaunch, resume, runtime switch or script change. ALWAYS use `4genteam watch --rig <RIG>` instead of manual terminal/tmux panes.
+description: Open or reopen the live view of a room — a herdr grid with one pane per seat plus a lead window with an input pane. Use whenever the user asks to "spawn grid", "give watch grid", "show me grid", "open the grid", "reopen grid watch", "watch the team", "show me the agents", "watch session", or after any restore, relaunch, resume, runtime switch or script change. ALWAYS use `4genteam watch --rig <RIG>` instead of manual terminal/tmux panes.
 ---
 
 # Watch a room
@@ -19,7 +19,7 @@ Full reference: `docs/WATCH.md` in the `4genthub-client` repository.
 
 `4genteam` is that repository's Go binary (`cmd/4genteam`). Every workspace and pane it opens is
 created in the directory you ran it from (`--cwd`), so run it from the project you are working in.
-`4genteam up <RIG>` opens the same wall as part of the lifecycle — daemon, compaction supervisor,
+`4genteam up <RIG>` opens the same wall as part of the lifecycle — safeguards,
 this view, then the UI.
 
 That opens both workspaces:

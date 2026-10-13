@@ -2,7 +2,7 @@
 name: test-driven-development
 description: Use when implementing any feature or bugfix, before writing implementation code
 metadata:
-  openrig:
+  agenthub:
     vendored_from: "Obra Superpowers (https://github.com/obra/superpowers)"
     vendoring_pattern: modify-the-file
     last_upstream_check: "2026-05-13 (historical upstream comparison; local scope and preservation adaptations made since)"

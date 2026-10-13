@@ -1,6 +1,6 @@
 ---
 name: seat-runtime-switch
-description: Switch ONE seat of an OpenRig rig to another runtime/LLM (e.g. architect claude-code/opus to omp/deepseek-flash) when its provider is capped, then verify, brief the seat and reopen the watch grid. Use when the owner says "switch <seat> to deepseek", "claude is limited", or one seat's runtime must change. For switching a whole rig, use rig-runtime-switch.
+description: Switch ONE seat of a team rig to another runtime/LLM (e.g. architect claude-code/opus to omp/deepseek-flash) when its provider is capped, then verify, brief the seat and reopen the watch grid. Use when the owner says "switch <seat> to deepseek", "claude is limited", or one seat's runtime must change. For switching a whole rig, use rig-runtime-switch.
 ---
 
 # Switch one seat's runtime / LLM
