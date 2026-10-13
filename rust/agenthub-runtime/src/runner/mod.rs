@@ -23,6 +23,7 @@
 use crate::types::{AgentRuntime, RoomSpec, SeatSpec};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use crate::frame::{self, SpillTarget};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use parking_lot::Mutex;
@@ -185,7 +186,12 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     });
 
     let mailbox = target.mailbox(state_dir);
-    spawn_mailbox(mailbox.clone(), to_child.clone())?;
+    spawn_mailbox(
+        mailbox.clone(),
+        to_child.clone(),
+        state_dir.to_path_buf(),
+        target.clone(),
+    )?;
 
     // The RPC reader: responses are answered to a pending id, events are mirrored to the pane.
     // The RPC reader: responses answer a pending id, events drive the pane and the seat's state, and a
@@ -389,8 +395,14 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     }
 }
 
-/// Serve the daemon's mailbox: a frame arrives, it goes to the child.
-fn spawn_mailbox(path: PathBuf, to_child: Sender<String>) -> Result<(), String> {
+/// Serve the daemon's mailbox: a frame arrives, it is relayed to the child, and a frame that carried a
+/// `replyTo` is answered exactly once — "a local write succeeded" is not the fact "the frame was relayed".
+fn spawn_mailbox(
+    path: PathBuf,
+    to_child: Sender<String>,
+    state_dir: PathBuf,
+    target: RunnerTarget,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("cannot create run dir: {e}"))?;
     }
@@ -407,19 +419,33 @@ fn spawn_mailbox(path: PathBuf, to_child: Sender<String>) -> Result<(), String> 
                     continue;
                 }
             };
-            serve_mailbox_stream(stream, &to_child);
+            serve_mailbox_stream(stream, &to_child, &state_dir, &target);
         }
     });
     Ok(())
 }
 
-fn serve_mailbox_stream(stream: UnixStream, to_child: &Sender<String>) {
-    let reader = BufReader::new(stream);
-    for line in reader.lines() {
-        let line = match line {
+/// One connection: read whole frames, relay each, answer if asked.
+///
+/// The reader bound is the contract's (`frame::read_line_bounded`): a peer that writes a line past
+/// `MAX_FRAME_BYTES` ends the connection with `framing_error` instead of making this process allocate
+/// without bound.
+fn serve_mailbox_stream(
+    stream: UnixStream,
+    to_child: &Sender<String>,
+    state_dir: &Path,
+    target: &RunnerTarget,
+) {
+    let mut reader = BufReader::new(stream);
+    let state_path = state_file_path(state_dir, &target.room, &target.seat);
+    loop {
+        let line = match frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES) {
+            Ok(l) if l.is_empty() => return,
             Ok(l) => l,
             Err(e) => {
-                warn!("runner mailbox read error: {e}");
+                // Both a framing failure and a dead socket end this connection; the caller learns the
+                // difference from its own reply socket timing out, never from a guessed success.
+                warn!("runner mailbox: {e}");
                 return;
             }
         };
@@ -427,54 +453,140 @@ fn serve_mailbox_stream(stream: UnixStream, to_child: &Sender<String>) {
         if trimmed.is_empty() {
             continue;
         }
-        match serde_json::from_str::<serde_json::Value>(trimmed) {
-            // The native compact frame: the daemon no longer steals a descriptor to send it.
-            Ok(frame) if frame.get("type").and_then(|t| t.as_str()) == Some("compact") => {
-                let id = frame
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("runner-compact");
-                match send(
-                    to_child,
-                    &serde_json::json!({"id": id, "type": "compact"}),
-                ) {
-                    Ok(()) => mirror(&format!("compact relayed to the agent (id {id})")),
-                    Err(e) => mirror(&format!("ERROR compact: {e}")),
+        let value: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(e) => {
+                mirror(&format!("ERROR mailbox: {e}"));
+                continue;
+            }
+        };
+        let id = value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("runner-frame")
+            .to_string();
+        let reply_to = value.get("replyTo").and_then(|v| v.as_str()).map(str::to_string);
+        let kind = value
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let outcome = relay_frame(&value, &kind, &id, to_child, &state_path, target);
+        match (reply_to, outcome) {
+            (Some(reply_to), outcome) => {
+                if let Err(e) = frame::reply(&reply_to, &id, outcome) {
+                    warn!("runner mailbox: {e}");
                 }
             }
-            Ok(other) => mirror(&format!(
-                "ERROR mailbox: unknown frame {}",
-                other.get("type").and_then(|t| t.as_str()).unwrap_or("?")
-            )),
-            Err(e) => mirror(&format!("ERROR mailbox: {e}")),
+            (None, Ok(_)) => {}
+            (None, Err(e)) => mirror(&format!("ERROR mailbox: {e}")),
         }
     }
 }
 
-/// Ask a running seat's runner to relay a compaction frame to its agent.
+/// Relay one daemon frame to the child, or refuse it by name.
 ///
-/// This is what replaces the `pidfd_getfd` theft: the daemon writes one JSON line into the seat's
-/// mailbox socket and the runner — the process that owns the child's channel — relays it. A seat with no
-/// runner is a refusal naming the seat, not a silent success.
-pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<String, String> {
-    let target = match session_or_target.split_once('/') {
-        Some(_) => RunnerTarget::parse(session_or_target)?,
-        // The IPC surface names seats by the session the supervisor derives: agenthub--<room>--<seat>.
-        None => {
-            let rest = session_or_target
-                .strip_prefix("agenthub--")
-                .ok_or_else(|| {
-                    format!(
-                        "'{session_or_target}' is neither <room>/<seat> nor the session name \
-                         agenthub--<room>--<seat>"
-                    )
-                })?;
-            let (room, seat) = rest.rsplit_once("--").ok_or_else(|| {
-                format!("'{session_or_target}' does not name a room and a seat")
-            })?;
-            RunnerTarget::parse(&format!("{room}/{seat}"))?
+/// The relay's verb vocabulary is the spec's (§1): `compact` (landed), `agent` (the daemon's channel to the
+/// agent without pasting into a pane), `text` (that verb's sugar, capped in the pane's own words) and
+/// `status` (the read side of the state file, so no caller parses a file it does not own). An unknown
+/// `type` is reported — `unsupported_type` to the caller when one is waiting, and the pane line the
+/// reference printed when none is — because an invisible refusal is the same "the surface can lie" shape as
+/// a stub that always succeeds.
+fn relay_frame(
+    value: &serde_json::Value,
+    kind: &str,
+    id: &str,
+    to_child: &Sender<String>,
+    state_path: &Path,
+    target: &RunnerTarget,
+) -> Result<serde_json::Value, String> {
+    match kind {
+        "compact" => {
+            send(to_child, &serde_json::json!({"id": id, "type": "compact"}))?;
+            mirror(&format!("compact relayed to the agent (id {id})"));
+            Ok(serde_json::json!({"relayed": "compact"}))
         }
-    };
+        "agent" => {
+            let cmd = value
+                .get("cmd")
+                .filter(|c| c.is_object())
+                .ok_or_else(|| "the agent verb needs a cmd object".to_string())?;
+            // Verbatim: one line, no field added, so the daemon's frame is what the agent reads.
+            send(to_child, cmd)?;
+            Ok(serde_json::json!({"relayed": "agent"}))
+        }
+        "text" => {
+            let text = value
+                .get("text")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "the text verb needs a text string".to_string())?;
+            // The pane's own cap and wording: what the agent's channel refuses is what the operator sees.
+            if text.len() > MAX_PANE_INPUT_BYTES {
+                return Err(PANE_INPUT_REJECTED.to_string());
+            }
+            send(
+                to_child,
+                &serde_json::json!({"id": id, "type": "prompt", "message": text}),
+            )?;
+            Ok(serde_json::json!({"relayed": "prompt"}))
+        }
+        "status" => {
+            let text = fs::read_to_string(state_path).map_err(|e| {
+                format!(
+                    "no state is published for {}/{} ({e})",
+                    target.room, target.seat
+                )
+            })?;
+            let doc: serde_json::Value =
+                serde_json::from_str(&text).map_err(|e| format!("unreadable state file: {e}"))?;
+            Ok(doc)
+        }
+        other => {
+            mirror(&format!("ERROR mailbox: unknown frame {other:?}"));
+            Err("unsupported_type".to_string())
+        }
+    }
+}
+
+/// The seat a session name addresses, or the `<room>/<seat>` spec itself.
+///
+/// The IPC surface names seats by the session the supervisor derives (`agenthub--<room>--<seat>`); the
+/// runner's own surface uses the spec. One spelling, so the two cannot drift.
+pub fn target_from_session(session_or_target: &str) -> Result<RunnerTarget, String> {
+    match session_or_target.split_once('/') {
+        Some(_) => RunnerTarget::parse(session_or_target),
+        None => {
+            let rest = session_or_target.strip_prefix("agenthub--").ok_or_else(|| {
+                format!(
+                    "'{session_or_target}' is neither <room>/<seat> nor the session name \
+                     agenthub--<room>--<seat>"
+                )
+            })?;
+            let (room, seat) = rest
+                .rsplit_once("--")
+                .ok_or_else(|| format!("'{session_or_target}' does not name a room and a seat"))?;
+            RunnerTarget::parse(&format!("{room}/{seat}"))
+        }
+    }
+}
+
+/// Relay one daemon frame into a seat's runner, spilling the payload when the encoded line reaches
+/// `MAX_FRAME_BYTES`.
+///
+/// The daemon is the side holding the bytes, and the side a >1 MiB message would be refused by, so the
+/// daemon writes the spill and the frame carries the handle (`SPEC §2`). With `want_reply`, the daemon binds
+/// a socket, hands its path to the runner as `replyTo`, and waits for the runner's one line: the caller then
+/// has the runner's own statement that the frame was relayed, which is the fact a local write cannot give.
+/// A reply that is a `payload` frame is read back through `read_spill`, so the digest is verified before the
+/// bytes are trusted.
+pub fn send_to_seat(
+    state_dir: &Path,
+    session_or_target: &str,
+    frame: &serde_json::Value,
+    payload: Option<(&[u8], bool)>,
+    want_reply: bool,
+) -> Result<serde_json::Value, String> {
+    let target = target_from_session(session_or_target)?;
     let mailbox = target.mailbox(state_dir);
     let mut stream = UnixStream::connect(&mailbox).map_err(|e| {
         format!(
@@ -484,14 +596,119 @@ pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<Stri
             mailbox.display()
         )
     })?;
+    let id = frame
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("daemon-frame")
+        .to_string();
+
+    let reply_listener = if want_reply {
+        let path = state_dir
+            .join("rooms")
+            .join(&target.room)
+            .join("run")
+            .join(format!("{}.reply-{}.sock", target.seat, std::process::id()));
+        let _ = fs::remove_file(&path);
+        Some((UnixListener::bind(&path).map_err(|e| {
+            format!("cannot bind a reply socket {}: {e}", path.display())
+        })?, path))
+    } else {
+        None
+    };
+
+    // One frame, measured on its encoded line: under the limit it goes as it is, at or above it the payload
+    // becomes a file and the frame carries the handle.
+    let mut to_send = frame.clone();
+    if let Some(listener) = &reply_listener {
+        to_send["replyTo"] = serde_json::Value::String(listener.1.to_string_lossy().into_owned());
+    }
+    let encoded = frame::encode_line(&to_send)?;
+    let line = if encoded.len() < frame::MAX_FRAME_BYTES {
+        (encoded, frame::Sent::Data)
+    } else {
+        let (bytes, utf8) = payload.ok_or_else(|| {
+            format!(
+                "frame {id} encodes to {} bytes with no payload to spill",
+                encoded.len()
+            )
+        })?;
+        frame::frame_or_spill(
+            &to_send,
+            bytes,
+            utf8,
+            &SpillTarget::Seat {
+                room: target.room.clone(),
+                seat: target.seat.clone(),
+            }
+            .dir(state_dir),
+            &frame::next_spill_name(),
+        )?
+    };
+    frame::write_sent(&mut stream, &line.0, &line.1)?;
+    let _ = gc_after_spill(state_dir, &target, &line.1);
+
+    match reply_listener {
+        None => Ok(serde_json::json!({"id": id, "ok": true})),
+        Some((listener, path)) => {
+            listener
+                .set_nonblocking(false)
+                .map_err(|e| format!("cannot wait on the reply socket: {e}"))?;
+            let (stream, _) = listener
+                .accept()
+                .map_err(|e| format!("no answer from the runner for {}/{}: {e}", target.room, target.seat))?;
+            let mut reader = BufReader::new(stream);
+            let line = frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES)?;
+            let _ = fs::remove_file(&path);
+            let answered: serde_json::Value = serde_json::from_str(line.trim())
+                .map_err(|e| format!("the runner's answer is not a frame: {e}"))?;
+            if answered.get("type").and_then(|v| v.as_str()) == Some("payload") {
+                if let Some(handle) = answered.get("handle") {
+                    let bytes = frame::read_spill(handle)?;
+                    return Ok(serde_json::json!({
+                        "id": id,
+                        "ok": true,
+                        "spilled": handle,
+                        "bytes": bytes.len()
+                    }));
+                }
+            }
+            Ok(answered)
+        }
+    }
+}
+
+/// Keep a room's spill tree inside its budget, opportunistically, on the side that wrote a spill.
+fn gc_after_spill(state_dir: &Path, target: &RunnerTarget, sent: &frame::Sent) -> Result<(), String> {
+    if !matches!(sent, frame::Sent::Spilled { .. }) {
+        return Ok(());
+    }
+    for dir in [
+        SpillTarget::Seat { room: target.room.clone(), seat: target.seat.clone() }.dir(state_dir),
+        SpillTarget::Room { room: target.room.clone() }.dir(state_dir),
+    ] {
+        frame::gc_spills(&dir, frame::SPILL_BUDGET_BYTES)?;
+    }
+    Ok(())
+}
+
+/// Ask a running seat's runner to relay a compaction frame to its agent.
+///
+/// This is what replaces the `pidfd_getfd` theft: the daemon writes one JSON line into the seat's
+/// mailbox socket and the runner — the process that owns the child's channel — relays it. A seat with no
+/// runner is a refusal naming the seat, not a silent success.
+pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<String, String> {
+    let target = target_from_session(session_or_target)?;
     let id = format!("forcecompact-{}", std::process::id());
-    let frame = serde_json::json!({"id": id, "type": "compact"});
-    let mut line =
-        serde_json::to_string(&frame).map_err(|e| format!("cannot encode compact frame: {e}"))?;
-    line.push('\n');
-    stream
-        .write_all(line.as_bytes())
-        .map_err(|e| format!("cannot write to the runner mailbox {}: {e}", mailbox.display()))?;
+    // Fire-and-forget, which is what compact's callers already had: no `replyTo`, so the relay is a write
+    // into the seat's mailbox and nothing more. It goes through the same sender the daemon uses for anything
+    // else it has to say to a seat, so the fallback exit cannot drift into a second copy of it.
+    send_to_seat(
+        state_dir,
+        session_or_target,
+        &serde_json::json!({"id": id, "type": "compact"}),
+        None,
+        false,
+    )?;
     Ok(format!(
         "{}/{}: compact relayed to its runner (id {id})",
         target.room, target.seat

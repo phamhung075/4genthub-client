@@ -148,4 +148,55 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
 - Only `omp` has a native rpc path; `claude-code`/`agy`/`codex` seats keep their own pane command.
 - The runner publishes its state file but does not yet *report* activity/idle to the daemon (parity 4's
   `last_active`), and the reference's HTTP activity hook is deliberately not ported.
-- Parities 2 (spill oversized payloads) and 4 remain to be built.
+- Parities 2 and 4 remain to be built.
+
+## The relay frame and the spill frame (parity 2, per `SPEC-runner-relay-protocol-2026-10-13.md`)
+
+### Added
+- `rust/agenthub-runtime/src/frame.rs`: the spec's contract as code. `MAX_FRAME_BYTES = 131 072` bounds the
+  **encoded line** — JSON escaping inflates a payload up to 6×, so a sender measures what it writes, never
+  the payload. `frame_or_spill` sends the frame as it is below the limit and, at or above it, writes the
+  payload to `<state dir>/rooms/<room>/[seats/<seat>/]spill/<name>.bin` and sends a `payload` frame whose
+  handle carries `bytes`, `sha256`, `path`, `head`/`tail` (8 192 bytes each, for a log line and a glance)
+  and `encoding`. `read_spill` verifies the digest *and* the length before a byte is trusted, and reports
+  `truncated_stream` on a mismatch. `read_line_bounded` refuses to buffer a line past the limit and aborts
+  with `framing_error`. `gc_spills` keeps the newest 256 MiB per room, oldest first by fixed-width
+  lexicographic name, with no mtime trusted. `remove_spill_trees` is wired into
+  `RoomSupervisor::stop_room`: a spill outlives no room.
+- The mailbox answers now. `serve_mailbox_stream` reads bounded frames, relays each, and answers every
+  frame that carried a `replyTo` on the socket the **caller** created — exactly once, `{"id","ok":true}` or
+  `{"id","ok":false,"error":…}`. That is the difference between "the local write succeeded" and "the frame
+  was relayed", which a mailbox write could not previously tell apart.
+- The relay's verb vocabulary (`relay_frame`): `compact` (landed), `agent` (the daemon's frame written to
+  the child verbatim, one line, no field added), `text` (that verb's sugar, refused in
+  `PANE_INPUT_REJECTED`'s own words above 1 MiB), and `status` (the read side of the state file, so no
+  caller parses a file it does not own). An unknown `type` is answered `unsupported_type` *and* still
+  mirrored to the pane, because an invisible refusal is the same lie as a stub that always succeeds.
+- `send_to_seat`: one sender for the daemon's frames into a seat — the spill above the limit, an optional
+  reply, and `read_spill` on a `payload` answer. `request_compact` is now a call to it, so the compact path
+  and every later seat-directed frame cannot drift into two conventions.
+
+### Testing
+- `cargo test` in `rust/agenthub-runtime`: **34 passed, 0 failed**. The new tests force the spec's own
+  threshold: payloads whose encoded line is exactly `N-1`, `N` and `N+1` bytes — the first stays a data
+  frame, the last two yield a `payload` frame whose `sha256` verifies against the file and whose
+  `head`/`tail` are exactly 8 192 bytes; a spill with one byte changed is refused `truncated_stream`; a
+  line past the limit with no line end is refused `framing_error` while a whole line under it is read back
+  whole; GC keeps the newest within budget and removes the oldest first; a room stop removes both spill
+  trees; a reply carries `ok`/`error` on the caller's socket.
+- **Not exercised end to end:** no daemon→agent frame above the limit has gone through a live mailbox yet.
+  `send_to_seat`'s only caller so far is `request_compact`, whose frame is small, so the spill leg is
+  forced at the unit level and not yet by a live relay; `SendText` still reaches every seat through a PTY,
+  and routing a native seat's text through the mailbox is the next step rather than a quiet part of this.
+
+### Corrected
+- The design's §4.2 read as if a spill could rescue a payload **omp refuses to emit**. Measured by the
+  architect (`SPEC` §0): the cap lives inside the omp binary (`maxFrameBytes`, the elision machinery) and
+  `pi-runner.js` contains none of its strings — so the runner cannot spill bytes omp never emits. The spill
+  covers the directions where we own the bytes (daemon→agent, runner→daemon) and parity 1's retry covers
+  what it cannot.
+
+### Known gaps (updated)
+- Parity 2's **other half** and parity 4: the daemon's `SendText`/nudge path still needs routing to
+  `send_to_seat` for a native seat; the chunk/stream reader (`seq`/`eof`, `truncated_stream` on a gap) and
+  the socket-close publication (`agent_socket_closed`/`agent_stdio_eof`/`agent_exited`) are not built.

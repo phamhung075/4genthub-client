@@ -5,6 +5,7 @@ use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod context;
+mod frame;
 mod hooks;
 mod ipc;
 mod pty;

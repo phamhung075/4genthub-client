@@ -337,6 +337,9 @@ impl RoomSupervisor {
         // The room's store goes with its seats; the next verb for this room opens the file fresh, which is
         // what makes a stopped room's rows durable-but-not-cached rather than lost.
         self.queue_stores.lock().remove(room);
+        // A spill outlives no room (`SPEC-runner-relay-protocol-2026-10-13.md` §2): its payloads are the
+        // room's bytes, and a tree left behind would be a payload no handle can name again.
+        let _ = crate::frame::remove_spill_trees(&room_dir);
         Ok(())
     }
 
