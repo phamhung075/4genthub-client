@@ -130,7 +130,10 @@ func (c *Client) QueueCreate(room string, in QueueCreateInput) (*QueueRow, error
 	if err != nil {
 		return nil, err
 	}
-	row := queueRowFrom(resp)
+	row, err := queueRowFrom("QueueCreate", resp)
+	if err != nil {
+		return nil, err
+	}
 	return &row, nil
 }
 
@@ -140,9 +143,10 @@ func (c *Client) QueueList(room string, filter QueueListFilter) ([]QueueRow, err
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := json.Marshal(resp.Data)
 	var rows []QueueRow
-	_ = json.Unmarshal(raw, &rows)
+	if err := decodeAnswer("QueueList", resp.Data, &rows); err != nil {
+		return nil, err
+	}
 	return rows, nil
 }
 
@@ -152,7 +156,10 @@ func (c *Client) QueueShow(room, qitemID string) (*QueueRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	row := queueRowFrom(resp)
+	row, err := queueRowFrom("QueueShow", resp)
+	if err != nil {
+		return nil, err
+	}
 	return &row, nil
 }
 
@@ -162,7 +169,10 @@ func (c *Client) QueueUpdate(room string, in QueueUpdateInput) (*QueueRow, error
 	if err != nil {
 		return nil, err
 	}
-	row := queueRowFrom(resp)
+	row, err := queueRowFrom("QueueUpdate", resp)
+	if err != nil {
+		return nil, err
+	}
 	return &row, nil
 }
 
@@ -177,7 +187,10 @@ func (c *Client) QueueClaim(room, qitemID, actorSession string) (*QueueRow, erro
 	if err != nil {
 		return nil, err
 	}
-	row := queueRowFrom(resp)
+	row, err := queueRowFrom("QueueClaim", resp)
+	if err != nil {
+		return nil, err
+	}
 	return &row, nil
 }
 
@@ -187,7 +200,10 @@ func (c *Client) QueueClose(room string, in QueueCloseInput) (*QueueRow, error) 
 	if err != nil {
 		return nil, err
 	}
-	row := queueRowFrom(resp)
+	row, err := queueRowFrom("QueueClose", resp)
+	if err != nil {
+		return nil, err
+	}
 	return &row, nil
 }
 
@@ -202,17 +218,22 @@ func (c *Client) ListAllRooms() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := json.Marshal(resp.Data)
 	var rooms []string
-	_ = json.Unmarshal(raw, &rooms)
+	if err := decodeAnswer("ListAllRooms", resp.Data, &rooms); err != nil {
+		return nil, err
+	}
 	return rooms, nil
 }
 
 // queueRowFrom reads the one row a row verb answers with. The daemon re-reads the row from its store before
-// answering, so what lands here is what the next read of the rail shows.
-func queueRowFrom(resp *IpcResponse) QueueRow {
-	raw, _ := json.Marshal(resp.Data)
+// answering, so what lands here is what the next read of the rail shows - and a document that is not a row
+// is REFUSED rather than flattened into a zero row. A zero QueueRow is the most dangerous answer this file
+// can produce: every field is empty, so a refused claim would render as a row with no id, no state and no
+// owner, which is exactly the "a write that never happened" the daemon's own refusal exists to prevent.
+func queueRowFrom(action string, resp *IpcResponse) (QueueRow, error) {
 	var row QueueRow
-	_ = json.Unmarshal(raw, &row)
-	return row
+	if err := decodeAnswer(action, resp.Data, &row); err != nil {
+		return QueueRow{}, err
+	}
+	return row, nil
 }

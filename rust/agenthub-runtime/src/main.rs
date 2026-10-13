@@ -29,7 +29,20 @@ use supervisor::RoomSupervisor;
 /// and the session/node/transcript ids - and an agent process can then reach the live daemon from inside a
 /// scratch room. Measured before this existed: nine `OPENRIG_*` variables were visible in the agent's own
 /// `/proc/<pid>/environ`.
-pub const ENV_DENY_PREFIXES: [&str; 1] = ["OPENRIG_"];
+///
+/// `RIGGED_` is denied for the same reason one rename later: the client still reads `RIGGED_SESSION_NAME` as
+/// `legacySessionEnv` (`internal/clientruntime/openrigdaemon.go:50`), so an agent that inherits a live rig's
+/// pre-rename session name is handed an identity that is not its seat's - exactly the falsification this list
+/// exists to stop. Measured while widening it: the harness sets seven variables for a seat and every one is
+/// already covered (`OPENRIG_HOME`, `OPENRIG_NODE_ID`, `OPENRIG_OCCUPANT_GENERATION`, `OPENRIG_PORT`,
+/// `OPENRIG_RUNTIME`, `OPENRIG_SESSION_NAME`, `OPENRIG_URL`), so this costs nothing today and closes the alias.
+///
+/// `AGENTHUB_` is deliberately NOT denied, and the boundary is a decision rather than an oversight. The
+/// supervisor inserts this room's own `AGENTHUB_ROOM`, `AGENTHUB_SEAT`, `AGENTHUB_ROLE`, `AGENTHUB_RUNTIME`,
+/// `AGENTHUB_SESSION_NAME` and `AGENTHUB_MODEL` *after* the scrub, so those would survive a prefix denial - but
+/// the client also reads `AGENTHUB_TOKEN` and `AGENTHUB_URL`, which nothing re-inserts, and whether a room's
+/// agent may hold an inherited cloud token is a design question. Named on U6's row, not decided here.
+pub const ENV_DENY_PREFIXES: [&str; 2] = ["OPENRIG_", "RIGGED_"];
 
 pub fn env_is_denied(key: &str) -> bool {
     ENV_DENY_PREFIXES.iter().any(|p| key.starts_with(p))
@@ -60,6 +73,40 @@ pub fn scrub_env(command: &mut std::process::Command) -> &mut std::process::Comm
         command.env_remove(key);
     }
     command
+}
+
+/// The tmux root this runtime owns: `<state dir>/tmux`.
+///
+/// Derived rather than configured, so the path is discoverable from the same place the rooms are: the
+/// operator's attach path and this runtime agree without either memorising a name.
+pub fn tmux_root_for(state_dir: &std::path::Path) -> std::path::PathBuf {
+    state_dir.join("tmux")
+}
+
+/// Point every tmux client this runtime starts at a server it owns, by setting `TMUX_TMPDIR` to the path
+/// `tmux_root_for` derives, once, before anything can call tmux.
+///
+/// WHY THE SERVER HAD TO BECOME OURS, measured on this machine rather than reasoned: a pane takes its
+/// environment from the tmux SERVER it is created on, so a scratch room started from a completely poisoned
+/// daemon still produced a pane holding six host variables - `OPENRIG_DB` and `OPENRIG_ACTIVITY_HOOK_TOKEN`
+/// among them, none of which came from the daemon that was started. The host's server held thirteen
+/// `OPENRIG_*` keys GLOBALLY, and `scrub_env` on the client cannot reach them: it removes what the daemon
+/// inherited, and tmux propagates exactly those, so anything living only in the server survives. The
+/// scrub and this function are one change rather than two: the server takes the environment of whoever
+/// creates it, and the client that creates ours is already scrubbed.
+///
+/// A failure here is logged, not fatal: a runtime that cannot write its state directory has larger
+/// problems, and refusing to start would be a worse answer than starting on the host's server.
+pub fn own_tmux_root(state_dir: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let root = tmux_root_for(state_dir);
+    std::fs::create_dir_all(&root)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700));
+    }
+    std::env::set_var("TMUX_TMPDIR", &root);
+    Ok(root)
 }
 
 #[derive(Parser)]
@@ -122,6 +169,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let state_dir_str = shellexpand(&cli.state_dir);
     let state_path = PathBuf::from(&state_dir_str);
+
+    // Before anything can start tmux: every room's panes live on a server THIS runtime owns, created
+    // through an already-scrubbed client. See `own_tmux_root` for the measurement that made it necessary.
+    match own_tmux_root(&state_path) {
+        Ok(root) => info!("tmux root owned by this runtime: {}", root.display()),
+        Err(e) => tracing::warn!("could not own a tmux root under {}: {e}; sessions will use the host's server", state_path.display()),
+    }
 
     let hook_bus = HookBus::new(state_path.join("audit"), 1024);
     let supervisor = Arc::new(RoomSupervisor::new(&state_path, hook_bus));
@@ -212,4 +266,109 @@ fn shellexpand(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    /// The list is a list of *prefixes* because the addresses this runtime must not pass on change names over
+    /// time, and the rename left an alias the client still honours. The second half is the boundary: removing
+    /// too much is its own defect, and `HOME`/`PATH`/`XDG_RUNTIME_DIR` are what a seat legitimately needs.
+    #[test]
+    fn the_deny_list_covers_every_prefix_that_addresses_a_rig() {
+        for denied in [
+            "OPENRIG_URL",
+            "OPENRIG_HOME",
+            "OPENRIG_SESSION_NAME",
+            "OPENRIG_PORT",
+            "RIGGED_SESSION_NAME",
+        ] {
+            assert!(env_is_denied(denied), "{denied} addresses a rig and must be denied");
+        }
+        for kept in [
+            "AGENTHUB_ROOM",
+            "AGENTHUB_SEAT",
+            "AGENTHUB_SESSION_NAME",
+            "HOME",
+            "PATH",
+            "XDG_RUNTIME_DIR",
+        ] {
+            assert!(
+                !env_is_denied(kept),
+                "{kept} is either this room's own or not ours to remove"
+            );
+        }
+    }
+
+    /// The mechanism rather than the list: a denied variable is REMOVED from the child's environment, and a
+    /// variable that is not denied is left alone. Synthetic names, so this cannot disturb the environment the
+    /// other tests in this binary read - and it asserts the removal is *explicit* (`env_remove`), because
+    /// `/proc/<pid>/environ` is what the design's predicate is measured against.
+    #[test]
+    fn scrub_removes_denied_keys_and_leaves_the_rest() {
+        std::env::set_var("OPENRIG_TESTONLY_SCRUB", "poison");
+        std::env::set_var("RIGGED_TESTONLY_SCRUB", "poison");
+        std::env::set_var("NOT_OURS_TESTONLY_SCRUB", "keep");
+
+        let mut cmd = Command::new("true");
+        scrub_env(&mut cmd);
+        let envs: Vec<(String, Option<String>)> = cmd
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+
+        std::env::remove_var("OPENRIG_TESTONLY_SCRUB");
+        std::env::remove_var("RIGGED_TESTONLY_SCRUB");
+        std::env::remove_var("NOT_OURS_TESTONLY_SCRUB");
+
+        for denied in ["OPENRIG_TESTONLY_SCRUB", "RIGGED_TESTONLY_SCRUB"] {
+            assert!(
+                envs.iter().any(|(k, v)| k == denied && v.is_none()),
+                "{denied} must arrive at the child as an explicit removal, not as an absent variable"
+            );
+        }
+        assert!(
+            !envs.iter().any(|(k, _)| k == "NOT_OURS_TESTONLY_SCRUB"),
+            "a variable that is not denied must not be touched by the scrub"
+        );
+    }
+
+    /// The tmux root is DERIVED from the state directory - the interface the operator's attach path and this
+    /// runtime share - and it is created without group or other access, because it is where one runtime's
+    /// panes live. Setting `TMUX_TMPDIR` is the mechanism, so it is asserted directly rather than by opening
+    /// a pane: it is what every tmux client this runtime starts inherits.
+    #[test]
+    fn the_tmux_root_is_derived_from_the_state_dir_and_created_private() {
+        let dir = std::env::temp_dir().join(format!("runtime-tmux-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch state dir");
+
+        let root = tmux_root_for(&dir);
+        assert_eq!(root, dir.join("tmux"), "the name is derived, not configured");
+        assert!(!root.exists(), "deriving the path creates nothing");
+
+        let returned = own_tmux_root(&dir).expect("owning the root");
+        assert_eq!(returned, root);
+        assert!(root.is_dir(), "owning it means creating it");
+        assert_eq!(
+            std::env::var("TMUX_TMPDIR").ok().as_deref(),
+            root.to_str(),
+            "every tmux client this runtime starts must inherit the runtime's own server directory"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&root).expect("root exists").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "one runtime's panes are nobody else's to read");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

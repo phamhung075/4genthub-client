@@ -3,6 +3,93 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the seat guard's identity and delivery are native, and the site inventory is not disposed: four declared sites plus three seams the assignment key never listed
+
+### Changed
+- `cmd/seatcheck`: `rigWhoami` no longer execs `rig whoami --json` and `rigSend` no longer execs
+  `rig send -- TARGET TEXT`. The identity comes from the client's own resolver, now ONE exported function
+  (`internal/clientruntime.ResolveIdentity`, whose chain the `whoami` verb also uses): the runtime socket
+  first, a rig's OpenRig daemon second, the seat's own environment last — so the guard answers on a machine
+  with no daemon at all. The delivery goes through `internal/clientruntime.DeliverToSession`, the same
+  runtime-first / daemon-fallback chain the `send` verb runs, with no daemon-only switch set — exactly the
+  shape `rig send SESSION TEXT` had.
+- The guard's failure shape is ONE: every non-zero the delivery answers is mapped to `exitDeliveryFailed` (5)
+  by `runSend`, so a policy result (2/3/4) is never readable as a delivery failure and a transport's own code
+  never leaks as the guard's exit. The `delivery failed` line no longer names `rig send`.
+- `internal/clientruntime`: the whoami chain moved out of `whoamiCommand.Run` into `ResolveIdentity`, so the
+  verb PRINTS an answer and the guard REASONS about the same one; a document the daemon answered with is still
+  carried whole (the CLI prints it unmodified). `whoami` asks the runtime for this seat's NATIVE session name
+  (`agenthub--<room>--<seat>`) when the environment names the halves and no session, rather than a bare empty
+  session.
+
+### Verified
+- `go build ./...`, `go vet ./...`, `go test ./... -count=1` → 24 packages ok.
+- The new `cmd/seatcheck` tests fail on HEAD's `main.go` for the plainest reason — it execs `rig`: run against
+  a pristine HEAD tree with the SAME test file, six tests fail (`parse rig whoami: unexpected end of JSON
+  input`, `rigSend = 0 with no transport`, …). The instrument is a fake `rig` first on PATH that records its
+  own execution, and its record not existing.
+- The other nine sites of the eleven-site inventory are disposed in
+  `CHANGELOG/2026-10-14--guard-native-identity-and-delivery.md`: five were already converted or deleted by
+  earlier commits, and four (`rigIdle`, `seatActivity`, `respawn`'s node read, and `clientcmd.RequireRig`'s
+  shared platform matrix) need the seat's decision — three of them on ONE missing capability, a native
+  per-seat agent-activity read that the runtime does not expose.
+
+### The value that was invisible, and the install still owed
+
+- The seat send's dead fallback is FIXED by this lineage rather than repaired: `sendCommand.Run`'s own
+  `RIG SEAT MESSAGE` shape used to fall back to `exec.LookPath("rig")` + `exec.Command(path, "send", ...)`, and on
+  this machine `rig` is a symlink to this client - so the "fallback" re-entered the same verb, whose three-positional
+  entry refused the two-argument OpenRig form. The reader got a failure report about a command nobody had asked for,
+  which is why seat-to-seat send looked dead on the installed binary AND on a tip build. `d777b52` deleted the
+  fallback (the send goes to `clientruntime.SendTextToSeat`) and pinned the deletion AS AN ABSENCE:
+  `TestTheRigSeatMessageShapeNeverFallsBackToShellingOutToRig` empties PATH, so the test fails if any shell-out
+  returns. Nobody had connected that fix to the architect's separate diagnosis until tonight.
+- The install is still owed, and deliberately not done from this tree: the binary everyone runs is
+  `/home/daihu/.local/bin/4genteam` version 0.1.0, mtime 2026-10-13 22:39, which PREDATES `d777b52` and this
+  snapshot - so the room's documented verb keeps failing on the installed binary while a tip build passes. Rebuilding
+  and reinstalling it is a gated, reversible step after the reviewer's verdict on this pin; overwriting the
+  operator's binary from ungated tree bytes is not this unit's call.
+- The count, in the terms the reviewer will gate: the fragment's table keys eleven sites in `wt/r7-shim`, and against
+  this pin it dispositions seven as converted or deleted (the seatcheck pair included) and FOUR as not converted,
+  each with its reason - `clientseat/sync.go` seatActivity and `clientlifecycle/supervisor.go` rigIdle, both blocked on
+  the same missing native per-seat agent-activity read; `clientsync/respawnverb.go` runRigCapture, two thirds
+  convertible; and `clientcmd/command.go` RequireRig, the shared platform matrix rather than a site fix. One further
+  site that execs the name `rig` is NOT in that table at all: `internal/clientsync/connectorverb.go:355`
+  (`exec.CommandContext(ctx, "rig", args...)`), and TWO further seams the assignment key never listed at all, both of
+  which take their program from an ARGUMENT LIST rather than a literal, which is why no grep for `exec.Command("rig"`
+  can see them: `internal/clientsync/bundleverb.go:42-48` (`bundleRunRig`, argv built as `rig bundle create …` at :192)
+  and `internal/clientsync/switchverb.go:53-58` (`switchRunRig`, called as `rig ps --json --nodes --rig ROOM` at :350).
+  So the inventory is NOT disposed - seven converted or deleted, four declared with a reason, three seams the key never
+  listed - and no count is claimed here: the reviewer emits the site list at this pin, built from the seams and who
+  supplies their argv.
+
+## 2026-10-14 — a daemon-only switch decides the send's transport, and the refusal names the party that stopped it
+
+### Fixed
+- `send RIG SEAT MESSAGE` — the client's own shape — dropped EVERY switch it accepted: it called
+  `SendTextToSeat` directly and never consulted the daemon-only list, so `--wait-for-idle 5` typed into a busy
+  seat without waiting, and `--verify` reported nothing where reporting is its whole purpose. Found by the U3
+  gate at `c55fa87` (REQUEST CHANGES, falsified with the wire frame at exit 0). The shape now routes any switch
+  its own seat send cannot carry — `--verify`, `--force`, `--wait-for-idle`, `--dangerously-interact`, `--raw`,
+  `--json` — through the same daemon path the SESSION shape uses, addressed to `agenthub--RIG--SEAT`, so the
+  switch decides the transport instead of riding along. `--raw` also drops the shape's own `From NAME:` prefix,
+  because raw means the text exactly. Measured against a recording daemon and a live runtime socket: every
+  switch reaches the daemon with the right payload field (`waitForIdleMs=5000`, `verify=true`,
+  `dangerouslyInteract`+`reason`, the exact text) while the runtime socket is not written to at all, and the
+  no-switch line still goes to the runtime and never asks the daemon.
+- The refusal for a daemon-only switch with a HEALTHY runtime and a dead daemon no longer opens with "no runtime
+  is answering at <socket>" — false, and aimed at the transport that DID answer. `DaemonSwitchMissing` names the
+  flag and the daemon; `FallbackMissing` keeps its sentence for the case where the runtime really did not
+  answer. Measured: `rc=3`, "`--verify` needs the OpenRig daemon, and the OpenRig fallback at
+  http://127.0.0.1:1 is not available either; nothing was sent".
+
+### Added
+- `internal/clientruntime/sendseam.go`: `SeatSessionName` (the `agenthub--<room>--<seat>` name both transports
+  address, derived rather than looked up, so a verb holding a RIG and a SEAT needs no status round trip) and
+  `DaemonSwitchMissing` (that one refusal sentence).
+- Three tests in `internal/clientseat/send_transport_test.go` that FAIL on the pre-change tree and pass after it —
+  the gate's own wire observation, reproduced as an assertion rather than answered by argument.
+
 ## 2026-10-14 — the shim's verbs resolve the RUNTIME socket first, and the seat's own environment is the last identity
 
 ### Changed

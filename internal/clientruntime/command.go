@@ -54,71 +54,34 @@ func (whoamiCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 	}
 	full := *fullFlag || *verboseFlag
 
-	session := *sessionFlag
-	if session == "" {
-		session = os.Getenv(agentHubSessionEnv)
+	// THE CHAIN IS ONE FUNCTION (ResolveIdentity): the runtime socket first, the OpenRig daemon as the
+	// fallback the live rig still runs, the seat's own environment last — so this verb PRINTS an answer and
+	// the seat guard (cmd/seatcheck) reasons about the same one, instead of each exec-ing `rig whoami --json`
+	// or re-deriving the order. `full` decides whether the daemon is asked for its compact projection.
+	resolved, err := ResolveIdentity(ctx, *sessionFlag, !full)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
 	}
 
-	// THE TRANSPORT SEAM, RUNTIME FIRST. The runtime socket is asked before anything else, because it is
-	// this client's own transport: a machine with a runtime and no OpenRig daemon resolves identity here,
-	// which is what `whoami --json` has to do. Only the identity verb's ANSWER is taken from it — a runtime
-	// that answers with a refusal ("could not be resolved from active rooms") has not answered this
-	// question, and whoami's job is to RECOVER an identity, so the chain below continues rather than
-	// reporting one transport's mood.
-	if ResolveTransport() == TransportRuntime {
-		if resp, err := NewClient("").Whoami(session); err == nil {
-			return printWhoami(stdout, stderr, resp, *jsonFlag)
-		}
-	}
-
-	// A rig the OpenRig daemon hosts has no native room for this seat, so its daemon is asked SECOND, as
-	// the fallback the live rig still runs, and its document is what this verb prints when it answers.
-	openRigSeat := *sessionFlag
-	if openRigSeat == "" {
-		openRigSeat = openRigSession()
-	}
-	if openRigSeat != "" && openRigDaemonConfigured() {
-		// Compact by default, exactly as the CLI asks the daemon (`if (!full) params.set("compact", "1")`,
-		// whoami.ts) and then projects the answer to the identity-recovery allowlist below. --full opts
-		// out of both, so the daemon also skips the contextUsage/runtimeContext compute.
-		raw, err := openRigWhoami(ctx, openRigSeat, !full)
-		if err != nil {
-			// A daemon that ANSWERED — it refused this session — has answered: report its words with the
-			// raiser's own code (a 404 is ExitRemote, 1, the CLI's answer for an unknown session). Only a
-			// daemon that is merely ABSENT (no configuration, or no answer at all) leaves the chain below
-			// to recover the identity without it.
-			if clientcmd.CodeOf(err, clientcmd.ExitUnavailable) != clientcmd.ExitUnavailable {
-				fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
-				return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
+	// A document at all means the OpenRig daemon answered: the CLI prints the payload, not a pretty-print of
+	// it, and projects it to the identity-recovery allowlist unless --full was asked for.
+	if resolved.Document != nil {
+		if *jsonFlag {
+			out := resolved.Document
+			if !full {
+				out = projectCompactWhoami(resolved.Document)
 			}
-		} else {
-			if *jsonFlag {
-				// The document is printed as it arrived (the CLI prints the payload, not a pretty-print of
-				// it), and the compact projection is the CLI's allowlist — see projectCompactWhoami.
-				out := raw
-				if !full {
-					out = projectCompactWhoami(raw)
-				}
-				_, _ = stdout.Write(out)
-				_, _ = stdout.Write([]byte("\n"))
-				return clientcmd.ExitOK
-			}
-			return printOpenRigIdentity(stdout, raw)
+			_, _ = stdout.Write(out)
+			_, _ = stdout.Write([]byte("\n"))
+			return clientcmd.ExitOK
 		}
+		return printOpenRigIdentity(stdout, resolved.Document)
 	}
 
-	// NO DAEMON AND NO RUNTIME ANSWER: the seat's own environment IS the identity. This is the path that
-	// makes `whoami --json` work on a machine with no daemon at all — a native seat states AGENTHUB_ROOM /
-	// AGENTHUB_SEAT, and a seat the OpenRig daemon hosts states its identity as OPENRIG_SESSION_NAME
-	// ("<seat>@<rig>"). The runtime is NOT started here as a side effect: booting a daemon to answer an
-	// identity question would make the answer depend on a process this verb could have left alone.
-	if resp, ok := seatEnvIdentity(); ok {
-		return printWhoami(stdout, stderr, &resp, *jsonFlag)
-	}
-
-	fmt.Fprintf(stderr, "4genteam whoami: %s; no seat environment names this seat either (set %s and %s, or %s)\n",
-		RuntimeMissing(""), agentHubRoomEnv, agentHubSeatEnv, openRigSessionEnv)
-	return clientcmd.ExitUnavailable
+	// The runtime's answer and the environment's are VALUES, printed by the ONE rendering of this client's
+	// own identity document, so the two sources cannot drift apart.
+	return printWhoami(stdout, stderr, &resolved.Response, *jsonFlag)
 }
 
 // seatEnvIdentity builds the identity document from the seat's own environment, and reports whether there
@@ -379,7 +342,7 @@ func queueListRuntime(destination string, asJSON bool, stdout, stderr io.Writer)
 		// session names the client's own convention renders ("agenthub--<room>--<seat>", the same name
 		// SendTextToSeat addresses) — and it stays empty when this shell names no seat, so the filter
 		// narrows nothing rather than narrowing to a name nobody used.
-		destination = seatEnvSessionName(room, seat)
+		destination = SeatSessionName(room, seat)
 	}
 	filter := QueueListFilter{ActiveOnly: true}
 	if destination != "" {

@@ -17,11 +17,15 @@
 package clientruntime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
 // Transport names where a shim verb's request goes.
@@ -95,7 +99,7 @@ const (
 func seatEnvParts() (room, seat, session string, ok bool) {
 	room, seat = strings.TrimSpace(os.Getenv(agentHubRoomEnv)), strings.TrimSpace(os.Getenv(agentHubSeatEnv))
 	if room != "" && seat != "" {
-		return room, seat, seatEnvSessionName(room, seat), true
+		return room, seat, SeatSessionName(room, seat), true
 	}
 	name := openRigSession()
 	at := strings.LastIndex(name, "@")
@@ -103,15 +107,6 @@ func seatEnvParts() (room, seat, session string, ok bool) {
 		return "", "", "", false
 	}
 	return strings.TrimSpace(name[at+1:]), strings.TrimSpace(name[:at]), name, true
-}
-
-// seatEnvSessionName is the native session name for a room/seat pair — the one shape the runtime's own
-// `session_name` helper renders — or "" when either half is missing (a half-named seat names no session).
-func seatEnvSessionName(room, seat string) string {
-	if room == "" || seat == "" {
-		return ""
-	}
-	return "agenthub--" + room + "--" + seat
 }
 
 // RuntimeSendText delivers one message to one session through the runtime socket and returns the runtime's
@@ -150,4 +145,158 @@ func runtimeJSONDocument(value any) []byte {
 		return []byte(fmt.Sprintf("%v", value))
 	}
 	return raw
+}
+
+// ResolvedIdentity is one answer of the whoami chain, in the two forms its callers need.
+type ResolvedIdentity struct {
+	// Response is the identity, parsed: what a caller that REASONS with the identity reads (a roster to
+	// address, a member name to compare against a policy).
+	Response WhoamiResponse
+	// Document is the answer as the transport rendered it, and it is non-nil ONLY when the OpenRig daemon
+	// answered. The CLI prints that document unmodified, so a caller that PRINTS must use these bytes rather
+	// than a re-encode of them; the runtime's and the environment's answers are values this build marshals
+	// (printWhoami), so they are not carried twice.
+	Document []byte
+}
+
+// ResolveIdentity answers who this seat is, over the ONE chain: the runtime socket first, then a rig's OpenRig
+// daemon when this shell names one, then the seat's own environment. It is the chain `4genteam whoami` prints,
+// extracted so that a SECOND caller (the seat guard, cmd/seatcheck) asks the same question the same way
+// instead of exec-ing `rig whoami --json` — a name that does not exist after the cutover.
+//
+// `session` is the caller's explicit session name (the verb's --session); "" means the seat's own
+// environment. The two transports read it differently and deliberately so, because that is what each one
+// carries: the runtime is asked for the session this shell's environment spells (AGENTHUB_SESSION_NAME, the
+// native name), while the daemon is asked for this shell's OpenRig session name (OPENRIG_SESSION_NAME) unless
+// the caller named one, since that is the only name such a seat has.
+//
+// The failure is a SINGLE shape: a CodedError carrying ExitUnavailable whose message names the runtime that
+// did not answer AND the environment that named no seat. A daemon that ANSWERED with a refusal keeps its own
+// words and its own code (the CLI's exit for an unknown session), because a daemon that answered has
+// answered — the same distinction a caller made before this function existed.
+func ResolveIdentity(ctx context.Context, session string, compact bool) (ResolvedIdentity, error) {
+	// THE RUNTIME FIRST. It is this client's own transport: a machine with a runtime and no OpenRig daemon
+	// resolves identity here, which is what `whoami --json` has to do. Only the identity verb's ANSWER is
+	// taken from it — a runtime that answers with a refusal ("could not be resolved from active rooms") has
+	// not answered this question, and whoami's job is to RECOVER an identity, so the chain continues rather
+	// than reporting one transport's mood.
+	if ResolveTransport() == TransportRuntime {
+		asked := session
+		if asked == "" {
+			asked = strings.TrimSpace(os.Getenv(agentHubSessionEnv))
+		}
+		if asked == "" {
+			// A native seat may name its HALVES rather than the session (AGENTHUB_ROOM/AGENTHUB_SEAT, which is
+			// the pair a native seat always states): the runtime's own helper renders that pair to exactly the
+			// name below, so the seat asked for is THIS one rather than "the first seat the room lists" — the
+			// reading a bare empty session would invite.
+			room, seat, _, _ := seatEnvParts()
+			asked = SeatSessionName(room, seat)
+		}
+		if resp, err := NewClient("").Whoami(asked); err == nil {
+			return ResolvedIdentity{Response: *resp}, nil
+		}
+	}
+
+	// A rig the OpenRig daemon hosts has no native room for this seat, so its daemon is asked SECOND, as the
+	// fallback the live rig still runs, and its document is what a caller prints when it answers.
+	openRigSeat := session
+	if openRigSeat == "" {
+		openRigSeat = openRigSession()
+	}
+	if openRigSeat != "" && openRigDaemonConfigured() {
+		// Compact by default, exactly as the CLI asks the daemon (`if (!full) params.set("compact", "1")`,
+		// whoami.ts); the caller that prints then projects the answer to the identity-recovery allowlist.
+		raw, err := openRigWhoami(ctx, openRigSeat, compact)
+		if err != nil {
+			// A daemon that ANSWERED — it refused this session — has answered: report its words with the
+			// raiser's own code (a 404 is ExitRemote, 1, the CLI's answer for an unknown session). Only a
+			// daemon that is merely ABSENT (no configuration, or no answer at all) leaves the chain below to
+			// recover the identity without it.
+			if clientcmd.CodeOf(err, clientcmd.ExitUnavailable) != clientcmd.ExitUnavailable {
+				return ResolvedIdentity{}, err
+			}
+		} else {
+			// The document is the daemon's, so it is carried whole and re-read rather than re-typed: a field
+			// this build has not heard of still reaches a caller that prints, and the parsed copy carries the
+			// fields the shape in types.go names (identity.rigName/memberId, peers[].logicalId/sessionName).
+			var parsed WhoamiResponse
+			_ = json.Unmarshal(raw, &parsed)
+			return ResolvedIdentity{Response: parsed, Document: raw}, nil
+		}
+	}
+
+	// NO DAEMON AND NO RUNTIME ANSWER: the seat's own environment IS the identity. This is the path that makes
+	// `whoami --json` work on a machine with no daemon at all — a native seat states AGENTHUB_ROOM /
+	// AGENTHUB_SEAT, and a seat the OpenRig daemon hosts states its identity as OPENRIG_SESSION_NAME
+	// ("<seat>@<rig>"). The runtime is NOT started here as a side effect: booting a daemon to answer an
+	// identity question would make the answer depend on a process this call could have left alone.
+	if resp, ok := seatEnvIdentity(); ok {
+		return ResolvedIdentity{Response: resp}, nil
+	}
+
+	return ResolvedIdentity{}, &clientcmd.CodedError{
+		Message: fmt.Sprintf("%s; no seat environment names this seat either (set %s and %s, or %s)",
+			RuntimeMissing(""), agentHubRoomEnv, agentHubSeatEnv, openRigSessionEnv),
+		Code: clientcmd.ExitUnavailable,
+	}
+}
+
+// DeliverToSession delivers ONE message to ONE session over the transport this machine actually has: the
+// runtime socket first, the OpenRig daemon as the fallback the live rig still runs. It is the native half of
+// the seat guard's delivery (cmd/seatcheck calls it where it used to exec `rig send -- SESSION TEXT`), so the
+// guard delivers through the SAME transports the `send` verb uses instead of through a CLI that does not
+// exist after the cutover.
+//
+// NO DAEMON-ONLY SWITCH IS SET, and that is the whole shape of the call it replaces: the two-positional
+// `rig send SESSION TEXT` carries no `--verify`/`--force`/`--wait-for-idle`/`--dangerously-interact`, so
+// nothing here has to decide whether a handshake the runtime does not run was asked for. The text is wrapped
+// in the same From/To/Sent envelope either way, attributed to this shell's own session name.
+//
+// The exit code is the client's own: 0 delivered, ExitRemote (1) when the answering transport refused it,
+// ExitUnavailable (3) when no transport answered. A caller that must not report a policy result as a delivery
+// failure maps it at its own boundary — the guard maps every non-zero to its own one delivery failure code.
+func DeliverToSession(ctx context.Context, session, text string, stdout, stderr io.Writer) int {
+	switch ResolveTransport() {
+	case TransportRuntime:
+		_, err := RuntimeSendText(session, text, SendOptions{})
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam send: the runtime at %s refused it: %v\n", DefaultSocketPath(), err)
+			return clientcmd.ExitRemote
+		}
+		fmt.Fprintf(stdout, "Sent to %s\n", session)
+		return clientcmd.ExitOK
+	case TransportDaemon:
+		result, status, err := OpenRigSend(ctx, session, text, SendOptions{})
+		if err != nil {
+			// A daemon that could not be REACHED has not refused anything: with the runtime first, the
+			// transport that is missing is the runtime, so the refusal names it (and says the fallback was
+			// tried) rather than blaming a $OPENRIG_URL the delivery was never going to reach. A daemon that
+			// ANSWERED keeps its own words and its own code below.
+			if clientcmd.CodeOf(err, clientcmd.ExitRemote) == clientcmd.ExitUnavailable {
+				fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", FallbackMissing())
+				return clientcmd.ExitUnavailable
+			}
+			fmt.Fprintf(stderr, "4genteam send: %v\n", err)
+			return clientcmd.CodeOf(err, clientcmd.ExitRemote)
+		}
+		if status >= 400 {
+			words := result.Error
+			if words == "" {
+				words = result.Detail
+			}
+			fmt.Fprintf(stderr, "4genteam send: the daemon refused it (HTTP %d) %s\n", status, words)
+			return clientcmd.ExitRemote
+		}
+		fmt.Fprintf(stdout, "Sent to %s\n", session)
+		// The advisory is not noise: it is the only signal that the message landed in a pane that was not
+		// reading, and the guard's caller is the one party that can act on it.
+		if warning := strings.TrimSpace(result.Warning); warning != "" {
+			fmt.Fprintf(stdout, "Advisory: %s\n", warning)
+		}
+		return clientcmd.ExitOK
+	default:
+		fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", FallbackMissing())
+		return clientcmd.ExitUnavailable
+	}
 }

@@ -6,11 +6,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/commpolicy"
 )
 
@@ -65,6 +65,18 @@ func send(args ...string) (code int, stdout, stderr string) {
 	return code, out.String(), errb.String()
 }
 
+// whoamiFixture is a document shaped like the client's own identity answer, read the way the guard reads it:
+// the fixture is the client's TYPE, so a field the guard started depending on that the type does not carry
+// fails here rather than in a room.
+func whoamiFixture(t *testing.T, data string) *clientruntime.WhoamiResponse {
+	t.Helper()
+	var doc clientruntime.WhoamiResponse
+	if err := json.Unmarshal([]byte(data), &doc); err != nil {
+		t.Fatalf("identity fixture: %v", err)
+	}
+	return &doc
+}
+
 func auditRecords(t *testing.T, seatDir string) []commpolicy.AuditRecord {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(seatDir, "audit.jsonl"))
@@ -107,15 +119,16 @@ func TestSendAllowedDelivers(t *testing.T) {
 	}
 }
 
-// Whatever rig send exits with, a failed delivery is seatcheck's own code 5, never one of the
-// policy codes (2 usage/policy, 3 denied, 4 bypass) and never rig's code unchanged.
+// Whatever the delivery answers with, a failed delivery is seatcheck's own code 5, never one of the
+// policy codes (2 usage/policy, 3 denied, 4 bypass) and never the transport's code unchanged: the seam now
+// reports the client's own codes (1 refused, 3 no transport), so this pins that the guard flattens them.
 func TestSendDeliveryFailureIsItsOwnExitCode(t *testing.T) {
 	for _, rigCode := range []int{1, 2, 3, 4, 7} {
 		seatDir, got := seatEnv(t, allowPolicy)
 		got.code = rigCode
 		code, _, stderr := send("--to", "b", "--intent", "task", "--", "hi")
 		if code != exitDeliveryFailed || !strings.Contains(stderr, "delivery failed") {
-			t.Fatalf("rig send exit %d: exit = %d, stderr %q, want %d and a delivery failure message", rigCode, code, stderr, exitDeliveryFailed)
+			t.Fatalf("delivery exit %d: exit = %d, stderr %q, want %d and a delivery failure message", rigCode, code, stderr, exitDeliveryFailed)
 		}
 		records := auditRecords(t, seatDir)
 		if len(records) != 2 || records[0].Outcome != "" || records[1].Outcome != commpolicy.OutcomeDeliveryFailed || !records[1].Allowed {
@@ -346,10 +359,10 @@ func TestSendAllowedRecipientOutsideRosterFails(t *testing.T) {
 	}
 }
 
-// parseWhoami reads the roster the way rig whoami prints it: peers are keyed by member name
-// and carry the full session name rig send needs.
-func TestParseWhoamiRoster(t *testing.T) {
-	who, err := parseWhoami([]byte(`{"identity":{"rigName":"scratchcomm","memberId":"alpha","sessionName":"scratchcomm-alpha@scratchcomm"},` +
+// identityFromDocument reads the roster the identity document carries: peers are keyed by member name
+// and carry the full session name a delivery needs.
+func TestIdentityFromDocumentRoster(t *testing.T) {
+	who, err := identityFromDocument(whoamiFixture(t, `{"identity":{"rigName":"scratchcomm","memberId":"alpha","sessionName":"scratchcomm-alpha@scratchcomm"},`+
 		`"peers":[{"logicalId":"scratchcomm.beta","sessionName":"scratchcomm-beta@scratchcomm"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -357,15 +370,15 @@ func TestParseWhoamiRoster(t *testing.T) {
 	if who.Rig != "scratchcomm" || who.Member != "alpha" || len(who.Peers) != 1 || strings.Join(who.Peers["beta"], ",") != "scratchcomm-beta@scratchcomm" {
 		t.Fatalf("identity = %+v", who)
 	}
-	if _, err := parseWhoami([]byte(`{"identity":{}}`)); err == nil {
+	if _, err := identityFromDocument(whoamiFixture(t, `{"identity":{}}`)); err == nil {
 		t.Fatal("an identity without rig or member must fail")
 	}
 }
 
 // In a multi-pod rig the pod is not the rig name: the member is what follows the first dot.
-func TestParseWhoamiMultiPodRig(t *testing.T) {
-	who, err := parseWhoami([]byte(`{"identity":{"rigName":"room-c","memberId":"coder"},"peers":[` +
-		`{"logicalId":"dev.reviewer","sessionName":"dev-reviewer@room-c"},` +
+func TestIdentityFromDocumentMultiPodRig(t *testing.T) {
+	who, err := identityFromDocument(whoamiFixture(t, `{"identity":{"rigName":"room-c","memberId":"coder"},"peers":[`+
+		`{"logicalId":"dev.reviewer","sessionName":"dev-reviewer@room-c"},`+
 		`{"logicalId":"agy.check","sessionName":"agy-check@room-c"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -376,8 +389,8 @@ func TestParseWhoamiMultiPodRig(t *testing.T) {
 }
 
 // A member name repeated across pods is ambiguous only for a send to that name.
-func TestParseWhoamiKeepsEverySessionOfARepeatedMember(t *testing.T) {
-	who, err := parseWhoami([]byte(`{"identity":{"rigName":"r","memberId":"a"},"peers":[` +
+func TestIdentityFromDocumentKeepsEverySessionOfARepeatedMember(t *testing.T) {
+	who, err := identityFromDocument(whoamiFixture(t, `{"identity":{"rigName":"r","memberId":"a"},"peers":[`+
 		`{"logicalId":"agy.check","sessionName":"agy-check@r"},{"logicalId":"dev.check","sessionName":"dev-check@r"},{"logicalId":"dev.lead","sessionName":"dev-lead@r"}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -528,26 +541,36 @@ func TestAuditScanCleanExits0(t *testing.T) {
 	}
 }
 
-// A send end to end through the real delivery seam: seatcheck joins the message words and
-// hands the roster session the whole text as one positional argument after --.
-func TestSendEndToEndDeliversThroughRig(t *testing.T) {
+// A send end to end through the REAL identity and delivery seams, with no `rig` anywhere: the roster comes
+// from the runtime's own whoami, the message goes to the runtime as one SendText frame carrying the whole
+// joined text, and the audit carries the decision line then the outcome. It is the U3 acceptance's shape at
+// the guard's own boundary — the fake rig on PATH records its own execution, and its record must not exist.
+func TestSendEndToEndDeliversNatively(t *testing.T) {
 	seatDir, _ := seatEnv(t, allowPolicy)
+	identify = rigWhoami
 	deliver = rigSend
-	dir := t.TempDir()
-	argsPath := filepath.Join(dir, "args")
-	t.Setenv(fakeRigArgsVar, argsPath)
-	t.Setenv(fakeRigStdinVar, filepath.Join(dir, "stdin"))
-	fakeRig(t, fakeRigArgvNul)
+	hermeticSeat(t)
+	argsPath := fakeRig(t)
+
+	_, requests := fakeRuntimeSocket(t, func(line string) string {
+		if strings.Contains(line, `"Whoami"`) {
+			return okData(`{"identity":{"rigName":"r","memberId":"a"},"peers":[{"logicalId":"pod.b","sessionName":"pod-b@r"}]}`)
+		}
+		return okData(`{"session":"pod-b@r","outcome":"delivered","ok":true}`)
+	})
 
 	code, _, stderr := send("--to", "b", "--intent", "task", "--", "fix", "the", "bug")
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr %q, want 0", code, stderr)
 	}
-	got := readArgv(t, argsPath)
-	want := []string{"send", "--", "pod-b@r", "fix the bug"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("argv = %q, want %q", got, want)
+	frames := strings.Join([]string{awaitRequest(t, requests), awaitRequest(t, requests)}, "\n")
+	if !strings.Contains(frames, `"action":"Whoami"`) || !strings.Contains(frames, `"action":"SendText"`) {
+		t.Fatalf("runtime frames = %q, want a Whoami and a SendText", frames)
 	}
+	if !strings.Contains(frames, `"session":"pod-b@r"`) || !strings.Contains(frames, "fix the bug") {
+		t.Fatalf("runtime frames = %q, want the joined message addressed to the roster session", frames)
+	}
+	assertRigNeverRan(t, argsPath)
 	records := auditRecords(t, seatDir)
 	if len(records) != 2 || records[0].Outcome != "" || records[1].Outcome != commpolicy.OutcomeDelivered {
 		t.Fatalf("audit = %+v, want the decision line then delivered", records)

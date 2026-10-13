@@ -7,6 +7,20 @@ use tracing::{error, info, warn};
 
 pub struct TerminalManager;
 
+/// Every tmux call this module makes goes through here, for one reason expressed twice: the client must not
+/// carry this runtime's denied addressing into the server it may create, and it must reach the server this
+/// runtime OWNS rather than one the host happens to be running. Both halves are load-bearing:
+/// `TMUX_TMPDIR` (set once at startup, see `crate::own_tmux_root`) decides WHICH server, and the scrub
+/// decides whether that server starts clean - measured, a private server created by an unscrubbed client
+/// carried the host's variables just as the shared one did (7 of them), because a server takes the
+/// environment of whoever creates it. The first tmux call in `launch_session` runs before any other scrub,
+/// and it is exactly the call that would create ours.
+fn tmux_command() -> Command {
+    let mut cmd = Command::new("tmux");
+    crate::scrub_env(&mut cmd);
+    cmd
+}
+
 impl TerminalManager {
     /// Launch an agent runtime inside a dedicated tmux session.
     pub fn launch_session(
@@ -18,19 +32,19 @@ impl TerminalManager {
         info!("launching session {} in cwd {}", session_name, cwd.display());
 
         // Check if session already exists
-        let check = Command::new("tmux")
+        let check = tmux_command()
             .args(["has-session", "-t", session_name])
             .output();
 
         if let Ok(out) = check {
             if out.status.success() {
                 warn!("session {} already exists; killing first", session_name);
-                let _ = Command::new("tmux").args(["kill-session", "-t", session_name]).output();
+                let _ = tmux_command().args(["kill-session", "-t", session_name]).output();
             }
         }
 
         // Prepare new tmux session detached
-        let mut cmd = Command::new("tmux");
+        let mut cmd = tmux_command();
         cmd.args(["new-session", "-d", "-s", session_name, "-c"]);
         cmd.arg(cwd.as_os_str());
 
@@ -79,7 +93,7 @@ impl TerminalManager {
         }
 
         // Get the pane PID
-        let pid_out = Command::new("tmux")
+        let pid_out = tmux_command()
             .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])
             .output()
             .map_err(|e| format!("failed to list pane pid: {e}"))?;
@@ -93,7 +107,7 @@ impl TerminalManager {
 
     /// Stop an active session.
     pub fn stop_session(session_name: &str) -> Result<(), String> {
-        let output = Command::new("tmux")
+        let output = tmux_command()
             .args(["kill-session", "-t", session_name])
             .output()
             .map_err(|e| format!("failed to kill tmux session: {e}"))?;
@@ -117,7 +131,7 @@ impl TerminalManager {
         fs::write(&temp_file, text).map_err(|e| format!("failed to write temp paste file: {e}"))?;
 
         // 1. Load buffer
-        let load = Command::new("tmux")
+        let load = tmux_command()
             .args(["load-buffer", "-b", &buf_id])
             .arg(temp_file.as_os_str())
             .output()
@@ -129,7 +143,7 @@ impl TerminalManager {
         }
 
         // 2. Paste buffer with -p (bracketed), -r (raw LF), -d (drop buffer after paste)
-        let paste = Command::new("tmux")
+        let paste = tmux_command()
             .args(["paste-buffer", "-t", session_name, "-b", &buf_id, "-d", "-r", "-p"])
             .output();
 
@@ -141,7 +155,7 @@ impl TerminalManager {
         }
 
         // 3. Send Enter key
-        let enter = Command::new("tmux")
+        let enter = tmux_command()
             .args(["send-keys", "-t", session_name, "Enter"])
             .output()
             .map_err(|e| format!("tmux send-keys Enter failed: {e}"))?;
@@ -155,7 +169,7 @@ impl TerminalManager {
 
     /// Check if a session is currently running.
     pub fn is_session_alive(session_name: &str) -> bool {
-        let out = Command::new("tmux")
+        let out = tmux_command()
             .args(["has-session", "-t", session_name])
             .output();
         out.map(|o| o.status.success()).unwrap_or(false)
@@ -164,7 +178,7 @@ impl TerminalManager {
     /// Capture pane text scrollback for telemetry/watch.
     pub fn capture_pane(session_name: &str, lines: usize) -> Result<String, String> {
         let lines_arg = format!("-{lines}");
-        let out = Command::new("tmux")
+        let out = tmux_command()
             .args(["capture-pane", "-p", "-t", session_name, "-S", &lines_arg])
             .output()
             .map_err(|e| format!("tmux capture-pane failed: {e}"))?;

@@ -153,6 +153,27 @@ pub enum SeatLifecycleState {
     Dead,
 }
 
+/// The advisory a seat carries when the daemon has joined the seat's freshness with the room's rail: the
+/// seat is up, and the rail is holding work addressed to it that nobody has picked up.
+///
+/// It is a *join*, not a reading of either side alone (design §4 row 4): the rail alone says work exists,
+/// the seat's own state file alone says the seat is quiet, and only together do they say "this live seat
+/// is owed something and has not done it". The field is advisory on purpose - a client that does not know
+/// it renders the same status it always did, and a client that does can raise it to a human.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeatAlert {
+    /// A stable word a client branches on. `seat_up_with_queued_work`: the session is alive and the room's
+    /// rail holds active rows addressed to it.
+    pub kind: String,
+    /// How long the seat has been quiet: seconds since its own freshness stamp (the runner state file's
+    /// `updated_at`), floored at 0. `None` when the seat published no stamp at all - "how long quiet" is
+    /// then unknown, and this says unknown rather than inventing a zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quiet_seconds: Option<i64>,
+    /// The active (`pending|in-progress|blocked`) qitem ids the rail is holding for this seat.
+    pub waiting_qitem_ids: Vec<String>,
+}
+
 /// Runtime snapshot of a seat for `whoami`, `ps`, and telemetry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeatStatus {
@@ -174,6 +195,11 @@ pub struct SeatStatus {
     pub token_estimate: usize,
     pub last_active: Option<DateTime<Utc>>,
     pub transcript_path: Option<String>,
+    /// The freshness/rail join, set only when a seat is up with active rows waiting for it. Omitted from
+    /// the wire when there is nothing to say, so every existing reader of this payload sees exactly what
+    /// it saw before (design §4 row 4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert: Option<SeatAlert>,
 }
 
 /// The exact payload schema returned by `whoami --json` (Rule 1 compatibility).

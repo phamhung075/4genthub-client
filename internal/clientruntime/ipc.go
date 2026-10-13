@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
 // RuntimeSocketEnv names the override for the runtime's Unix socket. It exists because a client built from a
@@ -143,14 +145,58 @@ func (c *Client) Call(action string, payload any) (*IpcResponse, error) {
 	return &resp, nil
 }
 
+// decodeAnswer reads ONE verb's answer out of a frame the daemon answered: the document under `data`,
+// re-encoded and read into this client's own shape. A document that cannot be read is a REFUSAL rather
+// than a zero value, and that is the whole point of this function existing.
+//
+// WHY A ZERO VALUE IS FORBIDDEN. `Call` has already proved the daemon ANSWERED (its envelope guard passed
+// and `ok` is true), so whatever the verb returns is read as that answer. Discarding a decode failure
+// therefore returns a value the caller cannot tell from a real one: an unreadable Whoami would report an
+// EMPTY IDENTITY, an unreadable room list would report NO ROOMS, and `up` would decide the room is not up
+// and start it - cycling live sessions - from an answer nobody could read. Nothing here may ever return
+// "nothing" as if it were a measurement.
+//
+// WHAT IS REFUSED, PRECISELY: the SHAPE. Unknown FIELDS stay tolerated exactly as they were - this is a
+// plain json.Unmarshal, and DisallowUnknownFields is deliberately used nowhere in this package, so a
+// runtime that learns a key before this client does costs nothing. Only a document this client cannot read
+// at all (a different type where a row, an array or an object belongs; truncated JSON) is refused.
+//
+// The code is clientcmd.ExitRoomRefused (3), the room-scoped contract's number for a request the daemon did
+// not serve (design §2.5), so a caller reading the exit code is told "this was not answered", never "this
+// was answered and the answer is empty".
+func decodeAnswer(action string, data any, out any) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return unreadableAnswer(action, err)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return unreadableAnswer(action, err)
+	}
+	return nil
+}
+
+// unreadableAnswer is the refusal decodeAnswer raises: the verb NAMED, the failure NAMED as a document
+// whose shape is not the one this verb asks for, and the decoder's own words kept so a reader can see which
+// shape arrived. It carries exit 3 (see decodeAnswer), so the verb's caller cannot mistake it for a
+// transport that was merely absent.
+func unreadableAnswer(action string, err error) error {
+	return &clientcmd.CodedError{
+		Message: fmt.Sprintf(
+			"the runtime's %s answer could not be read (the document it sent is not the shape this verb asks for): %v",
+			action, err),
+		Code: clientcmd.ExitRoomRefused,
+	}
+}
+
 func (c *Client) StartRoom(spec RoomSpec) ([]SeatStatus, error) {
 	resp, err := c.Call("StartRoom", spec)
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := json.Marshal(resp.Data)
 	var statuses []SeatStatus
-	_ = json.Unmarshal(raw, &statuses)
+	if err := decodeAnswer("StartRoom", resp.Data, &statuses); err != nil {
+		return nil, err
+	}
 	return statuses, nil
 }
 
@@ -169,9 +215,10 @@ func (c *Client) RestartSeat(room, seat string) (*SeatStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := json.Marshal(resp.Data)
 	var status SeatStatus
-	_ = json.Unmarshal(raw, &status)
+	if err := decodeAnswer("RestartSeat", resp.Data, &status); err != nil {
+		return nil, err
+	}
 	return &status, nil
 }
 
@@ -181,8 +228,7 @@ func (c *Client) SendText(session, text string) error {
 }
 
 func (c *Client) SendTextToSeat(room, seat, text string) error {
-	session := fmt.Sprintf("agenthub--%s--%s", room, seat)
-	return c.SendText(session, text)
+	return c.SendText(SeatSessionName(room, seat), text)
 }
 
 func (c *Client) StartRoomByName(room, cwd string) ([]SeatStatus, error) {
@@ -201,9 +247,10 @@ func (c *Client) GetRoomStatus(room string) ([]SeatStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := json.Marshal(resp.Data)
 	var statuses []SeatStatus
-	_ = json.Unmarshal(raw, &statuses)
+	if err := decodeAnswer("GetRoomStatus", resp.Data, &statuses); err != nil {
+		return nil, err
+	}
 	return statuses, nil
 }
 
@@ -212,9 +259,10 @@ func (c *Client) Whoami(session string) (*WhoamiResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, _ := json.Marshal(resp.Data)
 	var who WhoamiResponse
-	_ = json.Unmarshal(raw, &who)
+	if err := decodeAnswer("Whoami", resp.Data, &who); err != nil {
+		return nil, err
+	}
 	return &who, nil
 }
 

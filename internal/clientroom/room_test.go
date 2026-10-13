@@ -181,6 +181,69 @@ func TestRoomStatusPrintsThePairThenOneLinePerSeat(t *testing.T) {
 	assertRequests(t, daemon, `{"action":"GetRoomStatus","payload":{"room":"room-a"}}`)
 }
 
+// TestRoomStatusRendersTheAlertAndKeepsUnknownQuietTimeUnknown pins the three readings of the OPTIONAL
+// `alert` key on one seat's row, and it compares the WHOLE stdout rather than a substring because both
+// halves of the contract are exact: a seat the runtime did not flag prints the four fields it always did -
+// a pre-existing reader of this verb sees no change - and a seat whose quiet time is UNKNOWN must not print
+// the number a seat that acted a moment ago prints.
+//
+// THE TWO INDISTINGUISHABLE CASES are the point of the third and fourth payloads: `quiet_seconds` absent is
+// a seat that published NO stamp (unknown), and `quiet_seconds: 0` is a seat that published one just now.
+// Rendering both as "0" would make the alert say "this seat just did something" about the one seat it exists
+// to raise, so the unknown case says `unknown` in the number's place.
+func TestRoomStatusRendersTheAlertAndKeepsUnknownQuietTimeUnknown(t *testing.T) {
+	// The payloads differ in the alert key alone, so a difference in the rendered line can only come from it.
+	const (
+		fields = `"room":"` + testRoom + `","seat":"lead","session_name":"agenthub--` + testRoom + `--lead","runtime":"omp","state":"running"`
+		row    = "lead omp running agenthub--room-a--lead"
+	)
+	for _, tc := range []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "an alert is rendered with its kind, its quiet seconds and the ids waiting for the seat",
+			payload: "{" + fields + `,"alert":{"kind":"seat_up_with_queued_work","quiet_seconds":90,"waiting_qitem_ids":["qi-1","qi-2"]}}`,
+			want:    row + " alert=seat_up_with_queued_work quiet_seconds=90 waiting_qitem_ids=qi-1,qi-2",
+		},
+		{
+			name:    "an ABSENT alert key is no alert, not an alert of zeroes",
+			payload: "{" + fields + "}",
+			want:    row,
+		},
+		{
+			name:    "an ABSENT quiet_seconds says unknown, never a zero-second alert",
+			payload: "{" + fields + `,"alert":{"kind":"seat_up_with_queued_work","waiting_qitem_ids":["qi-3"]}}`,
+			want:    row + " alert=seat_up_with_queued_work quiet_seconds=unknown waiting_qitem_ids=qi-3",
+		},
+		{
+			name:    "a stamp published now is a real zero seconds, which reads differently from unknown",
+			payload: "{" + fields + `,"alert":{"kind":"seat_up_with_queued_work","quiet_seconds":0,"waiting_qitem_ids":["qi-4"]}}`,
+			want:    row + " alert=seat_up_with_queued_work quiet_seconds=0 waiting_qitem_ids=qi-4",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			daemon := newFakeDaemon(t, map[string]string{
+				"GetRoomStatus": okData("[" + tc.payload + "]"),
+			})
+
+			code, stdout, stderr := runRoom(t, daemon.args("status", testRoom)...)
+			if code != clientcmd.ExitOK {
+				t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+			}
+			want := "room: " + testRoom + "@" + daemon.stateDir + " socket: " + daemon.socket + "\n" + tc.want + "\n"
+			if stdout != want {
+				t.Fatalf("stdout:\n got %q\nwant %q (stderr %q)", stdout, want, stderr)
+			}
+			if stderr != "" {
+				t.Errorf("stderr = %q, want nothing: a status that read the room has nothing to refuse", stderr)
+			}
+			assertRequests(t, daemon, `{"action":"GetRoomStatus","payload":{"room":"room-a"}}`)
+		})
+	}
+}
+
 // TestRoomStatusReportsTheDaemonsOwnMessage pins the failure half: a room the daemon does not know is the
 // daemon's sentence, printed as it arrived, and the design's 3 (§2.5) - not 2, which says the daemon started
 // and a seat came up short.

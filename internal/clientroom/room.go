@@ -25,6 +25,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
@@ -103,7 +104,10 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "because neither is resolved implicitly. --state-dir is the flag, else $"+clientenv.StateRootEnv+",")
 	fmt.Fprintln(out, "else this machine's own; --socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this")
 	fmt.Fprintln(out, "machine's own.")
-	fmt.Fprintln(out, "\nstatus reads GetRoomStatus and prints one line per seat: SEAT RUNTIME STATE SESSION.")
+	fmt.Fprintln(out, "\nstatus reads GetRoomStatus and prints one line per seat: SEAT RUNTIME STATE SESSION, plus an")
+	fmt.Fprintln(out, "ALERT segment when the runtime flagged the seat - alert=<kind> quiet_seconds=<secs|unknown>")
+	fmt.Fprintln(out, "waiting_qitem_ids=<id,id|none>. A seat with no alert prints the four fields and nothing else, and")
+	fmt.Fprintln(out, "`unknown` is a seat that published no freshness stamp: unknown quiet time is NOT zero seconds.")
 	fmt.Fprintln(out, "stop sends StopRoom: exactly that room's own sessions. The room's directory (spec.json, seats/,")
 	fmt.Fprintln(out, "logs/) is LEFT IN PLACE so the room can be started again; nothing outside the room is touched.")
 	fmt.Fprintln(out, "reseat sends StopSeat then RestartSeat for one seat, in that order.")
@@ -250,6 +254,41 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 	return strings.EqualFold(strings.TrimSpace(seat.State), "running")
 }
 
+// seatRow is the ONE rendering of a seat's line: the four fields the usage line documents - SEAT RUNTIME
+// STATE SESSION - and then the runtime's advisory when there is one. `status` and `reseat` each print a
+// seat's row out of a daemon-returned SeatStatus, so both come through here rather than each keeping its own
+// format string: an alert that showed up on one verb and not the other would be the field carried but not
+// rendered, one verb at a time.
+func seatRow(seat clientruntime.SeatStatus) string {
+	row := fmt.Sprintf("%s %s %s %s", seat.Seat, seat.Runtime, seat.State, seat.SessionName)
+	return row + alertNote(seat.Alert)
+}
+
+// alertNote is the trailing segment of a seat's row for the runtime's alert, or the empty string when the
+// seat carries none - an ABSENT `alert` key is no alert, never an alert of zeroes.
+//
+// TWO CASES THAT MUST NOT READ THE SAME, and they are the reason this is a function rather than a wider
+// format string: `quiet_seconds=0` is a seat whose own stamp is from just now (it acted a moment ago), and an
+// ABSENT quiet_seconds is a seat that published no stamp at all, so how long it has been quiet is UNKNOWN.
+// Rendering the second as a number would tell a reader the exact opposite of the truth - "this seat just did
+// something" about the seat the alert exists to raise - so the unknown case says `unknown` where the number
+// would be. The waiting ids are spelled out rather than counted, because the ids are what a reader needs to
+// go and look at the work; an alert with an empty list says `none` rather than leaving a dangling key.
+func alertNote(alert *clientruntime.SeatAlert) string {
+	if alert == nil {
+		return ""
+	}
+	quiet := "unknown"
+	if alert.QuietSeconds != nil {
+		quiet = strconv.FormatInt(*alert.QuietSeconds, 10)
+	}
+	waiting := "none"
+	if len(alert.WaitingQitemIDs) > 0 {
+		waiting = strings.Join(alert.WaitingQitemIDs, ",")
+	}
+	return fmt.Sprintf(" alert=%s quiet_seconds=%s waiting_qitem_ids=%s", alert.Kind, quiet, waiting)
+}
+
 // reportDaemon is the one rendering of a daemon-side failure: the daemon's own words, naming the sub-verb,
 // and the code the room contract gives any failure that is not a partial start.
 //
@@ -274,8 +313,9 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	// One line per seat, and the SEAT's own rows in the daemon's order: the state word and the session name
 	// are the daemon's, not this client's, so a reader can compare this output with the room's own reading.
+	// A seat the runtime flagged carries its alert as the row's last segment (see seatRow/alertNote).
 	for _, seat := range seats {
-		fmt.Fprintf(stdout, "%s %s %s %s\n", seat.Seat, seat.Runtime, seat.State, seat.SessionName)
+		fmt.Fprintln(stdout, seatRow(seat))
 	}
 	return clientcmd.ExitOK
 }
@@ -330,7 +370,7 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam room reseat: the runtime answered RestartSeat for %s with no seat status, so this verb cannot say the seat is running\n", inv.seat)
 		return clientcmd.ExitPartialStart
 	}
-	fmt.Fprintf(stdout, "%s %s %s %s\n", status.Seat, status.Runtime, status.State, status.SessionName)
+	fmt.Fprintln(stdout, seatRow(*status))
 	if !seatRunning(*status) {
 		fmt.Fprintf(stderr, "4genteam room reseat: %s came back %q, not running\n", inv.seat, status.State)
 		return clientcmd.ExitPartialStart

@@ -21,6 +21,8 @@
 //!   `CAP_SYS_PTRACE` and is retired with this module.
 
 use crate::types::{AgentRuntime, RoomSpec, SeatSpec};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use crate::frame::{self, SpillTarget};
@@ -917,6 +919,185 @@ pub fn resume_delay(attempt: u32) -> Duration {
     Duration::from_secs(1u64 << attempt.min(3).saturating_sub(1).min(3))
 }
 
+/// How many times the daemon asks a seat to pick its rail work up, and how long it waits between tries.
+///
+/// `nudge_delay` mirrors `resume_delay`'s shape exactly - a bounded ladder, clamped past the bound - for
+/// the same reason: a retry that grows without a ceiling is a spin. Bounded at three because a fourth
+/// identical request to a seat that has answered nothing says nothing new; what remains then is the alert
+/// on the room status, which is the signal a human reads.
+pub const MAX_NUDGE_ATTEMPTS: u32 = 3;
+
+pub fn nudge_delay(attempt: u32) -> Duration {
+    // 1s, 2s, 4s - the same shape as `resume_delay`, so an operator who knows one ladder knows the other.
+    Duration::from_secs(1u64 << attempt.min(3).saturating_sub(1).min(3))
+}
+
+/// The identity of the work a nudge is about: the seat and the rows waiting for it, sorted, so the same
+/// pile is the same nudge however the rail listed it.
+///
+/// Keying the ladder on this is what re-arms it: a seat that finished its rows and was handed a
+/// *different* pile is nudged again, while an unchanged pile that has been asked three times is left to
+/// the alert. Without a key, either every new row would be silent (the bound never resetting) or a
+/// restarted daemon would ask a fourth time (the count living in memory).
+pub fn nudge_key(seat: &str, qitem_ids: &[String]) -> String {
+    let mut ids: Vec<&str> = qitem_ids.iter().map(String::as_str).collect();
+    ids.sort_unstable();
+    format!("{seat}:{}", ids.join(","))
+}
+
+/// Where nudge attempts are recorded: `<state dir>/rooms/<room>/run/<seat>.nudge.jsonl`.
+///
+/// The home, and why: the room's `run/` dir is already where this seat's durable facts live - its
+/// `state.json` and its mailbox `.sock` - so one reader looking for "what happened to this seat" looks in
+/// one place. The state file itself cannot hold this: `write_state` publishes the *current* state and
+/// rewrites on every publish, so a ladder of attempts would collapse into its last line. Append-only is
+/// the point: an attempt log is a history, and the difference between "attempted once and got nowhere"
+/// and "attempted three times" has to survive being read.
+pub fn nudge_log_path(state_dir: &Path, room: &str, seat: &str) -> PathBuf {
+    state_dir
+        .join("rooms")
+        .join(room)
+        .join("run")
+        .join(format!("{seat}.nudge.jsonl"))
+}
+
+/// One nudge attempt as the log records it, successful or not - one line per attempt, nothing overwritten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NudgeAttempt {
+    pub ts: String,
+    pub room: String,
+    pub seat: String,
+    /// The waiting pile this attempt belongs to (`nudge_key`), so the count is per pile.
+    pub key: String,
+    pub attempt: u32,
+    pub max_attempts: u32,
+    pub session_name: String,
+    pub qitem_ids: Vec<String>,
+    /// What became of the attempt: the agent-channel frame the seat's runner reported it relayed
+    /// (`prompt`), or the failure's own words. "Attempted" and "delivered" are different records.
+    pub outcome: String,
+}
+
+/// How far up the ladder this waiting pile has already been asked, read back from the durable log.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NudgeProgress {
+    /// The highest attempt number recorded for this pile; 0 means it has never been asked.
+    pub attempts: u32,
+    /// When the most recent attempt was recorded, when its record carried a readable stamp.
+    pub last_ts: Option<DateTime<Utc>>,
+}
+
+/// Reading the log rather than keeping a counter in memory is what makes the ladder survive a daemon
+/// restart: the durable file is the state, so a restarted daemon resumes the third attempt instead of
+/// starting a fresh first one against a seat that has already been asked twice.
+pub fn nudge_progress(state_dir: &Path, room: &str, seat: &str, key: &str) -> NudgeProgress {
+    let Ok(text) = fs::read_to_string(nudge_log_path(state_dir, room, seat)) else {
+        return NudgeProgress::default();
+    };
+    let mut progress = NudgeProgress::default();
+    for line in text.lines() {
+        // A line this build cannot read is skipped, not fatal: the log is append-only and a foreign or
+        // half-written line must not stop the ladder. It cannot weaken the bound - `attempts` only grows.
+        let Ok(record) = serde_json::from_str::<NudgeAttempt>(line) else {
+            continue;
+        };
+        if record.key != key {
+            continue;
+        }
+        progress.attempts = progress.attempts.max(record.attempt);
+        progress.last_ts = DateTime::parse_from_rfc3339(&record.ts)
+            .ok()
+            .map(|t| t.with_timezone(&Utc));
+    }
+    progress
+}
+
+/// Append one attempt record. Never truncates: the ladder's history is the point.
+fn append_nudge_attempt(state_dir: &Path, attempt: &NudgeAttempt) -> Result<(), String> {
+    let path = nudge_log_path(state_dir, &attempt.room, &attempt.seat);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("cannot create run dir: {e}"))?;
+    }
+    let mut line =
+        serde_json::to_string(attempt).map_err(|e| format!("cannot encode nudge attempt: {e}"))?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("cannot open the nudge log {}: {e}", path.display()))?;
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("cannot append to the nudge log {}: {e}", path.display()))
+}
+
+/// What the woken seat is told. It names the rows, so the agent reads the pile off the rail itself and
+/// nobody has to guess which work the wake was about.
+pub fn nudge_text(room: &str, seat: &str, qitem_ids: &[String], attempt: u32) -> String {
+    format!(
+        "[rail] {seat}: {} row(s) on room {room}'s rail are waiting for you: {}. Read each with \
+         `4genteam room queue show <qitem_id>` and claim what you will do. (wake {attempt}/{MAX_NUDGE_ATTEMPTS})",
+        qitem_ids.len(),
+        qitem_ids.join(", ")
+    )
+}
+
+/// One nudge: ask a seat's runner to hand its agent the prompt that its waiting rail work is about.
+///
+/// The frame is the runner's own `text` verb - the frame `send_to_seat` already speaks - which
+/// `relay_frame` turns into the agent's `prompt` frame on the child channel. That channel is why this is
+/// the right mechanism and `pty::TerminalManager::send_text` is not: `send_text` pastes into the tmux
+/// pane, and the pane's input is the runner's own prompt reader (the pane's keystrokes are the human at
+/// the terminal), so a nudge sent that way is typed in the runner's name into whatever the pane's input
+/// happens to be - it does not carry the rail's identity to the agent, which is what the seat needs to
+/// act on it.
+///
+/// `want_reply` is true on purpose: the recorded outcome is the runner's own answer that it relayed the
+/// frame, never "a write returned". A write into a socket no runner is reading is not a delivery, and the
+/// attempt log must not confuse the two.
+pub fn nudge_seat(
+    state_dir: &Path,
+    room: &str,
+    seat: &str,
+    session_name: &str,
+    qitem_ids: &[String],
+    attempt: u32,
+) -> Result<serde_json::Value, String> {
+    let text = nudge_text(room, seat, qitem_ids, attempt);
+    let id = format!("nudge-{}-{attempt}", std::process::id());
+    let outcome = send_to_seat(
+        state_dir,
+        session_name,
+        &serde_json::json!({"id": id, "type": "text", "text": text}),
+        None,
+        true,
+    );
+    let record = NudgeAttempt {
+        ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        room: room.to_string(),
+        seat: seat.to_string(),
+        key: nudge_key(seat, qitem_ids),
+        attempt,
+        max_attempts: MAX_NUDGE_ATTEMPTS,
+        session_name: session_name.to_string(),
+        qitem_ids: qitem_ids.to_vec(),
+        outcome: match &outcome {
+            // `frame::reply` wraps the runner's answer as `{"id":..,"ok":true,"data":{...}}`, and
+            // `relay_frame`'s `text` arm answers `{"relayed":"prompt"}` - the agent-channel frame the
+            // prompt became. That word is what the log records.
+            Ok(answer) => answer
+                .pointer("/data/relayed")
+                .and_then(|v| v.as_str())
+                .unwrap_or("relayed")
+                .to_string(),
+            Err(e) => e.clone(),
+        },
+    };
+    // Written whether the delivery worked or not: an attempt the daemon made and did not record would be
+    // read afterwards as an attempt it never made, and the ladder's bound would be a lie.
+    append_nudge_attempt(state_dir, &record)?;
+    outcome
+}
+
 /// The seat's own state, written where the daemon and `ps` can read it (the reference writes a
 /// `runner-state.json` beside the session for the same reason, `pi-runner-protocol.js:26`).
 pub fn write_state(state_path: &Path, state: &str, classification: &str, attempts: u32) -> Result<(), String> {
@@ -1291,5 +1472,109 @@ mod tests {
         // no temp file survives the publish
         assert!(!path.with_extension("json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nudge_attempts_are_bounded_and_back_off() {
+        assert_eq!(nudge_delay(1), Duration::from_secs(1));
+        assert_eq!(nudge_delay(2), Duration::from_secs(2));
+        assert_eq!(nudge_delay(3), Duration::from_secs(4));
+        // Past the bound the schedule stops growing, exactly as `resume_delay` does: a bounded ladder must
+        // not become a busy loop.
+        assert_eq!(nudge_delay(4), Duration::from_secs(4));
+        assert_eq!(nudge_delay(MAX_NUDGE_ATTEMPTS + 5), Duration::from_secs(4));
+    }
+
+    /// The pile is identified by which rows are waiting, order-insensitively: the same rows listed in a
+    /// different order are the same nudge (the ladder must not reset on a re-order), and a different pile
+    /// is a different nudge (the ladder must reset when the work changes).
+    #[test]
+    fn a_nudge_key_is_the_seat_and_its_waiting_rows() {
+        let one = vec!["qitem-b".to_string(), "qitem-a".to_string()];
+        let reordered = vec!["qitem-a".to_string(), "qitem-b".to_string()];
+        assert_eq!(nudge_key("dev", &one), nudge_key("dev", &reordered));
+        assert_ne!(nudge_key("dev", &one), nudge_key("dev", &["qitem-a".to_string()]));
+        assert_ne!(nudge_key("dev", &one), nudge_key("reviewer", &one));
+    }
+
+    /// The log is what the ladder reads, so it has to round-trip: one line per attempt, the count and the
+    /// latest stamp for *this pile* coming back, and another pile's attempts not counting towards it.
+    #[test]
+    fn the_nudge_log_is_the_ladders_durable_state() {
+        let dir = std::env::temp_dir().join(format!("runner-nudge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ids = vec!["qitem-a".to_string()];
+        let key = nudge_key("dev", &ids);
+
+        // Nothing recorded yet: the pile has never been asked.
+        assert_eq!(nudge_progress(&dir, "demo", "dev", &key), NudgeProgress::default());
+
+        for attempt in 1..=2u32 {
+            append_nudge_attempt(
+                &dir,
+                &NudgeAttempt {
+                    ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    room: "demo".into(),
+                    seat: "dev".into(),
+                    key: key.clone(),
+                    attempt,
+                    max_attempts: MAX_NUDGE_ATTEMPTS,
+                    session_name: "agenthub--demo--dev".into(),
+                    qitem_ids: ids.clone(),
+                    outcome: "prompt".into(),
+                },
+            )
+            .expect("append");
+        }
+        // A different pile's attempt is durable too, but it is not this ladder's progress.
+        append_nudge_attempt(
+            &dir,
+            &NudgeAttempt {
+                ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                room: "demo".into(),
+                seat: "dev".into(),
+                key: nudge_key("dev", &["qitem-z".to_string()]),
+                attempt: 3,
+                max_attempts: MAX_NUDGE_ATTEMPTS,
+                session_name: "agenthub--demo--dev".into(),
+                qitem_ids: vec!["qitem-z".to_string()],
+                outcome: "prompt".into(),
+            },
+        )
+        .expect("append");
+
+        let progress = nudge_progress(&dir, "demo", "dev", &key);
+        assert_eq!(progress.attempts, 2, "two attempts for this pile");
+        assert!(progress.last_ts.is_some(), "the latest stamp is readable");
+
+        // Append-only: three lines on disk, nothing overwritten.
+        let log = std::fs::read_to_string(nudge_log_path(&dir, "demo", "dev")).expect("log");
+        assert_eq!(log.lines().count(), 3);
+        assert!(log.contains("\"attempt\":1") && log.contains("\"attempt\":3"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Item 5 of the change, pinned: the nudge is the runner's own `text` frame on the *agent channel*, and
+    /// what the agent receives is a `prompt` on the child's stdin - not a tmux `send-keys`. Fails without
+    /// the wiring: an empty channel here is a nudge that reached nobody.
+    #[test]
+    fn a_text_frame_becomes_the_agents_prompt_on_the_child_channel() {
+        let (to_child, from_threads) = mpsc::channel::<String>();
+        let target = RunnerTarget::parse("demo/dev").unwrap();
+        let answer = relay_frame(
+            &serde_json::json!({"id": "nudge-1", "type": "text", "text": "you have work waiting"}),
+            "text",
+            "nudge-1",
+            &to_child,
+            Path::new("/nonexistent/dev.state.json"),
+            &target,
+        )
+        .expect("a text frame is relayed");
+        assert_eq!(answer, serde_json::json!({"relayed": "prompt"}));
+
+        let line = from_threads.recv_timeout(Duration::from_secs(1)).expect("a frame reached the agent");
+        let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
+        assert_eq!(frame["type"], "prompt");
+        assert_eq!(frame["message"], "you have work waiting");
     }
 }

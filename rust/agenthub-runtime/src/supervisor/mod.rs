@@ -1,8 +1,8 @@
 use crate::hooks::{HookBus, SeatEvent};
 use crate::pty::TerminalManager;
-use crate::queue::QueueStore;
+use crate::queue::{ListFilter, QueueStore};
 use crate::types::*;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};
 use std::collections::HashMap;
 use std::fs;
@@ -47,6 +47,62 @@ impl std::ops::Deref for RoomQueueStore<'_> {
             .get(&self.room)
             .expect("the store is inserted for this room before the borrow is handed out")
     }
+}
+
+/// The one read of a seat's own state file and the room's rail that both the status row and the nudge
+/// pass are built from (see `RoomSupervisor::seat_facts`).
+struct SeatFacts {
+    /// The seat's tmux session is up.
+    alive: bool,
+    /// The runner's own word for what it is doing: `idle`, `retrying`, `needs_input`, `blocked`, or a
+    /// death (`agent_exited`, …). `None` when the seat published nothing.
+    published_state: Option<String>,
+    /// The seat's freshness stamp: the state file's `updated_at`.
+    last_active: Option<DateTime<Utc>>,
+    /// The active rail rows addressed to this seat, by qitem id.
+    waiting_qitem_ids: Vec<String>,
+}
+
+/// One seat the periodic nudge pass should act on, and the rows it is being woken for.
+pub struct PendingNudge {
+    pub room: String,
+    pub seat: String,
+    pub session_name: String,
+    pub qitem_ids: Vec<String>,
+}
+
+/// The names a rail row might use to address one seat, because the rail's rows have been written with
+/// more than one spelling and a spelling the join missed reads as "nothing waiting" - the exact lie the
+/// alert exists to prevent.
+///
+/// The three that exist in this tree's world: the session name this runtime derives
+/// (`agenthub--<room>--<seat>`, the same one `SendTextToSeat` and the pane's `AGENTHUB_SESSION_NAME` use),
+/// the bare seat key (what the design's own room recipe named and what a row written by hand usually
+/// says), and the OpenRig session name the live rig's rows carry (`<rig>-<seat>@<rig>`, where this
+/// runtime's room IS the rig name). A row written by a seat on the live rail is addressed with the third.
+fn addressed_names(room: &str, session: &str, seat: &str) -> [String; 3] {
+    [
+        session.to_string(),
+        seat.to_string(),
+        format!("{room}-{seat}@{room}"),
+    ]
+}
+
+/// The alert rule, on the facts alone: a seat that is up with active rows waiting for it carries one.
+///
+/// It is a free function so the rule can be tested without a tmux server - the join is what is being
+/// pinned here, not the probes that feed it.
+fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
+    if !facts.alive || facts.waiting_qitem_ids.is_empty() {
+        return None;
+    }
+    Some(SeatAlert {
+        kind: "seat_up_with_queued_work".to_string(),
+        quiet_seconds: facts
+            .last_active
+            .map(|t| (Utc::now() - t).num_seconds().max(0)),
+        waiting_qitem_ids: facts.waiting_qitem_ids.clone(),
+    })
 }
 
 impl RoomSupervisor {
@@ -183,6 +239,9 @@ impl RoomSupervisor {
                     .to_string_lossy()
                     .to_string(),
             ),
+            // A seat that never came up has nothing waiting *for it* - it is not the seat the rail's rows
+            // name - so there is no join to report.
+            alert: None,
         }
     }
 
@@ -305,6 +364,9 @@ impl RoomSupervisor {
             token_estimate: 0,
             last_active: Some(Utc::now()),
             transcript_path: Some(transcript_path.to_string_lossy().to_string()),
+            // A seat that just launched has not had time to be owed anything; the join is read when the
+            // status is read, not remembered from the launch.
+            alert: None,
         };
 
         // Emit Hook event
@@ -371,25 +433,26 @@ impl RoomSupervisor {
         let mut statuses = Vec::new();
         for seat in spec.seats {
             let session = Self::session_name(room, &seat.seat_key);
-            let alive = TerminalManager::is_session_alive(&session);
-            let state = if alive {
+            // ONE read of the seat's own state file and one read of the rail, shared by the death reason,
+            // the freshness stamp and the alert below: the runner publishes its state and its `updated_at`
+            // in the same document, so reading it twice would be reading the same fact twice. This cannot
+            // fail (the alert is advisory), so nothing here can turn the status into an outage.
+            let facts = self.seat_facts(room, &seat.seat_key);
+            let state = if facts.alive {
                 SeatLifecycleState::Running
             } else {
                 SeatLifecycleState::Stopped
             };
+
             // The reason, because "not running" alone is exactly the shape that let a dead turn look healthy
             // (`SPEC` §4). The runner publishes the three death facts when it survives to see them; when the
             // pane's teardown kills it first, the state file still claims `idle`/`running` — so the daemon,
             // which owns this file's path too, replaces that claim with the death it can actually observe.
             let state_path = room_dir.join("run").join(format!("{}.state.json", seat.seat_key));
-            let published = fs::read_to_string(&state_path)
-                .ok()
-                .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-                .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string));
-            let detail = if alive {
+            let detail = if facts.alive {
                 None
             } else {
-                match published {
+                match facts.published_state.clone() {
                     Some(s)
                         if matches!(
                             s.as_str(),
@@ -425,11 +488,157 @@ impl RoomSupervisor {
                 detail,
                 started_at: None,
                 token_estimate: 0,
-                last_active: None,
+                last_active: facts.last_active,
                 transcript_path: Some(transcript_path.to_string_lossy().to_string()),
+                alert: alert_for(&facts),
             });
         }
         Ok(statuses)
+    }
+
+    /// Everything one seat's status row is built from, read once: whether its session is up, the runner's
+    /// own last published word and freshness stamp, and the active rail rows addressed to it.
+    ///
+    /// It exists so the two readers that need this join - `get_room_status` (the human-facing alert) and
+    /// `pending_nudges` (the nudge pass) - share one implementation of it. A second copy of the join is
+    /// how a status that says "work is waiting" and a nudge pass that says "nothing to do" come to
+    /// disagree while both look right.
+    ///
+    /// It cannot fail, and that is the point: the alert is ADVISORY, so a rail that cannot be read costs
+    /// the alert and nothing else. A status that refused to answer because an advisory about a *different*
+    /// fact could not be computed would trade the freshness signal for an outage - and the seat's own
+    /// liveness and stamp are read from a local file that has nothing to do with the rail. The failure is
+    /// not swallowed silently: it is logged, and the seat carries no alert rather than a false empty one.
+    /// (`get_room_status` can still fail on the one thing it cannot answer without: an unreadable spec.)
+    fn seat_facts(&self, room: &str, seat: &str) -> SeatFacts {
+        let session = Self::session_name(room, seat);
+        let alive = TerminalManager::is_session_alive(&session);
+        let state_path = self
+            .room_dir(room)
+            .join("run")
+            .join(format!("{seat}.state.json"));
+        let published = fs::read_to_string(&state_path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+        let published_state = published
+            .as_ref()
+            .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string));
+        // The runner's `updated_at` IS the seat's freshness: it is stamped every time the seat publishes
+        // (turn ended, retry started, death seen), so it answers "when did this seat last do something".
+        // The launch instant `start_seat` records is a different fact - when the pane was created - and it
+        // was the only thing `last_active` ever held, which is why a seat that had been idle for hours read
+        // as freshly active. A missing or unparseable stamp is `None`, not a guessed time.
+        let last_active = published
+            .as_ref()
+            .and_then(|v| v.get("updated_at").and_then(|t| t.as_str()))
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc));
+
+        let waiting_qitem_ids = match self.waiting_rows(room, &session, seat) {
+            Ok(ids) => ids,
+            Err(e) => {
+                // Loud, and the row still answers: an advisory that cannot be computed is a missing
+                // advisory, never a failed status.
+                warn!("rail unreadable for {room}/{seat}; status carries no alert: {e}");
+                Vec::new()
+            }
+        };
+
+        SeatFacts {
+            alive,
+            published_state,
+            last_active,
+            waiting_qitem_ids,
+        }
+    }
+
+    /// The active rows the room's rail is holding for one seat, by qitem id.
+    ///
+    /// The rail's rows are written by the client's `room queue` verbs, whose `--to` is a free session
+    /// string, and the two spellings in use disagree: the live rig's `OPENRIG_SESSION_NAME` is
+    /// `<rig>-<seat>@<rig>` while this runtime derives `agenthub--<room>--<seat>`, and a row a human wrote
+    /// by hand usually names the bare seat key. All three are matched, because a spelling gap here would
+    /// be read as "nothing is waiting" - the one lie this join exists to prevent. The rows are selected
+    /// from the room's active set rather than by an equality filter in SQL for that reason; a room's
+    /// active set is small, and correctness of the match beats pushing one clause into SQLite.
+    fn waiting_rows(&self, room: &str, session: &str, seat: &str) -> Result<Vec<String>, String> {
+        let store = self.queue_store(room)?;
+        let active = store.list(&ListFilter {
+            active_only: true,
+            ..Default::default()
+        })?;
+        let names = addressed_names(room, session, seat);
+        Ok(active
+            .into_iter()
+            .filter(|row| names.iter().any(|name| name == &row.destination_session))
+            .map(|row| row.qitem_id)
+            .collect())
+    }
+
+    /// Every seat the periodic nudge pass should act on: it is up, the rail is holding active rows for it,
+    /// and its runner's own state file says `idle` - the runner's word for "no turn is in flight".
+    ///
+    /// The rooms are read from disk rather than from `active_rooms`, and that is the load-bearing choice:
+    /// the rail is disk-scoped (a queue verb answers for any room directory), and a daemon that has just
+    /// restarted owns no active room while its seats are still up in tmux with rows waiting for them.
+    /// Reading the disk is what makes the nudge survive a daemon restart; `active_rooms` would make it a
+    /// one-shot that dies with the process that started the room.
+    pub fn pending_nudges(&self) -> Vec<PendingNudge> {
+        let rooms_dir = self.base_state_dir.join("rooms");
+        let mut out = Vec::new();
+        let Ok(entries) = fs::read_dir(&rooms_dir) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let room = entry.file_name().to_string_lossy().to_string();
+            // A room whose spec or rail cannot be read is skipped, not guessed at: this pass only *acts*,
+            // and an action taken on an unread room would be an action on unknown facts.
+            let Ok(statuses) = self.get_room_status(&room) else {
+                continue;
+            };
+            for status in statuses {
+                if status.state != SeatLifecycleState::Running {
+                    continue;
+                }
+                let Some(alert) = status.alert else {
+                    continue;
+                };
+                if !self.seat_is_idle(&room, &status.seat) {
+                    continue;
+                }
+                out.push(PendingNudge {
+                    room: room.clone(),
+                    seat: status.seat,
+                    session_name: status.session_name,
+                    qitem_ids: alert.waiting_qitem_ids,
+                });
+            }
+        }
+        out
+    }
+
+    /// Whether a seat's own state file says `idle`: exactly the runner's word for "no turn in flight".
+    ///
+    /// Only that word counts. A seat that published `retrying`, `needs_input` or `blocked` is occupied or
+    /// stuck, and a nudge would either collide with a live turn or talk past a seat that already gave up;
+    /// a seat that published nothing (no state file) has not said it is ready to hear one, so it is not
+    /// `idle` either. This is the one reader that looks at the state file a second time - once here and
+    /// once inside `get_room_status`'s join - and it is deliberate: the idle gate is a *nudge* rule, not a
+    /// status rule (the alert stands whether the seat is mid-turn or quiet), so it must not be folded into
+    /// the status row and change what the status says.
+    fn seat_is_idle(&self, room: &str, seat: &str) -> bool {
+        let path = self
+            .room_dir(room)
+            .join("run")
+            .join(format!("{seat}.state.json"));
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string))
+            .is_some_and(|state| state == "idle")
     }
 
     /// Generate the exact `whoami` payload for an active seat session (Rule 1 parity).
@@ -547,5 +756,292 @@ impl RoomSupervisor {
         }
 
         Err("seat identity could not be resolved from active rooms".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::{CloseInput, CreateInput};
+
+    /// A scratch state dir under the system temp dir, unique per test, removed by the caller.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "agenthub-supervisor-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    /// A supervisor needs a `HookBus`, whose constructor spawns its audit task, so these tests run on a
+    /// tokio runtime (`#[tokio::test]`) even where nothing is awaited.
+    fn supervisor_at(state_dir: &Path) -> RoomSupervisor {
+        RoomSupervisor::new(state_dir, HookBus::new(state_dir.join("audit"), 8))
+    }
+
+    fn write_spec(state_dir: &Path, room: &str, seat: &str) {
+        let room_dir = state_dir.join("rooms").join(room);
+        fs::create_dir_all(&room_dir).expect("room dir");
+        let spec = serde_json::json!({
+            "room": room,
+            "seats": [{"seat_key": seat, "seat_type": "developer", "runtime": "omp"}],
+            "links": []
+        });
+        fs::write(
+            room_dir.join("spec.json"),
+            serde_json::to_string_pretty(&spec).unwrap(),
+        )
+        .expect("spec");
+    }
+
+    /// A seat key no tmux session on this host can bear. The session name is `agenthub--<room>--<seat>`,
+    /// and a live scratch session (or a developer's own forcing run) with the same name would make a
+    /// test's "not running" seat read as RUNNING - measured: a leftover `agenthub--demo--dev` from the
+    /// forcing run turned two of these tests red. The process id in the key makes the session name unique
+    /// to this test binary, so no session can exist unless this test created one (and it does not).
+    fn seat_key(tag: &str) -> String {
+        format!("dev-{tag}-{}", std::process::id())
+    }
+
+    fn write_state_file(state_dir: &Path, room: &str, seat: &str, state: &str, updated_at: &str) {
+        let run_dir = state_dir.join("rooms").join(room).join("run");
+        fs::create_dir_all(&run_dir).expect("run dir");
+        fs::write(
+            run_dir.join(format!("{seat}.state.json")),
+            serde_json::json!({
+                "state": state,
+                "classification": "",
+                "resume_attempts": 0,
+                "updated_at": updated_at,
+            })
+            .to_string(),
+        )
+        .expect("state file");
+    }
+
+    /// The freshness the daemon reports is the seat's OWN (`updated_at`, the runner's stamp), not the
+    /// `None` this used to be hardcoded to and not the launch instant `start_seat` records. Fails without
+    /// the join: the assertion below reads `None` on the old code.
+    #[tokio::test]
+    async fn last_active_is_the_seats_own_freshness_stamp() {
+        let dir = scratch("last-active");
+        let seat = seat_key("last-active");
+        write_spec(&dir, "demo", &seat);
+        let stamp = "2026-10-13T20:15:30.250Z";
+        write_state_file(&dir, "demo", &seat, "idle", stamp);
+
+        let supervisor = supervisor_at(&dir);
+        let statuses = supervisor.get_room_status("demo").expect("status");
+        assert_eq!(statuses.len(), 1);
+        let expected = DateTime::parse_from_rfc3339(stamp)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(statuses[0].last_active, Some(expected));
+        // No tmux session exists in this test, so the seat is not up: `last_active` is still the seat's own
+        // stamp (it is read before the death is written), and the alert is absent, not empty.
+        assert_eq!(statuses[0].state, SeatLifecycleState::Stopped);
+        assert!(statuses[0].alert.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The join's rule, on the facts alone: up + rows waiting = an alert carrying the kind, how long the
+    /// seat has been quiet, and the rows' ids. A seat that is down, or one with nothing waiting, gets none.
+    #[test]
+    fn an_alert_needs_a_live_seat_and_waiting_rows() {
+        let quiet_for = chrono::Duration::seconds(120);
+        let last_active = Utc::now() - quiet_for;
+        let ids = vec!["qitem-b".to_string(), "qitem-a".to_string()];
+
+        let alert = alert_for(&SeatFacts {
+            alive: true,
+            published_state: Some("idle".to_string()),
+            last_active: Some(last_active),
+            waiting_qitem_ids: ids.clone(),
+        })
+        .expect("a live seat with work waiting carries an alert");
+        assert_eq!(alert.kind, "seat_up_with_queued_work");
+        assert_eq!(alert.waiting_qitem_ids, ids);
+        let quiet = alert.quiet_seconds.expect("a stamp was published, so the quiet time is known");
+        assert!((119..=121).contains(&quiet), "quiet_seconds = {quiet}");
+
+        // No stamp published: "how long quiet" is unknown, and the alert says unknown instead of a zero
+        // that would read as "just active".
+        let unknown = alert_for(&SeatFacts {
+            alive: true,
+            published_state: None,
+            last_active: None,
+            waiting_qitem_ids: vec!["qitem-c".to_string()],
+        })
+        .expect("a live seat with work waiting still gets an alert with no stamp");
+        assert_eq!(unknown.quiet_seconds, None);
+
+        // Down with work waiting: not the seat the rail can reach, so nothing to report.
+        assert!(alert_for(&SeatFacts {
+            alive: false,
+            published_state: Some("agent_exited".to_string()),
+            last_active: Some(last_active),
+            waiting_qitem_ids: ids.clone(),
+        })
+        .is_none());
+        // Up with nothing waiting: nothing to be woken for.
+        assert!(alert_for(&SeatFacts {
+            alive: true,
+            published_state: Some("idle".to_string()),
+            last_active: Some(last_active),
+            waiting_qitem_ids: Vec::new(),
+        })
+        .is_none());
+    }
+
+    /// The rail's rows have been written with more than one spelling of a seat's name, and the join has to
+    /// see all of them: a row addressed to the native session name, to the OpenRig session name, or to the
+    /// bare seat key all belong to the same seat. A spelling the join missed would read as "nothing
+    /// waiting" - the lie the alert exists to prevent.
+    #[tokio::test]
+    async fn waiting_rows_match_every_spelling_the_rail_has_used() {
+        let dir = scratch("waiting-rows");
+        let seat = seat_key("spellings");
+        write_spec(&dir, "demo", &seat);
+        let session = RoomSupervisor::session_name("demo", &seat);
+        let openrig = format!("demo-{seat}@demo");
+        let supervisor = supervisor_at(&dir);
+        let mut expected_ids = Vec::new();
+        {
+            // Scoped: `queue_store` holds the store mutex for the borrow, and `waiting_rows` takes it again.
+            let store = supervisor.queue_store("demo").expect("open the rail");
+            for (to, summary) in [
+                (session.as_str(), "native"),
+                (openrig.as_str(), "openrig"),
+                (seat.as_str(), "bare key"),
+            ] {
+                let row = store
+                    .create(CreateInput {
+                        source_session: "lead".into(),
+                        destination_session: to.into(),
+                        summary: summary.into(),
+                        ..Default::default()
+                    })
+                    .expect("create");
+                expected_ids.push(row.qitem_id);
+            }
+            // A row for somebody else, and a row for this seat that is closed: neither is waiting work.
+            store
+                .create(CreateInput {
+                    source_session: "lead".into(),
+                    destination_session: "someone-else".into(),
+                    summary: "not ours".into(),
+                    ..Default::default()
+                })
+                .expect("create");
+            let closed = store
+                .create(CreateInput {
+                    source_session: "lead".into(),
+                    destination_session: seat.clone(),
+                    summary: "already done".into(),
+                    ..Default::default()
+                })
+                .expect("create");
+            store
+                .close(CloseInput {
+                    qitem_id: closed.qitem_id,
+                    actor_session: seat.clone(),
+                    closure_reason: "no-follow-on".into(),
+                    closure_target: None,
+                    transition_note: "handled".into(),
+                })
+                .expect("close");
+        }
+
+        let waiting = supervisor
+            .waiting_rows("demo", &session, &seat)
+            .expect("the rail is readable");
+        assert_eq!(waiting.len(), 3, "waiting = {waiting:?}");
+        for id in expected_ids {
+            assert!(waiting.contains(&id), "{id} missing from {waiting:?}");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Only the runner's own `idle` earns a nudge: `retrying`/`needs_input`/`blocked` are occupied or
+    /// stuck, a death is gone, and no state file has not said the seat is ready.
+    #[tokio::test]
+    async fn only_the_runners_own_idle_word_earns_a_nudge() {
+        let dir = scratch("idle-gate");
+        let seat = seat_key("idle-gate");
+        write_spec(&dir, "demo", &seat);
+        let supervisor = supervisor_at(&dir);
+
+        assert!(
+            !supervisor.seat_is_idle("demo", &seat),
+            "a seat that published nothing has not said it is ready"
+        );
+        write_state_file(&dir, "demo", &seat, "idle", "2026-10-13T20:15:30.250Z");
+        assert!(supervisor.seat_is_idle("demo", &seat));
+        for state in ["retrying", "needs_input", "blocked", "agent_exited"] {
+            write_state_file(&dir, "demo", &seat, state, "2026-10-13T20:15:30.250Z");
+            assert!(!supervisor.seat_is_idle("demo", &seat), "{state} is not idle");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Pin 2 of the ordering (the seat's own requirement): the alert is ADVISORY, so a rail that cannot be
+    /// read costs the alert and NOTHING else. The status must still answer every seat it knows with its
+    /// liveness and freshness - a status that failed because an advisory about a different fact could not
+    /// be computed would trade the freshness signal for an outage. The room here holds one seat and a
+    /// `queue.sqlite` that is a *directory*, so opening the rail fails for real (not by mocking).
+    #[tokio::test]
+    async fn an_unreadable_rail_costs_the_alert_and_not_the_status() {
+        let dir = scratch("rail-unreadable");
+        let seat = seat_key("rail-unreadable");
+        write_spec(&dir, "demo", &seat);
+        write_state_file(&dir, "demo", &seat, "idle", "2026-10-13T20:15:30.250Z");
+        // A directory where the store's file must be: `rusqlite` cannot open it, so `waiting_rows` errors.
+        fs::create_dir_all(dir.join("rooms/demo/queue.sqlite")).expect("blocking path");
+
+        let supervisor = supervisor_at(&dir);
+        let statuses = supervisor
+            .get_room_status("demo")
+            .expect("status must answer even when the rail cannot be read");
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].seat, seat);
+        // The freshness stamp is a fact about a local file that has nothing to do with the rail, so it is
+        // still reported...
+        assert_eq!(
+            statuses[0].last_active,
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-13T20:15:30.250Z")
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
+        // ...and the missing advisory is absent, not a fabricated empty one.
+        assert!(statuses[0].alert.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The nudge pass enumerates the rooms that are on disk. With no tmux session behind any seat, no seat
+    /// is up and nothing is nudged - which is also what makes a daemon restart safe to run this pass.
+    #[tokio::test]
+    async fn the_nudge_pass_finds_no_seat_in_a_room_that_is_not_up() {
+        let dir = scratch("pending-nudges");
+        let seat = seat_key("pending-nudges");
+        write_spec(&dir, "demo", &seat);
+        write_state_file(&dir, "demo", &seat, "idle", "2026-10-13T20:15:30.250Z");
+        let supervisor = supervisor_at(&dir);
+        {
+            let store = supervisor.queue_store("demo").expect("open the rail");
+            store
+                .create(CreateInput {
+                    source_session: "lead".into(),
+                    destination_session: seat.clone(),
+                    summary: "waiting work".into(),
+                    ..Default::default()
+                })
+                .expect("create");
+        }
+        assert!(supervisor.pending_nudges().is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 }

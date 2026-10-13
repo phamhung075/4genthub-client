@@ -1,12 +1,14 @@
 use crate::pty::TerminalManager;
 use crate::supervisor::RoomSupervisor;
 use crate::types::*;
+use chrono::Utc;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub struct IpcServer {
     socket_path: PathBuf,
@@ -41,18 +43,51 @@ impl IpcServer {
 
         info!("agenthub-runtime IPC server listening at {}", self.socket_path.display());
 
+        // The daemon's one piece of periodic work. It is spawned here because this is where the daemon
+        // owns its long-lived tasks (this accept loop and one task per client), and it is stopped through
+        // the same shutdown that stops the accept loop - so the daemon never returns while a task still
+        // holds the supervisor and can write into its state dir.
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let nudge = tokio::spawn(nudge_loop(Arc::clone(&self.supervisor), shutdown_rx));
+
+        let result = self.accept_until_shutdown(&listener).await;
+
+        let _ = shutdown_tx.send(true);
+        let _ = nudge.await;
+        let _ = fs::remove_file(&self.socket_path);
+        result
+    }
+
+    /// The accept loop, and the two signals that end it: SIGINT (the operator's Ctrl-C) and SIGTERM (how a
+    /// supervisor, or a plain `kill`, stops a daemon). Both mean "the daemon is going", and both have to
+    /// stop the nudge loop too - which is why the shutdown lives here rather than in `main`.
+    async fn accept_until_shutdown(&self, listener: &UnixListener) -> Result<(), String> {
+        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .map_err(|e| format!("cannot listen for SIGTERM: {e}"))?;
+        let ctrl_c = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c);
         loop {
-            match listener.accept().await {
-                Ok((stream, _)) => {
-                    let supervisor = Arc::clone(&self.supervisor);
-                    tokio::spawn(async move {
-                        if let Err(e) = Self::handle_client(stream, supervisor).await {
-                            error!("ipc client error: {e}");
-                        }
-                    });
+            tokio::select! {
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _)) => {
+                        let supervisor = Arc::clone(&self.supervisor);
+                        tokio::spawn(async move {
+                            if let Err(e) = Self::handle_client(stream, supervisor).await {
+                                error!("ipc client error: {e}");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!("listener accept error: {e}");
+                    }
+                },
+                _ = &mut ctrl_c => {
+                    info!("SIGINT: stopping the daemon");
+                    return Ok(());
                 }
-                Err(e) => {
-                    error!("listener accept error: {e}");
+                _ = terminate.recv() => {
+                    info!("SIGTERM: stopping the daemon");
+                    return Ok(());
                 }
             }
         }
@@ -211,6 +246,73 @@ impl IpcServer {
                 },
                 Err(e) => IpcResponse::err(e),
             },
+        }
+    }
+}
+/// How often the daemon looks for a seat that is up with rail work waiting and has not been woken. Short
+/// enough that a row handed to an idle seat is answered within seconds; long enough that a pass (a tmux
+/// probe and a rail read per seat) is not a spin.
+const NUDGE_POLL_INTERVAL_SECS: u64 = 2;
+
+/// The daemon's periodic nudge pass, until the shutdown it was handed says the daemon is going.
+///
+/// A pass shells out (tmux), opens SQLite and writes files, so it runs on the blocking pool rather than
+/// stalling the accept loop's runtime.
+async fn nudge_loop(supervisor: Arc<RoomSupervisor>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+    loop {
+        tokio::select! {
+            // Any change is the shutdown (`true`), and a dropped sender means the daemon is going too:
+            // both end the loop, rather than leaving a task that would keep nudging a daemon that no
+            // longer exists.
+            _ = shutdown.changed() => return,
+            _ = tokio::time::sleep(Duration::from_secs(NUDGE_POLL_INTERVAL_SECS)) => {}
+        }
+        let supervisor = Arc::clone(&supervisor);
+        let _ = tokio::task::spawn_blocking(move || nudge_pass(&supervisor)).await;
+    }
+}
+
+/// One pass: for every seat the rail is holding work for whose runner says it is idle, deliver the nudge
+/// once - through the seat's runner mailbox, the channel the agent actually reads - and record the
+/// attempt. The ladder is bounded and its state is the durable attempt log, so a restart resumes the same
+/// ladder instead of starting a fresh one against a seat that has already been asked twice.
+fn nudge_pass(supervisor: &RoomSupervisor) {
+    let state_dir = supervisor.state_dir();
+    for pending in supervisor.pending_nudges() {
+        let key = crate::runner::nudge_key(&pending.seat, &pending.qitem_ids);
+        let progress = crate::runner::nudge_progress(state_dir, &pending.room, &pending.seat, &key);
+        if progress.attempts >= crate::runner::MAX_NUDGE_ATTEMPTS {
+            // Asked the whole ladder and the work is still there. The alert on the room status is the
+            // signal that remains, and it stays on.
+            continue;
+        }
+        let attempt = progress.attempts + 1;
+        if let Some(last) = progress.last_ts {
+            let waited = Utc::now().signed_duration_since(last).num_seconds().max(0) as u64;
+            if waited < crate::runner::nudge_delay(attempt).as_secs() {
+                continue;
+            }
+        }
+        match crate::runner::nudge_seat(
+            state_dir,
+            &pending.room,
+            &pending.seat,
+            &pending.session_name,
+            &pending.qitem_ids,
+            attempt,
+        ) {
+            Ok(answer) => info!(
+                "nudged {}/{} (attempt {attempt}/{}): {answer}",
+                pending.room,
+                pending.seat,
+                crate::runner::MAX_NUDGE_ATTEMPTS
+            ),
+            Err(e) => warn!(
+                "nudge for {}/{} (attempt {attempt}/{}) was attempted and recorded but not delivered: {e}",
+                pending.room,
+                pending.seat,
+                crate::runner::MAX_NUDGE_ATTEMPTS
+            ),
         }
     }
 }
