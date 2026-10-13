@@ -204,6 +204,8 @@ func writeRoomDefinition(t *testing.T, room string) string {
 
 // A definition that names a different room is a caller error, and it is reported BEFORE the machine is
 // reached: `up other --team DIR` must not start a daemon or touch a seat on the way to saying so.
+//
+// Its code is 3, not the CLI-wide ExitUsage (2), because 2 is a PARTIAL START for this verb (design §2.5).
 func TestUpRefusesADefinitionThatNamesAnotherRoom(t *testing.T) {
 	restoreAll(t)
 	var started []string
@@ -216,8 +218,8 @@ func TestUpRefusesADefinitionThatNamesAnotherRoom(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{},
 		[]string{"other-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut)
-	if code != clientcmd.ExitUsage {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
+	if code != clientcmd.ExitRoomRefused {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, errOut.String())
 	}
 	if len(started) != 0 {
 		t.Errorf("a wrong room name reached the machine: %v", started)
@@ -408,16 +410,23 @@ func TestCompactNamesTheRowWhenTheSupervisorIsNotRunning(t *testing.T) {
 
 // TestEveryLifecycleVerbRequiresARig: the Python defaulted to a rig of the owner's own team. There is no
 // such default now, so an omitted name is a usage error that names the verb and the argument.
+//
+// `up` is the ONE exception to the code, not to the rule: its usage failures are 3, because 2 is a PARTIAL
+// START for that verb (design §2.5) and one number cannot mean both.
 func TestEveryLifecycleVerbRequiresARig(t *testing.T) {
 	for _, name := range []string{"up", "compact", "stop", "status", "log"} {
 		for _, command := range Commands() {
 			if command.Name() != name {
 				continue
 			}
+			want := clientcmd.ExitUsage
+			if name == "up" {
+				want = clientcmd.ExitRoomRefused
+			}
 			var out, errOut bytes.Buffer
 			code := command.Run(context.Background(), &clientcmd.Rig{}, nil, &out, &errOut)
-			if code != clientcmd.ExitUsage {
-				t.Errorf("%s with no rig: exit %d, want %d", name, code, clientcmd.ExitUsage)
+			if code != want {
+				t.Errorf("%s with no rig: exit %d, want %d", name, code, want)
 			}
 			if !strings.Contains(errOut.String(), "no default rig") {
 				t.Errorf("%s with no rig: stderr = %q, want the required-rig rule", name, errOut.String())
@@ -488,5 +497,75 @@ func TestCompactRunRequiresARig(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "no default rig") {
 		t.Errorf("the refusal did not state the rule: %q", errOut.String())
+	}
+}
+
+// unreadableRoom is a failed room reading, without pulling an error package into this test.
+type unreadableRoom struct{}
+
+func (unreadableRoom) Error() string { return "the daemon does not know this room" }
+
+// TestSeatStartPlan pins the check-then-start decision, and the stake is the runtime's own semantics:
+// StartRoom KILLS AND RE-CREATES a session it finds running (pty::launch_session), so "send the whole spec"
+// and "start this one seat" differ by whether a second `up` is a no-op or a room of live agents is cycled.
+// The design's observable - a second `up` does NOT move started_at or a pane pid - is this table.
+func TestSeatStartPlan(t *testing.T) {
+	running := func(seat string) clientruntime.SeatStatus {
+		return clientruntime.SeatStatus{Seat: seat, State: "running"}
+	}
+	stopped := func(seat string) clientruntime.SeatStatus {
+		return clientruntime.SeatStatus{Seat: seat, State: "stopped"}
+	}
+
+	for _, tc := range []struct {
+		name      string
+		reported  []clientruntime.SeatStatus
+		readErr   error
+		wantStart []string
+		wantSend  bool
+	}{
+		{
+			name:     "a room the daemon does not know: the definition is the only source of its seats",
+			readErr:  unreadableRoom{},
+			wantSend: true,
+		},
+		{
+			name:     "a reading with no seats at all: same, the definition starts the room",
+			reported: nil,
+			wantSend: true,
+		},
+		{
+			name:     "every seat stopped: nothing is running, so nothing can be cycled",
+			reported: []clientruntime.SeatStatus{stopped("a"), stopped("b"), stopped("c")},
+			wantSend: true,
+		},
+		{
+			name:      "every seat already running: nothing is started and nothing is sent",
+			reported:  []clientruntime.SeatStatus{running("a"), running("b"), running("c")},
+			wantStart: nil,
+			wantSend:  false,
+		},
+		{
+			name:      "one seat down: that seat only, so its running siblings are left alone",
+			reported:  []clientruntime.SeatStatus{running("a"), stopped("b"), running("c")},
+			wantStart: []string{"b"},
+			wantSend:  false,
+		},
+		{
+			name:      "the runtime spells the state its own way: Running still counts as up",
+			reported:  []clientruntime.SeatStatus{{Seat: "a", State: "Running"}, stopped("b")},
+			wantStart: []string{"b"},
+			wantSend:  false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start, send := seatStartPlan(tc.reported, tc.readErr)
+			if send != tc.wantSend {
+				t.Errorf("sendSpec = %v, want %v", send, tc.wantSend)
+			}
+			if strings.Join(start, ",") != strings.Join(tc.wantStart, ",") {
+				t.Errorf("restart = %v, want %v", start, tc.wantStart)
+			}
+		})
 	}
 }

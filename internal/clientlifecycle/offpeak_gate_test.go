@@ -147,6 +147,9 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 // TestUpRefusesAFlagItDoesNotTake: the gate has ONE flag, so an argument this verb does not know is a
 // caller error naming it - whether it sits where the rig name goes or after it, because the failure
 // shape this replaced was a verb that quietly ignored the extra argument.
+//
+// The code is 3, not the CLI-wide ExitUsage (2): for this verb 2 is a PARTIAL START - the daemon started
+// but a seat did not (design §2.5) - so the two numbers must not mean the same thing.
 func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 	restoreAll(t)
 	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
@@ -159,8 +162,8 @@ func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 	} {
 		var out, errOut bytes.Buffer
 		code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, args, &out, &errOut)
-		if code != clientcmd.ExitUsage {
-			t.Fatalf("%v: exit %d, want %d (stderr %q)", args, code, clientcmd.ExitUsage, errOut.String())
+		if code != clientcmd.ExitRoomRefused {
+			t.Fatalf("%v: exit %d, want %d (stderr %q)", args, code, clientcmd.ExitRoomRefused, errOut.String())
 		}
 		if !strings.Contains(errOut.String(), "--any-time") && strings.Contains(strings.Join(args, " "), "--any-time") {
 			t.Errorf("%v: the refusal did not name the argument: %q", args, errOut.String())

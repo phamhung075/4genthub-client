@@ -3,6 +3,40 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-13 — `up` reads the room before it starts it, and the client gains a room-scoped verb group
+
+### Added
+- `4genteam room status|stop|reseat|compact` (`internal/clientroom/room.go`): the room-scoped frame over the runtime's IPC.
+  Every sub-verb prints the pair it ran against (`room: <room>@<state-dir> socket: <socket>`), because neither is resolved
+  implicitly. `stop` is `StopRoom` alone — no tmux, no rigd, no bridge, no `~/.openrig` — and leaves the room's directory in
+  place so the room can be started again. `reseat` is `StopSeat` then `RestartSeat`, in that order. `compact` asks the
+  runtime once per RUNNING seat and refuses a stopped one by name rather than reporting a compact that did not happen; a
+  runtime refusal is repeated in the runtime's own words. Both refusals exit 2.
+- The room contract's exit codes in `internal/clientcmd`: `ExitPartialStart` (2) for "the daemon started but a seat did
+  not", `ExitRoomRefused` (3) for a usage error or a room the daemon does not know. They share `ExitUsage`'s and
+  `ExitUnavailable`'s values deliberately, and are named so no room verb borrows a name that means something else.
+
+### Changed
+- `up` is room-scoped: `upCommand.NeedsRig` is false, so the dispatcher hands it a nil rig — the room is the positional and
+  its seats come from the LOCAL team definition, so starting them needs nothing resolved from OpenRig. The two rig reaches
+  that remain take nil (`openUIImpl` now resolves the tool itself, as the peak gate's nil branch already did).
+- `up` PRINTS the state dir and the socket before it touches the room, and CHECKS BEFORE IT STARTS: the definition is sent
+  whole only when the daemon does not know the room, or when every seat it reports is stopped — nothing running, so nothing
+  can be cycled — and otherwise only the seats that are not running are started, one `RestartSeat` each. The stake is the
+  runtime's own semantics: `StartRoom` kills and re-creates a session it finds running, so a blind start would cycle live
+  agents and move every `started_at` on a second `up`.
+- `up`'s usage and unknown-room failures exit 3, not the CLI-wide `ExitUsage` (2), because 2 is a PARTIAL START for that verb.
+
+### Verified
+- `TestSeatStartPlan` pins the check-then-start decision; three existing tests moved to the new codes; `gofmt` clean,
+  `go build ./...` and `go vet` exit 0, `go test ./internal/clientlifecycle/ -count=1` → ok.
+- Forced end-to-end through the REAL binary against a stub daemon that speaks the client's own line envelope
+  (`OPENRIG_RUNTIME_SOCKET` points at it, so nothing live is touched): a second `up` sends NO start request at all; one
+  stopped seat gets exactly one `RestartSeat` and its running siblings get none; a seat that never returns exits 2 with the
+  seat named; a room the daemon does not know gets `StartRoom` with the whole definition, exit 0 or 3 on the daemon's
+  answer; usage is 3. The room verbs' own forcing runs (including `compact` sending `ForceCompact` for exactly the running
+  seats and refusing the stopped one) are in `CHANGELOG/2026-10-13--native-client-room-up.md`.
+
 ## 2026-10-13 — the machine-wide session fallback is deleted, so no verb shells out to choose a prompt
 
 ### Changed

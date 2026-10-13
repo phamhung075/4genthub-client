@@ -35,6 +35,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
 	"github.com/phamhung075/4genthub-client/internal/clientps"
 	"github.com/phamhung075/4genthub-client/internal/clientrestore"
+	"github.com/phamhung075/4genthub-client/internal/clientroom"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientseat"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
@@ -102,6 +103,10 @@ func refuse(stderr io.Writer, name, owner string) int {
 func commands() []clientcmd.Command {
 	registry := append(clientsync.Commands(), clientbridge.Commands()...)
 	registry = append(registry, clientlifecycle.Commands()...)
+	// The room-scoped sibling of the lifecycle verbs: `room status|stop|reseat|compact` over the same IPC,
+	// with the pair (state dir + socket) printed on every run. `up` is the room's own start path and stays
+	// where it is, in clientlifecycle.
+	registry = append(registry, clientroom.Commands()...)
 	registry = append(registry, clientoffpeak.Commands()...)
 	registry = append(registry, clientseat.Commands()...)
 	registry = append(registry, clientpolicy.Commands()...)

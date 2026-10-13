@@ -168,7 +168,15 @@ func (upCommand) Name() string { return "up" }
 func (upCommand) Summary() string {
 	return "start the local stack for a rig: daemon, seats, rigd (which starts the bridge and the supervisor), UI"
 }
-func (upCommand) NeedsRig() bool { return true }
+
+// NeedsRig is FALSE, and that is this cutover's point rather than an exemption: the room is named by the
+// positional and its seats come from the LOCAL team definition, so starting them needs nothing resolved
+// from OpenRig. Requiring one is what made the native start path depend on the CLI exec it replaces.
+//
+// The dispatcher therefore hands this verb a NIL rig, and the two places that still reach for one must
+// take nil: the peak gate's fail-closed activity read already does, and openUIImpl resolves the tool
+// itself now. A third that dereferenced it would panic on every `up`.
+func (upCommand) NeedsRig() bool { return false }
 
 func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
@@ -183,6 +191,15 @@ func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdou
 				"failures are not this verb's verdict - and it must not be used to make a red go away.\n"+
 				"The acceptance invocation, so a reader re-reads the signature instead of remembering it:\n"+
 				"  4genteam up RIG --team DIR [--state-dir DIR] --room-only\n"+
+				"WHAT IT EXITS WITH (design §2.5), counting only the room's own verdict:\n"+
+				"  0  every seat of the room is running. A room that is already up is READ, not restarted: a blind\n"+
+				"     start would cycle sessions of live agents.\n"+
+				"  2  the daemon started but a seat did not - the seats that are not running are named, with the\n"+
+				"     daemon's log path to read next\n"+
+				"  3  the invocation is wrong, or the daemon will not take the definition it was handed\n"+
+				"The state dir and the socket this run talks to are printed BEFORE the room is touched: with the\n"+
+				"flags absent both are chosen from this machine's own environment, and the room's own lines are\n"+
+				"read against that pair.\n"+
 				"The DeepSeek peak gate is LOCAL (it reads the room's own node records) and runs BEFORE the seats\n"+
 				"are started: with "+clientoffpeak.ModeEnv+" on (the default) a room whose seats run a deepseek/\n"+
 				"model is refused at peak with exit 3, and "+clientoffpeak.FlagAllowPeak+" skips the check for\n"+
@@ -199,25 +216,30 @@ func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdou
 	for _, arg := range flagArgs {
 		if name := flagName(arg); name != "" && !upTakesFlag(name) {
 			fmt.Fprintf(stderr, "4genteam up: unknown argument %s. %s\n", arg, upUsage)
-			return clientcmd.ExitUsage
+			return clientcmd.ExitRoomRefused
 		}
 	}
 	if err := flags.Parse(flagArgs); err != nil {
-		return clientcmd.ExitUsage
+		return clientcmd.ExitRoomRefused
 	}
 	name, ok := requireRig("up", positional, stderr)
 	if !ok {
-		return clientcmd.ExitUsage
+		return clientcmd.ExitRoomRefused
 	}
 	if strings.TrimSpace(*teamDir) == "" {
 		fmt.Fprintf(stderr, "4genteam up: --team DIR is required - the room's seats are read from the team definition it holds, and there is no default. %s\n", upUsage)
-		return clientcmd.ExitUsage
+		return clientcmd.ExitRoomRefused
 	}
 	root, err := clientenv.ResolveStateRoot(*stateDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
-		return clientcmd.ExitUsage
+		return clientcmd.ExitRoomRefused
 	}
+	// THE PAIR IS PRINTED, NOT RESOLVED SILENTLY. The state dir decides which rooms exist and the socket
+	// decides which daemon is asked, and with the flags absent both come from this machine's own
+	// environment - so the run SAYS which daemon it is talking to instead of leaving a reader to guess, and
+	// the room's own lines below are read against it (design §1).
+	fmt.Fprintf(stdout, "state dir: %s\nsocket: %s\n", root, clientruntime.DefaultSocketPath())
 	return runUp(rig, name, *teamDir, root, allowPeak, *roomOnly, stdout, stderr)
 }
 
@@ -275,15 +297,17 @@ func runUp(rig *clientcmd.Rig, name, teamDir, stateDir string, allowPeak, roomOn
 	// The definition is read FIRST: a --team typo is a caller error, and it must be reported before a daemon
 	// is started or a seat is touched. The room name must be the room the file defines, which is the same
 	// rule clientpolicy applies to its own --rig.
+	// A bad invocation is 3 for this verb, not the CLI-wide ExitUsage (2): 2 is what a PARTIAL START is here
+	// (design §2.5), and one number cannot mean both things to a caller reading an exit code.
 	spec, err := clientteam.LoadRoomSpec(teamDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
-		return clientcmd.ExitUsage
+		return clientcmd.ExitRoomRefused
 	}
 	if spec.Room != name {
 		fmt.Fprintf(stderr, "4genteam up: %s defines the room %q, not %q - --rig must name the room the definition defines. %s\n",
 			teamDir, spec.Room, name, upUsage)
-		return clientcmd.ExitUsage
+		return clientcmd.ExitRoomRefused
 	}
 	daemonLog, err := ensureDaemon(stateDir, stderr)
 	if err != nil {
@@ -398,21 +422,40 @@ func runtimeBinary() (string, error) {
 	return "", errors.New("agenthub-runtime is not on PATH or in ~/.local/bin, and a room cannot start without it")
 }
 
-// ensureRigImpl starts the room from the definition's own spec and reads it back until every seat is
+// ensureRigImpl makes the room ready from the definition's own spec and reads it back until every seat is
 // running or RoomStartWindow runs out.
 //
-// It returns the verb's verdict: ExitOK when every seat runs, and ExitUnavailable - naming the seats that
-// are not running AND the daemon's log path - when any does not. A room that is only partly up is "this
-// machine could not do it", which is what ExitUnavailable means in every other verb here; the seats come
-// from the caller because the runtime cannot invent them (StartRoom sends the whole spec, and its by-name
-// form sends only {room, cwd}).
+// CHECK-THEN-START, and the reason is the runtime's own semantics: StartRoom kills and re-creates a session
+// of that name when it finds one running (pty::launch_session), so a blind start CYCLES a room that is
+// already up - live agents included - and every second `up` would move the started_at of a room that was
+// fine. So the room is read first; what that reading says decides the start (seatStartPlan below).
+//
+// It returns the verb's verdict (design §2.5): ExitOK when every seat runs, ExitPartialStart (2) - naming
+// the seats that are not running AND the daemon's log path - when the daemon started but a seat did not,
+// and ExitRoomRefused (3) when the daemon will not take the definition it was handed.
 func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, stdout, stderr io.Writer) int {
 	client := clientruntime.NewClient("")
-	seats, err := client.StartRoom(spec)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam up: could not start room %s: %v\n", name, err)
-		fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
-		return clientcmd.ExitUnavailable
+	reported, statusErr := client.GetRoomStatus(name)
+	restart, sendSpec := seatStartPlan(reported, statusErr)
+	seats := reported
+	if sendSpec {
+		started, err := client.StartRoom(spec)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam up: could not start room %s: %v\n", name, err)
+			fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+			return clientcmd.ExitRoomRefused
+		}
+		seats = started
+	}
+	// One seat at a time, and only the ones the reading says are not running: RestartSeat is the per-seat
+	// start (stop that seat if it runs, re-read the materialised spec, start it), so it cannot touch a
+	// running sibling.
+	for _, seat := range restart {
+		if _, err := client.RestartSeat(name, seat); err != nil {
+			fmt.Fprintf(stderr, "4genteam up: could not start %s/%s: %v\n", name, seat, err)
+			fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+			return clientcmd.ExitPartialStart
+		}
 	}
 	deadline := time.Now().Add(RoomStartWindow)
 	for {
@@ -425,7 +468,7 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 	if len(seats) == 0 {
 		fmt.Fprintf(stderr, "4genteam up: room %s reported no seats at all\n", name)
 		fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
-		return clientcmd.ExitUnavailable
+		return clientcmd.ExitPartialStart
 	}
 	var late []string
 	for _, seat := range seats {
@@ -438,9 +481,36 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 		fmt.Fprintf(stderr, "4genteam up: room %s is not up: %d of %d seat(s) are not running (%s)\n",
 			name, len(late), len(seats), strings.Join(late, ", "))
 		fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
-		return clientcmd.ExitUnavailable
+		return clientcmd.ExitPartialStart
 	}
 	return clientcmd.ExitOK
+}
+
+// seatStartPlan is the check-then-start decision, pure so it can be pinned without a daemon.
+//
+// sendSpec is true when the WHOLE definition has to be sent: either the daemon does not know the room (the
+// reading failed, or it reported no seats), or every seat it reports is stopped - in both cases nothing is
+// running, so a whole-spec start has nothing to cycle and it is also the path that materialises a room
+// whose spec.json does not exist yet.
+//
+// Otherwise the seats that are not running are returned and started one at a time. A room where every seat
+// already runs returns neither: that is the second `up`, and it must change nothing.
+func seatStartPlan(reported []clientruntime.SeatStatus, err error) (restart []string, sendSpec bool) {
+	if err != nil || len(reported) == 0 {
+		return nil, true
+	}
+	running := false
+	for _, seat := range reported {
+		if seatRunning(seat) {
+			running = true
+			continue
+		}
+		restart = append(restart, seat.Seat)
+	}
+	if !running {
+		return nil, true
+	}
+	return restart, false
 }
 
 // roomReadings is the room's current seats. A reading that fails keeps the last one the runtime gave: the
@@ -557,6 +627,17 @@ func ensureForcecompactImpl(stderr io.Writer) {
 }
 
 func openUIImpl(rig *clientcmd.Rig, stderr io.Writer) {
+	// `up` no longer needs a resolved rig (NeedsRig is false), so this is reached with nil and resolves the
+	// tool itself, exactly as the peak gate's own nil branch does. Reaching for `ui open` and failing is not
+	// this verb's verdict, so an unresolvable tool is a line of stderr and nothing else.
+	if rig == nil {
+		tool, err := clientcmd.RequireRig()
+		if err != nil {
+			fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: rig daemon status)")
+			return
+		}
+		rig = tool
+	}
 	if _, err := rig.Run(context.Background(), "ui", "open"); err != nil {
 		fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: rig daemon status)")
 	}

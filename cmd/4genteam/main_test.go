@@ -125,29 +125,33 @@ func TestBridgeIsRefusedByThePlatformMatrixBeforeItIsRefusedAsUnported(t *testin
 func TestUsageAndVersionAreTheOnlyFreeCommands(t *testing.T) {
 	rigPresent(t)
 	var out, errOut bytes.Buffer
-	if code := run(nil, &out, &errOut); code != clientcmd.ExitUsage {
-		t.Errorf("no arguments: exit code = %d, want %d", code, clientcmd.ExitUsage)
+	if code := run(nil, &out, &errOut); code != clientcmd.ExitRoomRefused {
+		t.Errorf("no arguments: exit code = %d, want %d", code, clientcmd.ExitRoomRefused)
 	}
-	// No argument means `up`, as the Python client's dispatcher did, so the failure names THAT verb and
-	// the argument it is missing - not the command list it would have printed before.
-	if !strings.Contains(errOut.String(), "4genteam up:") || !strings.Contains(errOut.String(), "no default rig") {
-		t.Errorf("no arguments: stderr = %q, want up's required-rig error", errOut.String())
+	// No argument means `up`, as the Python client's dispatcher did, so the failure names THAT verb and the
+	// argument it is missing - not the command list it would have printed before. `up` is room-scoped now
+	// (NeedsRig is false) and takes its seats from a LOCAL definition, so the argument it is missing is
+	// --team, and the room contract numbers that 3 rather than the CLI-wide ExitUsage (2).
+	if !strings.Contains(errOut.String(), "4genteam up:") || !strings.Contains(errOut.String(), "--team") {
+		t.Errorf("no arguments: stderr = %q, want up's missing-definition error", errOut.String())
 	}
 
-	// THE OTHER HALF: the same invocation on a machine that has never had OpenRig. `up` cannot run at
-	// all there, so the argument it is missing is not the useful answer - the platform matrix's one
-	// message, naming rig and what to do instead, is.
+	// THE OTHER HALF: a machine that has never had OpenRig. It is pinned on a verb that STILL needs the
+	// platform matrix (`ui`), NOT on `up`: `up` no longer consults the matrix at all, because the point of
+	// the native start path is that it needs no OpenRig process - NeedsRig is false and its seats come from
+	// a local definition. `status` is deliberately not used here either: it reports this machine's own
+	// safeguard rows and answers without a rig by design.
 	out.Reset()
 	errOut.Reset()
 	rigMissing(t)
-	if code := run(nil, &out, &errOut); code != clientcmd.ExitUnavailable {
-		t.Errorf("no arguments, no rig: exit code = %d, want %d", code, clientcmd.ExitUnavailable)
+	if code := run([]string{"ui"}, &out, &errOut); code != clientcmd.ExitUnavailable {
+		t.Errorf("ui with no rig on PATH: exit code = %d, want %d", code, clientcmd.ExitUnavailable)
 	}
-	if !strings.Contains(errOut.String(), "4genteam up:") || !strings.Contains(errOut.String(), "rig is not on PATH") {
-		t.Errorf("no arguments, no rig: stderr = %q, want the platform matrix's reason", errOut.String())
+	if !strings.Contains(errOut.String(), "rig is not on PATH") {
+		t.Errorf("ui with no rig on PATH: stderr = %q, want the platform matrix's reason", errOut.String())
 	}
 	if out.Len() != 0 {
-		t.Errorf("no arguments, no rig: stdout = %q, want nothing", out.String())
+		t.Errorf("ui with no rig on PATH: stdout = %q, want nothing", out.String())
 	}
 
 	out.Reset()
@@ -243,8 +247,12 @@ func TestHelpIsAnsweredBeforeThePlatformMatrix(t *testing.T) {
 
 	// The refusal is NOT softened: the same verbs without --help still fail on the matrix, naming the
 	// missing tool and printing nothing on stdout.
+	//
+	// `up` is NOT in this list anymore, and that is the cutover rather than a softening: it is room-scoped
+	// (NeedsRig false) and starts a room from a LOCAL definition, so it deliberately does not consult the
+	// matrix at all. TestUsageAndVersionAreTheOnlyFreeCommands pins that from the other side by using `ui`
+	// for the matrix half.
 	for _, args := range [][]string{
-		{"up", "4genthub-dev"},
 		{"ui"},
 		{"bridge"},
 		{"bridge", "once"},

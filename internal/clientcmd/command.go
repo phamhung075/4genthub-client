@@ -45,6 +45,14 @@ const (
 	// ONE PLACE A CALLER LOOKS: codes scattered per package make a bare 1 ambiguous - a caller could
 	// not tell a seat being behind from a report not being accepted.
 	ExitRemote = 1
+	// The room-scoped contract (DESIGN-room-scoped-up-and-siblings §2.5) numbers a room's failures
+	// differently from the rest of the CLI, because its acceptance has to tell a bad invocation from a room
+	// that came up short: 0 only when every seat is running, 2 when the daemon started but a seat did not,
+	// 3 for usage or a room the daemon does not know. ExitPartialStart shares ExitUsage's value and
+	// ExitRoomRefused shares ExitUnavailable's; both are named rather than borrowed, so `up` and the `room`
+	// verbs never have to use a name that means something else to say what happened.
+	ExitPartialStart = 2
+	ExitRoomRefused  = 3
 )
 
 // Rig is how a command reaches OpenRig: the resolved program and its argument prefix. On Linux, WSL2
