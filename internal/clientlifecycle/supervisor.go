@@ -344,8 +344,9 @@ func rigSay(rig, seat, text string, raw bool) {
 	}
 }
 
-// runtimeSendText is the ONE place this package types text into a seat's pane. A package-level variable rather
-// than an interface added for testing, which is the repo's rule, and it is what makes the no-envelope property
+// runtimeSendText is the ONE place ABORT types text into a seat's pane - NOT yet the package's only send: rigSay
+// ABOVE still builds its own `rig send`, and the remaining sites are converted one by one. A package-level variable
+// rather than an interface added for testing, which is the repo's rule, and it is what makes the no-envelope property
 // of rigAbort BELOW observable: the test replaces it and asserts the exact barrier text.
 var runtimeSendText = func(session, text string) error {
 	return clientruntime.NewClient("").SendText(session, text)

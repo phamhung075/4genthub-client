@@ -19,7 +19,7 @@ func TestRoomNodesNeverShellsOutToRig(t *testing.T) {
 
 	nodes, err := roomNodes("nosuchrig")
 	if err != nil && strings.Contains(err.Error(), "is not on PATH") {
-		t.Fatalf("rigNodes shelled out to `rig`: %v", err)
+		t.Fatalf("roomNodes shelled out to `rig`: %v", err)
 	}
 	if err != nil && !strings.Contains(err.Error(), "nosuchrig") {
 		t.Errorf("the failure does not name the rig it could not read: %v", err)
