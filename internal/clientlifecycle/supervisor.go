@@ -67,6 +67,10 @@ type Supervisor struct {
 	Abort      func(rig, seat string)
 	Interrupt  func(rig, seat string)
 	Log        func(text string)
+	// IdleWhy carries the sentence behind an Idle=false, so the pass that ACTS on the false can say it rather than
+	// letting "the seat is working" and "nothing ever answered" print the same way - as nothing. Empty means the
+	// refusal was a deliberate one and there is nothing to say. nil means the wiring says nothing, as in tests.
+	IdleWhy func(rig, seat string) string
 	// Nodes is the room's node records - the reading the off-peak gate decides over, the same one the
 	// gated verbs take. Getenv is the environment the gate resolves its setting and its clock from.
 	Nodes  func(rig string) []map[string]any
@@ -90,6 +94,7 @@ func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *
 	supervisor.Seats = seatlog.RigSeats
 	supervisor.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	supervisor.Idle = rigIdle
+	supervisor.IdleWhy = func(rig, seat string) string { _, why := rigIdleReason(rig, seat); return why }
 	supervisor.Say = rigSay
 	supervisor.RPCCompact = func(r, seat string) string { return supervisor.rpcCompact(r, seat) }
 	supervisor.Abort = rigAbort
@@ -198,6 +203,15 @@ func (s *Supervisor) Step() {
 				s.Interrupt(s.Rig, seat)
 				state.interrupted = now
 				s.Log(fmt.Sprintf("%s: interrupted at %s (hard limit)", seat, seatlog.Kilo(used)))
+				// AND WHY NOTHING WAS COMPACTED, on this line, where the false is ACTED ON: this branch returns every
+				// pass, so the quiet-triggered compact below never fires, and a read that answered nothing must not
+				// look the same as a seat that is simply working. Rate-limited with the interrupt above; a deliberate
+				// refusal (a busy seat) carries no sentence and says nothing here.
+				if s.IdleWhy != nil {
+					if why := s.IdleWhy(s.Rig, seat); why != "" {
+						s.Log(fmt.Sprintf("%s: not compacting at %s: %s", seat, seatlog.Kilo(used), why))
+					}
+				}
 			}
 			continue
 		}
@@ -326,17 +340,28 @@ func modTime(path string) float64 {
 // prove the seat is idle WAITS rather than racing a working turn. A check that failed open here would send /compact
 // into a running seat, which is the one outcome the gate exists to prevent.
 func rigIdle(rig, seat string) bool {
+	idle, _ := rigIdleReason(rig, seat)
+	return idle
+}
+
+// rigIdleReason is rigIdle with the sentence that says WHY a false came back, and it exists because the two kinds of
+// false are not the same fact: "the seat is working" is a healthy answer, while "nothing ever answered" is this box's
+// actual state - on the compaction path the not-idle branch is taken EVERY pass (`:196`, rate-limited, interrupt and
+// continue), so the quiet-triggered compact below it never fires and a supervisor that never compacts looks exactly
+// like a supervisor with nothing to do. The bool the Idle hook trades in stays a bool; the sentence is said where the
+// false is ACTED ON, and only when the read could not answer at all.
+func rigIdleReason(rig, seat string) (idle bool, why string) {
 	path, err := exec.LookPath("rig")
 	if err != nil {
-		return false
+		return false, "the activity read could not run: no `rig` on PATH"
 	}
 	out, err := exec.Command(path, "ps", "--nodes", "--rig", rig, "--json").Output()
 	if err != nil {
-		return false
+		return false, "the activity read failed: `rig ps --nodes --json` did not answer"
 	}
 	var nodes []map[string]any
 	if json.Unmarshal(out, &nodes) != nil {
-		return false
+		return false, "the activity read answered something that is not a node table"
 	}
 	for _, node := range nodes {
 		if node["canonicalSessionName"] != rig+"-"+seat+"@"+rig {
@@ -344,16 +369,30 @@ func rigIdle(rig, seat string) bool {
 		}
 		activity, _ := node["agentActivity"].(map[string]any)
 		word, _ := activity["state"].(string)
-		// The SAME predicate the quiet waiter uses: one home for the rule, so a vocabulary change is made once. A
-		// missing or non-string state reads as the empty word, which the set does not contain - refusal, not release.
-		//
-		// The predicate also hands back the word it did not recognize, and THIS reader drops it: Idle is a plain
-		// hook and its consumer is the compaction decision, which prints its own sentence. Naming that here rather
-		// than leaving it implied - the launch half's unrecognized word is carried but not yet said.
-		released, _ := clientruntime.ActivityReleasesTheWait(word)
-		return released
+		return idleFromActivityWord(word, activity != nil)
 	}
-	return false
+	return false, "the activity read answered no record for " + rig + "/" + seat
+}
+
+// idleFromActivityWord is the pure half of the read: it turns the word the node table carried into the answer the
+// hook returns AND the sentence a caller can say. A recognized, non-quiet word is a DELIBERATE false and has nothing
+// to report - the seat is simply busy; an absent or unrecognized one is the failure this box has been living in
+// silently, and it is named rather than left to be discovered.
+func idleFromActivityWord(word string, present bool) (idle bool, why string) {
+	released, unrecognized := clientruntime.ActivityReleasesTheWait(word)
+	if released {
+		return true, ""
+	}
+	if unrecognized != "" {
+		return false, fmt.Sprintf("the activity word %q is not one this client recognizes", unrecognized)
+	}
+	if !present {
+		return false, "the node table carries no agentActivity for this seat, so nothing can say whether it is idle"
+	}
+	if word == "" {
+		return false, "the activity read answered, and the word it carried was empty"
+	}
+	return false, ""
 }
 
 // saySender is the "From" prefix a plain message carries, and it is REPRODUCED rather than invented: the client's own

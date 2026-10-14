@@ -183,6 +183,76 @@ func TestAWorkingSeatOfAnotherRuntimePastTheWarnLimitWaitsThenIsInterruptedAtThe
 	}
 }
 
+// THE PURE HALF: what the read's word means, and what a caller can SAY about it. A recognized word is a deliberate
+// answer - the seat is busy - and has no sentence; a word nobody knows, an absent field, and an empty word are the
+// three ways a gate goes silent, and each says which one it was.
+func TestIdleFromActivityWordNamesWhatItCouldNotRead(t *testing.T) {
+	cases := []struct {
+		name    string
+		word    string
+		present bool
+		idle    bool
+		want    string
+	}{
+		{"idle", "idle", true, true, ""},
+		{"the stored form releases too", "idle-at-prompt", true, true, ""},
+		{"a busy seat is deliberate and silent", "working", true, false, ""},
+		{"needs_input is busy too", "needs_input", true, false, ""},
+		{"a word nobody knows is named", "drifting", true, false, "drifting"},
+		{"no agentActivity field at all", "", false, false, "no agentActivity"},
+		{"a field that carried no word", "", true, false, "was empty"},
+	}
+	for _, c := range cases {
+		idle, why := idleFromActivityWord(c.word, c.present)
+		if idle != c.idle {
+			t.Errorf("%s: idle=%v, want %v", c.name, idle, c.idle)
+		}
+		if c.want == "" {
+			if why != "" {
+				t.Errorf("%s: said %q, want nothing (a deliberate refusal is not a failure to read)", c.name, why)
+			}
+			continue
+		}
+		if !strings.Contains(why, c.want) {
+			t.Errorf("%s: said %q, which does not name %q", c.name, why, c.want)
+		}
+	}
+}
+
+// AND THE SENTENCE LANDS WHERE THE FALSE IS ACTED ON - the hard-limit branch, which interrupts and returns every
+// pass, so the quiet-triggered compact below it never fires. Without this line a read that answered nothing reads
+// exactly like a seat that is simply working: a supervisor that never compacts, saying nothing.
+func TestASeatThatCouldNotBeReadSaysWhyItWasNotCompacted(t *testing.T) {
+	withDocumentedLimits(t)
+	var sent, interrupted, logged []string
+	hard := seatLogFile(t, 320_000, 5)
+	supervisor := supervisorFor(hard, "claude-code", true, &sent, &interrupted)
+	supervisor.Log = func(text string) { logged = append(logged, text) }
+	supervisor.IdleWhy = func(string, string) string {
+		return "the node table carries no agentActivity for this seat, so nothing can say whether it is idle"
+	}
+	supervisor.Step()
+	supervisor.Step()
+	if len(interrupted) != 1 {
+		t.Fatalf("interrupted = %v, want exactly one", interrupted)
+	}
+	said := strings.Join(logged, "|")
+	if !strings.Contains(said, "not compacting") || !strings.Contains(said, "no agentActivity") {
+		t.Errorf("the pass acted on a false without saying why: %v", logged)
+	}
+
+	// AND A BUSY SEAT STAYS QUIET: a deliberate refusal carries no sentence, so the acting path says nothing about it.
+	var quiet []string
+	busy := supervisorFor(hard, "claude-code", true, &sent, &interrupted)
+	busy.Log = func(text string) { quiet = append(quiet, text) }
+	busy.IdleWhy = func(string, string) string { return "" }
+	busy.Step()
+	busy.Step()
+	if strings.Contains(strings.Join(quiet, "|"), "not compacting") {
+		t.Errorf("a deliberate refusal was reported as a failure to read: %v", quiet)
+	}
+}
+
 func TestASeatPastTheWarnLimitIsWarnedOnce(t *testing.T) {
 	withDocumentedLimits(t)
 	var sent, interrupted []string

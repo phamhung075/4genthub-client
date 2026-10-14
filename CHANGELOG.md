@@ -16,6 +16,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `internal/clientseat/sync.go`, `internal/clientlifecycle/supervisor.go` — the waiter and the supervisor's `rigIdle`
   both call that one predicate, so a vocabulary change is decided once instead of being found twice, and a missing or
   non-string `state` reads as the empty word — refusal, not release.
+- `internal/clientlifecycle/supervisor.go` — **the false is reported where it is ACTED ON.** `rigIdle` keeps its bool,
+  and `rigIdleReason` now carries the sentence behind it; the hard-limit branch — which interrupts and returns EVERY
+  pass, so the quiet-triggered compact below it never fires — says why nothing was compacted, rate-limited with the
+  interrupt it already logs. On this path a dropped word is not a lost detail: without it "the seat is working" and
+  "nothing ever answered" print the same way, as nothing, and a supervisor that never compacts looks exactly like a
+  supervisor with nothing to do. A deliberate refusal (a busy seat) still says nothing.
 
 ### Verified
 - `internal/clientseat` — `TestWaitUntilQuietDoesNotProceedOnAWordThatIsNotIdle` FAILS against the previous
