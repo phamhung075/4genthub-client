@@ -81,9 +81,9 @@ The grid panes are read-only. An input pane is the way to talk to a seat from th
 4genteam inputs hide --rig <RIG>                # close them again
 ```
 
-A line typed there is sent to the seat with `rig send`, so it goes through the same route as any
-other message. `/hide` or Ctrl-D leaves the loop. Opening it twice adds nothing. The lead window's
-input pane exists already.
+A line typed there is sent to the seat with `4genteam send <session> 'message'`, so it goes through the
+same route as any other message. `/hide` or Ctrl-D leaves the loop. Opening it twice adds nothing. The lead
+window's input pane exists already.
 
 ## Scrolling back
 
@@ -95,7 +95,7 @@ older than the replay is not in the pane — start the view again with a larger 
 
 ```bash
 herdr workspace list      # look for "<RIG> grid" and "<RIG> lead"
-rig ps --nodes --rig <RIG>   # one row per seat, with its lifecycle and activity
+4genteam ps <RIG> --nodes   # one row per seat, with its lifecycle and activity
 ```
 
 Run these from the shell that started `herdr`: it resolves its server from the home directory of
