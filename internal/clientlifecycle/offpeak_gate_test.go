@@ -262,7 +262,11 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 
 // TestTheGateProceedsWhenTheRoomHasNoRecords: NO RECORDS is not a refusal. There are no seats to bill, which
 // is the shape of a room being started for the first time on a machine that has no OpenRig daemon at all, so
-// the verb goes on to restore it and its own errors, if any, are the ones reported.
+// the verb goes on to restore it and its own errors, if any, are the ones reported. The START is the same -
+// the gate does not run - but it is SAID: this test used to require EMPTY stderr here ("nothing is printed
+// for no records - it is the normal case, not a diagnostic"), which is the silence that let a DeepSeek seat
+// start on the peak rate with no line anywhere admitting the check never happened. The assertion moved with
+// the behavior and now requires the line.
 func TestTheGateProceedsWhenTheRoomHasNoRecords(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
@@ -277,8 +281,11 @@ func TestTheGateProceedsWhenTheRoomHasNoRecords(t *testing.T) {
 	if !strings.Contains(strings.Join(*ran, ","), "ensureRig") {
 		t.Error("a room with no records must still be restored, so its own error can be reported")
 	}
-	if errOut.Len() != 0 {
-		t.Errorf("nothing is printed for no records - it is the normal case, not a diagnostic: %q", errOut.String())
+	for _, want := range []string{"4genteam up:", "room-alpha", "no node records", "did NOT run"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("the start went ahead with the gate never having decided, and said so nowhere: "+
+				"stderr %q does not name %q", errOut.String(), want)
+		}
 	}
 }
 

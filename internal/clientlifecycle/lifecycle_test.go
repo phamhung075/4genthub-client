@@ -640,3 +640,32 @@ func TestATransportFailureRefusesInsteadOfStartingTheRoom(t *testing.T) {
 		t.Fatal("a transport failure was not refused: the caller would go on to StartRoom")
 	}
 }
+
+// THE THIRD CASE IS A START THE GATE DID NOT DECIDE, AND IT IS SAID OUT LOUD. NO RECORDS - the client's
+// transports know no such room - still proceeds, because there are no seats in those records to bill and
+// blocking a start on a room this client knows nothing about would be wrong. But the gate has NOT run for
+// that start, and this branch used to `return clientcmd.ExitOK` with nothing printed: silence is how a
+// DeepSeek seat starts on the peak rate with no line anywhere saying the check never happened. So the
+// decision stays ExitOK and the fact is printed to the writer the gate already holds, naming the verb, the
+// room, and that the gate did NOT run. Both verbs that call the gate here are pinned, so neither can drop
+// the line on its own.
+func TestPeakGateSaysWhenItDidNotRunForARoomItHasNoRecordsOf(t *testing.T) {
+	restoreAll(t)
+	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	// The clock is pinned inside the peak window on a DeepSeek-heavy Friday, so the case cannot pass
+	// merely because the schedule had nothing to refuse.
+	gateEnv(t, "2026-10-09 02:00")
+
+	for _, verb := range []string{"up", "compact"} {
+		var errOut bytes.Buffer
+		if code := PeakGate("room-alpha", verb, false, &errOut); code != clientcmd.ExitOK {
+			t.Fatalf("%s: exit %d, want %d - a room with no records has no seats to bill, so the start proceeds",
+				verb, code, clientcmd.ExitOK)
+		}
+		for _, want := range []string{"4genteam " + verb + ":", "room-alpha", "no node records", "did NOT run"} {
+			if !strings.Contains(errOut.String(), want) {
+				t.Errorf("%s: the gate's silence is not ended - stderr %q does not name %q", verb, errOut.String(), want)
+			}
+		}
+	}
+}

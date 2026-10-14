@@ -613,8 +613,11 @@ var rigNodes = func(name string) ([]map[string]any, bool, error) {
 // A READING THAT FAILS IS A REFUSAL, in words: this used to resolve a rig tool and return ExitOK when it
 // could not, which is how a peak-time resume could proceed with the gate never having decided. A room with
 // NO records is different and still proceeds - there are no seats to bill, which is the shape of a room
-// being started for the first time on a machine that has no OpenRig daemon at all - and nothing is printed
-// for it, because that is the normal case rather than a diagnostic.
+// being started for the first time on a machine that has no OpenRig daemon at all - and blocking a start on
+// a room the client knows nothing about would be the wrong call. But the gate has NOT decided THAT start,
+// and the room may still run a DeepSeek seat, so proceeding is SAID rather than silent: the line below is
+// the whole guard on this fail-open case, and it is here, once, so that no verb reaching this gate - `up`,
+// `compact`, or a restore - can forget to print it.
 func PeakGate(name, verb string, allowPeak bool, stderr io.Writer) int {
 	nodes, ok, err := rigNodes(name)
 	if err != nil {
@@ -623,6 +626,8 @@ func PeakGate(name, verb string, allowPeak bool, stderr io.Writer) int {
 		return clientcmd.ExitUnavailable
 	}
 	if !ok {
+		fmt.Fprintf(stderr, "4genteam %s: the room %s has no node records, so the peak gate did NOT run for "+
+			"this start: a DeepSeek seat may be starting on the peak rate\n", verb, name)
 		return clientcmd.ExitOK
 	}
 	proceed, message, err := clientoffpeak.Check(allowPeak, nodes, os.Getenv)

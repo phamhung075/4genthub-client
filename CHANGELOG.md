@@ -3,6 +3,23 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the peak gate says when it did NOT run for a room it has no records of
+
+### Changed
+- `internal/clientlifecycle/lifecycle.go` — `PeakGate`'s third case (`!ok`: the client has NO RECORDS of this
+  room) still proceeds with `ExitOK`, because blocking a start on a room the client knows nothing about would be
+  the wrong call — but it no longer proceeds SILENTLY. It prints, once, that the room has no node records and
+  that the gate did NOT run for this start, naming the verb and the room. That line is the whole guard on this
+  fail-open case, and it lives in the gate so no verb reaching it — `up`, `compact`, or a restore — can forget
+  it. No caller printed the fact before this, so nothing is duplicated.
+
+### Tests
+- Added `TestPeakGateSaysWhenItDidNotRunForARoomItHasNoRecordsOf`, pinning both verbs that call the gate here
+  plus the unchanged `ExitOK`; removing the print makes it fail for each verb.
+- `TestTheGateProceedsWhenTheRoomHasNoRecords` ASSERTED THE SILENCE (`errOut.Len() != 0` was an error). The
+  assertion moved with the behavior — it now requires the line, with the start itself unchanged — because
+  otherwise the package cannot be green with the guard in place.
+
 ## 2026-10-14 — the rig list is read from the daemon's own route, not from `rig ps`
 
 ### Changed
