@@ -22,6 +22,41 @@ const SEAT_READY_WINDOW_SECS: u64 = 20;
 /// a grace period, not a handshake. Short, because it proves nothing about the agent inside the pane.
 const NON_OMP_READY_GRACE_MS: u64 = 1500;
 
+/// Whether `path` is a readiness signal written by THIS generation's pane: it must exist, be NEWER than the
+/// launch, and not be a death record.
+///
+/// Existence alone was the whole proof, and it is a green that cannot fail. The previous generation's teardown
+/// writes a death record INTO the same path - `agent_socket_closed`, by the runner and again by the daemon when
+/// it observes a pane end - and `room stop`'s own message invites a restart in the same state dir. Measured
+/// twice: that restart returned running in 0.03 s, judged on a file whose own content said `agent_socket_closed`
+/// and whose `updated_at` was 0.3 s BEFORE the new pane was launched, while a first start in a fresh state dir
+/// took 2.00-2.34 s. Freshness is the load-bearing half; the death check keeps a coarse clock from reading a
+/// death as a handshake.
+fn readiness_written_by(path: &Path, launched_at: std::time::SystemTime) -> bool {
+    let Ok(modified) = fs::metadata(path).and_then(|meta| meta.modified()) else {
+        return false;
+    };
+    if modified < launched_at {
+        return false;
+    }
+    match published_state(path).as_deref() {
+        Some("agent_socket_closed" | "agent_stdio_eof" | "agent_exited") => false,
+        _ => true,
+    }
+}
+
+/// The state a state file publishes, or `None` when it is missing or unparseable. The same field
+/// `seat_facts` reads for its own report, kept separate here because the readiness loop asks the question
+/// before any status exists.
+fn published_state(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value
+        .get("state")
+        .and_then(|s| s.as_str())
+        .map(str::to_string)
+}
+
 pub struct RoomSupervisor {
     base_state_dir: PathBuf,
     active_rooms: Arc<Mutex<HashMap<String, RoomSpec>>>,
@@ -290,6 +325,12 @@ impl RoomSupervisor {
             env.insert("AGENTHUB_MODEL".into(), m.clone());
         }
 
+        // WHEN THIS GENERATION'S PANE WAS CREATED. The readiness proof below is a file the previous
+        // generation's teardown also writes into, so existence alone cannot separate a handshake from an
+        // inherited death record: this instant is what does. Taken BEFORE the launch, so a state file written
+        // by this generation's runner is necessarily newer than it.
+        let launched_at = std::time::SystemTime::now();
+
         // Launch tmux session
         let pid = TerminalManager::launch_session(&session_name, &cwd, &cmd, &env)?;
 
@@ -319,7 +360,10 @@ impl RoomSupervisor {
         let proven_by_state_file = signal.is_some();
         let deadline = std::time::Instant::now() + window;
         loop {
-            if signal.as_ref().is_some_and(|path| path.exists()) {
+            if signal
+                .as_ref()
+                .is_some_and(|path| readiness_written_by(path, launched_at))
+            {
                 break;
             }
             if !TerminalManager::is_session_alive(&session_name) {
@@ -458,10 +502,28 @@ impl RoomSupervisor {
             // in the same document, so reading it twice would be reading the same fact twice. This cannot
             // fail (the alert is advisory), so nothing here can turn the status into an outage.
             let facts = self.seat_facts(room, &seat.seat_key);
-            let state = if facts.alive {
-                SeatLifecycleState::Running
-            } else {
-                SeatLifecycleState::Stopped
+            // WHICH PROOF THIS SEAT CAN GIVE DECIDES WHAT THE STATUS MAY CLAIM, and it must be the same answer
+            // `up` gave about the same seat in the same breath: a seat whose `up` refused and whose `room
+            // status` then read `running` is the disagreement the lead measured. LIVENESS ALONE IS NOT
+            // "RUNNING" where the runtime publishes a readiness document - a pane whose agent died stays alive,
+            // and its own file names the death.
+            let publishes_readiness = matches!(
+                AgentRuntime::from_str_loose(&seat.runtime),
+                AgentRuntime::Omp
+            );
+            let died = facts.published_state.as_deref().is_some_and(|s| {
+                matches!(
+                    s,
+                    "agent_socket_closed" | "agent_stdio_eof" | "agent_exited"
+                )
+            });
+            let state = match (facts.alive, publishes_readiness, died) {
+                (false, ..) => SeatLifecycleState::Stopped,
+                (true, true, true) => SeatLifecycleState::Dead,
+                // A pane that is up with no readiness document at all has not handshaked YET; calling that
+                // `running` is what let a restart inherit the previous generation's green in 0.03 s.
+                (true, true, false) if facts.published_state.is_none() => SeatLifecycleState::Starting,
+                _ => SeatLifecycleState::Running,
             };
 
             // The reason, because "not running" alone is exactly the shape that let a dead turn look healthy
@@ -469,8 +531,31 @@ impl RoomSupervisor {
             // pane's teardown kills it first, the state file still claims `idle`/`running` — so the daemon,
             // which owns this file's path too, replaces that claim with the death it can actually observe.
             let state_path = room_dir.join("run").join(format!("{}.state.json", seat.seat_key));
-            let detail = if facts.alive {
-                None
+            // AND THE PROOF, because a state name alone does not say what it rests on. The lead's honesty
+            // requirement: the client's own output must show which of the two evidences produced the verdict -
+            // the agent's own handshake, or a pane that outlived a grace.
+            let evidence = match state {
+                SeatLifecycleState::Running if publishes_readiness => Some(
+                    "the seat's own state file, published after its agent answered the transport handshake"
+                        .to_string(),
+                ),
+                SeatLifecycleState::Starting => Some(
+                    "the pane is up and no handshake has been published for it yet".to_string(),
+                ),
+                SeatLifecycleState::Dead => Some(
+                    facts
+                        .published_state
+                        .clone()
+                        .unwrap_or_else(|| "agent_socket_closed".to_string()),
+                ),
+                _ if facts.alive => Some(format!(
+                    "pane alive after {NON_OMP_READY_GRACE_MS}ms; this runtime publishes no readiness channel, so a \
+                     live but unconfigured agent is indistinguishable from a working one"
+                )),
+                _ => None,
+            };
+            let detail = if evidence.is_some() {
+                evidence
             } else {
                 match facts.published_state.clone() {
                     Some(s)
@@ -784,6 +869,64 @@ mod tests {
     use super::*;
     use crate::queue::{CloseInput, CreateInput};
 
+    /// The readiness proof is a file from THIS generation, not an artifact. The measured false green: a restart
+    /// in the same state dir returned running in 0.03 s on the previous generation's `agent_socket_closed`
+    /// record, which was older than the new pane. Each arm states one fact, so a failure names which half broke.
+    #[test]
+    fn readiness_needs_a_file_from_this_generation_and_not_a_death() {
+        let dir = scratch("readiness");
+        let path = dir.join("solo.state.json");
+
+        let write = |state: &str| {
+            let payload = serde_json::json!({
+                "state": state,
+                "classification": "",
+                "resume_attempts": 0,
+                "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            });
+            fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
+        };
+
+        // The file's age is set by the launch instant handed in, not by touching the file: a launch AFTER the
+        // file is the inherited case, a launch BEFORE it is this generation's.
+        let after_the_file = std::time::SystemTime::now() + Duration::from_secs(60);
+        let before_the_file = std::time::SystemTime::now() - Duration::from_secs(60);
+
+        let _ = fs::remove_file(&path);
+        assert!(
+            !readiness_written_by(&path, before_the_file),
+            "a missing file is not a handshake"
+        );
+
+        write("agent_socket_closed");
+        assert!(
+            !readiness_written_by(&path, after_the_file),
+            "an inherited death record is not a handshake, however fresh the rename was"
+        );
+        write("agent_exited");
+        assert!(
+            !readiness_written_by(&path, after_the_file),
+            "another death state is not a handshake"
+        );
+        write("idle");
+        assert!(
+            !readiness_written_by(&path, after_the_file),
+            "a live state older than the launch is the previous generation's word"
+        );
+        assert!(
+            readiness_written_by(&path, before_the_file),
+            "a live state written after the launch IS the handshake"
+        );
+
+        write("running");
+        assert!(
+            readiness_written_by(&path, before_the_file),
+            "running is a handshake too"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// A scratch state dir under the system temp dir, unique per test, removed by the caller.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -839,6 +982,76 @@ mod tests {
             .to_string(),
         )
         .expect("state file");
+    }
+
+    /// THE VERDICT AND THE MESSAGE, pinned where the lead measured them: LIVENESS ALONE IS NOT "RUNNING" for a
+    /// runtime that publishes readiness. A pane whose agent died stays alive, and the verb the operator checks
+    /// after `up` refused read it as `running` - so the state now comes from the proof, and the detail says
+    /// which proof it was.
+    #[tokio::test]
+    async fn an_omp_seat_reports_the_proof_its_state_rests_on() {
+        let dir = scratch("omp-proof");
+        let room = format!("omp-proof-{}", std::process::id());
+        let key = seat_key("omp-proof");
+        write_spec(&dir, &room, &key);
+        let supervisor = supervisor_at(&dir);
+
+        // A real pane, so the liveness half is genuinely true and only the readiness document varies.
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(&session, Path::new("."), "sleep 30", &HashMap::new())
+            .expect("scratch pane");
+
+        let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let read = |supervisor: &RoomSupervisor| {
+            supervisor
+                .get_room_status(&room)
+                .expect("status")
+                .into_iter()
+                .next()
+                .expect("one seat")
+        };
+
+        // No readiness document at all: the pane is up and nothing has handshaked. Calling this `running` is
+        // what let a restart inherit the previous generation's green.
+        let none = read(&supervisor);
+        assert_eq!(
+            none.state,
+            SeatLifecycleState::Starting,
+            "a pane with no handshake is not running, got {:?}",
+            none.detail
+        );
+        assert!(
+            none.detail
+                .as_deref()
+                .is_some_and(|d| d.contains("no handshake has been published")),
+            "the status must say the handshake is missing, got {:?}",
+            none.detail
+        );
+
+        // A live state: running, and the detail names the evidence rather than leaving it implied.
+        write_state_file(&dir, &room, &key, "idle", &now);
+        let live = read(&supervisor);
+        assert_eq!(live.state, SeatLifecycleState::Running);
+        assert!(
+            live.detail
+                .as_deref()
+                .is_some_and(|d| d.contains("answered the transport handshake")),
+            "RUNNING must say which proof it rests on, got {:?}",
+            live.detail
+        );
+
+        // The pane outlived its agent: not running, whatever the session still says.
+        write_state_file(&dir, &room, &key, "agent_socket_closed", &now);
+        let dead = read(&supervisor);
+        assert_eq!(
+            dead.state,
+            SeatLifecycleState::Dead,
+            "a pane whose agent closed its socket is not a running seat"
+        );
+        assert_eq!(dead.detail.as_deref(), Some("agent_socket_closed"));
+
+        let _ = supervisor.stop_seat(&room, &key);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A room spec whose single seat runs a shell command, so the probe is driven by a REAL tmux pane and not an

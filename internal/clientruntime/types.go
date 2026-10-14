@@ -4,13 +4,19 @@ import "time"
 
 // SeatStatus is the live status of a seat reported by agenthub-runtime.
 type SeatStatus struct {
-	Room           string     `json:"room"`
-	Seat           string     `json:"seat"`
-	SessionName    string     `json:"session_name"`
-	Runtime        string     `json:"runtime"`
-	Model          *string    `json:"model,omitempty"`
-	Pid            *uint32    `json:"pid,omitempty"`
-	State          string     `json:"state"`
+	Room        string  `json:"room"`
+	Seat        string  `json:"seat"`
+	SessionName string  `json:"session_name"`
+	Runtime     string  `json:"runtime"`
+	Model       *string `json:"model,omitempty"`
+	Pid         *uint32 `json:"pid,omitempty"`
+	State       string  `json:"state"`
+	// Detail is WHICH EVIDENCE the state rests on - the agent's own handshake, the grace a non-omp pane
+	// outlived, or the death the state file names. The runtime OMITS it when it has nothing to say
+	// (`skip_serializing_if` on `SeatStatus::detail` in rust), so it is a POINTER: nil is "no evidence given",
+	// never an empty one. It is rendered by `up` beside the state, so the operator sees the proof and not just
+	// the verdict.
+	Detail         *string    `json:"detail,omitempty"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
 	TokenEstimate  int        `json:"token_estimate"`
 	LastActive     *time.Time `json:"last_active,omitempty"`

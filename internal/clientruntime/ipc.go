@@ -106,15 +106,33 @@ func (c *Client) EnsureDaemon(ctx context.Context) error {
 	return errors.New("agenthub-runtime daemon started but socket was not ready within 3 seconds")
 }
 
+// callDeadline is how long an ordinary request waits: a verb that reads or writes an answer settles in
+// milliseconds, so a socket gone quiet is a fault worth naming in ten seconds.
+const callDeadline = 10 * time.Second
+
+// seatStartDeadline is how long the client waits for a verb that STARTS A SEAT and therefore waits for that
+// seat to prove itself. It MUST outlast the runtime's own readiness window - `SEAT_READY_WINDOW_SECS = 20` in
+// rust/agenthub-runtime/src/supervisor/mod.rs - and it did not: measured, a cold start returned `read error:
+// i/o timeout` at 10.15 s while the runtime was still legitimately waiting, so a verdict that would have
+// landed at 15 s could never reach the client and read as a transport error instead of a verdict. The two
+// constants cannot be read from one another across the language boundary, so the runtime's number is named
+// here and a test pins that this one stays larger.
+const seatStartDeadline = 30 * time.Second
+
 // Call sends a request and reads a response.
 func (c *Client) Call(action string, payload any) (*IpcResponse, error) {
+	return c.CallWithDeadline(action, payload, callDeadline)
+}
+
+// CallWithDeadline is Call for a verb whose answer legitimately takes longer than an ordinary request.
+func (c *Client) CallWithDeadline(action string, payload any, timeout time.Duration) (*IpcResponse, error) {
 	conn, err := net.DialTimeout("unix", c.SocketPath, 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("cannot connect to agenthub-runtime at %s: %w", c.SocketPath, err)
 	}
 	defer conn.Close()
 
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	req := IpcRequest{Action: action, Payload: payload}
 	reqBytes, err := json.Marshal(req)
@@ -189,7 +207,7 @@ func unreadableAnswer(action string, err error) error {
 }
 
 func (c *Client) StartRoom(spec RoomSpec) ([]SeatStatus, error) {
-	resp, err := c.Call("StartRoom", spec)
+	resp, err := c.CallWithDeadline("StartRoom", spec, seatStartDeadline)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +229,7 @@ func (c *Client) StopSeat(room, seat string) error {
 }
 
 func (c *Client) RestartSeat(room, seat string) (*SeatStatus, error) {
-	resp, err := c.Call("RestartSeat", map[string]string{"room": room, "seat": seat})
+	resp, err := c.CallWithDeadline("RestartSeat", map[string]string{"room": room, "seat": seat}, seatStartDeadline)
 	if err != nil {
 		return nil, err
 	}

@@ -472,7 +472,15 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 	}
 	var late []string
 	for _, seat := range seats {
-		fmt.Fprintf(stdout, "%s/%s: %s\n", name, seat.Seat, seat.State)
+		// THE PROOF TRAVELS WITH THE VERDICT. `running` alone never said what it rested on - the agent's own
+		// handshake, or a pane that outlived a grace - and the runtime publishes exactly that in `detail`. The
+		// line used to drop the field on the floor, which is the honesty requirement this row was filed for:
+		// the operator read a state name and had no evidence to weigh.
+		line := fmt.Sprintf("%s/%s: %s", name, seat.Seat, seat.State)
+		if seat.Detail != nil && strings.TrimSpace(*seat.Detail) != "" {
+			line += " (" + strings.TrimSpace(*seat.Detail) + ")"
+		}
+		fmt.Fprintln(stdout, line)
 		if !seatRunning(seat) {
 			late = append(late, seat.Seat)
 		}

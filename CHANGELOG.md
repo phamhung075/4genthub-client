@@ -3,6 +3,54 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the readiness verdict and its message: a restart cannot inherit the previous generation's green, a verdict near the window reaches the client, and the proof travels with the state
+
+### Changed
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — **the omp readiness proof is a HANDSHAKE, not an artifact.**
+  `start_seat` stamped nothing and broke on `path.exists()`, so a restart in the same state dir returned
+  running in 0.03 s on the PREVIOUS generation's `agent_socket_closed` record — the runner and the daemon both
+  write a death record into that same path on teardown, and `room stop`'s own message invites starting the room
+  again in the same directory. `launched_at` is now taken BEFORE the launch, and the loop breaks only on
+  `readiness_written_by(path, launched_at)`: the file must exist, be NEWER than the launch, and not be a death
+  record. A restart therefore waits for its own handshake (or refuses) exactly as a cold start does; deleting
+  the file was never a fix, because a still-live writer re-creates it.
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — **the status carries the proof.** `get_room_status` derived
+  `running` from LIVENESS, so a seat whose `up` had just refused still read `running` from the verb the
+  operator checks next: a pane whose agent died stays alive. For a runtime that publishes readiness the state
+  now comes from the seat's own document — no readiness document at all is `Starting`, a live document is
+  `Running`, a death state with the pane still alive is `Dead`. The `detail` field names the evidence in every
+  one of those cases, including the agent's own handshake, instead of leaving `running` to be read as more
+  than it is.
+- `internal/clientruntime/ipc.go` — **the severed bridge.** The client gave a seat-starting verb 10 s while the
+  runtime gives the seat 20 s, so a verdict landing between the two could never arrive: measured, a cold start
+  read `read error: i/o timeout` at 10.15 s while the runtime was still legitimately waiting. `callDeadline`
+  (10 s) is now separate from `seatStartDeadline` (30 s), and `StartRoom`/`RestartSeat` use the longer one.
+- `internal/clientruntime/types.go`, `internal/clientlifecycle/lifecycle.go` — `SeatStatus` decodes `detail`
+  (a pointer: the runtime omits the key when it has nothing to claim) and `up` prints it beside the state, so
+  the operator sees which proof the verdict rests on rather than a bare state name.
+
+### Verified
+- `cargo +stable test` in `rust/agenthub-runtime` → **51 passed / 0 failed**, including
+  `readiness_needs_a_file_from_this_generation_and_not_a_death` (missing file, inherited death record, another
+  death state, a live state older than the launch, and a live state written after it — each arm one fact) and
+  `an_omp_seat_reports_the_proof_its_state_rests_on` (Starting with no document, Running with one, Dead when
+  the pane outlived its agent).
+- `go build ./...`, `go vet`, `gofmt -l` clean; `go test ./... -count=1` → 24 packages ok / 0 failing, with
+  `TestTheSeatStartDeadlineOutlastsTheRuntimesReadyWindow` pinning that the client's deadline stays longer than
+  the runtime's documented window.
+- LIVE, with the branch-built runtime on a scratch `HOME`/`TMUX_TMPDIR` and the dashed room `leg-standin`:
+  `up leg-standin --room-only` printed
+  `leg-standin/solo: running (pane alive after 1500ms; this runtime publishes no readiness channel, so a live
+  but unconfigured agent is indistinguishable from a working one)` — the verdict carrying its proof, which is
+  the honest shape for a runtime that publishes nothing.
+- LIVE, the same scratch room: `send leg-cat-solo@leg-cat "<text>" --json` answered the runtime's own
+  `{"delivered":"agenthub--leg-cat--solo"}` — the canonical name resolved through the room's record and
+  delivered, where the pre-change runtime refused it with `can't find pane`.
+- NOT re-run live: the omp arm's restart-in-the-same-state-dir falsification, which needs a real omp seat and
+  therefore a DeepSeek model at peak (the off-peak gate refuses it, and bypassing a spend guard is not mine to
+  do). The predicate is unit-pinned and the architect's own harness (`/tmp/arch-leg2/run4.sh`) re-runs it
+  off-peak against a build of this branch.
+
 ## 2026-10-14 — the seat guard's identity and delivery are native, and the site inventory is not disposed: four declared sites plus three seams the assignment key never listed
 
 ### Changed
