@@ -63,8 +63,12 @@ The client has exactly one credential and reads exactly one file.
 
 ```bash
 mkdir -p ~/.config/4genthub
-cp .env.sample ~/.config/4genthub/.env    # then fill in AGENTHUB_TOKEN
+[ -f ~/.config/4genthub/.env ] || cp .env.sample ~/.config/4genthub/.env   # then fill in AGENTHUB_TOKEN
+chmod 600 ~/.config/4genthub/.env
 ```
+
+Initialize it once, before the first verb that talks to the server. Never copy over an existing file:
+it holds the user's key. `scripts/build.sh` creates it from `.env.sample` when none exists.
 
 Ask the user for the key; do not generate one, and do not put one in this file yourself. The
 sample also lists the optional settings (`TYPESAFE_API_KEY`, `DEEPSEEK_API_KEY`, the `COMPACT_*` limits,
