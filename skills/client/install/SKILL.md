@@ -64,7 +64,7 @@ AGENTHUB_TOKEN=tok_...                     # User bearer token from 4genthub web
 # Model Provider Credentials (for omp / headless DeepSeek seats)
 DEEPSEEK_API_KEY=sk-...
 
-# TypeSafe AI / Jev System One Validation Gate Credentials
+# TypeSafe AI / Jev System One (runs on this machine: 4genteam decide, 4genteam complete)
 TYPESAFE_API_KEY=apikey_...
 TYPESAFE_BASE_URL=https://api.typesafe.ai/v1
 

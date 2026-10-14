@@ -145,6 +145,8 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `input` | read lines and send each to one seat |
 | `feedback` | report friction to the owner |
 | `evidence` | submit evidence for a task |
+| `complete` | complete a task after the local Jev gate (evidence, deterministic checks, acceptance criteria) |
+| `decide` | ask one step of the seat/lead/owner decision ladder, answered by Jev on this machine |
 | `continue` | restore a stopped rig from its latest snapshot and brief its seats; no argument lists the rigs and the briefs, `--all` walks every rig that has one |
 | `watchdog` | notice when a rig's tmux seats have vanished and restore it: `--check` reports, `--watch SECONDS` restores after two dead polls, `--self-test` exercises the rule |
 | `seatcheck` | the seat-side checker (also reachable as `seatcheck` via argv[0]) |
@@ -163,8 +165,13 @@ Every key lives in `~/.config/4genthub/.env` or the environment; only the first 
 |---|---|
 | `AGENTHUB_URL` | the server, for example `https://api.4genthub.com` |
 | `AGENTHUB_TOKEN` | your key; the one credential |
-| `TYPESAFE_API_KEY` | TypeSafe AI System One token for validation gate evaluation (model `jev-1.13.0`) |
+| `TYPESAFE_API_KEY` | TypeSafe AI System One token. Jev runs on this machine, never on the server: `4genteam decide` and `4genteam complete` call it from here (model `jev-1.13.0`) |
 | `TYPESAFE_BASE_URL` | TypeSafe AI base endpoint (default `https://api.typesafe.ai/v1`) |
+| `JEV_DECISION_THRESHOLD` | confidence at or above which a seat or lead decides for itself (0.8) |
+| `JEV_DECISION_MODEL` | the Jev model (`jev-1.13.0`) |
+| `JEV_DECISION_LOG_PATH` | the Jev decision log (`~/.config/4genthub/jev_decisions.log`) |
+| `DECISION_OWNER_ONLY_CATEGORIES` | comma list of categories that always go to the owner, added to `credentials` and `spend` |
+| `VALIDATION_GATE_ENFORCEMENT` | `true` makes `4genteam complete` stop on a reject or uncertain verdict; otherwise the gate is a shadow (verdict printed, completion goes on) |
 | `DEEPSEEK_API_KEY` | DeepSeek API key for model seats and offload jobs |
 | `4GENTEAM_CLAUDE_PROJECTS` | a Claude Code projects directory to read session logs from, as the fallback for a `claude-code` seat |
 | `COMPACT_LIMIT_TOKENS` | context size at which a seat is told to find a safe point (150000) |

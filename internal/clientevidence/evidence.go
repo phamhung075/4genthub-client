@@ -164,7 +164,6 @@ func (evidenceCommand) Run(ctx context.Context, args []string, stdout, stderr io
 	}
 
 	// The --test line is parsed BEFORE any git call or dial, so a typo in a quoted line costs nothing.
-	var testArgv []string
 	if opts.test != "" {
 		argv, err := splitCommand(opts.test)
 		if err != nil {
@@ -173,7 +172,6 @@ func (evidenceCommand) Run(ctx context.Context, args []string, stdout, stderr io
 		if len(argv) == 0 {
 			return evidenceUsageError(stderr, "--test names no command")
 		}
-		testArgv = argv
 	}
 
 	baseURL := opts.url
@@ -189,41 +187,73 @@ func (evidenceCommand) Run(ctx context.Context, args []string, stdout, stderr io
 	}
 
 	// Everything below is collected BEFORE the dial, and any refusal here costs no request.
-	baseSHA, err := resolveSHA(ctx, opts.base)
+	body, failure := Collect(ctx, opts.base, opts.test)
+	if failure != nil {
+		if failure.Usage {
+			return evidenceUsageError(stderr, failure.Message)
+		}
+		fmt.Fprintf(stderr, "4genteam evidence: %s\n", failure.Message)
+		return clientcmd.ExitRemote
+	}
+	return postEvidence(ctx, baseURL, token, opts.task, body, stdout, stderr)
+}
+
+// Body is the evidence payload: the diff's numstat, the two SHAs and the test block.
+type Body = evidenceBody
+
+// CollectFailure is a refusal while collecting evidence. Usage marks a caller error (a ref that names
+// no commit, a test line that does not parse); anything else is a failure of git or of the command.
+type CollectFailure struct {
+	Usage   bool
+	Message string
+}
+
+// Collect gathers the evidence for the change from `base` to HEAD: it resolves both SHAs, reads the
+// numstat and runs the test line (split in-process, no shell; empty means no test run). Nothing is sent.
+func Collect(ctx context.Context, base, test string) (Body, *CollectFailure) {
+	var testArgv []string
+	if test != "" {
+		argv, err := splitCommand(test)
+		if err != nil {
+			return Body{}, &CollectFailure{Usage: true, Message: err.Error()}
+		}
+		if len(argv) == 0 {
+			return Body{}, &CollectFailure{Usage: true, Message: "--test names no command"}
+		}
+		testArgv = argv
+	}
+	baseSHA, err := resolveSHA(ctx, base)
 	if err != nil {
-		return evidenceUsageError(stderr, fmt.Sprintf("--base %s does not name a commit: %v", opts.base, err))
+		return Body{}, &CollectFailure{Usage: true, Message: fmt.Sprintf("--base %s does not name a commit: %v", base, err)}
 	}
 	headSHA, err := resolveSHA(ctx, "HEAD")
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam evidence: cannot resolve HEAD: %v\n", err)
-		return clientcmd.ExitRemote
+		return Body{}, &CollectFailure{Message: fmt.Sprintf("cannot resolve HEAD: %v", err)}
 	}
 	// The range is expressed with the RESOLVED SHAs so the text is exactly what the route recomputes for
 	// the SHAs it receives, rather than a string the local refs happen to spell the same way today.
 	numstat, err := gitOutput(ctx, "diff", "--numstat", baseSHA+".."+headSHA)
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam evidence: %v\n", err)
-		return clientcmd.ExitRemote
+		return Body{}, &CollectFailure{Message: err.Error()}
 	}
 
-	test := evidenceTest{Command: opts.test, Failed: []string{}}
+	result := evidenceTest{Command: test, Failed: []string{}}
 	if len(testArgv) > 0 {
 		output, code, err := runTestCommand(ctx, testArgv)
 		if err != nil {
 			// The command never started, so there is no exit code and no honest evidence to send.
-			fmt.Fprintf(stderr, "4genteam evidence: the test command could not run: %v\n", err)
-			return clientcmd.ExitRemote
+			return Body{}, &CollectFailure{Message: fmt.Sprintf("the test command could not run: %v", err)}
 		}
-		test.ExitCode = code
-		test.Failed = extractFailedTests(output)
+		result.ExitCode = code
+		result.Failed = extractFailedTests(output)
 	}
+	return Body{BaseSHA: baseSHA, HeadSHA: headSHA, Numstat: numstat, Test: result}, nil
+}
 
-	return postEvidence(ctx, baseURL, token, opts.task, evidenceBody{
-		BaseSHA: baseSHA,
-		HeadSHA: headSHA,
-		Numstat: numstat,
-		Test:    test,
-	}, stdout, stderr)
+// Post stores the evidence on the task with the same answers and exit codes as `4genteam evidence`:
+// 0 stored, 5 stored with a failing test run, ExitRemote refused or failed.
+func Post(ctx context.Context, baseURL, token, taskID string, body Body, stdout, stderr io.Writer) int {
+	return postEvidence(ctx, baseURL, token, taskID, body, stdout, stderr)
 }
 
 // resolveSHA turns a ref into the full 40-hex commit SHA the wire contract requires. `^{commit}` makes

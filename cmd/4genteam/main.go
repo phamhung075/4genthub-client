@@ -19,6 +19,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientcomplete"
 	"github.com/phamhung075/4genthub-client/internal/clientdecide"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientevidence"
@@ -105,6 +106,7 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientteam.Commands()...)
 	registry = append(registry, clientwatch.Commands()...)
 	registry = append(registry, clientfeedback.Commands()...)
+	registry = append(registry, clientcomplete.Commands()...)
 	registry = append(registry, clientdecide.Commands()...)
 	registry = append(registry, clientevidence.Commands()...)
 	registry = append(registry, clientrestore.Commands()...)
