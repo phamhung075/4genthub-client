@@ -315,6 +315,37 @@ func TestQueueListReportsTheRuntimesOwnRefusalBySocket(t *testing.T) {
 	}
 }
 
+// TestQueueListNamesAnOlderRuntimeThatCannotFrameTheRequest: this is the measured defect, driven end to end. The
+// installed runtime does not know QueueList and says so in serde's own words; shown as the verb's answer that
+// reads as a fact about the room, and it is not one - nothing about the room was asked or answered. The client
+// must NAME the version boundary and leave with ExitUnavailable, with nothing on the (empty) stdout.
+func TestQueueListNamesAnOlderRuntimeThatCannotFrameTheRequest(t *testing.T) {
+	hermeticSeat(t)
+	t.Setenv(agentHubRoomEnv, "room-a")
+	t.Setenv(agentHubSeatEnv, "go-dev")
+
+	sock, _ := fakeRuntime(t, func(string) string {
+		return "{\"ok\":false,\"error\":\"invalid request JSON: unknown variant `QueueList`, expected one of " +
+			"`StartRoom`, `StopRoom`\"}\n"
+	})
+	t.Setenv(RuntimeSocketEnv, sock)
+
+	var out, errOut bytes.Buffer
+	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
+
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit = %d, want ExitUnavailable (%d); stderr = %q", code, clientcmd.ExitUnavailable, errOut.String())
+	}
+	if out.Len() != 0 {
+		t.Errorf("an unimplemented verb printed %q on stdout", out.String())
+	}
+	for _, want := range []string{"QueueList", sock, "different builds", "older than this client"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr does not name %q:\n%s", want, errOut.String())
+		}
+	}
+}
+
 // TestQueueListFallsBackToTheDaemonWhenNoRuntimeAnswers is the regression guard for the fallback: with no
 // runtime on this machine, the daemon path must behave exactly as it did before this change.
 func TestQueueListFallsBackToTheDaemonWhenNoRuntimeAnswers(t *testing.T) {

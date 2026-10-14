@@ -3,6 +3,28 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — an older runtime is named as what it is, not shown as the verb's answer
+
+### Fixed
+- `internal/clientruntime/ipc.go` — `Client.Call` now reads a FRAMING failure apart from a verb's own refusal.
+  An installed runtime that predates a verb answers `{"ok":false,"error":"invalid request JSON: unknown variant
+  `QueueList`, expected one of …"}`, and shown as the verb's answer that read as something about the ROOM —
+  which it is not: nothing about the room was asked or answered. It becomes `*RuntimeTooOld`, carries
+  `ExitUnavailable`, and its message names the action, the runtime's socket, the runtime's own words and this
+  client's version. Every other `ok:false` passes through as `DaemonRefused`, untouched, because `unknown
+  qitem_id 'x'` is the runtime refusing WORK and reporting that as unimplemented would be a lie about versions.
+- The client matches serde's markers (`invalid request JSON`, `unknown variant`) rather than a marker of our
+  own, and the comment says why: the runtime this must survive is OLDER than this build, so a kind added to the
+  runtime now cannot be present in the answer that arrives. The markers are pinned by a test, so a wording drift
+  is visible instead of silent.
+
+### Tests
+- `TestAnOlderRuntimesFramingFailureIsNamedAsSuch` and `TestAVerbsOwnRefusalIsNotRewrittenAsAVersionMismatch`
+  (the two halves of the boundary, at the transport), plus `TestQueueListNamesAnOlderRuntimeThatCannotFrameTheRequest`,
+  which drives the verb the defect was measured on: exit 3, nothing on stdout, and the version boundary named.
+  `TestQueueListReportsTheRuntimesOwnRefusalBySocket` still passes unchanged, so the business refusal is
+  demonstrably not rewritten.
+
 ## 2026-10-14 — a room read that failed holds the automatic resume, and is not reported as a stopped room
 
 ### Fixed

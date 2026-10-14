@@ -1,8 +1,12 @@
 package clientruntime
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
 func TestDefaultSocketPath(t *testing.T) {
@@ -105,5 +109,52 @@ func TestExplicitPathBeatsTheOverride(t *testing.T) {
 	}
 	if got := NewClient("").SocketPath; got != fromEnv {
 		t.Fatalf("the variable lost to the HOME default: got %s, want %s", got, fromEnv)
+	}
+}
+
+// TestAnOlderRuntimesFramingFailureIsNamedAsSuch: an action the installed runtime does not know comes back in
+// serde's own words, and as the verb's ANSWER that reads as something about the room - which is a lie about
+// versions. It is typed, it names the runtime and the action, and it leaves with ExitUnavailable.
+func TestAnOlderRuntimesFramingFailureIsNamedAsSuch(t *testing.T) {
+	sock, _ := fakeRuntime(t, func(string) string {
+		return "{\"ok\":false,\"error\":\"invalid request JSON: unknown variant `QueueList`, expected one of `StartRoom`, `StopRoom`\"}\n"
+	})
+	client := NewClient(sock)
+
+	_, err := client.Call("QueueList", nil)
+	var tooOld *RuntimeTooOld
+	if !errors.As(err, &tooOld) {
+		t.Fatalf("err = %#v, want a RuntimeTooOld", err)
+	}
+	if code := clientcmd.CodeOf(err, clientcmd.ExitOK); code != clientcmd.ExitUnavailable {
+		t.Errorf("exit = %d, want ExitUnavailable (%d)", code, clientcmd.ExitUnavailable)
+	}
+	for _, want := range []string{"QueueList", sock, "unknown variant", "different builds"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q:\n%s", want, err.Error())
+		}
+	}
+}
+
+// TestAVerbsOwnRefusalIsNotRewrittenAsAVersionMismatch: `unknown qitem_id 'x'` is the runtime refusing WORK.
+// Rewriting it as "unimplemented" would convert a real refusal into a lie about versions, so only the framing
+// markers convert and every other ok=false stays the runtime's own refusal, with its own code.
+func TestAVerbsOwnRefusalIsNotRewrittenAsAVersionMismatch(t *testing.T) {
+	sock, _ := fakeRuntime(t, func(string) string {
+		return `{"ok":false,"error":"unknown qitem_id 'qitem-1'"}` + "\n"
+	})
+	client := NewClient(sock)
+
+	_, err := client.Call("QueueStop", nil)
+	var refused *DaemonRefused
+	if !errors.As(err, &refused) {
+		t.Fatalf("err = %#v, want a DaemonRefused", err)
+	}
+	var tooOld *RuntimeTooOld
+	if errors.As(err, &tooOld) {
+		t.Errorf("a verb's own refusal was rewritten as a version mismatch: %s", err.Error())
+	}
+	if code := clientcmd.CodeOf(err, 0); code == clientcmd.ExitUnavailable {
+		t.Errorf("a verb's own refusal left with ExitUnavailable")
 	}
 }

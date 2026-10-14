@@ -162,6 +162,13 @@ func (c *Client) CallWithDeadline(action string, payload any, timeout time.Durat
 	}
 
 	if !resp.Ok {
+		// A FRAMING FAILURE IS NOT A VERB'S REFUSAL, and it must not be shown as one: an older runtime lists the
+		// actions it knows and rejects everything else in serde's own words ("invalid request JSON: unknown
+		// variant `QueueList`, expected one of ..."), which as the verb's answer reads as something about the
+		// ROOM - and nothing about the room was asked or answered. Typed here, where the envelope is read.
+		if IsFramingFailure(resp.Error) {
+			return nil, runtimeTooOld(action, c.SocketPath, resp.Error)
+		}
 		// THE DAEMON'S OWN REFUSAL, typed because it is the one failure that says something about the ROOM: the daemon
 		// answered, and it will not serve this request - for a status read, a room it does not know.
 		return nil, &DaemonRefused{Reason: resp.Error}
@@ -244,6 +251,64 @@ func unreadableAnswer(action string, err error) error {
 				"the runtime's %s answer could not be read (the document it sent is not the shape this verb asks for): %v",
 				action, err),
 			Code: clientcmd.ExitRoomRefused,
+		},
+	}
+}
+
+// RuntimeTooOld is a FRAMING failure read as what it is: the runtime answered on the socket and did not
+// understand the REQUEST. It is a different fact from DaemonRefused in both directions - nothing about the room
+// was asked, so nothing about it was answered - and it is a different fact from UnreadableAnswer too, because
+// the runtime's own words came back in a frame this client reads perfectly.
+//
+// It leaves with ExitUnavailable: this client is correct, and the thing it is talking to cannot serve it. A verb
+// may print the reason as its whole output; nothing may be retried and nothing falls back (the ruling's R4).
+//
+// WHY THE CLIENT MATCHES TEXT HERE instead of the runtime marking its own framing failures with a kind: the
+// runtime this must survive is OLDER than this build - that is the entire case - so a marker added to the
+// runtime now cannot be in the answer that arrives. A kind would only help a future runtime, and a future
+// runtime is the case where the install discipline (C1/C4: a matching build beside the client) already wins. The
+// markers are named here and pinned by a test, so a wording drift is visible rather than silent.
+//
+// WHAT IT MUST NEVER DO: rewrite a verb's own refusal. `unknown qitem_id 'x'` is the runtime refusing WORK, and
+// reporting that as "unimplemented" would convert a real refusal into a lie about versions. Only the framing
+// markers below convert, and every other ok=false passes through as DaemonRefused, untouched.
+type RuntimeTooOld struct {
+	*clientcmd.CodedError
+	Action string
+	Socket string
+	Reason string
+}
+
+// Unwrap keeps CodeOf working through the wrapper: an older runtime is still a coded refusal.
+func (e *RuntimeTooOld) Unwrap() error { return e.CodedError }
+
+// framingMarkers are serde's own words for a request the runtime could not frame at all. Measured against the
+// installed runtime, which answers an action it does not know with `invalid request JSON: unknown variant
+// \`QueueList\`, expected one of StartRoom, StopRoom, ...` - the same complaint for every verb added after it was
+// built, which is why this is a boundary rather than an accident.
+var framingMarkers = []string{"invalid request JSON", "unknown variant"}
+
+// IsFramingFailure reports whether the runtime's refusal is about the REQUEST rather than about the work.
+func IsFramingFailure(reason string) bool {
+	for _, marker := range framingMarkers {
+		if strings.Contains(reason, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeTooOld(action, socket, reason string) error {
+	return &RuntimeTooOld{
+		Action: action,
+		Socket: socket,
+		Reason: reason,
+		CodedError: &clientcmd.CodedError{
+			Message: fmt.Sprintf(
+				"%s is not implemented by the runtime at %s (it is older than this client; it answered %q). "+
+					"The runtime and this binary are different builds: restart the runtime for this seat (client %s) or run the matching binary.",
+				action, socket, strings.TrimSpace(reason), clientcmd.Version),
+			Code: clientcmd.ExitUnavailable,
 		},
 	}
 }
