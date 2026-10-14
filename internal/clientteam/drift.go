@@ -151,7 +151,7 @@ func driftLine(item finding) string {
 }
 
 // driftRoots is the roots a recorded path may be relative to, in resolution order: --root (default the
-// project directory) holds import-project's paths; --library-root (default $OPENRIG_SKILLS_ROOT) holds
+// project directory) holds import-project's paths; --library-root (default $AGENTHUB_SKILLS_ROOT) holds
 // publish-skills' library paths.
 func driftRoots(rootFlag, libraryFlag string) ([]string, error) {
 	root := rootFlag

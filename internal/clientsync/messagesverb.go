@@ -71,7 +71,7 @@ waits for the next pass instead of ending the child.
 
   --limit <n>  the page size asked of the cloud (the cloud's own default and clamp apply)
   --dry-run    pull and print, send and acknowledge nothing (a --rig read is one pass; refused with --watch)
-  --out <dir>  where the delivered ledger lives (default ` + "`~/.openrig/agenthub-seats`" + `)`
+  --out <dir>  where the delivered ledger lives (default ` + "`~/.config/4genthub/seats`" + `)`
 
 // HTTPTimeout is not redefined here: RequestJSON owns the timeout this package uses.
 
@@ -84,34 +84,13 @@ const humanSeatSession = "human@kernel"
 // real one types the text into a session on this machine, which no test can do — and no other machine
 // can do at all, which is the whole reason the cloud stores the text instead of delivering it.
 //
-// IT TAKES THE ROUTE `rig send` ITSELF TAKES. The envelope is rendered by the CLI's own body renderer,
-// so a delivered message reaches the pane in exactly the wrapper a human's own send produces, and there
-// is no child process left to outrun or to fail for a reason of its own.
-//
-// THE SENDER IS GIVEN RATHER THAN INHERITED, and that is the one thing the exec it replaces had to do by
-// hand: the deliverer runs OUTSIDE any seat shell and the text is the human's, so the envelope must say
-// human@kernel — where the exec stamped OPENRIG_SESSION_NAME onto the child's environment to get the
-// same effect.
-var sendToSession = func(ctx context.Context, session, text string) error {
-	result, status, err := clientruntime.OpenRigSend(ctx, session, text, clientruntime.SendOptions{Sender: humanSeatSession})
-	if err != nil {
+// It delivers through the runtime socket. THE SENDER IS GIVEN RATHER THAN INHERITED: the deliverer runs
+// OUTSIDE any seat shell and the text is the human's, so the envelope must say human@kernel.
+var sendToSession = func(_ context.Context, session, text string) error {
+	if _, err := clientruntime.RuntimeSendText(session, text, clientruntime.SendOptions{Sender: humanSeatSession}); err != nil {
 		return fmt.Errorf("send to %s: %w", session, err)
 	}
-	if status < 200 || status > 299 || !result.OK {
-		return fmt.Errorf("send to %s: %s", session, deliveryRefusal(result, status))
-	}
 	return nil
-}
-
-// deliveryRefusal is the daemon's own words for a refusal, with the status as the last resort: a body this
-// build could not read is still reported rather than flattened into a bare code.
-func deliveryRefusal(result clientruntime.SendResult, status int) string {
-	for _, detail := range []string{result.Detail, result.Error, result.Warning} {
-		if strings.TrimSpace(detail) != "" {
-			return oneLine(detail)
-		}
-	}
-	return fmt.Sprintf("the daemon answered HTTP %d", status)
 }
 
 // seatMessage is one pulled message, as the pull describes it.

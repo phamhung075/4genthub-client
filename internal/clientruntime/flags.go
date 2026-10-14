@@ -8,7 +8,7 @@ import (
 // FlagSpec is one option a shim verb accepts.
 //
 // WHY THIS EXISTS. Go's flag package stops parsing at the first positional argument, so an option
-// written AFTER the message — which is exactly how the OpenRig CLI documents its own verbs, e.g.
+// written AFTER the message — which is exactly how the rig CLI documents its own verbs, e.g.
 // `rig send <session> 'message' --verify` (the daemon's own `whoami` prints that form as
 // `commands.sendExamples`) — became message text: the verb read rig=<session>, seat="text",
 // message="--verify" and delivered nothing to the named seat. The CLI's parser accepts an option

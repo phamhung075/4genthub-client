@@ -8,7 +8,7 @@ package clientskills
 // this test fails on exactly those ten and on nothing else, and after it there are none.
 //
 // SCOPE - read before extending. CHECKED: every `SKILL.md` in the tree plus the two companion
-// documents a skill ships beside it (`OPENRIG.md`, `LOCAL-INSIGHTS.md`) - the unit a seat actually
+// documents a skill ships beside it (`VENDORING.md`, `LOCAL-INSIGHTS.md`) - the unit a seat actually
 // loads. NOT CHECKED, each for a reason:
 //   - fenced code blocks. They carry samples, not links; `skills/share/token-economy/TEMPLATES.md`
 //     shows `**[func]([params])**` as an example of the style it warns against.
@@ -35,7 +35,7 @@ import (
 // checkedDoc names the documents of a shipped skill that are read as its own prose.
 func checkedDoc(name string) bool {
 	switch name {
-	case "SKILL.md", "OPENRIG.md", "LOCAL-INSIGHTS.md":
+	case "SKILL.md", "VENDORING.md", "LOCAL-INSIGHTS.md":
 		return true
 	}
 	return false

@@ -6,8 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,26 +15,17 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-// THE RUNTIME-FIRST SEAM, PINNED WHERE IT CAN BE FALSIFIED.
+// THE RUNTIME TRANSPORT, PINNED WHERE IT CAN BE FALSIFIED.
 //
-// These tests are the U3 acceptance's instrument. The verb they exercise used to resolve its transport from
-// the SEAT ENVIRONMENT first: with OPENRIG_SESSION_NAME set and OPENRIG_URL naming a daemon, `whoami` and
-// `queue` went straight to HTTP and answered "the OpenRig daemon at http://127.0.0.1:1 is not answering" on a
-// machine whose runtime was up and perfectly able to answer. The fix is the preference order, and the
-// preference order is what is asserted below — in all three combinations:
+// The runtime socket is the only transport: a runtime that answers is the answer, and with none the refusal
+// names the RUNTIME (its socket and the knob that points elsewhere).
 //
-//	runtime present (with a daemon also up)  -> the RUNTIME answers, and the daemon is NOT asked;
-//	runtime absent, daemon present           -> the daemon answers, exactly as it did before;
-//	neither                                  -> the refusal names the RUNTIME.
-//
-// They fail on the pre-change code for the plainest reason: the fake runtime socket below is never dialled.
-//
-// hermeticSeat empties the AGENTHUB_* / OPENRIG_* variables a test does not explicitly want, so a test run
+// hermeticSeat empties the AGENTHUB_* variables a test does not explicitly want, so a test run
 // from inside a seat shell (which is how this repo is worked on) cannot be answered by the shell's own
 // environment instead of by the thing under test.
 func hermeticSeat(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{agentHubRoomEnv, agentHubSeatEnv, agentHubRoleEnv, agentHubRuntimeEnv, agentHubSessionEnv, openRigSessionEnv, legacySessionEnv, openRigURLEnv, openRigPortEnv, openRigHomeEnv} {
+	for _, name := range []string{agentHubRoomEnv, agentHubSeatEnv, agentHubRoleEnv, agentHubRuntimeEnv, agentHubSessionEnv} {
 		t.Setenv(name, "")
 	}
 }
@@ -200,206 +189,27 @@ func awaitRequest(t *testing.T, requests <-chan string) string {
 	}
 }
 
-// TestQueueListPrefersTheRuntimeEvenWhenADaemonIsUp is the primary preference: a runtime that answers wins,
-// and the OpenRig daemon is NOT asked at all — its handler fails the test if a single request reaches it.
-//
-// The frame is pinned as the exact line, because the room and the destination are the two things a reader
-// cannot check from the outside: the room comes from the seat's environment and the destination from this
-// seat's native session name.
-func TestQueueListPrefersTheRuntimeEvenWhenADaemonIsUp(t *testing.T) {
-	hermeticSeat(t)
-	t.Setenv(agentHubRoomEnv, "room-a")
-	t.Setenv(agentHubSeatEnv, "go-dev")
-	t.Setenv(agentHubSessionEnv, "agenthub--room-a--go-dev")
-	t.Setenv(openRigHomeEnv, t.TempDir())
-
-	daemonCalls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		daemonCalls++
-		t.Errorf("the OpenRig daemon was asked while a runtime answered: %s %s", r.Method, r.URL.Path)
-	}))
-	defer srv.Close()
-	t.Setenv(openRigURLEnv, srv.URL)
-
-	sock, requests := fakeRuntime(t, func(string) string {
-		return okDataResponse(`[` + queueTestRowJSON + `]`)
-	})
-	t.Setenv(RuntimeSocketEnv, sock)
-
-	var out, errOut bytes.Buffer
-	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
-
-	if code != 0 {
-		t.Fatalf("queue exit = %d, stderr = %q", code, errOut.String())
-	}
-	if daemonCalls != 0 {
-		t.Fatalf("%d requests reached the OpenRig daemon, want none", daemonCalls)
-	}
-	want := `{"action":"QueueList","payload":{"filter":{"destination_session":"agenthub--room-a--go-dev","active_only":true},"room":"room-a"}}`
-	if got := awaitRequest(t, requests); got != want {
-		t.Errorf("runtime frame:\n got %q\nwant %q", got, want)
-	}
-	for _, want := range []string{"q-item-7", "in-progress", "sess-src", "wire the rail"} {
-		if !strings.Contains(out.String(), want) {
-			t.Errorf("queue printed %q, want it to carry %q", out.String(), want)
-		}
-	}
-}
-
-// TestQueueListNamesTheRuntimeWhenNothingAnswersEither is the acceptance's queue instrument, in the
-// combination the acceptance cannot guarantee (no runtime on this machine): the refusal names the RUNTIME —
-// its socket, and the knob that points elsewhere — and never the removed sentence about the OpenRig daemon.
-func TestQueueListNamesTheRuntimeWhenNothingAnswersEither(t *testing.T) {
+// TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoRuntime: with no runtime to ask, `whoami --json` still
+// exits 0 and prints the identity this shell's environment carries, and says it came from the environment.
+func TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoRuntime(t *testing.T) {
 	hermeticSeat(t)
 	noRuntimeSocket(t)
-	t.Setenv(openRigSessionEnv, "4genthub-min-go-dev@4genthub-min")
-	// A daemon this shell names but nothing is listening on: the shim's own measured failure mode.
-	t.Setenv(openRigURLEnv, "http://127.0.0.1:1")
-
-	var out, errOut bytes.Buffer
-	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
-
-	if code == 0 {
-		t.Fatalf("queue exited 0 with no transport; stdout = %q", out.String())
-	}
-	if out.Len() != 0 {
-		t.Errorf("a refused read printed %q on stdout, want nothing", out.String())
-	}
-	for _, want := range []string{"no runtime is answering at", RuntimeSocketEnv, "nothing was measured"} {
-		if !strings.Contains(errOut.String(), want) {
-			t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
-		}
-	}
-	if strings.Contains(errOut.String(), "is not answering") {
-		t.Errorf("the runtime-first refusal still blames the OpenRig daemon: %q", errOut.String())
-	}
-	if strings.Contains(out.String(), "Measured 0") {
-		t.Errorf("a transportless queue claimed a measurement: %q", out.String())
-	}
-}
-
-// TestQueueListReportsTheRuntimesOwnRefusalBySocket: a runtime that ANSWERS with a refusal has answered, and
-// the answer names the transport it came from — never a fabricated empty list, and never the daemon whose
-// queue was not even asked.
-func TestQueueListReportsTheRuntimesOwnRefusalBySocket(t *testing.T) {
-	hermeticSeat(t)
 	t.Setenv(agentHubRoomEnv, "room-a")
 	t.Setenv(agentHubSeatEnv, "go-dev")
-
-	daemonCalls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		daemonCalls++
-	}))
-	defer srv.Close()
-	t.Setenv(openRigURLEnv, srv.URL)
-
-	sock, _ := fakeRuntime(t, func(string) string {
-		return `{"ok":false,"error":"no such room 'room-a': /state/rooms/room-a is not a room directory"}` + "\n"
-	})
-	t.Setenv(RuntimeSocketEnv, sock)
+	t.Setenv(agentHubRuntimeEnv, "omp")
 
 	var out, errOut bytes.Buffer
-	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
-
-	if code != 1 {
-		t.Fatalf("exit = %d, want the refusal code 1; stderr = %q", code, errOut.String())
-	}
-	if daemonCalls != 0 {
-		t.Errorf("%d requests reached the OpenRig daemon, want none", daemonCalls)
-	}
-	if out.Len() != 0 {
-		t.Errorf("a refused read printed %q on stdout", out.String())
-	}
-	if !strings.Contains(errOut.String(), sock) || !strings.Contains(errOut.String(), "no such room 'room-a'") {
-		t.Errorf("stderr = %q, want the runtime's socket and its own reason", errOut.String())
-	}
-}
-
-// TestQueueListNamesAnOlderRuntimeThatCannotFrameTheRequest: this is the measured defect, driven end to end. The
-// installed runtime does not know QueueList and says so in serde's own words; shown as the verb's answer that
-// reads as a fact about the room, and it is not one - nothing about the room was asked or answered. The client
-// must NAME the version boundary and leave with ExitUnavailable, with nothing on the (empty) stdout.
-func TestQueueListNamesAnOlderRuntimeThatCannotFrameTheRequest(t *testing.T) {
-	hermeticSeat(t)
-	t.Setenv(agentHubRoomEnv, "room-a")
-	t.Setenv(agentHubSeatEnv, "go-dev")
-
-	sock, _ := fakeRuntime(t, func(string) string {
-		return "{\"ok\":false,\"error\":\"invalid request JSON: unknown variant `QueueList`, expected one of " +
-			"`StartRoom`, `StopRoom`\"}\n"
-	})
-	t.Setenv(RuntimeSocketEnv, sock)
-
-	var out, errOut bytes.Buffer
-	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
-
-	if code != clientcmd.ExitUnavailable {
-		t.Fatalf("exit = %d, want ExitUnavailable (%d); stderr = %q", code, clientcmd.ExitUnavailable, errOut.String())
-	}
-	if out.Len() != 0 {
-		t.Errorf("an unimplemented verb printed %q on stdout", out.String())
-	}
-	for _, want := range []string{"QueueList", sock, "different builds", "older than this client"} {
-		if !strings.Contains(errOut.String(), want) {
-			t.Errorf("stderr does not name %q:\n%s", want, errOut.String())
-		}
-	}
-}
-
-// TestQueueListFallsBackToTheDaemonWhenNoRuntimeAnswers is the regression guard for the fallback: with no
-// runtime on this machine, the daemon path must behave exactly as it did before this change.
-func TestQueueListFallsBackToTheDaemonWhenNoRuntimeAnswers(t *testing.T) {
-	hermeticSeat(t)
-	noRuntimeSocket(t)
-	t.Setenv(openRigSessionEnv, "4genthub-min-go-dev@4genthub-min")
-
-	var gotPath, gotDest string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath, gotDest = r.URL.Path, r.URL.Query().Get("destinationSession")
-		_, _ = w.Write([]byte(`[{"qitemId":"qitem-aaa","state":"pending","sourceSession":"s@r","summary":"first owed task"}]`))
-	}))
-	defer srv.Close()
-	t.Setenv(openRigURLEnv, srv.URL)
-
-	var out, errOut bytes.Buffer
-	code := queueCommand{}.Run(context.Background(), nil, nil, &out, &errOut)
+	code := whoamiCommand{}.Run(context.Background(), []string{"--json"}, &out, &errOut)
 
 	if code != 0 {
-		t.Fatalf("queue exit = %d, stderr = %q", code, errOut.String())
-	}
-	if gotPath != "/api/queue/list" || gotDest != "4genthub-min-go-dev@4genthub-min" {
-		t.Errorf("asked %q for %q, want the daemon path unchanged", gotPath, gotDest)
-	}
-	if !strings.Contains(out.String(), "qitem-aaa") {
-		t.Errorf("stdout = %q, want the daemon's row", out.String())
-	}
-}
-
-// TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoDaemonAtAll IS the U3 acceptance, not an incidental case:
-// with $OPENRIG_URL at a dead port and no runtime to ask, `whoami --json` must still exit 0 and print the
-// seat identity — the identity this shell's environment carries. Before the change this verb exited 3 with
-// the OpenRig daemon's connection error, because a set OPENRIG_SESSION_NAME sent it straight to HTTP.
-func TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoDaemonAtAll(t *testing.T) {
-	hermeticSeat(t)
-	noRuntimeSocket(t)
-	t.Setenv(openRigSessionEnv, "4genthub-min-go-dev@4genthub-min")
-	t.Setenv(openRigRuntimeEnv, "omp")
-	t.Setenv(openRigURLEnv, "http://127.0.0.1:1")
-
-	var out, errOut bytes.Buffer
-	code := whoamiCommand{}.Run(context.Background(), nil, []string{"--json"}, &out, &errOut)
-
-	if code != 0 {
-		t.Fatalf("whoami --json exit = %d with no daemon at all, stderr = %q", code, errOut.String())
+		t.Fatalf("whoami --json exit = %d with no runtime, stderr = %q", code, errOut.String())
 	}
 	var printed struct {
 		ResolvedBy string `json:"resolved_by"`
 		Identity   struct {
-			RigName     string `json:"rigName"`
-			MemberID    string `json:"memberId"`
-			Runtime     string `json:"runtime"`
-			SessionName string `json:"sessionName"`
-			LogicalID   string `json:"logical_id"`
+			RigName  string `json:"rigName"`
+			MemberID string `json:"memberId"`
+			Runtime  string `json:"runtime"`
 		} `json:"identity"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &printed); err != nil {
@@ -408,36 +218,18 @@ func TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoDaemonAtAll(t *testing.T) 
 	if printed.ResolvedBy != "environment" {
 		t.Errorf("resolved_by = %q, want the seat's own environment to say so", printed.ResolvedBy)
 	}
-	if printed.Identity.RigName != "4genthub-min" || printed.Identity.MemberID != "4genthub-min-go-dev" {
-		t.Errorf("identity = %+v, want the seat the session name names", printed.Identity)
-	}
-	if printed.Identity.SessionName != "4genthub-min-go-dev@4genthub-min" {
-		t.Errorf("sessionName = %q, want the seat's own OPENRIG_SESSION_NAME", printed.Identity.SessionName)
-	}
-	if printed.Identity.Runtime != "omp" {
-		t.Errorf("runtime = %q, want the seat's OPENRIG_RUNTIME", printed.Identity.Runtime)
+	if printed.Identity.RigName != "room-a" || printed.Identity.MemberID != "go-dev" || printed.Identity.Runtime != "omp" {
+		t.Errorf("identity = %+v, want the seat the environment names", printed.Identity)
 	}
 }
 
-// TestWhoamiPrefersTheRuntimesIdentityOverTheDaemon: an identity the runtime resolves wins, and the daemon is
-// not asked for it. The document is the runtime's own — the identity below exists nowhere in the environment.
-func TestWhoamiPrefersTheRuntimesIdentityOverTheDaemon(t *testing.T) {
+// TestWhoamiPrefersTheRuntimesIdentity: an identity the runtime resolves wins over the environment's. The
+// document is the runtime's own - its role exists nowhere in the environment.
+func TestWhoamiPrefersTheRuntimesIdentity(t *testing.T) {
 	hermeticSeat(t)
 	t.Setenv(agentHubRoomEnv, "room-a")
 	t.Setenv(agentHubSeatEnv, "go-dev")
 	t.Setenv(agentHubSessionEnv, "agenthub--room-a--go-dev")
-	// The OpenRig daemon is named TOO, so the pre-change verb — which resolved its transport from the seat
-	// environment — had somewhere to go and the handler below would have been called.
-	t.Setenv(openRigSessionEnv, "4genthub-min-go-dev@4genthub-min")
-	t.Setenv(openRigHomeEnv, t.TempDir())
-
-	daemonCalls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		daemonCalls++
-		t.Errorf("the OpenRig daemon was asked for an identity the runtime answered: %s", r.URL.Path)
-	}))
-	defer srv.Close()
-	t.Setenv(openRigURLEnv, srv.URL)
 
 	const identityDoc = `{"resolved_by":"session_name","identity":{"rigName":"room-a","memberId":"go-dev","runtime":"omp","sessionName":"agenthub--room-a--go-dev","logical_id":"go-dev","role":"developer"},"peers":[],"edges":{"outgoing":[],"incoming":[]},"transcript":{"enabled":true}}`
 	sock, requests := fakeRuntime(t, func(string) string {
@@ -446,13 +238,10 @@ func TestWhoamiPrefersTheRuntimesIdentityOverTheDaemon(t *testing.T) {
 	t.Setenv(RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := whoamiCommand{}.Run(context.Background(), nil, []string{"--json"}, &out, &errOut)
+	code := whoamiCommand{}.Run(context.Background(), []string{"--json"}, &out, &errOut)
 
 	if code != 0 {
 		t.Fatalf("whoami exit = %d, stderr = %q", code, errOut.String())
-	}
-	if daemonCalls != 0 {
-		t.Errorf("%d requests reached the OpenRig daemon, want none", daemonCalls)
 	}
 	if got := awaitRequest(t, requests); got != `{"action":"Whoami","payload":{"session":"agenthub--room-a--go-dev"}}` {
 		t.Errorf("runtime frame:\n got %q\nwant the Whoami frame for this seat", got)
@@ -460,8 +249,7 @@ func TestWhoamiPrefersTheRuntimesIdentityOverTheDaemon(t *testing.T) {
 	var printed struct {
 		ResolvedBy string `json:"resolved_by"`
 		Identity   struct {
-			RigName string `json:"rigName"`
-			Role    string `json:"role"`
+			Role string `json:"role"`
 		} `json:"identity"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &printed); err != nil {
@@ -472,23 +260,12 @@ func TestWhoamiPrefersTheRuntimesIdentityOverTheDaemon(t *testing.T) {
 	}
 }
 
-// TestWhoamiFallsThroughARefusedRuntimeToTheDaemon: a runtime that ANSWERS with a refusal has not resolved
-// this seat, so the daemon — when this shell names one — still gets its turn. Reporting the runtime's refusal
-// here would make an identity question fail on the machine that could have answered it.
-func TestWhoamiFallsThroughARefusedRuntimeToTheDaemon(t *testing.T) {
+// TestWhoamiFallsThroughARefusedRuntimeToTheEnvironment: a runtime that ANSWERS with a refusal has not
+// resolved this seat, so the seat's own environment still gets its turn.
+func TestWhoamiFallsThroughARefusedRuntimeToTheEnvironment(t *testing.T) {
 	hermeticSeat(t)
 	t.Setenv(agentHubRoomEnv, "room-a")
 	t.Setenv(agentHubSeatEnv, "go-dev")
-	t.Setenv(openRigSessionEnv, "4genthub-min-go-dev@4genthub-min")
-	t.Setenv(openRigHomeEnv, t.TempDir())
-
-	daemonCalls := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		daemonCalls++
-		_, _ = w.Write([]byte(whoamiDoc))
-	}))
-	defer srv.Close()
-	t.Setenv(openRigURLEnv, srv.URL)
 
 	sock, _ := fakeRuntime(t, func(string) string {
 		return `{"ok":false,"error":"seat identity could not be resolved from active rooms"}` + "\n"
@@ -496,27 +273,20 @@ func TestWhoamiFallsThroughARefusedRuntimeToTheDaemon(t *testing.T) {
 	t.Setenv(RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := whoamiCommand{}.Run(context.Background(), nil, []string{"--json"}, &out, &errOut)
+	code := whoamiCommand{}.Run(context.Background(), []string{"--json"}, &out, &errOut)
 
 	if code != 0 {
 		t.Fatalf("whoami exit = %d, stderr = %q", code, errOut.String())
 	}
-	if daemonCalls != 1 {
-		t.Fatalf("%d requests reached the OpenRig daemon, want exactly one", daemonCalls)
-	}
-	if !strings.Contains(out.String(), `"4genthub-min.go-dev"`) {
-		t.Errorf("stdout = %q, want the daemon's own document", out.String())
+	if !strings.Contains(out.String(), `"environment"`) || !strings.Contains(out.String(), `"go-dev"`) {
+		t.Errorf("stdout = %q, want the environment's identity", out.String())
 	}
 }
 
-// TestResolveTransportPrefersTheRuntimeThenTheDaemon states the preference order itself, in the three
-// combinations, so a future edit to the seam fails here rather than in a room.
-func TestResolveTransportPrefersTheRuntimeThenTheDaemon(t *testing.T) {
-	t.Run("runtime first, daemon up too", func(t *testing.T) {
+// TestResolveTransportIsTheRuntimeOrNothing states the whole seam: a runtime that answers, or no transport.
+func TestResolveTransportIsTheRuntimeOrNothing(t *testing.T) {
+	t.Run("runtime present", func(t *testing.T) {
 		hermeticSeat(t)
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-		defer srv.Close()
-		t.Setenv(openRigURLEnv, srv.URL)
 		sock, _ := fakeRuntime(t, func(string) string { return `{"ok":true}` + "\n" })
 		t.Setenv(RuntimeSocketEnv, sock)
 		if got := ResolveTransport(); got != TransportRuntime {
@@ -524,16 +294,7 @@ func TestResolveTransportPrefersTheRuntimeThenTheDaemon(t *testing.T) {
 		}
 	})
 
-	t.Run("no runtime, daemon named", func(t *testing.T) {
-		hermeticSeat(t)
-		noRuntimeSocket(t)
-		t.Setenv(openRigURLEnv, "http://127.0.0.1:1")
-		if got := ResolveTransport(); got != TransportDaemon {
-			t.Errorf("ResolveTransport() = %v, want the daemon fallback", got)
-		}
-	})
-
-	t.Run("neither", func(t *testing.T) {
+	t.Run("no runtime", func(t *testing.T) {
 		hermeticSeat(t)
 		noRuntimeSocket(t)
 		if got := ResolveTransport(); got != TransportNone {

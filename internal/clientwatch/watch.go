@@ -9,9 +9,8 @@
 //
 //   - `--rig` is REQUIRED. The Python defaulted it to the owner's own rig name, and the mission
 //     forbids an owner default; the doc already says "there is no default room".
-//   - the state root is `--state-root`, else $OPENRIG_STATE_ROOT, else the machine's own
-//     ~/.openrig/state/omp (clientenv.DefaultStateRoot) - the first place docs/WATCH.md says the feed
-//     looks - and a machine where that root is not there, or is without herdr, exits non-zero with ONE
+//   - the state root is `--state-root`, else the machine's own
+//     ~/.config/4genthub (clientenv.DefaultStateRoot) - and a machine where that root is not there, or is without herdr, exits non-zero with ONE
 //     message naming the path it tried, instead of failing on a missing owner path.
 //   - every external process goes through ONE injectable seam (`execCommand`), so the tests need no
 //     herdr, no tmux, no rig and no seat, and the refusals are testable by name.
@@ -58,9 +57,6 @@ var execCommand = func(ctx context.Context, name string, args ...string) (string
 // lookPath is the second half of the same seam: whether a tool exists at all.
 var lookPath = exec.LookPath
 
-// stateRootEnv names the override for the omp state root the logs are read from.
-const stateRootEnv = "OPENRIG_STATE_ROOT"
-
 // shared are the flags every reading verb takes. `--rig` has NO default: the doc says there is no
 // default room, and an owner's rig name must never be baked in.
 type shared struct {
@@ -87,7 +83,7 @@ func detailFlag(detail bool) string {
 }
 
 // resolveStateRoot is the watch group's state root: the ONE resolution every verb shares
-// (clientenv.ResolveStateRoot - `--state-root`, else $OPENRIG_STATE_ROOT, else this machine's own
+// (clientenv.ResolveStateRoot - `--state-root`, else this machine's own
 // default), plus the two things this group adds on top. Both are deliberate, and both stay here:
 //
 //   - the root must EXIST and be a directory, because every pane is about to read session logs under
@@ -122,7 +118,7 @@ func watchRootError(err error) error {
 }
 
 // seatStore is where this machine materializes a room's seats: clientenv.DefaultSeatStore(), the
-// account home's .openrig/agenthub-seats, never $HOME. A seat runs with HOME pointed at its own state
+// account home's .config/4genthub/seats, never $HOME. A seat runs with HOME pointed at its own state
 // directory, so an environment-resolved store would refuse every real room when the client runs from a
 // seat. It is a variable only so a test can point it at a scratch tree.
 var seatStore = clientenv.DefaultSeatStore

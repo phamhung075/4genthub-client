@@ -54,19 +54,14 @@ func newRestorer(log *teeLog) (*restorer, error) {
 		briefs:       briefs,
 		ensureDaemon: func(ctx context.Context) error { return clientruntime.NewClient("").EnsureDaemon(ctx) },
 		revive:       reviveRoom,
-		// send is the brief's delivery, over the client's OWN transports: the runtime socket, then the
-		// OpenRig daemon, then a refusal. It used to try SendTextToSeat behind a guard that parsed the
-		// Python-era agenthub--<room>--<seat> session shape - which the sessions this rig actually has
-		// (4genthub-min-reviewer@4genthub-min) do not match - and then exec `rig send`, whose failure the
-		// closure swallowed: a brief reported as delivered and dropped. DeliverToSession takes the session
-		// name as given, so the native branch is reachable for the real shape, and a refusal in words is
-		// what a caller gets when no transport answers.
-		send: func(ctx context.Context, session, text string) error {
+		// send is the brief's delivery through the runtime socket. DeliverToSession takes the session name
+		// as given, and a refusal in words is what a caller gets when the runtime does not answer.
+		send: func(_ context.Context, session, text string) error {
 			var refusal strings.Builder
-			if code := clientruntime.DeliverToSession(ctx, session, text, io.Discard, &refusal); code != clientcmd.ExitOK {
+			if code := clientruntime.DeliverToSession(session, text, io.Discard, &refusal); code != clientcmd.ExitOK {
 				why := strings.TrimSpace(refusal.String())
 				if why == "" {
-					why = "no transport answered and none said why"
+					why = "the runtime did not answer and said nothing"
 				}
 				return errors.New(why)
 			}
@@ -128,7 +123,7 @@ func (r *restorer) restore(rigName, brief string) bool {
 	}
 	r.openWatch(rigName)
 	// The pointer names the CLIENT's own read - `4genteam ps <RIG> --nodes`, which reads the node table through
-	// the runtime (RigEntries) - and not `rig ps --nodes --rig RIG`, which is the tool this cutover removes and
+	// the runtime (RoomNodes) - and not `rig ps --nodes --rig RIG`, which is the tool this cutover removes and
 	// which an operator following the old line would find missing (the gate's nit at bb4f412).
 	r.log.printf("%s: done — verify with: 4genteam ps %s --nodes", rigName, rigName)
 	return true
@@ -230,7 +225,7 @@ func (r *restorer) daemonUp() {
 }
 
 // reviveRoom starts the stopped seats of a room the runtime holds a spec for. Each seat resumes its own saved
-// session, which is what the OpenRig snapshot restore did. A seat that already runs is left alone: a restart
+// session, which is what the rig orchestrator snapshot restore did. A seat that already runs is left alone: a restart
 // would cycle live agents, and `continue` on a live room must change nothing. A room the runtime does not
 // know is the daemon's refusal, returned as it came.
 func reviveRoom(_ context.Context, room string) error {

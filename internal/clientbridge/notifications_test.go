@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// D3's producer: the bridge reads the OpenRig rows addressed to a rig's human and posts ONE
+// D3's producer: the bridge reads the rig orchestrator rows addressed to a rig's human and posts ONE
 // notification frame per row. These cases drive the sweep through the package's own seams - the local
 // tools are fixtures behind Runner, the notification transport is a script of answers - so nothing
 // here touches a rig, a seat or a network, and nothing sleeps.

@@ -49,10 +49,10 @@ func isolate(t *testing.T) string {
 	return home
 }
 
-// writeBrief drops <home>/.openrig/briefs/<rig>.txt, which is what "a rig that has a brief" means.
+// writeBrief drops <home>/.config/4genthub/briefs/<rig>.txt, which is what "a rig that has a brief" means.
 func writeBrief(t *testing.T, home, rigName string) {
 	t.Helper()
-	dir := filepath.Join(home, ".openrig", "briefs")
+	dir := filepath.Join(home, ".config", "4genthub", "briefs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestServerIdentityFirstWriteAndChange(t *testing.T) {
 	if got := buf.String(); !strings.Contains(got, "tmux server identity: 100 2026-01-01 (no change recorded before this poll)") {
 		t.Errorf("first write did not log the identity:\n%s", got)
 	}
-	path := filepath.Join(home, ".openrig", "state", watchdogServerIDName)
+	path := filepath.Join(home, ".config", "4genthub", "state", watchdogServerIDName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("identity file: %v", err)
@@ -424,7 +424,7 @@ func TestRestoreRunsTheGateBeforeRestoring(t *testing.T) {
 // TestAllWithoutWatchIsUsage: --all needs --watch, and exits 2 when it has none.
 func TestAllWithoutWatchIsUsage(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code := watchdogCommand{}.Run(context.Background(), nil, []string{"--all"}, &out, &errBuf)
+	code := watchdogCommand{}.Run(context.Background(), []string{"--all"}, &out, &errBuf)
 	if code != clientcmd.ExitUsage {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitUsage)
 	}
@@ -450,7 +450,7 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 	tmuxRead = func() (string, error) { return "zulu-seat@zulu\n", nil }
 
 	var out, errBuf bytes.Buffer
-	code := watchdogCommand{}.Run(context.Background(), nil, []string{"--check"}, &out, &errBuf)
+	code := watchdogCommand{}.Run(context.Background(), []string{"--check"}, &out, &errBuf)
 	if code != exitDead {
 		t.Fatalf("exit %d, want %d: a dead rig that is not last must still count (stderr %q)", code, exitDead, errBuf.String())
 	}
@@ -466,7 +466,7 @@ func TestListingWorksWithoutRigTool(t *testing.T) {
 	home := isolate(t)
 	writeBrief(t, home, "alpha")
 	var out, errBuf bytes.Buffer
-	code := watchdogCommand{}.Run(context.Background(), nil, nil, &out, &errBuf)
+	code := watchdogCommand{}.Run(context.Background(), nil, &out, &errBuf)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0 (stderr %q)", code, errBuf.String())
 	}

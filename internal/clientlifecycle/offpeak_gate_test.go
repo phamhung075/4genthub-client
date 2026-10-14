@@ -81,7 +81,7 @@ func TestUpRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}
@@ -133,7 +133,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 
 			args := append([]string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, c.extra...)
 			var out, errOut bytes.Buffer
-			code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, args, &out, &errOut)
+			code := (upCommand{}).Run(context.Background(), args, &out, &errOut)
 			if code != c.want {
 				t.Fatalf("exit %d, want %d (stderr %q)", code, c.want, errOut.String())
 			}
@@ -162,7 +162,7 @@ func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 		{"room-alpha", clientoffpeak.FlagAllowPeak, clientoffpeak.FlagAllowPeak, "extra"},
 	} {
 		var out, errOut bytes.Buffer
-		code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, args, &out, &errOut)
+		code := (upCommand{}).Run(context.Background(), args, &out, &errOut)
 		if code != clientcmd.ExitRoomRefused {
 			t.Fatalf("%v: exit %d, want %d (stderr %q)", args, code, clientcmd.ExitRoomRefused, errOut.String())
 		}
@@ -181,8 +181,7 @@ func TestUpTakesTheOneFlagTwice(t *testing.T) {
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{},
-		[]string{clientoffpeak.FlagAllowPeak, "room-alpha", clientoffpeak.FlagAllowPeak, "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{clientoffpeak.FlagAllowPeak, "room-alpha", clientoffpeak.FlagAllowPeak, "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0 (stderr %q)", code, errOut.String())
 	}
@@ -205,7 +204,7 @@ func TestCompactRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
-	code := (compactCommand{}).Run(context.Background(), nil, []string{"room-alpha"}, &out, &errOut)
+	code := (compactCommand{}).Run(context.Background(), []string{"room-alpha"}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}
@@ -249,7 +248,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 
 			args := append([]string{"room-alpha"}, c.extra...)
 			var out, errOut bytes.Buffer
-			code := (compactCommand{}).Run(context.Background(), nil, args, &out, &errOut)
+			code := (compactCommand{}).Run(context.Background(), args, &out, &errOut)
 			if code != clientcmd.ExitOK {
 				t.Fatalf("exit %d, want 0 (stderr %q)", code, errOut.String())
 			}
@@ -261,7 +260,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 }
 
 // TestTheGateProceedsWhenTheRoomHasNoRecords: NO RECORDS is not a refusal. There are no seats to bill, which
-// is the shape of a room being started for the first time on a machine that has no OpenRig daemon at all, so
+// is the shape of a room being started for the first time on a machine that has no rig daemon at all, so
 // the verb goes on to restore it and its own errors, if any, are the ones reported. The START is the same -
 // the gate does not run - but it is SAID: this test used to require EMPTY stderr here ("nothing is printed
 // for no records - it is the normal case, not a diagnostic"), which is the silence that let a DeepSeek seat
@@ -274,7 +273,7 @@ func TestTheGateProceedsWhenTheRoomHasNoRecords(t *testing.T) {
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0: a room with no records has nothing to bill (stderr %q)", code, errOut.String())
 	}
@@ -301,7 +300,7 @@ func TestAFailedNodeReadRefusesAtTheGate(t *testing.T) {
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit %d, want %d: a reading that failed must refuse (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}
@@ -324,7 +323,7 @@ func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 	gateEnv(t, "whenever")
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitUsage {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
 	}

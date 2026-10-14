@@ -159,7 +159,7 @@ func switchParseArgs(args []string) (switchArgs, error) {
 }
 
 // switchExecute ports cmd_switch: validate, read the current occupant, PUT the new one, then decide
-// whether OpenRig can apply it and how.
+// whether the rig orchestrator can apply it and how.
 func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "4genteam sync switch: %v\n", err)
@@ -246,17 +246,17 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 	applied := "none"
 	if mode != "none" && runtimeChanged {
 		applied = "manual"
-		// NOTHING IN THIS BRANCH IS A PROCEDURE ANY MORE. The three lines it printed were the OpenRig
+		// NOTHING IN THIS BRANCH IS A PROCEDURE ANY MORE. The three lines it printed were the rig orchestrator
 		// CLI's own sequence; the middle one was measured on this box to stop the MACHINE's safeguards
 		// rather than the room's (rigd reaped with its children, for every rig), and the last could not
 		// run at all (`--team DIR is required`), so a reader who followed it took the supervisors down
 		// and could not start the room again from it. A reader cannot tell those two vocabularies apart
 		// by name, so the branch names only what this client itself owns and documents, and prints no
-		// OpenRig CLI verb. It runs neither: both write, and a restart is peak-gated. Whether a restart
+		// rig CLI verb. It runs neither: both write, and a restart is peak-gated. Whether a restart
 		// carries a changed RUNTIME is not established here, and saying so IS the finding - the printed
 		// text is pinned by TestSwitchRuntimeChangePrintsNoMachineWideVerb.
 		fmt.Fprintf(stderr,
-			"runtime changed: OpenRig cannot switch a runtime in place, and this client prints no "+
+			"runtime changed: the rig orchestrator cannot switch a runtime in place, and this client prints no "+
 				"sequence that completes the switch (it has none that can be run):\n"+
 				"  4genteam sync rig %s --update writes the room's definition and each seat's pinned "+
 				"snapshot.\n"+
@@ -345,7 +345,7 @@ func switchSeatStep(step string, err error, room, seat string, stderr io.Writer)
 		return "none", true, nil
 	}
 	var refused *clientruntime.DaemonRefused
-	if errors.As(err, &refused) && (strings.Contains(refused.Reason, "not found in room") || strings.Contains(refused.Reason, "cannot read room spec")) {
+	if errors.As(err, &refused) && (strings.Contains(refused.Reason, "not found in room") || clientruntime.IsUnknownRoom(refused)) {
 		fmt.Fprintf(stderr, "note: seat %s/%s is not in the runtime's records; the cloud change is recorded only\n", room, seat)
 		return "none", true, nil
 	}

@@ -40,7 +40,6 @@ func (teamCommand) Name() string { return "team" }
 func (teamCommand) Summary() string {
 	return "create the cloud room: apply, import-project, publish-skills, drift-check"
 }
-func (teamCommand) NeedsRig() bool { return false }
 
 // errHelpShown separates "the caller asked for usage" from a failure: both stop the verb, but usage
 // is a success.
@@ -52,7 +51,7 @@ var errDriftFound = errors.New("drift found")
 
 const teamVerbs = "apply, prune, import-project, publish-skills, drift-check"
 
-func (teamCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (teamCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintf(stderr, "4genteam team: pick a verb: %s\n", teamVerbs)
 		return clientcmd.ExitUsage
@@ -242,15 +241,15 @@ Push a skill library inventory as kind=skill blocks with provenance.
 
 options:
   --inventory FILE    skill library inventory JSON; required
-  --source-root DIR   OpenRig checkout the inventory paths are relative to
-                      (default: $OPENRIG_SKILLS_ROOT)
+  --source-root DIR   library checkout the inventory paths are relative to
+                      (default: $AGENTHUB_SKILLS_ROOT)
   --dry-run           print the plan, call nothing
   --version V         module version to publish (default 1.0.0)
 `
 	flags := newVerbFlags("publish-skills")
 	dryRun := flags.Bool("dry-run", false, "print the plan, call nothing")
 	inventory := flags.String("inventory", "", "skill library inventory JSON")
-	sourceRoot := flags.String("source-root", "", "OpenRig checkout the inventory paths are relative to")
+	sourceRoot := flags.String("source-root", "", "library checkout the inventory paths are relative to")
 	version := flags.String("version", publishVersion, "module version to publish (default 1.0.0)")
 	if err := parseVerb(flags, args, func(w io.Writer) { fmt.Fprint(w, usage) }, stdout); err != nil {
 		return err
@@ -269,12 +268,12 @@ Report stored skill provenance that no longer matches the files on disk. Reads o
 
 options:
   --root DIR           project root import-project's paths are relative to (default: the current directory)
-  --library-root DIR   OpenRig checkout publish-skills' paths are relative to
-                       (default: $OPENRIG_SKILLS_ROOT)
+  --library-root DIR   library checkout publish-skills' paths are relative to
+                       (default: $AGENTHUB_SKILLS_ROOT)
 `
 	flags := newVerbFlags("drift-check")
 	root := flags.String("root", "", "project root import-project's paths are relative to")
-	libraryRoot := flags.String("library-root", "", "OpenRig checkout publish-skills' paths are relative to")
+	libraryRoot := flags.String("library-root", "", "library checkout publish-skills' paths are relative to")
 	if err := parseVerb(flags, args, func(w io.Writer) { fmt.Fprint(w, usage) }, stdout); err != nil {
 		return err
 	}

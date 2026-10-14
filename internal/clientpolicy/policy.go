@@ -1,7 +1,7 @@
 // Package clientpolicy is the `policy` verb group: per-seat permission policy for omp seats, written as
 // each seat's own config.yml.
 //
-// OpenRig launches an omp seat in exactly one of two postures - yolo, or always-ask which the managed
+// the rig orchestrator launches an omp seat in exactly one of two postures - yolo, or always-ask which the managed
 // runner auto-cancels - so the restrictions live where omp enforces them. This is a guard rail against
 // accidents, not a sandbox.
 //
@@ -34,7 +34,7 @@ const ExitDrift = 1
 
 // servedRuntime is the one runtime `policy apply` writes for. The document it renders is an omp config
 // (`mcp`, `compaction`, `bash.patterns`, `tools.approval`) and the state root it resolves defaults to
-// `~/.openrig/state/omp` - the same default the Python's DEFAULT_STATE_ROOT had - so a seat running
+// `~/.config/4genthub` (clientenv.DefaultStateRoot) so a seat running
 // anything else has no config here to write: that seat's state lives under its OWN runtime's root, which
 // this verb never addresses. Named rather than inlined because the refusal and the help both state it.
 const servedRuntime = "omp"
@@ -244,9 +244,8 @@ type policyCommand struct{}
 
 func (policyCommand) Name() string    { return "policy" }
 func (policyCommand) Summary() string { return "per-seat policy: show, apply" }
-func (policyCommand) NeedsRig() bool  { return false }
 
-func (policyCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (policyCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "4genteam policy: pick a verb: show, apply")
 		return clientcmd.ExitUsage

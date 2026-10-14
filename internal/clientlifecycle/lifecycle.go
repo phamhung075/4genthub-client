@@ -175,18 +175,10 @@ func (upCommand) Summary() string {
 	return "start the local stack for a rig: daemon, seats, rigd (which starts the bridge and the supervisor), UI"
 }
 
-// NeedsRig is FALSE, and that is this cutover's point rather than an exemption: the room is named by the
-// positional and its seats come from the LOCAL team definition, so starting them needs nothing resolved
-// from OpenRig. Requiring one is what made the native start path depend on the CLI exec it replaces.
-//
-// The dispatcher therefore hands this verb a NIL rig, and the two places that still reach for one must
-// take nil: the peak gate's fail-closed activity read already does. A second that dereferenced it would panic on every `up`.
-func (upCommand) NeedsRig() bool { return false }
-
-func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, upUsage,
-			"The runtime daemon, this rig's room and its seats, and then the OpenRig-era safeguards: rigd,\n"+
+			"The runtime daemon, this rig's room and its seats, and then the safeguards: rigd,\n"+
 				"which owns the compaction supervisor, the watchdog, the seat-message deliverer and the status\n"+
 				"bridge, and finally the watch view and the UI.\n"+
 				"The room's seats come from the LOCAL team definition: --team names the directory that holds\n"+
@@ -215,7 +207,7 @@ func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdou
 	flags := flag.NewFlagSet("up", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	teamDir := flags.String("team", "", "the team definition directory that holds team.json (required)")
-	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else $"+clientenv.StateRootEnv+", else this machine's own")
+	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else ~/.config/4genthub")
 	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before rigd, the bridge, the watch view and the UI")
 	flagArgs, positional := splitFlagsAndPositional(rest)
 	for _, arg := range flagArgs {
@@ -245,7 +237,7 @@ func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdou
 	// environment - so the run SAYS which daemon it is talking to instead of leaving a reader to guess, and
 	// the room's own lines below are read against it (design §1).
 	fmt.Fprintf(stdout, "state dir: %s\nsocket: %s\n", root, clientruntime.DefaultSocketPath())
-	return runUp(rig, name, *teamDir, root, allowPeak, *roomOnly, stdout, stderr)
+	return runUp(name, *teamDir, root, allowPeak, *roomOnly, stdout, stderr)
 }
 
 // splitFlagsAndPositional separates this verb's flags from its one positional, and puts the positionals
@@ -298,7 +290,7 @@ func upTakesFlag(name string) bool {
 	return false
 }
 
-func runUp(rig *clientcmd.Rig, name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, stderr io.Writer) int {
+func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, stderr io.Writer) int {
 	// The definition is read FIRST: a --team typo is a caller error, and it must be reported before a daemon
 	// is started or a seat is touched. The room name must be the room the file defines, which is the same
 	// rule clientpolicy applies to its own --rig.
@@ -415,7 +407,7 @@ func ensureDaemonImpl(stateDir string, stderr io.Writer) (string, error) {
 // and the reason for it are read from one tree.
 func daemonLogPath(stateDir string) string { return filepath.Join(stateDir, "daemon.log") }
 
-// runtimeBinary is the runtime executable: PATH first, then the per-user install the OpenRig CLIs use.
+// runtimeBinary is the runtime executable: PATH first, then the per-user install.
 func runtimeBinary() (string, error) {
 	if found, err := exec.LookPath("agenthub-runtime"); err == nil {
 		return found, nil
@@ -587,15 +579,14 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 // an ERROR naming the rig, because `reseat` has to say why it will not restart a seat. The names differ on purpose -
 // two same-named functions with opposite contracts is a trap whose only guard would be a commit message.
 //
-// The reading itself is clientruntime.RoomNodes: the runtime first, then the OpenRig daemon's node table, in
-// one home so the gate here and the watchdog in clientrestore cannot disagree about the same room. It used to
-// fall back to exec-ing `rig ps --nodes --json`, which is the dependency this cutover removes.
+// The reading itself is clientruntime.RoomNodes, in one home so the gate here and the watchdog in
+// clientrestore cannot disagree about the same room.
 //
 // The three answers are the seam's own, explicit rather than a sentinel: ok with no error is a transport's
-// answer (possibly an empty table - a room with no seats), no ok and no error is NO RECORDS - this shell's
-// transports know no such room, so there is nothing to decide - and an error is a read that FAILED.
+// answer (possibly an empty table - a room with no seats), no ok and no error is NO RECORDS - the
+// runtime knows no such room, so there is nothing to decide - and an error is a read that FAILED.
 var rigNodes = func(name string) ([]map[string]any, bool, error) {
-	return clientruntime.RoomNodes(context.Background(), name)
+	return clientruntime.RoomNodes(name)
 }
 
 // PeakGate is the DeepSeek peak gate for every verb in the client that starts or resumes a room's seats
@@ -612,7 +603,7 @@ var rigNodes = func(name string) ([]map[string]any, bool, error) {
 // A READING THAT FAILS IS A REFUSAL, in words: this used to resolve a rig tool and return ExitOK when it
 // could not, which is how a peak-time resume could proceed with the gate never having decided. A room with
 // NO records is different and still proceeds - there are no seats to bill, which is the shape of a room
-// being started for the first time on a machine that has no OpenRig daemon at all - and blocking a start on
+// being started for the first time - and blocking a start on
 // a room the client knows nothing about would be the wrong call. But the gate has NOT decided THAT start,
 // and the room may still run a DeepSeek seat, so proceeding is SAID rather than silent: the line below is
 // the whole guard on this fail-open case, and it is here, once, so that no verb reaching this gate - `up`,
@@ -721,9 +712,8 @@ func (compactCommand) Name() string { return "compact" }
 func (compactCommand) Summary() string {
 	return "record a rig as one meant to run and report its compaction supervisor's row (rigd owns the restart)"
 }
-func (compactCommand) NeedsRig() bool { return false }
 
-func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, compactUsage,
 			"Record RIG as a room that is meant to run, and report its compaction supervisor's row.\n"+
@@ -770,9 +760,8 @@ func (stopCommand) Name() string { return "stop" }
 func (stopCommand) Summary() string {
 	return "stop rigd and its children (a machine-wide stop: compact, watchdog, messages, bridge)"
 }
-func (stopCommand) NeedsRig() bool { return false }
 
-func (stopCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (stopCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, stopUsage,
 			"Stop rigd. Its children - the compaction supervisors, the watchdogs and the bridge - stop with it,\n"+
@@ -794,9 +783,8 @@ func (statusCommand) Name() string { return "status" }
 func (statusCommand) Summary() string {
 	return "the safeguard rows (--json too) and the supervisor's last log lines"
 }
-func (statusCommand) NeedsRig() bool { return false }
 
-func (statusCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (statusCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, statusUsage,
 			"One line per safeguard row for the rig, then the compaction supervisor's process and the last five\n"+
@@ -839,9 +827,8 @@ type logCommand struct{}
 
 func (logCommand) Name() string    { return "log" }
 func (logCommand) Summary() string { return "follow the supervisor's log" }
-func (logCommand) NeedsRig() bool  { return false }
 
-func (logCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (logCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, logUsage, "Follow the compaction supervisor's log for a rig.")
 		return clientcmd.ExitOK
@@ -872,9 +859,8 @@ type uiCommand struct{}
 
 func (uiCommand) Name() string    { return "ui" }
 func (uiCommand) Summary() string { return "open the 4genthub web UI" }
-func (uiCommand) NeedsRig() bool  { return false }
 
-func (uiCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (uiCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, uiUsage, "Open the 4genthub web UI (AGENTHUB_UI_URL, default http://localhost:3800).")
 		return clientcmd.ExitOK
@@ -889,9 +875,8 @@ func (compactRunCommand) Name() string { return "compact-run" }
 func (compactRunCommand) Summary() string {
 	return "the compaction supervisor loop, in the foreground (what compact starts)"
 }
-func (compactRunCommand) NeedsRig() bool { return false }
 
-func (compactRunCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (compactRunCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, compactRunUsage,
 			"The compaction supervisor loop in the foreground. Every pass reads each seat's newest session log and\n"+
@@ -954,7 +939,7 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 	quietFlag := flags.Int("quiet", quiet, "seconds of log silence that mean the job is finished")
 	every := flags.Int("every", 10, "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
-	stateRoot := flags.String("state-root", "", "where OpenRig keeps its per-seat state: the flag, else $OPENRIG_STATE_ROOT, else this machine's own")
+	stateRoot := flags.String("state-root", "", "where the client keeps its state: the flag, else ~/.config/4genthub")
 	forcecompact := flags.String("forcecompact", ForcecompactPath(), "the forcecompact helper, when this machine has one")
 	if err := flags.Parse(args); err != nil {
 		return options, false

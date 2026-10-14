@@ -31,11 +31,7 @@ type bridgeCommand struct{}
 func (bridgeCommand) Name() string    { return "bridge" }
 func (bridgeCommand) Summary() string { return "report this machine and its rigs to the cloud" }
 
-// NeedsRig is false: the bridge reads its seats, topology and human queue from the agenthub runtime, so it
-// needs no rig tool.
-func (bridgeCommand) NeedsRig() bool { return false }
-
-func (c bridgeCommand) Run(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (c bridgeCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		bridgeUsage(stderr)
 		return clientcmd.ExitUsage
@@ -242,7 +238,7 @@ func bridgeInstallService(stdout, stderr io.Writer) int {
 		return clientcmd.ExitRemote
 	}
 	_, _ = fmt.Fprintf(stdout, `[Unit]
-Description=4genthub OpenRig status bridge
+Description=4genthub the rig orchestrator status bridge
 After=network-online.target
 
 [Service]

@@ -27,9 +27,8 @@ func (watchCommand) Name() string { return "watch" }
 func (watchCommand) Summary() string {
 	return "the live view of a room: the seat grid and the lead window"
 }
-func (watchCommand) NeedsRig() bool { return false }
 
-func (watchCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (watchCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return runWatchArgs(ctx, args, stdout, stderr)
 }
 
@@ -51,9 +50,8 @@ type bareCommand struct {
 
 func (c bareCommand) Name() string    { return c.name }
 func (c bareCommand) Summary() string { return c.summary }
-func (c bareCommand) NeedsRig() bool  { return false }
 
-func (c bareCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (c bareCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return runVerb(ctx, c.name, args, stdout, stderr)
 }
 
@@ -94,7 +92,7 @@ var verbUsages = map[string]verbUsage{
 // docs/WATCH.md. Sections, never line numbers: this comment was made stale twice - once by a move, once
 // by an insertion above the clause - and a line number in a cross-file comment is a stale fact waiting
 // to happen.
-const stateRootInHelp = "~/.openrig/state/omp"
+const stateRootInHelp = "~/.config/4genthub"
 
 // commonFlags states the path --state-root resolves to rather than only naming the variable: the third
 // clause is a machine path, so the usage text has to say which one will be read - in its home-relative
@@ -110,7 +108,7 @@ options:
                   (on for grid and watch, off for feed)
   --cols N        grid columns (grid and watch only; default 2)
   --state-root DIR  the omp state root the session logs are read from
-                    (--state-root, else $OPENRIG_STATE_ROOT, else ` + stateRootInHelp + `)
+                    (--state-root, else ` + stateRootInHelp + `)
 `
 }
 

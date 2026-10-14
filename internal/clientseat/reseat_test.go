@@ -15,7 +15,6 @@ import (
 // failure comes from the local runtime.
 func TestRoomNodesNeverShellsOutToRig(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	t.Setenv("OPENRIG_HOME", t.TempDir())
 
 	nodes, err := roomNodes("nosuchrig")
 	if err != nil && strings.Contains(err.Error(), "is not on PATH") {

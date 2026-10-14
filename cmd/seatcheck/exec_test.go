@@ -4,10 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"io"
 	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,7 +21,7 @@ import (
 // the name is a symlink to this client, so the "fallback" would be a self-call — and the identity has a rung
 // the exec never had: the seat's own environment.
 //
-// So every test below arranges the NATIVE sources (the runtime socket, a fake OpenRig daemon, the seat
+// So every test below arranges the NATIVE sources (the runtime socket, the seat
 // environment) and then proves the claim that matters: `rig` was never started. The recording fake rig on
 // PATH is the instrument — it writes a file when it runs, and its ABSENCE is the assertion. These tests fail
 // on the pre-change code for the plainest reason: it execs the fake rig, so the file exists (or, with PATH
@@ -74,7 +71,7 @@ func assertRigNeverRan(t *testing.T, argsPath string) {
 	}
 }
 
-// hermeticSeat empties the AGENTHUB_* / OPENRIG_* variables a test does not explicitly want, so a test run
+// hermeticSeat empties the AGENTHUB_* variables a test does not explicitly want, so a test run
 // from inside a seat shell (which is how this repo is worked on) cannot be answered by the shell's own
 // environment instead of by the thing under test. It ALSO points the runtime socket at a path nothing can be
 // listening on: a test that does not install a fake runtime must never dial this machine's real one.
@@ -82,8 +79,6 @@ func hermeticSeat(t *testing.T) {
 	t.Helper()
 	for _, name := range []string{
 		"AGENTHUB_ROOM", "AGENTHUB_SEAT", "AGENTHUB_ROLE", "AGENTHUB_RUNTIME", "AGENTHUB_SESSION_NAME",
-		"OPENRIG_SESSION_NAME", "RIGGED_SESSION_NAME", "OPENRIG_URL", "OPENRIG_PORT", "OPENRIG_HOME",
-		"OPENRIG_OCCUPANT_GENERATION", "OPENRIG_TERMINAL_BEARER_TOKEN",
 	} {
 		t.Setenv(name, "")
 	}
@@ -93,7 +88,7 @@ func hermeticSeat(t *testing.T) {
 // noRuntimeSocket points the runtime transport at a path nothing can be listening on.
 func noRuntimeSocket(t *testing.T) {
 	t.Helper()
-	t.Setenv("OPENRIG_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
+	t.Setenv("AGENTHUB_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
 }
 
 // fakeRuntimeSocket answers the runtime socket the way the daemon does. It accepts connections for the life
@@ -136,7 +131,7 @@ func fakeRuntimeSocket(t *testing.T, handler func(line string) string) (sock str
 			}(conn)
 		}
 	}()
-	t.Setenv("OPENRIG_RUNTIME_SOCKET", sock)
+	t.Setenv("AGENTHUB_RUNTIME_SOCKET", sock)
 	return sock, lines
 }
 
@@ -160,7 +155,7 @@ func okData(data string) string { return `{"ok":true,"data":` + data + "}\n" }
 const identityDocument = `{"resolved_by":"session_name","identity":{"rigName":"room-a","memberId":"go-dev","sessionName":"agenthub--room-a--go-dev","runtime":"omp"},"peers":[{"logicalId":"dev.reviewer","sessionName":"dev-reviewer@room-a"},{"logicalId":"agy.reviewer","sessionName":"agy-reviewer@room-a"},{"logicalId":"dev.lead","sessionName":"dev-lead@room-a"}],"edges":{"outgoing":[],"incoming":[]}}`
 
 // TestIdentityIsResolvedNativelyWithNoRigOnPath IS the acceptance for the identity seam: with a fake `rig`
-// first on PATH, no runtime and no daemon, the identity still resolves — from the seat's own environment —
+// first on PATH and no runtime, the identity still resolves — from the seat's own environment —
 // and the fake rig was never started. Pre-change this failed twice over: the exec ran (or, with PATH emptied,
 // the seam answered an error instead of an identity).
 func TestIdentityIsResolvedNativelyWithNoRigOnPath(t *testing.T) {
@@ -210,43 +205,13 @@ func TestIdentityComesFromTheRuntimeSocket(t *testing.T) {
 	assertRigNeverRan(t, argsPath)
 }
 
-// TestIdentityFallsBackToTheOpenRigDaemon: with no runtime answering, the daemon is still asked — the live
-// rig's shape — and its own document is what the guard reads. The fake rig is first on PATH and still not
-// started, which is what makes this a fallback to the DAEMON rather than to the CLI.
-func TestIdentityFallsBackToTheOpenRigDaemon(t *testing.T) {
-	hermeticSeat(t)
-	argsPath := fakeRig(t)
-	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
-	t.Setenv("OPENRIG_HOME", t.TempDir())
-
-	var askedPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		askedPath = r.URL.Path
-		_, _ = w.Write([]byte(`{"resolvedBy":"session_name","identity":{"rigName":"4genthub-min","memberId":"go-dev","sessionName":"4genthub-min-go-dev@4genthub-min"},"peers":[{"logicalId":"4genthub-min.lead","sessionName":"4genthub-min-lead@4genthub-min"}]}`))
-	}))
-	defer srv.Close()
-	t.Setenv("OPENRIG_URL", srv.URL)
-
-	who, err := seatIdentity()
-	if err != nil {
-		t.Fatalf("seatIdentity: %v", err)
-	}
-	if askedPath != "/api/whoami" {
-		t.Fatalf("asked %q, want the daemon's whoami route", askedPath)
-	}
-	if who.Rig != "4genthub-min" || who.Member != "go-dev" || strings.Join(who.Peers["lead"], ",") != "4genthub-min-lead@4genthub-min" {
-		t.Fatalf("identity = %+v, want the daemon's document", who)
-	}
-	assertRigNeverRan(t, argsPath)
-}
-
 // TestDeliveryGoesToTheRuntimeSocket IS the acceptance for the delivery seam: the message reaches the runtime
 // as its own SendText frame, the guard reports success, and `rig` was never started. Pre-change the fake rig
 // ran and its argv (send -- TARGET TEXT) was the record — which is exactly what is gone.
 func TestDeliveryGoesToTheRuntimeSocket(t *testing.T) {
 	hermeticSeat(t)
 	argsPath := fakeRig(t)
-	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+	t.Setenv("AGENTHUB_SESSION_NAME", "agenthub--room-a--go-dev")
 
 	_, requests := fakeRuntimeSocket(t, func(string) string {
 		return okData(`{"session":"pod-b@r","outcome":"delivered","ok":true}`)
@@ -274,43 +239,8 @@ func TestDeliveryGoesToTheRuntimeSocket(t *testing.T) {
 		t.Fatalf("frame = %q, want a SendText to pod-b@r", frame)
 	}
 	// The text rides the From/To/Sent envelope either transport uses, attributed to THIS seat.
-	if !strings.Contains(sent.Payload.Text, "hello world") || !strings.Contains(sent.Payload.Text, "From: 4genthub-min-go-dev@4genthub-min") {
+	if !strings.Contains(sent.Payload.Text, "hello world") || !strings.Contains(sent.Payload.Text, "From: agenthub--room-a--go-dev") {
 		t.Fatalf("payload text = %q, want the message in this seat's envelope", sent.Payload.Text)
-	}
-	assertRigNeverRan(t, argsPath)
-}
-
-// TestDeliveryFallsBackToTheOpenRigDaemon: with no runtime answering, the message goes to the daemon's own
-// transport route — the live rig's shape — and still not through the CLI.
-func TestDeliveryFallsBackToTheOpenRigDaemon(t *testing.T) {
-	hermeticSeat(t)
-	argsPath := fakeRig(t)
-	t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
-	t.Setenv("OPENRIG_HOME", t.TempDir())
-
-	var gotPath string
-	var gotBody struct {
-		Session string `json:"session"`
-		Text    string `json:"text"`
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &gotBody)
-		_, _ = w.Write([]byte(`{"ok":true,"sessionName":"pod-b@r","outcome":"delivered"}`))
-	}))
-	defer srv.Close()
-	t.Setenv("OPENRIG_URL", srv.URL)
-
-	var stdout, stderr bytes.Buffer
-	if code := seatDelivery("pod-b@r", "hello world", &stdout, &stderr); code != 0 {
-		t.Fatalf("seatDelivery = %d, want 0 (stderr %q)", code, stderr.String())
-	}
-	if gotPath != "/api/transport/send" {
-		t.Fatalf("asked %q, want the daemon's send route", gotPath)
-	}
-	if gotBody.Session != "pod-b@r" || !strings.Contains(gotBody.Text, "hello world") {
-		t.Fatalf("body = %+v, want the message addressed to pod-b@r", gotBody)
 	}
 	assertRigNeverRan(t, argsPath)
 }

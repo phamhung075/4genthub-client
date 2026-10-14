@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -25,22 +24,16 @@ const CheckerName = "seatcheck"
 // The PATH a new seat inherits is not this process's PATH, and that difference is the whole reason
 // this file reads three sources instead of one.
 const (
-	shellPathSource = "shell PATH (no tmux server and no readable rig daemon PATH were found, so no " +
-		"seat exists yet)"
-	daemonPathSource = "rig daemon PATH (the daemon starts the first tmux server, so the first seat " +
-		"inherits it)"
-	tmuxPathSource = "tmux global PATH"
+	shellPathSource = "shell PATH (no tmux server was found, so no seat exists yet)"
+	tmuxPathSource  = "tmux global PATH"
 
 	tmuxTimeoutSeconds = 5 * time.Second
 )
 
 // pathLimit is the operator-facing explanation the refusal carries, kept verbatim from the Python.
 var pathLimit = "seats inherit the tmux global PATH, which is what this checks while a tmux server " +
-	"runs (only the default tmux socket is queried); at cold start it reads the PATH of " +
-	"the running rig daemon (the daemon starts the first tmux server, so the first seat " +
-	"inherits the daemon's environment). If the daemon's PATH does not resolve " +
-	CheckerName + ", restart the daemon from a shell where it resolves " +
-	"(`rig daemon stop`, `rig daemon start`)"
+	"runs (only the default tmux socket is queried); with no tmux server it checks this shell's " +
+	"PATH. If the PATH does not resolve " + CheckerName + ", restart tmux from a shell where it resolves"
 
 // CheckerBinary is where the install puts the checker: <store>/bin/<name>.
 func CheckerBinary(out string) string { return filepath.Join(out, "bin", CheckerName) }
@@ -94,75 +87,12 @@ func tmuxGlobalPath() (string, bool) {
 	return strings.TrimSpace(stdout)[len("PATH="):], true
 }
 
-// openrigDaemonPID is the rig daemon pid listening on the OpenRig port, or 0 when it cannot be found.
-// The daemon starts the first tmux server, so at cold start the first seat inherits its environment,
-// and /proc still has it.
-func openrigDaemonPID() int {
-	port := openrigDaemonPort()
-	if port == "" {
-		return 0
-	}
-	stdout, _, err := captureCommand([]string{"ss", "-ltnp"}, tmuxTimeoutSeconds)
-	if err != nil {
-		return 0
-	}
-	seen := regexp.MustCompile(`pid=(\d+)`)
-	needle := ":" + port + " "
-	for _, line := range strings.Split(stdout, "\n") {
-		if !strings.Contains(line, needle) && !strings.Contains(line, ":"+port+"\t") {
-			continue
-		}
-		if match := seen.FindStringSubmatch(line); match != nil {
-			pid, err := strconv.Atoi(match[1])
-			if err == nil {
-				return pid
-			}
-		}
-	}
-	return 0
-}
-
-// openrigDaemonPort is OPENRIG_PORT, else the port in OPENRIG_URL.
-func openrigDaemonPort() string {
-	if port := strings.TrimSpace(os.Getenv("OPENRIG_PORT")); port != "" {
-		if _, err := strconv.Atoi(port); err == nil {
-			return port
-		}
-	}
-	match := regexp.MustCompile(`:(\d+)(?:/|$)`).FindStringSubmatch(os.Getenv("OPENRIG_URL"))
-	if match == nil {
-		return ""
-	}
-	return match[1]
-}
-
-// procEnvPath is the PATH of process pid from <rigProcRoot>/<pid>/environ, or "" when unreadable.
-// rigProcRoot is the package's process-table seam, so a test reads a scratch tree instead of this
-// box's /proc; its default is "/proc", so the behaviour on a real machine is unchanged.
-func procEnvPath(pid int) string {
-	raw, err := os.ReadFile(filepath.Join(rigProcRoot, strconv.Itoa(pid), "environ"))
-	if err != nil {
-		return ""
-	}
-	for _, entry := range bytes.Split(raw, []byte{0}) {
-		if bytes.HasPrefix(entry, []byte("PATH=")) {
-			return string(entry[len("PATH="):])
-		}
-	}
-	return ""
-}
-
 // seatPath is the PATH a seat inherits, and which source it came from: tmux's global environment
-// while a tmux server runs, else the rig daemon's, else this process's. A var so a test can hand the
+// while a tmux server runs, else this process's. A var so a test can hand the
 // resolver a PATH instead of a machine.
 var seatPath = func() (string, string) {
 	if path, ok := tmuxGlobalPath(); ok {
 		return path, tmuxPathSource
-	}
-	if pid := openrigDaemonPID(); pid != 0 {
-		if path := procEnvPath(pid); path != "" {
-			return path, daemonPathSource
-		}
 	}
 	return os.Getenv("PATH"), shellPathSource
 }

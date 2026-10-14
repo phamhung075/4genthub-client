@@ -9,9 +9,9 @@ import (
 
 // SeatsBehind returns, in the order the cloud listed them, the seats whose local pin differs from the
 // cloud's hash or is missing entirely. The exit code that goes with it is clientcmd.ExitBehind (4,
-// measured from openrig_seat_client.py's EXIT_BEHIND - it was 1 in the first draft here).
+// measured from the retired Python seat client's EXIT_BEHIND - it was 1 in the first draft here).
 //
-// PORTED FROM openrig_seat_client.py's seats_behind, whose test is the parity spec:
+// PORTED FROM the retired Python seat client's seats_behind, whose test is the parity spec:
 //
 //	cloud  = lead:h2, go-dev:h1, writer:h3
 //	pinned = lead:h1, go-dev:h1, writer:None   ->  [lead, writer]

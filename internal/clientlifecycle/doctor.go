@@ -33,9 +33,8 @@ func (doctorCommand) Name() string { return "doctor" }
 func (doctorCommand) Summary() string {
 	return "report every safeguard (compact, watchdog, messages, bridge, rigd); read-only"
 }
-func (doctorCommand) NeedsRig() bool { return false }
 
-func (doctorCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, doctorUsage,
 			"One line per safeguard row (rig, safeguard, state, age), then the tail of alerts.log.\n"+

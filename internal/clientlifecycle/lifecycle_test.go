@@ -24,7 +24,7 @@ func helpOf(t *testing.T, name, flag string) (int, string, string) {
 			continue
 		}
 		var out, errOut bytes.Buffer
-		code := command.Run(context.Background(), nil, []string{flag}, &out, &errOut)
+		code := command.Run(context.Background(), []string{flag}, &out, &errOut)
 		return code, out.String(), errOut.String()
 	}
 	t.Fatalf("no command named %q is registered", name)
@@ -77,7 +77,6 @@ func restoreAll(t *testing.T) {
 	ui, watch, herdr := openUI, runWatchView, runHerdr
 	spawn, grace := spawnChild, SupervisorStartGrace
 	stop, nodes := stopPattern, rigNodes
-	lookPath := clientcmd.LookPath
 	rows, authorityUp := rowsFor, rigdRunning
 	t.Cleanup(func() {
 		ensureDaemon, ensureRig = daemon, rigStep
@@ -86,14 +85,12 @@ func restoreAll(t *testing.T) {
 		openUI, runWatchView, runHerdr = ui, watch, herdr
 		spawnChild, SupervisorStartGrace = spawn, grace
 		stopPattern, rigNodes = stop, nodes
-		clientcmd.LookPath = lookPath
 		rowsFor, rigdRunning = rows, authorityUp
 	})
 	// A test in this package runs with the peak gate reading NO nodes: the gate then has nothing to
 	// decide, and no test here reaches the machine's own daemon, rig or clock. A test about the gate
 	// replaces rigNodes with the reading it wants to be judged on.
 	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
-	clientcmd.LookPath = func(string) (string, error) { return "/usr/local/bin/rig", nil }
 	// NO TEST WRITES rigd.json. The seams that would - recording the room and starting the authority -
 	// are replaced with recorders here, so a `up` test can assert the ORDER without touching the machine's
 	// own state file.
@@ -137,10 +134,10 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
 	var out, errOut bytes.Buffer
-	if code := (compactCommand{}).Run(context.Background(), nil, []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (compactCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("compact --help exited %d", code)
 	}
-	if code := (upCommand{}).Run(context.Background(), nil, []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (upCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up --help exited %d", code)
 	}
 	if len(ran) != 0 {
@@ -180,7 +177,7 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	t.Setenv("HERDR_ENV", "")
 
 	var out, errOut bytes.Buffer
-	if code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (upCommand{}).Run(context.Background(), []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up returned %d (stderr: %q)", code, errOut.String())
 	}
 	want := []string{"ensureDaemon", "ensureRig", "ensureForcecompact", "recordRig", "startRigd", "waitSafeguards", "watch", "openUI", "herdr"}
@@ -217,8 +214,7 @@ func TestUpRefusesADefinitionThatNamesAnotherRoom(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{},
-		[]string{"other-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"other-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut)
 	if code != clientcmd.ExitRoomRefused {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, errOut.String())
 	}
@@ -265,8 +261,7 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 			runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
 			var out, errOut bytes.Buffer
-			code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{},
-				[]string{"my-rig", "--team", writeRoomDefinition(t, "my-rig"), "--room-only"}, &out, &errOut)
+			code := (upCommand{}).Run(context.Background(), []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig"), "--room-only"}, &out, &errOut)
 			if code != c.want {
 				t.Fatalf("exit %d, want %d (stderr %q)", code, c.want, errOut.String())
 			}
@@ -290,7 +285,7 @@ func TestStopSignalsRigdAndSaysTheStopIsMachineWide(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	if code := (stopCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"my-rig"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (stopCommand{}).Run(context.Background(), []string{"my-rig"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("stop returned %d (stderr %q)", code, errOut.String())
 	}
 	want := []string{clientservices.Pattern(clientservices.Rigd, "")}
@@ -304,11 +299,11 @@ func TestStopSignalsRigdAndSaysTheStopIsMachineWide(t *testing.T) {
 	// No rig means no guess, and nothing may be signalled while the verb decides that.
 	patterns = nil
 	out.Reset()
-	if code := (stopCommand{}).Run(context.Background(), &clientcmd.Rig{}, nil, &out, &errOut); code != clientcmd.ExitUsage {
+	if code := (stopCommand{}).Run(context.Background(), nil, &out, &errOut); code != clientcmd.ExitUsage {
 		t.Errorf("stop with no rig returned %d, want %d", code, clientcmd.ExitUsage)
 	}
 	// Help is the other case where a lifecycle action must not run.
-	if code := (stopCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (stopCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Errorf("stop --help returned %d, want %d", code, clientcmd.ExitOK)
 	}
 	if len(patterns) != 0 {
@@ -346,7 +341,7 @@ func TestCompactSpawnsNothingAndRefusesWithoutTheAuthority(t *testing.T) {
 	rigdRunning = func() int { return 0 }
 
 	var out, errOut bytes.Buffer
-	code := (compactCommand{}).Run(context.Background(), nil, []string{"some-rig"}, &out, &errOut)
+	code := (compactCommand{}).Run(context.Background(), []string{"some-rig"}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("compact with no rigd returned %d, want %d", code, clientcmd.ExitUnavailable)
 	}
@@ -376,7 +371,7 @@ func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	code := (compactCommand{}).Run(context.Background(), nil, []string{"some-rig"}, &out, &errOut)
+	code := (compactCommand{}).Run(context.Background(), []string{"some-rig"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("compact with a running supervisor returned %d (stderr: %q)", code, errOut.String())
 	}
@@ -400,7 +395,7 @@ func TestCompactNamesTheRowWhenTheSupervisorIsNotRunning(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	code := (compactCommand{}).Run(context.Background(), nil, []string{"some-rig"}, &out, &errOut)
+	code := (compactCommand{}).Run(context.Background(), []string{"some-rig"}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("compact with a stopped supervisor returned %d, want %d", code, clientcmd.ExitUnavailable)
 	}
@@ -425,7 +420,7 @@ func TestEveryLifecycleVerbRequiresARig(t *testing.T) {
 				want = clientcmd.ExitRoomRefused
 			}
 			var out, errOut bytes.Buffer
-			code := command.Run(context.Background(), &clientcmd.Rig{}, nil, &out, &errOut)
+			code := command.Run(context.Background(), nil, &out, &errOut)
 			if code != want {
 				t.Errorf("%s with no rig: exit %d, want %d", name, code, want)
 			}
@@ -463,23 +458,17 @@ func TestANonNumericQuietValueRefusesAndNamesIt(t *testing.T) {
 	}
 }
 
-// test_compact_run_reads_the_documented_state_root_variable: the flag used to default straight to the
-// machine's own root, so whoever set $OPENRIG_STATE_ROOT got the machine tree while the refusal in these
-// verbs told them to set exactly that variable. The variable is the second clause for compact-run too.
-func TestCompactRunReadsTheStateRootVariable(t *testing.T) {
+// TestCompactRunStateRootFlag: --state-root names the root; without it the machine's own default is used.
+func TestCompactRunStateRootFlag(t *testing.T) {
 	var errOut bytes.Buffer
-	chosen := t.TempDir()
-	t.Setenv(clientenv.StateRootEnv, chosen)
-
 	options, ok := ParseCompactRunOptions([]string{"--rig", "my-rig", "--once"}, &errOut)
 	if !ok {
-		t.Fatalf("a set variable was refused: %s", errOut.String())
+		t.Fatalf("the default was refused: %s", errOut.String())
 	}
-	if options.StateRoot != chosen {
-		t.Errorf("StateRoot = %q, want the variable's %q", options.StateRoot, chosen)
+	if want := clientenv.DefaultStateRoot(); options.StateRoot != want {
+		t.Errorf("StateRoot = %q, want the machine default %q", options.StateRoot, want)
 	}
 
-	// The flag still wins over the variable.
 	options, ok = ParseCompactRunOptions([]string{"--rig", "my-rig", "--once", "--state-root", "/from/flag"}, &errOut)
 	if !ok {
 		t.Fatalf("the flag was refused: %s", errOut.String())

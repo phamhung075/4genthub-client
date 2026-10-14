@@ -33,7 +33,7 @@ func pythonDuplicateLines(t *testing.T) []string {
 // The fixtures are captured from the REFERENCE implementation, not written by hand:
 //
 //	rig_ps.json          - what `rig ps --json --nodes -A` printed when the Python bridge was run
-//	python_dump.json     - what `python3 scripts/openrig_bridge.py once --print --machine-id test-machine`
+//	python_dump.json     - what `python3 the retired Python bridge script once --print --machine-id test-machine`
 //	                       printed with HOME pointed at a scratch tree carrying ONE pinned seat
 //	builders_reference.json - outputs of the Python builders for inputs the dump cannot exercise
 //	                       (herdr was unavailable, so no agents rode the dump)

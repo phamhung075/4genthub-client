@@ -3,7 +3,6 @@ package clientwatch
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -62,11 +61,9 @@ func rigSeats(ctx context.Context, rig string) ([]string, error) {
 	}
 	seats := []string{}
 	for _, name := range strings.Fields(out) {
-		if !strings.HasPrefix(name, rig+"-") || !strings.HasSuffix(name, "@"+rig) {
-			continue
+		if room, seat, ok := clientruntime.ParseSeatSessionName(name); ok && room == rig {
+			seats = append(seats, seat)
 		}
-		seat := strings.TrimSuffix(strings.TrimPrefix(name, rig+"-"), "@"+rig)
-		seats = append(seats, seat)
 	}
 	sort.Strings(seats)
 	return seats, nil
@@ -299,34 +296,21 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 // sendLine delivers one typed line to its seat, in process. A var so the tests drive the loop without a
 // daemon or a runtime.
 //
-// IT REPLACES AN EXEC OF `rig send`, and two things were wrong with that. After this client's rename `rig`
-// resolves to THIS SAME BINARY, so the grid started a copy of itself and read its refusal back through a
-// subprocess; and the name it used was INVENTED from a convention (`{rig}-{seat}@{rig}`) rather than read
-// from the seat's record - the defect the SEAT shape's send path records as fixed. So the name is resolved,
-// the record decides the transport (the runtime and the daemon own different panes; the wrong one cannot
-// address the pane at all), and the sender is preserved: the exec used to inherit OPENRIG_SESSION_NAME, and
-// a line typed at the grid is written BY that seat's watcher, so it must be stamped the same way.
+// The seat's session name is READ from the runtime's room record rather than composed from a convention, and
+// the sender is preserved: a line typed at the grid is written BY that seat's watcher, so it is stamped with
+// the watcher's own session.
 //
 // The three calls below are the send verb's own primitives, and this is the THIRD writer of that shape the
 // `saySender` comment in clientlifecycle names as the moment to consolidate it into the runtime client.
 // Consolidating means touching the gated send path, so it is left to its own unit rather than smuggled in
 // here.
 var sendLine = func(ctx context.Context, rig, seat, text string) error {
-	address, err := clientruntime.ResolveSeatAddress(ctx, rig, seat)
+	address, err := clientruntime.ResolveSeatAddress(rig, seat)
 	if err != nil {
 		return err
 	}
-	options := clientruntime.SendOptions{Sender: os.Getenv("OPENRIG_SESSION_NAME")}
-	switch address.Transport {
-	case clientruntime.TransportRuntime:
-		_, err = clientruntime.RuntimeSendText(address.SessionName, text, options)
-		return err
-	case clientruntime.TransportDaemon:
-		_, _, err = clientruntime.OpenRigSend(ctx, address.SessionName, text, options)
-		return err
-	default:
-		return errors.New(clientruntime.FallbackMissing())
-	}
+	_, err = clientruntime.RuntimeSendText(address.SessionName, text, clientruntime.SendOptions{Sender: os.Getenv("AGENTHUB_SESSION_NAME")})
+	return err
 }
 
 // runInputLoop reads lines and sends each to its seat, the same route any other message takes. An empty

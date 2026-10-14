@@ -9,7 +9,7 @@ import (
 )
 
 // TestASeatIsBehindWhenItsPinDiffersOrIsMissing is the PARTY SPEC's own case, ported verbatim from
-// agenthub_client/tests/test_seat_client.py (it lived at scripts/tests/test_openrig_seat_client.py until
+// agenthub_client/tests/test_seat_client.py (it lived at the retired Python seat_client test until
 // 2026-10-09, when the scripts left the tree, and at agenthub_main/src/tests/scripts/ until 2026-10-08):
 //
 //	cloud  = lead:h2, go-dev:h1, writer:h3

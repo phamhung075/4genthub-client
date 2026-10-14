@@ -1,15 +1,12 @@
-// The send verb's two pieces of shared vocabulary: the canonical name of a seat's session, and the refusal a
-// send owes when the RUNTIME answered but the request carried a switch only the daemon runs.
-//
-// WHY THEY ARE IN A FILE OF THEIR OWN, rather than beside ResolveTransport: transport.go and ipc.go were held by
-// other writers when this was written, and both built the same session name inline - `seatEnvSessionName` in
-// transport.go, and the `agenthub--%s--%s` in ipc.go. BOTH NOW CALL THIS ONE, so the format string has a single
-// home on the client side: this file. The runtime derives the same name on its own side, which no Go constant can
-// reach. Nothing here replaces the transport seam that U3 landed, and nothing here changes either transport: it is
-// the name both of them address, and one sentence about which of them stopped a send.
+// The canonical name of a seat's session. The runtime derives the same name on its own side, which no Go
+// constant can reach; this file is its single home on the client side.
 package clientruntime
 
-import "fmt"
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+)
 
 // SeatSessionName is the client's OWN name for a seat's session: `agenthub--<room>--<seat>`, or "" when either half
 // is missing (a half-named seat names no session, which is the contract the transport seam relied on).
@@ -25,20 +22,24 @@ func SeatSessionName(room, seat string) string {
 	return fmt.Sprintf("agenthub--%s--%s", room, seat)
 }
 
-// DaemonSwitchMissing is the refusal a send owes when the RUNTIME answered but the request carried a switch
-// only the OpenRig daemon runs, and the daemon is not there either. `switches` is the caller's own list, in
-// the CLI's spelling ("--verify, --wait-for-idle"), so the sentence names the flags that stopped it.
-//
-// IT MUST NOT SAY THE RUNTIME IS MISSING, and that is the whole reason it is not `FallbackMissing(...)`.
-// FallbackMissing's first clause is "no runtime is answering at <socket>", which is true when the runtime
-// really was the transport that failed - and FALSE here, where the runtime answered, is healthy, and simply
-// does not run this handshake. A refusal that sends the reader to inspect a working transport hides which
-// party actually stopped the send; the clause this function adds is about the daemon, and is chosen from this
-// machine's own configuration exactly as FallbackMissing chooses its own.
-func DaemonSwitchMissing(switches string) string {
-	clause := "no OpenRig daemon is configured in this environment (set " + openRigURLEnv + " or " + openRigPortEnv + ")"
-	if base := openRigDaemonURL(); base != "" {
-		clause = "the OpenRig fallback at " + base + " is not available either"
+const seatSessionPrefix = "agenthub--"
+
+// ParseSeatSessionName is SeatSessionName's inverse: (room, seat) of `agenthub--<room>--<seat>`, or false
+// for any other tmux session. The room ends at the first `--` after the prefix.
+func ParseSeatSessionName(name string) (room, seat string, ok bool) {
+	rest, found := strings.CutPrefix(name, seatSessionPrefix)
+	if !found {
+		return "", "", false
 	}
-	return switches + " needs the OpenRig daemon, and " + clause
+	room, seat, found = strings.Cut(rest, "--")
+	if !found || room == "" || seat == "" {
+		return "", "", false
+	}
+	return room, seat, true
+}
+
+// SeatSessionsDir is where a native room's omp seat writes its transcripts under the state root:
+// `<root>/rooms/<room>/seats/<seat>/sessions`.
+func SeatSessionsDir(root, room, seat string) string {
+	return filepath.Join(root, "rooms", room, "seats", seat, "sessions")
 }

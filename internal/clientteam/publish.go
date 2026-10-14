@@ -25,9 +25,9 @@ const (
 	provenanceMirrorPath = "mirror_path"
 	provenanceMirrorSHA  = "mirror_sha256"
 
-	// libraryRootEnv is the OpenRig checkout publish-skills' and drift-check's library paths are
+	// libraryRootEnv is the library checkout publish-skills' and drift-check's library paths are
 	// relative to, when the flag is not given.
-	libraryRootEnv = "OPENRIG_SKILLS_ROOT"
+	libraryRootEnv = "AGENTHUB_SKILLS_ROOT"
 )
 
 // inventoryRow is one inventory skill line. Either edge may be absent; a canonical row's plugin is its
@@ -44,7 +44,7 @@ type inventoryEdge struct {
 }
 
 type skillInventory struct {
-	// GeneratedFrom is the provenance line the inventory carries, naming the OpenRig revision its
+	// GeneratedFrom is the provenance line the inventory carries, naming the library revision its
 	// digests were taken from. Nothing about the published bytes used to be checked against it.
 	GeneratedFrom string         `json:"generated_from"`
 	Skills        []inventoryRow `json:"skills"`
@@ -184,7 +184,7 @@ func skillLibraryModules(inventory *skillInventory, sourceRoot string) ([]module
 	return modules, nil
 }
 
-// publishSourceRoot is --source-root, else $OPENRIG_SKILLS_ROOT, else a usage error naming both. The
+// publishSourceRoot is --source-root, else $AGENTHUB_SKILLS_ROOT, else a usage error naming both. The
 // checkout the inventory's paths are relative to is required, never guessed: a wrong root would
 // publish bytes from the wrong tree.
 func publishSourceRoot(flagValue string) (string, error) {
@@ -194,7 +194,7 @@ func publishSourceRoot(flagValue string) (string, error) {
 	if fromEnv := os.Getenv(libraryRootEnv); fromEnv != "" {
 		return fromEnv, nil
 	}
-	return "", usageError("publish-skills needs the OpenRig checkout the inventory paths are relative to: " +
+	return "", usageError("publish-skills needs the library checkout the inventory paths are relative to: " +
 		"pass --source-root DIR or set " + libraryRootEnv)
 }
 
@@ -295,7 +295,7 @@ func inventoryRevision(inventory *skillInventory) (string, error) {
 	revision := revisionInGeneratedFrom.FindString(named)
 	if revision == "" {
 		return "", usageError(fmt.Sprintf(
-			"the inventory's generated_from names no revision: %q; it must name the OpenRig revision its digests were taken from",
+			"the inventory's generated_from names no revision: %q; it must name the library revision its digests were taken from",
 			named))
 	}
 	return revision, nil

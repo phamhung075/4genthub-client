@@ -125,7 +125,7 @@ func row(t *testing.T, rows []clientservices.Health, safeguard, rig string) clie
 func doctor(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code := (doctorCommand{}).Run(context.Background(), &clientcmd.Rig{}, args, &out, &errOut)
+	code := (doctorCommand{}).Run(context.Background(), args, &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 

@@ -1,5 +1,5 @@
 // The capture verb reads a pane over the client's OWN transport now - the runtime's terminal manager, the
-// process that owns the tmux server - and these tests MOVED here from the OpenRig-daemon suite when that path
+// process that owns the tmux server - and these tests MOVED here from the rig orchestrator-daemon suite when that path
 // was deleted. A daemon stub would have gone on passing while testing nothing, which is exactly the failure
 // mode the cutover keeps finding: a test that stubs a path the verb no longer walks.
 //
@@ -50,8 +50,7 @@ func TestCaptureCommandPrintsThePane(t *testing.T) {
 	t.Setenv(RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := captureCommand{}.Run(context.Background(), nil,
-		[]string{"--lines", "40", "4genthub-min-fe-dev@4genthub-min"}, &out, &errOut)
+	code := captureCommand{}.Run(context.Background(), []string{"--lines", "40", "4genthub-min-fe-dev@4genthub-min"}, &out, &errOut)
 
 	if code != clientcmd.ExitOK {
 		t.Fatalf("capture exit = %d, stderr = %q", code, errOut.String())
@@ -66,7 +65,7 @@ func TestCaptureCommandPrintsThePane(t *testing.T) {
 	// whole" case.
 	out.Reset()
 	errOut.Reset()
-	code = captureCommand{}.Run(context.Background(), nil, []string{"4genthub-min-fe-dev@4genthub-min"}, &out, &errOut)
+	code = captureCommand{}.Run(context.Background(), []string{"4genthub-min-fe-dev@4genthub-min"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("capture exit = %d, stderr = %q", code, errOut.String())
 	}
@@ -84,7 +83,7 @@ func TestCaptureCommandPrintsItsOwnAnswerForJSON(t *testing.T) {
 	t.Setenv(RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := captureCommand{}.Run(context.Background(), nil, []string{"--json", "peer@rig"}, &out, &errOut)
+	code := captureCommand{}.Run(context.Background(), []string{"--json", "peer@rig"}, &out, &errOut)
 
 	if code != clientcmd.ExitOK {
 		t.Fatalf("capture --json exit = %d, stderr = %q", code, errOut.String())
@@ -103,7 +102,7 @@ func TestCaptureCommandNamesTheRuntimeItCannotReach(t *testing.T) {
 	noRuntimeSocket(t)
 
 	var out, errOut bytes.Buffer
-	code := captureCommand{}.Run(context.Background(), nil, []string{"peer@rig"}, &out, &errOut)
+	code := captureCommand{}.Run(context.Background(), []string{"peer@rig"}, &out, &errOut)
 
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit = %d, want ExitUnavailable (%d); stderr = %q", code, clientcmd.ExitUnavailable, errOut.String())
@@ -128,7 +127,7 @@ func TestCaptureCommandRefusesTheRuntimesOwnRefusal(t *testing.T) {
 	t.Setenv(RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := captureCommand{}.Run(context.Background(), nil, []string{"ghost@4genthub-min"}, &out, &errOut)
+	code := captureCommand{}.Run(context.Background(), []string{"ghost@4genthub-min"}, &out, &errOut)
 
 	if code == clientcmd.ExitOK {
 		t.Fatalf("a refused capture exited 0, stdout = %q", out.String())
@@ -156,7 +155,7 @@ func TestCaptureTakesItsOptionsOnEitherSideOfTheSession(t *testing.T) {
 			t.Setenv(RuntimeSocketEnv, sock)
 
 			var out, errOut bytes.Buffer
-			code := captureCommand{}.Run(context.Background(), nil, args, &out, &errOut)
+			code := captureCommand{}.Run(context.Background(), args, &out, &errOut)
 
 			if code != clientcmd.ExitOK {
 				t.Fatalf("capture exit = %d, stderr = %q", code, errOut.String())

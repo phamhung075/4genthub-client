@@ -29,7 +29,7 @@ import (
 // http.RoundTripper for the sender itself), and the wait the loop would take comes back from Cycle as a
 // VALUE, so a test asserts it instead of living through it.
 
-// fixtureNodes is one OpenRig node in the shape `rig ps --json --nodes` prints. It carries a
+// fixtureNodes is one the rig orchestrator node in the shape `rig ps --json --nodes` prints. It carries a
 // latestError on purpose: the seat's detail must be NON-EMPTY, or the 422 strip would be asserted
 // against a field that could not have differed in the first place.
 const fixtureNodes = `[{"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp",` +
@@ -492,7 +492,7 @@ func TestAnUnreadableRecordReadsAsEmptyRatherThanInventingAHash(t *testing.T) {
 }
 
 // A node whose room or seat name fails this client's pattern is NOT reported, and the count is: the
-// report is an allow-list, so an OpenRig value this client does not understand must not travel as a
+// report is an allow-list, so an the rig orchestrator value this client does not understand must not travel as a
 // field the cloud then has to defend against. The Python asserted both halves - only the good seat
 // survives, and the caller says how many were skipped - and this is that case.
 func TestBuildSeatsSkipsInvalidNamesAndCountsThem(t *testing.T) {
@@ -709,7 +709,7 @@ func TestSenderWithoutTheTokenIsAUsageError(t *testing.T) {
 	t.Setenv("AGENTHUB_URL", "http://bridge.invalid")
 	t.Setenv("AGENTHUB_TOKEN", "")
 	var out, errOut bytes.Buffer
-	if code := (bridgeCommand{}).Run(context.Background(), nil, []string{"once"}, &out, &errOut); code != clientcmd.ExitUsage {
+	if code := (bridgeCommand{}).Run(context.Background(), []string{"once"}, &out, &errOut); code != clientcmd.ExitUsage {
 		t.Errorf("bridge once without a credential exited %d, want %d", code, clientcmd.ExitUsage)
 	}
 	if !strings.Contains(errOut.String(), "AGENTHUB_TOKEN") {

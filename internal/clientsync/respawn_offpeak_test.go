@@ -13,8 +13,7 @@ import (
 // deadDeepSeekNode is room1.alpha's record when its agent has died AND it runs a DeepSeek model: the one
 // record where a respawn would start DeepSeek work, which at peak is what the gate refuses.
 const deadDeepSeekNode = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1",` +
-	`"model":"deepseek/deepseek-flash","sessionStatus":"running",` +
-	`"agentActivity":{"state":"unknown","reason":"no_runtime_hook"}}`
+	`"model":"deepseek/deepseek-flash","sessionStatus":"agent_exited"}`
 
 // respawnGateEnv pins the clock and leaves the setting unset, with the machine's holiday file kept out.
 func respawnGateEnv(t *testing.T, pin string) {
@@ -109,8 +108,7 @@ func TestRespawnPassesADeepSeekSeatThroughTheGateWhenTheCheckIsOff(t *testing.T)
 // peak windows.
 func TestRespawnPassesALocalSeatThroughTheGateAtPeak(t *testing.T) {
 	localNode := `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1",` +
-		`"model":"claude-code/sonnet","sessionStatus":"running",` +
-		`"agentActivity":{"state":"unknown","reason":"no_runtime_hook"}}`
+		`"model":"claude-code/sonnet","sessionStatus":"agent_exited"}`
 	rigRan := poisonRig(t)
 	stub := &rigStub{answers: []string{"[" + localNode + "]"}}
 	stubRig(t, stub)

@@ -156,7 +156,7 @@ func DeepSeekSeats(seats []Seat) []Seat {
 
 // SeatsFromNodes reads the seat name and the model out of ONE `rig ps --json --nodes --rig ROOM`
 // reading, which is the reading every gated verb already takes for its own reasons: the models are in
-// the node records OpenRig reports, so the gate costs no extra call and no cloud round trip.
+// the node records the rig orchestrator reports, so the gate costs no extra call and no cloud round trip.
 //
 // The name is the logical id ("room.seat") when the node carries one, else the canonical session name.
 // A node with neither is skipped rather than reported as an empty seat.

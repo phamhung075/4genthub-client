@@ -59,7 +59,7 @@ var feedbackClient = &http.Client{Timeout: httpTimeout}
 // help test requires.
 const feedbackUsage = `usage: 4genteam feedback --layer <layer> --text <text> [--room R] [--seat S] [--session X] [--url BASE]
 
-Report friction from a seat whose runtime has no MCP: one HTTP POST to the openrig feedback route,
+Report friction from a seat whose runtime has no MCP: one HTTP POST to the feedback route,
 the same payload the MCP tool ` + "`submit_feedback`" + ` sends. The owner reads the reports grouped by layer.
 
   --layer    REQUIRED. One of: runtime, openrig, cloud, seat-context, workspace, other
@@ -75,9 +75,9 @@ Exit: 0 stored, 1 the request failed or the answer refused it, 2 usage or a miss
 
 // identityMessage is the ONE refusal when the seat identity cannot be read: it names the chain that was
 // tried and the three flags that make it unnecessary. The chain is the client's own - the runtime socket,
-// then an OpenRig daemon, then this shell's seat environment - so the message no longer names a `rig`
+// then an rig daemon, then this shell's seat environment - so the message no longer names a `rig`
 // command, which is not on that chain.
-const identityMessage = "cannot read the seat identity (no runtime, no OpenRig daemon and no seat environment names this seat); pass --room, --seat and --session"
+const identityMessage = "cannot read the seat identity (no runtime, no rig daemon and no seat environment names this seat); pass --room, --seat and --session"
 
 // feedbackBody is the wire payload. Its field order is the script's dict order so the bytes on the
 // wire are the same ones json.dumps would have produced.
@@ -114,14 +114,7 @@ type feedbackCommand struct{}
 func (feedbackCommand) Name() string    { return "feedback" }
 func (feedbackCommand) Summary() string { return "report friction to the owner" }
 
-// NeedsRig is false ON PURPOSE, and now for a second reason: this verb no longer reaches rig at all. The
-// identity default it fills in comes from the client's own identity chain (clientruntime.ResolveIdentity,
-// the same chain `whoami --json` prints), and a caller that passes --room, --seat and --session reads
-// nothing at all. `feedback --room R --seat S --session X` therefore works on a machine with no rig
-// installed, which is the script's own behaviour.
-func (feedbackCommand) NeedsRig() bool { return false }
-
-func (feedbackCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (feedbackCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	opts, help, err := parseFeedbackArgs(args)
 	if help {
 		_, _ = io.WriteString(stdout, feedbackUsage)
@@ -148,7 +141,7 @@ func (feedbackCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string,
 	// Identity defaults come from the client itself, which is the only authority on which seat this
 	// is. They are read only when one of the three is missing, so a fully-specified call reads nothing.
 	if !opts.complete() {
-		room, seat, session, err := readIdentity(ctx)
+		room, seat, session, err := readIdentity()
 		if err != nil {
 			return feedbackUsageError(stderr, identityMessage)
 		}
@@ -220,19 +213,18 @@ func validLayer(layer string) bool {
 }
 
 // readIdentity reads the three defaults from the client's own identity chain - the runtime socket first,
-// then a rig's OpenRig daemon when this shell names one, then this shell's own seat environment. That is
-// the chain `whoami --json` prints and the chain cmd/seatcheck asks, reached here instead of by exec-ing
-// `rig whoami --json`, a name that does not exist after the cutover.
+// then this shell's own seat environment. That is the chain `whoami --json` prints and the chain
+// cmd/seatcheck asks.
 //
 // The failure keeps the same shape it had when rig supplied the answer: the chain's own refusal, which
 // the caller turns into its usage error. An identity the chain resolves to empty fields is the script's
 // `who.get("identity") or {}` - empty defaults, not a failure.
-func readIdentity(ctx context.Context) (room, seat, session string, err error) {
-	resolved, err := clientruntime.ResolveIdentity(ctx, "", true)
+func readIdentity() (room, seat, session string, err error) {
+	resolved, err := clientruntime.ResolveIdentity("")
 	if err != nil {
 		return "", "", "", err
 	}
-	identity := resolved.Response.Identity
+	identity := resolved.Identity
 	return identity.RigName, identity.MemberId, identity.SessionName, nil
 }
 

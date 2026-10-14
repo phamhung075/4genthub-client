@@ -7,7 +7,7 @@ import (
 )
 
 // redactCase is one parity case: the input text and known values, and what the REFERENCE
-// implementation (scripts/openrig_scrub.py) produces for them. The fixture was generated from that
+// implementation (the retired Python scrub script) produces for them. The fixture was generated from that
 // script, so this test compares the Go redaction against the Python one rather than against a
 // hand-written expectation.
 type redactCase struct {

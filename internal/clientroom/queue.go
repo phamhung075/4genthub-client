@@ -13,7 +13,7 @@
 //     two pair flags it reads and hands the positionals over, so the state dir's environment fallback and
 //     the refusal that names it cannot become a second answer written here.
 //   - THE ACTOR IS THE SEAT'S OWN SESSION, OR THERE IS NO ACTOR. create, update, claim and close act as
-//     $OPENRIG_SESSION_NAME. When it is unset the verb REFUSES naming the variable: it never guesses and
+//     $AGENTHUB_SESSION_NAME. When it is unset the verb REFUSES naming the variable: it never guesses and
 //     never takes an actor from a flag, because a rail that records an actor nobody named is a rail nobody
 //     can audit.
 //   - A SUB-VERB THAT DID NOT DO THE THING SAYS SO. A refused operation and a room the daemon does not know
@@ -35,15 +35,14 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
-	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
-// sessionEnv is the variable a seat's own session name arrives in. It is the same name the daemon's
-// X-OpenRig-Session stamp reads, and it is read here rather than through a helper because what this group
+// sessionEnv is the variable a seat's own session name arrives in: the runtime launches every seat with it.
+// It is read here rather than through a helper because what this group
 // needs is not "a session if there is one" but the ONE session that may act: a fallback to another variable
 // would let a sub-verb write an actor the seat never named.
-const sessionEnv = "OPENRIG_SESSION_NAME"
+const sessionEnv = "AGENTHUB_SESSION_NAME"
 
 // queueGroupUsage is the group's grammar. It is nine characters longer than one line because a sub-verb's
 // own flags are the difference between two of them, and a caller reading help should not have to diff six
@@ -106,7 +105,7 @@ func runQueue(args []string, stdout, stderr io.Writer) int {
 func printQueueUsage(out io.Writer, sub string) {
 	fmt.Fprintln(out, queueSubUsage(sub))
 	fmt.Fprintln(out, "\nThe pair is printed by every sub-verb - `room: <room>@<state-dir> socket: <socket>` - because neither half")
-	fmt.Fprintln(out, "is resolved implicitly. --state-dir is the flag, else $"+clientenv.StateRootEnv+", else this machine's own;")
+	fmt.Fprintln(out, "is resolved implicitly. --state-dir is the flag, else ~/.config/4genthub;")
 	fmt.Fprintln(out, "--socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this machine's own.")
 	fmt.Fprintln(out, "\nThe daemon owns the room's rail and is its only writer: every verb renders the rows the daemon")
 	fmt.Fprintln(out, "re-read from its store, so the state printed is the state the next read shows. list prints")

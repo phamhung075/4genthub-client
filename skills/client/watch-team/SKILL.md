@@ -64,7 +64,7 @@ pane and header with no events, and a stopped seat has no pane at all.
 | Option | Effect |
 |---|---|
 | `--rig <RIG>` | the room to watch |
-| `--state-root DIR` | the omp state root the session logs are read from: the flag, else `$OPENRIG_STATE_ROOT`, else `~/.openrig/state/omp` |
+| `--state-root DIR` | the omp state root the session logs are read from: the flag, else `~/.config/4genthub` |
 | `--seat SEAT` | which seat: for `feed` and `inputs`, limit the view to this seat, repeatable; for `input`, the seat to send to, required |
 | `--cols N` | grid columns (default 2); `grid` and `watch` only |
 | `--back N` | events replayed per seat at startup (default 40; 3 for `feed`) |

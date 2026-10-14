@@ -30,8 +30,8 @@ func TestNewClient(t *testing.T) {
 // The NAME is pinned rather than discovered: an owner's harness and a branch client meet on exactly this string, which
 // is why renaming it would be a breaking change rather than a cleanup.
 func TestRuntimeSocketEnvIsTheContractedName(t *testing.T) {
-	if RuntimeSocketEnv != "OPENRIG_RUNTIME_SOCKET" {
-		t.Fatalf("RuntimeSocketEnv = %q, want %q", RuntimeSocketEnv, "OPENRIG_RUNTIME_SOCKET")
+	if RuntimeSocketEnv != "AGENTHUB_RUNTIME_SOCKET" {
+		t.Fatalf("RuntimeSocketEnv = %q, want %q", RuntimeSocketEnv, "AGENTHUB_RUNTIME_SOCKET")
 	}
 }
 

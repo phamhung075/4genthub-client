@@ -3,7 +3,7 @@
 // `room status|stop|reseat|compact` is the client half of the native cutover. Each sub-verb asks the runtime
 // daemon for something the wire already carries - GetRoomStatus, StopRoom, StopSeat and RestartSeat,
 // ForceCompact - so this package is a FRAME over clientruntime.Client rather than a second implementation of
-// any of it. Nothing here shells out to tmux, and nothing here resolves OpenRig's paths.
+// any of it. Nothing here shells out to tmux, and nothing here resolves the rig orchestrator's paths.
 //
 // THREE RULES ARE LOAD-BEARING, and each one is the reason a line of this file looks the way it does:
 //
@@ -12,7 +12,7 @@
 //     absent they come from this machine's own environment, where the caller's HOME decides them. So every
 //     run PRINTS `<room>@<state-dir>` and the socket it used, and the room's own lines are read against it.
 //   - `stop` IS NOT "STOP SUPERVISING". It is StopRoom and nothing else: that room's own
-//     `agenthub--<room>--<seat>` sessions, and nothing under ~/.openrig - never rigd, never its children
+//     `agenthub--<room>--<seat>` sessions, and nothing under the rig orchestrator's state home - never rigd, never its children
 //     (compact-run, watchdog, sync messages), never the bridge, never another room (design §3).
 //   - A SUB-VERB THAT DID NOT DO THE THING SAYS SO. `compact` refuses a seat that is not running BY NAME
 //     instead of printing a success line over it, and a runtime that refuses the compaction is reported in
@@ -47,12 +47,7 @@ func (RoomCommand) Summary() string {
 	return "one room's lifecycle over the runtime's own socket: status, stop, reseat, compact"
 }
 
-// NeedsRig is FALSE, for the same reason `up`'s is: the room is named by the positional and its seats live
-// in the runtime's own state dir, so nothing here needs the OpenRig CLI. The dispatcher therefore hands
-// this verb a NIL rig, and no function below may dereference one.
-func (RoomCommand) NeedsRig() bool { return false }
-
-func (RoomCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (RoomCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "4genteam room: pick a verb: status, stop, reseat, compact")
 		return clientcmd.ExitRoomRefused
@@ -101,8 +96,8 @@ func subUsage(verb string) string {
 func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, subUsage(verb))
 	fmt.Fprintln(out, "\nEvery sub-verb prints the pair it ran against - `room: <room>@<state-dir> socket: <socket>` -")
-	fmt.Fprintln(out, "because neither is resolved implicitly. --state-dir is the flag, else $"+clientenv.StateRootEnv+",")
-	fmt.Fprintln(out, "else this machine's own; --socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this")
+	fmt.Fprintln(out, "because neither is resolved implicitly. --state-dir is the flag, else ~/.config/4genthub,")
+	fmt.Fprintln(out, "--socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this")
 	fmt.Fprintln(out, "machine's own.")
 	fmt.Fprintln(out, "\nstatus reads GetRoomStatus and prints one line per seat: SEAT RUNTIME STATE SESSION, plus an")
 	fmt.Fprintln(out, "ALERT segment when the runtime flagged the seat - alert=<kind> quiet_seconds=<secs|unknown>")
@@ -150,7 +145,7 @@ func parseInvocation(verb string, args []string, positionals int, stdout, stderr
 	}
 	flags := flag.NewFlagSet("room "+verb, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else $"+clientenv.StateRootEnv+", else this machine's own")
+	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else ~/.config/4genthub")
 	socket := flags.String("socket", "", "the runtime daemon's Unix socket: the flag, else $"+clientruntime.RuntimeSocketEnv+", else this machine's own")
 	flagArgs, rest := splitFlagsAndPositionals(args)
 	if err := flags.Parse(flagArgs); err != nil {
@@ -237,15 +232,13 @@ func flagTakesValue(name string) bool { return name == "state-dir" || name == "s
 
 // SessionName is the session name of one seat: `agenthub--<room>--<seat>`.
 //
-// IT MIRRORS TWO OTHER SPELLINGS OF THE SAME STRING, and it exists because a REQUEST needs it:
-// ForceCompact is session-scoped, so this group must name a session rather than a seat. The Rust side's
-// `Supervisor::session_name` (rust/agenthub-runtime/src/supervisor/mod.rs:99-101) and the client's own
-// clientruntime.SendTextToSeat build exactly this string. If the format ever moves, all three move
-// together, which is why it lives here as one helper instead of being a format string at each call site.
+// It names a session because ForceCompact is session-scoped; the format lives in
+// clientruntime.SeatSessionName, and the Rust side's `Supervisor::session_name`
+// (rust/agenthub-runtime/src/supervisor/mod.rs) spells the same string.
 //
 // The design's other rule for these names is the load-bearing one: a session is targeted by this EXACT name
 // and never by a prefix (design §5.2). Nothing in this package ever builds `agenthub--<room>` alone.
-func SessionName(room, seat string) string { return fmt.Sprintf("agenthub--%s--%s", room, seat) }
+func SessionName(room, seat string) string { return clientruntime.SeatSessionName(room, seat) }
 
 // seatRunning reads the runtime's state string case-insensitively: "Running" and "running" are the same
 // fact, and the runtime's own enum is the only thing that decides it - which is also why the state a report
@@ -325,7 +318,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 // One request is the whole contract, and the reason is the must-not list (design §3): StopRoom kills exactly
 // the sessions of the room's own spec.json - `agenthub--<room>--<seat>`, one by one - so this verb must not
 // reach for tmux itself, must not stop rigd or any of its children, and must not touch the bridge or
-// another room. `~/.openrig` is never a path in this function's world at all.
+// another room. the rig orchestrator's state home is never a path in this function's world at all.
 //
 // The room's directory is left in place and the report says so: spec.json, seats/ and logs/ are what makes
 // the room startable again, and deleting them is a separate verb's business, not a stop's.

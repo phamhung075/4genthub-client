@@ -34,10 +34,10 @@ const (
 	// ClientDir holds the skills for the LLM running the client. They are not a seat's skill set and
 	// are never part of a resolution.
 	ClientDir = "client"
-	// RootEnv names the tree when no flag does. It is deliberately NOT OPENRIG_SKILLS_ROOT: that
+	// RootEnv names the tree when no flag does. It is deliberately NOT AGENTHUB_SKILLS_ROOT: that
 	// variable is the library checkout `team publish-skills` reads, a different tree with a different
 	// shape, and one name for two trees is how the wrong bytes get delivered.
-	RootEnv = "OPENRIG_CLIENT_SKILLS"
+	RootEnv = "AGENTHUB_CLIENT_SKILLS"
 	// SkillsDir is a seat's skills path inside its agent directory - the directory the seat's own agent
 	// spec points its resources.skills[].path at ("skills/<id>").
 	SkillsDir = "skills"
@@ -62,7 +62,7 @@ type Skill struct {
 	Dir  string
 }
 
-// Locate finds the tree: --skills-root when the caller passed one, else $OPENRIG_CLIENT_SKILLS, else
+// Locate finds the tree: --skills-root when the caller passed one, else $AGENTHUB_CLIENT_SKILLS, else
 // skills/ beside this executable ("the client directory"), which is where a user who has only the
 // binary is told to put the tree. It does not check that a tree is there; Require does that, so a
 // caller which only needs the path can ask for it.

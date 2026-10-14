@@ -20,7 +20,7 @@ import (
 const offlineInstallUsage = `usage: 4genteam sync offline-install TARGET [--home DIR]
 
 Install a materialized bundle's pinned policy into the seat store. seatcheck resolves its policy as
-<home>/.openrig/agenthub-seats/<room>/<member>/policy.json and it is deliberately not a flag, so
+<home>/.config/4genthub/seats/<room>/<member>/policy.json and it is deliberately not a flag, so
 this is what makes an offline seat's allowed path able to decide and audit. TARGET is the
 materialized bundle; HOME defaults to this account's home directory.
 `
@@ -38,7 +38,7 @@ type rigSpec struct {
 }
 
 // RunOfflineInstallVerb is `sync offline-install`: the bundle's pinned policy becomes the policy the
-// seat store at <home>/.openrig/agenthub-seats holds, which is the only place seatcheck looks.
+// seat store at <home>/.config/4genthub/seats holds, which is the only place seatcheck looks.
 func RunOfflineInstallVerb(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {
@@ -102,7 +102,7 @@ func offlineInstall(target, home string, stdout, stderr io.Writer) int {
 			return clientcmd.ExitUsage
 		}
 	}
-	store := filepath.Join(expandHome(homeDir), ".openrig", "agenthub-seats")
+	store := clientenv.SeatStoreUnder(expandHome(homeDir))
 
 	var installed []string
 	for _, pod := range spec.Pods {

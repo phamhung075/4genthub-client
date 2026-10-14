@@ -3,7 +3,6 @@
 package clientlifecycle
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -83,7 +82,7 @@ type Supervisor struct {
 	State map[string]*seatState
 }
 
-// New is a supervisor wired to the real world: tmux for the seat list, OpenRig for idleness and
+// New is a supervisor wired to the real world: tmux for the seat list, the runtime for idleness and
 // messages, and the forcecompact helper for an omp compact.
 func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *Supervisor {
 	supervisor := &Supervisor{
@@ -326,37 +325,10 @@ func modTime(path string) float64 {
 	return float64(info.ModTime().UnixNano()) / 1e9
 }
 
-// rigIdle is a DECLARED EXCEPTION, and the declaration is the point: this is the ONE place in this package that
-// still asks the rig tool a question, because the answer is not on the runtime's surface yet. It reads
-// agentActivity.state out of `rig ps --nodes --rig RIG --json`, and agentActivity is produced OUTSIDE this client -
-// the same producer-absent/undetermined tri-state the U2 finding records - so converting it today would mean
-// inventing a state source rather than reading one. The supervisor's Nodes seam takes the SAME reading, so the
-// dependency is one reading in two places, not two mechanisms.
-//
-// WHAT RETIRES IT: a native activity read on the runtime's IPC surface. When that lands, this function becomes a call
-// like rigSay's, and this comment should be DELETED rather than annotated. Until then the read is a CUTOVER
-// PRECONDITION rather than a retirement nicety, and the next reader needs the consequences stated rather than implied:
-// after the cutover there is no `rig` on PATH at all - and this function no longer looks for one. Both readers ask
-// clientruntime.ReadSeatActivity, which reads the OpenRig daemon's node table over the client's own transport today
-// and the runtime's own producer at cutover. The failure it can answer FALSE for now is a read that could not ask
-// (no daemon named, a route that refused, no record for this seat) or a word that does not authorize a compact. Per
-// runtime:
-//
-//   - omp seats are unaffected AT THE LIMIT: the urgent path compacts in-band through s.RPCCompact before either Idle
-//     check is reached. But the quiet-triggered compaction - a seat that has gone silent BELOW the warn limit - is
-//     gated on s.Idle, so it would never fire again for ANY runtime, omp included.
-//   - every other runtime is not compacted at all: at the hard limit `hard && !s.Idle(...)` takes the not-idle branch
-//     on every pass, so the seat is interrupted repeatedly (rate-limited by interruptGap) and never compacted, and
-//     below the hard limit the compact branch is simply unreachable.
-//
-// Nothing in the runtime covers this: its ForceCompact is ON DEMAND, and the thresholds live here (seatlog.CompactLimit),
-// not in the runtime. A future implementer who reads "returns false" as "still works" would ship the loudest silent
-// failure in this package.
-//
-// The direction of every failure is deliberately the safe one: an unreadable tool, a malformed record, and a seat the
-// record does not mention all return false, and false means "not idle" to both callers - so a compaction that cannot
-// prove the seat is idle WAITS rather than racing a working turn. A check that failed open here would send /compact
-// into a running seat, which is the one outcome the gate exists to prevent.
+// rigIdle reads a seat's idleness through clientruntime.ReadSeatActivity, the runtime's own session list.
+// Every failure answers false, and false means "not idle" to both callers: a seat that cannot be proved
+// idle WAITS rather than racing a working turn, because a check that failed open would send /compact into a
+// running seat, which is the one outcome the gate exists to prevent.
 func rigIdle(rig, seat string) bool {
 	idle, _ := rigIdleReason(rig, seat)
 	return idle
@@ -369,7 +341,7 @@ func rigIdle(rig, seat string) bool {
 // like a supervisor with nothing to do. The bool the Idle hook trades in stays a bool; the sentence is said where the
 // false is ACTED ON, and only when the read could not answer at all.
 func rigIdleReason(rig, seat string) (idle bool, why string) {
-	read := clientruntime.ReadSeatActivity(context.Background(), rig, seat)
+	read := clientruntime.ReadSeatActivity(rig, seat)
 	if !read.Read {
 		// THE SENTENCE IS THE READ'S, not this caller's: it names what could not be asked - no daemon named in the
 		// environment, the rig absent from the list, the route's HTTP status, no record for this seat. One read, one

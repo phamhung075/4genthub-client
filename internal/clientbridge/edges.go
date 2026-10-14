@@ -1,6 +1,6 @@
 package clientbridge
 
-// edgeKinds are OpenRig's five edge kinds; the server's commpolicy.ValidKind is the other copy of
+// edgeKinds are the rig orchestrator's five edge kinds; the server's commpolicy.ValidKind is the other copy of
 // this list.
 var edgeKinds = map[string]bool{
 	"delegates_to":      true,

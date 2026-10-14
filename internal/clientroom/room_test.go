@@ -112,12 +112,12 @@ func (d *fakeDaemon) args(verb string, positionals ...string) []string {
 	return append(args, "--state-dir", d.stateDir, "--socket", d.socket)
 }
 
-// runRoom drives the verb the way the dispatcher does: a nil rig (NeedsRig is false) and the three streams
+// runRoom drives the verb the way the dispatcher does: the three streams
 // captured.
 func runRoom(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := RoomCommand{}.Run(context.Background(), nil, args, &stdout, &stderr)
+	code := RoomCommand{}.Run(context.Background(), args, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -373,9 +373,9 @@ func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
 			t.Errorf("the stop reported %q, which names %q: StopRoom is the whole of this verb", rendered, forbidden)
 		}
 	}
-	// `~/.openrig` is NOT in that list, and the omission is deliberate: the pair this verb prints echoes back
-	// the --state-dir the caller passed, and this worktree lives under a path that spells `.openrig`, so a
-	// substring test there would fail on the checkout rather than on the verb. What the verb touched is the
+	// The rig orchestrator's state home is NOT in that list, and the omission is deliberate: the pair this verb
+	// prints echoes back the --state-dir the caller passed, so a substring test there would fail on the checkout
+	// path rather than on the verb. What the verb touched is the
 	// wire, and assertRequests above already pins it to one StopRoom and nothing else.
 	// The directory is LEFT IN PLACE, and the report says so: spec.json, seats/ and logs/ are what makes the
 	// room startable again.

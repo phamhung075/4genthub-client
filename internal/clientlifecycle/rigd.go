@@ -59,7 +59,7 @@ func RigdLogPath() (string, error) {
 }
 
 // WatchdogLogPath is the log of the watchdog CHILD rigd starts. It is deliberately NOT the watchdog's own
-// ~/.openrig/logs/rig-watchdog.log: that file is written by the watchdog itself through its tee, and
+// ~/.config/4genthub/logs/rig-watchdog.log: that file is written by the watchdog itself through its tee, and
 // pointing its stdout at the same file would append every line twice.
 func WatchdogLogPath(rig string) (string, error) {
 	dir, err := LogDir()
@@ -75,9 +75,8 @@ func (rigdCommand) Name() string { return "rigd" }
 func (rigdCommand) Summary() string {
 	return "the always-on client: stream local sessions, supervise the safeguards"
 }
-func (rigdCommand) NeedsRig() bool { return false }
 
-func (rigdCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (rigdCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, rigdUsage,
 			"One outbound /ws/connector socket: every local rig session registered, its transcript tailed and\n"+

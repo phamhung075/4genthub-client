@@ -20,15 +20,26 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-// StateRootEnv names the override for the omp state root - the second clause of the resolution.
-const StateRootEnv = "OPENRIG_STATE_ROOT"
-
-// StateRootMessage is the ONE refusal a machine that cannot resolve the state root gets. It names both
-// escapes rather than guessing, because a relative path would make the state tree depend on the working
+// StateRootMessage is the ONE refusal a machine that cannot resolve the state root gets. It names the
+// escape rather than guessing, because a relative path would make the state tree depend on the working
 // directory - the dependency this client forbids everywhere.
-const StateRootMessage = "the state root cannot be resolved on this machine: pass --state-root DIR or set " + StateRootEnv
+const StateRootMessage = "the state root cannot be resolved on this machine: pass --state-root DIR"
 
-// RealHome is the account's home directory from the passwd entry, NOT $HOME. OpenRig launches a seat
+// configDirName is the ONE directory under the real home's .config where every piece of the client's
+// state lives: the env file, the native state root and the seat store.
+const configDirName = "4genthub"
+
+// configDir is ~/.config/4genthub under the real home.
+func configDir(home string) string {
+	return filepath.Join(home, ".config", configDirName)
+}
+
+// StateSubdir is the named directory (briefs, logs, state) of the client's state home under home.
+func StateSubdir(home, name string) string {
+	return filepath.Join(configDir(home), name)
+}
+
+// RealHome is the account's home directory from the passwd entry, NOT $HOME. the rig orchestrator launches a seat
 // with HOME pointed at the seat's own state directory, so resolving from the environment would make a
 // machine-level path a function of which seat happens to run the client - the doubled path seat_policy's
 // real_home() exists to avoid.
@@ -45,10 +56,10 @@ func DefaultPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "4genthub", ".env"), nil
+	return filepath.Join(configDir(home), ".env"), nil
 }
 
-// DefaultStateRoot is where OpenRig keeps its per-seat state. It is here rather than in a verb package
+// DefaultStateRoot is where the client keeps its native state: ~/.config/4genthub. It is here rather than in a verb package
 // because two verb groups default to it, and because it is a MACHINE-level location: resolved from the
 // real home, it is the same inside a seat and out.
 //
@@ -61,26 +72,19 @@ func DefaultStateRoot() string {
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".openrig", "state", "omp")
+	return configDir(home)
 }
 
 // realHome is a var so a test can drive the machine that has no resolvable home: that path refuses
 // rather than guesses, so it has to be reachable without breaking the machine running the test.
 var realHome = RealHome
 
-// ResolveStateRoot is the ONE resolution every verb uses: the flag when it is given, else
-// $OPENRIG_STATE_ROOT, else this machine's own default. It REFUSES when all three are empty, naming both
-// escapes - a machine with no resolvable home and no override gets that message rather than a path that
-// depends on where the client was run from.
-//
-// The clauses live here and not per verb because a verb that resolved its own root and then told the
-// user to set $OPENRIG_STATE_ROOT while ignoring it reads the wrong tree silently.
+// ResolveStateRoot is the ONE resolution every verb uses: the flag when it is given, else this machine's
+// own default. It REFUSES when both are empty - a machine with no resolvable home and no flag gets that
+// message rather than a path that depends on where the client was run from.
 func ResolveStateRoot(flagValue string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
-	}
-	if fromEnv := os.Getenv(StateRootEnv); fromEnv != "" {
-		return fromEnv, nil
 	}
 	if root := DefaultStateRoot(); root != "" {
 		return root, nil
@@ -118,7 +122,7 @@ func SeatStoreRefusal(err error, outFlag string) error {
 // than in a verb package because several verbs default to it, and because it is a MACHINE-level location:
 // resolved from the real home, it is the same inside a seat and out.
 //
-// Two reasons it answers "" and NEVER a relative path: OpenRig launches a seat with HOME pointed at the
+// Two reasons it answers "" and NEVER a relative path: the rig orchestrator launches a seat with HOME pointed at the
 // seat's own state directory, so resolving from the environment would make the store a function of which
 // seat runs the client; and a relative store would make the tree a function of the working directory, so
 // a client run from a checkout could read whatever tree happened to sit under it. Callers refuse with
@@ -128,7 +132,12 @@ func DefaultSeatStore() string {
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".openrig", "agenthub-seats")
+	return SeatStoreUnder(home)
+}
+
+// SeatStoreUnder is the seat store of the account whose home is home.
+func SeatStoreUnder(home string) string {
+	return filepath.Join(configDir(home), "seats")
 }
 
 // ResolveSeatStore is the ONE resolution every verb uses: the flag when it is given, else this machine's

@@ -3,20 +3,20 @@ name: agent-browser
 description: Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to "open a website", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction.
 allowed-tools: Bash(npx agent-browser:*), Bash(agent-browser:*)
 metadata:
-  openrig:
+  agenthub:
     vendored_from: "Vercel agent-browser (https://github.com/vercel/agent-browser)"
     vendoring_pattern: add-supplementary-files
     last_upstream_check: "2026-05-13 (initial vendoring declaration)"
     divergence_notes: |
       Upstream SKILL.md content tracks upstream; a small "Local Dev Insights"
       pointer section was added near the end of the body to surface the sibling
-      LOCAL-INSIGHTS.md companion file. See OPENRIG.md for the full OpenRig
+      LOCAL-INSIGHTS.md companion file. See VENDORING.md for the full vendoring
       relationship to this skill.
       (2026-10-10) The "Deep-Dive Documentation" and "Ready-to-Use Templates" tables
       near the end were de-linked to plain file names and the three-line
       ./templates/... invocation block was removed: the ten files those links
       pointed at were never vendored, so every one of them dead-ended for a reader.
-      No prose in the body was rewritten. See OPENRIG.md's modification table and
+      No prose in the body was rewritten. See VENDORING.md's modification table and
       internal/clientskills/links_test.go, which now fails on any local link in a
       shipped skill document that does not resolve.
 ---
@@ -407,8 +407,8 @@ Priority (lowest to highest): `~/.agent-browser/config.json` < `./agent-browser.
 
 **Not vendored in this directory.** The files both tables below name are upstream files that this
 skill's `add-supplementary-files` vendoring did not copy in — this directory ships `SKILL.md`,
-`OPENRIG.md` and `LOCAL-INSIGHTS.md` only — so they are named as files, not linked, and reading one
-will not find it here. The upstream project is named in `OPENRIG.md` (`vendored_from`), and the
+`VENDORING.md` and `LOCAL-INSIGHTS.md` only — so they are named as files, not linked, and reading one
+will not find it here. The upstream project is named in `VENDORING.md` (`vendored_from`), and the
 corrections this tree has tested live in `LOCAL-INSIGHTS.md`.
 
 | Upstream reference | When to Use |

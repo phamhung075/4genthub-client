@@ -25,7 +25,7 @@ import (
 // here rather than borrowed, the same rule ExitRestoreFailed and ExitStartFailed follow.
 const exitDead = 2
 
-// watchdogServerIDName is the shell's `$HOME/.openrig/state/rig-watchdog.server-id`: the tmux server's
+// watchdogServerIDName is the shell's `~/.config/4genthub/state/rig-watchdog.server-id`: the tmux server's
 // pid + start time, so a changed server leaves a timestamped transition in the log instead of being
 // inferred after the fact. A reused pid cannot masquerade as the same server because start_time differs.
 const watchdogServerIDName = "rig-watchdog.server-id"
@@ -68,12 +68,11 @@ var (
 		return "none"
 	}
 	// watchdogNodesJSON is the ONE node read in this verb: a room's node records in the CLI's own JSON keys,
-	// read over the client's own transports (clientruntime.RoomNodes - the runtime first, then the OpenRig
-	// daemon's node table) instead of by exec-ing `rig ps --nodes --rig RIG --json`. It is a seam so a test
-	// counts seats with no rig and no daemon. A read that FAILED comes back as an error rather than as an
+	// read over the runtime socket (clientruntime.RoomNodes) instead of by exec-ing `rig ps --nodes --rig RIG --json`.
+	// It is a seam so a test counts seats with no runtime. A read that FAILED comes back as an error rather than as an
 	// empty table: the caller counts zero either way, but only one of those is a fact about the room.
 	watchdogNodesJSON = func(rigName string) (string, error) {
-		nodes, ok, err := clientruntime.RoomNodes(context.Background(), rigName)
+		nodes, ok, err := clientruntime.RoomNodes(rigName)
 		if err != nil {
 			return "", err
 		}
@@ -104,13 +103,7 @@ func (watchdogCommand) Summary() string {
 	return "when a rig's seats vanish, put it back with the same restore continue uses"
 }
 
-// NeedsRig is false and the verb resolves the rig tool itself, because TWO of its forms do not need it:
-// --self-test exercises the decision rule on fixtures, and the usage listing prints the briefs on disk -
-// and a machine that has no rig tool is exactly where a reader wants to know which rigs have briefs. The
-// forms that read the daemon refuse through the same one-message matrix every other verb uses.
-func (watchdogCommand) NeedsRig() bool { return false }
-
-func (watchdogCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (watchdogCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, watchdogUsage,
 			"Watches a rig's tmux sessions - the ground truth for \"is it up\"; the daemon's cached node\n"+

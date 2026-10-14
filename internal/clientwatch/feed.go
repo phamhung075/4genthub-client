@@ -37,7 +37,7 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 	// One seat in view (a grid pane): its name and token bar are the top line, not a column.
 	var header *Header
 	if len(seats) == 1 {
-		logPath, _ := seatLog(ctx, root, s.rig, seats[0])
+		logPath, _ := seatLog(root, s.rig, seats[0])
 		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModel(logPath),
 			func(line string) { fmt.Fprintln(out, line) })
 	}
@@ -68,7 +68,7 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 		fmt.Fprintf(out, "-- following %d seats; Ctrl-C to stop\n", len(seats))
 	}
 	for _, seat := range seats {
-		logPath, _ := seatLog(ctx, root, s.rig, seat)
+		logPath, _ := seatLog(root, s.rig, seat)
 		if logPath == "" {
 			continue
 		}
@@ -104,7 +104,7 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 			return nil
 		}
 		for _, seat := range seats {
-			logPath, _ := seatLog(ctx, root, s.rig, seat)
+			logPath, _ := seatLog(root, s.rig, seat)
 			if logPath == "" {
 				continue
 			}

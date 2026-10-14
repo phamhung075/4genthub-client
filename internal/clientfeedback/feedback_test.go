@@ -16,10 +16,9 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-// runFeedback drives the verb the dispatcher drives: rig is nil because NeedsRig is false, which is
-// also the path a test that wants the REAL lazy resolution takes.
+// runFeedback drives the verb the dispatcher drives: no rig is involved.
 func runFeedback(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	return feedbackCommand{}.Run(ctx, nil, args, stdout, stderr)
+	return feedbackCommand{}.Run(ctx, args, stdout, stderr)
 }
 
 // feedbackServer is a routed stand-in for the server: it records the one request it is asked to
@@ -86,15 +85,12 @@ func feedbackEnv(t *testing.T, serverURL, token string) {
 }
 
 // nativeChain isolates the identity chain from the machine the tests run on: no runtime socket answers, no
-// OpenRig daemon is named, and no seat is stated. A test that wants an identity must then state one with
+// rig daemon is named, and no seat is stated. A test that wants an identity must then state one with
 // seatEnv, and a test that wants the refusal gets it on every machine - the isolation the deleted rig stub
 // used to give the PATH.
 func nativeChain(t *testing.T) {
 	t.Helper()
-	t.Setenv("OPENRIG_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
-	t.Setenv("OPENRIG_URL", "")
-	t.Setenv("OPENRIG_PORT", "")
-	t.Setenv("OPENRIG_SESSION_NAME", "")
+	t.Setenv("AGENTHUB_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
 	t.Setenv("RIGGED_SESSION_NAME", "")
 	t.Setenv("AGENTHUB_SESSION_NAME", "")
 	t.Setenv("AGENTHUB_ROOM", "")
@@ -408,8 +404,5 @@ func TestCommandsRegistersTheFeedbackVerb(t *testing.T) {
 	}
 	if command.Summary() == "" {
 		t.Error("Summary() is empty")
-	}
-	if command.NeedsRig() {
-		t.Error("NeedsRig() is true: the verb resolves rig lazily so a fully-specified call needs none")
 	}
 }

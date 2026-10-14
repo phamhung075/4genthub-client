@@ -1,12 +1,12 @@
 package clientsync
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"io"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	deadNode  = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1","sessionStatus":"running","agentActivity":{"state":"unknown","reason":"no_runtime_hook"}}`
-	aliveNode = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1","sessionStatus":"running","agentActivity":{"state":"idle","reason":null}}`
+	deadNode  = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1","sessionStatus":"agent_exited"}`
+	aliveNode = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1","sessionStatus":"running"}`
 )
 
-// rigStub scripts the READ the verb makes: answers is the node table the DAEMON serves, one scripted answer
-// per reading with the last repeating (rigNodeDaemon below), because the verb reads a seat through
+// rigStub scripts the READ the verb makes: answers is the node table the RUNTIME serves, one scripted answer
+// per reading with the last repeating (rigNodeRuntime below), because the verb reads a seat through
 // clientruntime.SeatNode rather than through a `rig ps` exec, and a stub beside that seam would let this
 // suite pass while the real read was broken. reads counts the readings the verb actually took.
 //
@@ -46,78 +46,79 @@ func (s *rigStub) nodeAnswer() string {
 	return answer
 }
 
-// rigNames is the rigs the scripted rows name, deduplicated: the daemon's rig list is what makes the node
-// route askable at all, since that route is keyed on the rig's id rather than on its name.
-func (s *rigStub) rigNames() []string {
-	seen := map[string]bool{}
-	var names []string
-	for _, answer := range s.answers {
-		var rows []map[string]any
-		if err := json.Unmarshal([]byte(answer), &rows); err != nil {
-			continue
-		}
-		for _, row := range rows {
-			name, _ := row["rigName"].(string)
-			if name == "" || seen[name] {
-				continue
-			}
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	return names
-}
-
 // stubRig points the verb's read at the stub's scripted answers.
 func stubRig(t *testing.T, stub *rigStub) {
 	t.Helper()
-	rigNodeDaemon(t, stub.rigNames(), stub.nodeAnswer)
+	rigNodeRuntime(t, stub.nodeAnswer)
 }
 
-// rigNodeDaemon is the daemon the node read talks to, in the shape internal/clientrestore's world uses:
-// GET /api/ps names the rigs the rows come from (the node route is keyed on the id, not the name), and
-// GET /api/rigs/<rigId>/nodes carries the rows themselves. rigs is what the list advertises, and nodes
-// answers the table for THIS reading, so a sequenced stub hands each reading its own answer. It serves
-// BOTH verbs' read: `sync respawn` and `sync switch` now ask the daemon through the client's own
-// transport, and a stub beside that seam would let a suite pass while the real read was broken.
-func rigNodeDaemon(t *testing.T, rigs []string, nodes func() string) {
+// rigNodeRuntime is the runtime the node read talks to: GetRoomStatus over a unix socket, answering the rows
+// of THIS reading in the runtime's own seat-status keys. nodes yields the scripted node table for the
+// reading, so a sequenced stub hands each reading its own answer. It serves BOTH verbs' read: `sync respawn`
+// and `sync switch` ask the runtime through the client's own transport, and a stub beside that seam would let a
+// suite pass while the real read was broken.
+func rigNodeRuntime(t *testing.T, nodes func() string) {
 	t.Helper()
-	daemon := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
-		switch {
-		case req.URL.Path == "/api/ps":
-			list := make([]map[string]string, 0, len(rigs))
-			for _, rig := range rigs {
-				list = append(list, map[string]string{"rigId": "01TESTRIG" + rig, "name": rig, "rigName": rig})
-			}
-			out.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(out).Encode(list)
-		case strings.HasPrefix(req.URL.Path, "/api/rigs/") && strings.HasSuffix(req.URL.Path, "/nodes"):
-			_, _ = io.WriteString(out, nodes())
-		default:
-			out.WriteHeader(http.StatusNotFound)
+	serveRuntimeSocket(t, func(string) string {
+		var rows []map[string]any
+		_ = json.Unmarshal([]byte(nodes()), &rows)
+		statuses := []map[string]any{}
+		for _, row := range rows {
+			room, _ := row["rigName"].(string)
+			logical, _ := row["logicalId"].(string)
+			statuses = append(statuses, map[string]any{
+				"room": room, "seat": strings.TrimPrefix(logical, room+"."), "session_name": row["canonicalSessionName"],
+				"runtime": "omp", "model": row["model"], "state": row["sessionStatus"],
+			})
 		}
-	}))
-	t.Cleanup(daemon.Close)
-	t.Setenv("OPENRIG_URL", daemon.URL)
-	t.Setenv("OPENRIG_PORT", "")
-	// And no runtime room: the socket names a path nothing listens on, so the runtime rung of the read
-	// fails fast and the daemon is the transport that answers - the order a seat's box takes.
-	t.Setenv(clientruntime.RuntimeSocketEnv, filepath.Join(t.TempDir(), "no-runtime.sock"))
+		raw, _ := json.Marshal(map[string]any{"ok": true, "data": statuses})
+		return string(raw) + "\n"
+	})
 }
 
-// brokenNodeDaemon names a daemon whose READS fail: the rig list answers HTTP 500, and so does the node
-// table. A verb reading through it must refuse in those words rather than read the failure as a room
-// without that seat - the distinction the read's three answers exist for.
-func brokenNodeDaemon(t *testing.T) {
+// brokenNodeRuntime names a runtime whose READS fail: it answers every request with a refusal. A verb reading
+// through it must refuse in those words rather than read the failure as a room without that seat - the
+// distinction the read's three answers exist for.
+func brokenNodeRuntime(t *testing.T) {
 	t.Helper()
-	daemon := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, _ *http.Request) {
-		out.WriteHeader(http.StatusInternalServerError)
-		_, _ = io.WriteString(out, `{"error":"the node table is unavailable"}`)
-	}))
-	t.Cleanup(daemon.Close)
-	t.Setenv("OPENRIG_URL", daemon.URL)
-	t.Setenv("OPENRIG_PORT", "")
-	t.Setenv(clientruntime.RuntimeSocketEnv, filepath.Join(t.TempDir(), "no-runtime.sock"))
+	serveRuntimeSocket(t, func(string) string {
+		return `{"ok":false,"error":"the node table is unavailable"}` + "\n"
+	})
+}
+
+// serveRuntimeSocket listens on a unix socket for the life of the test and answers each request LINE with
+// answer(line); the reachability probe (dialled and closed with no line) is ignored. The directory is a short
+// temp prefix because a unix socket path is capped near 108 bytes.
+func serveRuntimeSocket(t *testing.T, answer func(line string) string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "csrt")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s.sock")
+	listener, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen on %s: %v", sock, err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				line, err := bufio.NewReader(conn).ReadBytes('\n')
+				if err != nil {
+					return
+				}
+				_, _ = io.WriteString(conn, answer(string(line)))
+			}(conn)
+		}
+	}()
+	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 }
 
 // poisonRig plants a `rig` FIRST on PATH that records having been run, and returns the reading of that
@@ -217,7 +218,7 @@ func TestRespawnRefusesALiveSeat(t *testing.T) {
 	if code != clientcmd.ExitUsage {
 		t.Errorf("exit %d, want %d", code, clientcmd.ExitUsage)
 	}
-	if !strings.Contains(stderr.String(), "not in the dead-agent state") {
+	if !strings.Contains(stderr.String(), "not in a dead-agent state") {
 		t.Errorf("stderr = %q, want the refusal", stderr.String())
 	}
 	if rigRan() {
@@ -237,7 +238,7 @@ func TestRespawnRefusesAnUnknownSeat(t *testing.T) {
 	if code != clientcmd.ExitUsage {
 		t.Errorf("exit %d, want %d", code, clientcmd.ExitUsage)
 	}
-	if !strings.Contains(stderr.String(), "OpenRig lists no node room1.alpha") {
+	if !strings.Contains(stderr.String(), "the runtime lists no seat room1.alpha") {
 		t.Errorf("stderr = %q, want the missing node named", stderr.String())
 	}
 	if rigRan() {
@@ -253,7 +254,7 @@ func TestRespawnRefusesWhenTheNodeReadFails(t *testing.T) {
 	rigRan := poisonRig(t)
 	stub := &rigStub{answers: []string{"[" + deadNode + "]"}}
 	stubRig(t, stub)
-	brokenNodeDaemon(t)
+	brokenNodeRuntime(t)
 
 	var stdout, stderr bytes.Buffer
 	code := RunRespawnVerb(context.Background(),
@@ -262,7 +263,7 @@ func TestRespawnRefusesWhenTheNodeReadFails(t *testing.T) {
 	if code != clientcmd.ExitRemote {
 		t.Errorf("exit %d, want %d: an unreadable record is not an absent seat", code, clientcmd.ExitRemote)
 	}
-	if !strings.Contains(stderr.String(), "the node read asked /api/ps") {
+	if !strings.Contains(stderr.String(), "the node table is unavailable") {
 		t.Errorf("stderr = %q, want the failed read rather than a missing node", stderr.String())
 	}
 	if rigRan() {

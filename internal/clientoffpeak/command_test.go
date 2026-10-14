@@ -12,7 +12,7 @@ import (
 func runOffpeak(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code := offpeakCommand{}.Run(context.Background(), nil, args, &out, &errOut)
+	code := offpeakCommand{}.Run(context.Background(), args, &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 

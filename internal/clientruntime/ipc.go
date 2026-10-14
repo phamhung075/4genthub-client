@@ -20,7 +20,7 @@ import (
 // branch has to reach a daemon built from the SAME branch while the owner's daemon keeps serving the default
 // path - the only way the cutover gets tested before it happens. The NAME IS A CONTRACT rather than a discovery:
 // an owner's harness and a branch client meet on exactly this string, so it is exported and pinned by a test.
-const RuntimeSocketEnv = "OPENRIG_RUNTIME_SOCKET"
+const RuntimeSocketEnv = "AGENTHUB_RUNTIME_SOCKET"
 
 // DefaultSocketPath resolves the runtime Unix domain socket: the override when it is set, else this machine's own
 // location. THIS IS THE ONE RESOLUTION POINT - NewClient("") is its only caller - so one socket is named by exactly

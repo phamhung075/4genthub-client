@@ -1,9 +1,7 @@
 package clientwatch
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,104 +9,26 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
-// Where a seat's session log lives. An omp seat keeps one under the state root; a Claude Code seat
-// keeps one under ~/.claude/projects, found from its process. A runtime the client has no reader for
-// (codex, agy) has neither, so its pane keeps its header and shows no events - which is what the doc
-// says a reader sees.
+// Where a seat's session log lives. A native room's omp seat keeps one under the state root, at
+// clientruntime.SeatSessionsDir. The runtime runs omp only, so that is the only log a seat can have.
 
 var (
-	claudeSessionID  = regexp.MustCompile(`--(?:session-id|resume) ([0-9a-f-]{36})`)
 	modelInLog       = regexp.MustCompile(`"model":"([^"]+)"`)
 	geminiModelInLog = regexp.MustCompile(`(Gemini [0-9.]+ Flash(?:\s*\([^)]+\))?)`)
 )
 
-func claudeProjects() string {
-	home, err := clientenv.RealHome()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".claude", "projects")
-}
-
-// agyLog resolves the session log of an Antigravity CLI / Gemini seat.
-func agyLog(ctx context.Context, rig, seat string) string {
-	home, err := clientenv.RealHome()
-	if err != nil {
-		return ""
-	}
-
-	// 1. Check native agenthub room logs: ~/.config/4genthub/rooms/<rig>/logs/<seat>.jsonl
-	nativeLog := filepath.Join(home, ".config", "4genthub", "rooms", rig, "logs", seat+".jsonl")
-	if info, err := os.Stat(nativeLog); err == nil && !info.IsDir() {
-		return nativeLog
-	}
-
-	// 2. Search ~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl
-	// matching session target
-	sessionTarget := fmt.Sprintf("%s-%s@%s", rig, seat, rig)
-	brainGlob := filepath.Join(home, ".gemini", "antigravity-cli", "brain", "*", ".system_generated", "logs", "transcript.jsonl")
-	matches, _ := filepath.Glob(brainGlob)
-	var candidates []string
-	buf := make([]byte, 4096)
-	for _, p := range matches {
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		n, _ := f.Read(buf)
-		_ = f.Close()
-		if n > 0 && strings.Contains(string(buf[:n]), sessionTarget) {
-			candidates = append(candidates, p)
-		}
-	}
-	if len(candidates) > 0 {
-		return newestByModTime(candidates)
-	}
-
-	// 3. Fallback to ~/.openrig/transcripts/<rig>/<rig>-<seat>@<rig>.log
-	fallbackLog := filepath.Join(home, ".openrig", "transcripts", rig, fmt.Sprintf("%s-%s@%s.log", rig, seat, rig))
-	if info, err := os.Stat(fallbackLog); err == nil && !info.IsDir() {
-		return fallbackLog
-	}
-
-	return ""
-}
-
-// newestSession is the most recently written sessions/*.jsonl under one seat's state directory.
-func newestSession(seatDir string) string {
-	matches, err := filepath.Glob(filepath.Join(seatDir, "sessions", "*.jsonl"))
+// newestSession is the most recently written *.jsonl in a seat's sessions directory. The directory also
+// holds one artifact subdirectory per session, named like its log without the extension; the pattern
+// skips them.
+func newestSession(sessionsDir string) string {
+	matches, err := filepath.Glob(filepath.Join(sessionsDir, "*.jsonl"))
 	if err != nil || len(matches) == 0 {
 		return ""
 	}
 	return newestByModTime(matches)
-}
-
-// claudeLog is the session log of a Claude Code seat, found from the --session-id of its process.
-func claudeLog(ctx context.Context, rig, seat string) string {
-	out, err := execCommand(ctx, "pgrep", "-af", fmt.Sprintf("claude .*--name %s-%s@%s", rig, seat, rig))
-	if err != nil {
-		return ""
-	}
-	roots := claudeProjects()
-	if roots == "" {
-		return ""
-	}
-	found := []string{}
-	for _, match := range claudeSessionID.FindAllStringSubmatch(out, -1) {
-		pattern := filepath.Join(roots, "*", match[1]+".jsonl")
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			continue
-		}
-		found = append(found, matches...)
-	}
-	if len(found) == 0 {
-		return ""
-	}
-	return newestByModTime(found)
 }
 
 func newestByModTime(paths []string) string {
@@ -126,19 +46,13 @@ func newestByModTime(paths []string) string {
 	return paths[len(paths)-1]
 }
 
-// seatLog is (the newest session log, the runtime) of a seat: omp state first, then agy, else Claude Code.
-// A seat with neither yields an empty path and no runtime.
-func seatLog(ctx context.Context, root, rig, seat string) (string, string) {
-	seatDir := filepath.Join(root, fmt.Sprintf("%s-%s@%s", rig, seat, rig))
-	if info, err := os.Stat(seatDir); err == nil && info.IsDir() {
-		if session := newestSession(seatDir); session != "" {
-			return session, "omp"
-		}
+// seatLog is (the newest session log, the runtime) of a seat in a native room. A seat with no log yields
+// an empty path and no runtime.
+func seatLog(root, room, seat string) (string, string) {
+	if session := newestSession(clientruntime.SeatSessionsDir(root, room, seat)); session != "" {
+		return session, "omp"
 	}
-	if agy := agyLog(ctx, rig, seat); agy != "" {
-		return agy, "agy"
-	}
-	return claudeLog(ctx, rig, seat), "claude"
+	return "", ""
 }
 
 // contextTokens is the tokens in the context after this record's reply, or nil when the record carries

@@ -120,7 +120,7 @@ func TestRoomQueueCreateSendsTheEnvSessionAsSource(t *testing.T) {
 }
 
 // TestRoomQueueCreateWithoutTheSessionEnvRefusesAndSendsNothing pins the actor rule's refusal half: with
-// $OPENRIG_SESSION_NAME unset the verb refuses, NAMES the variable, and asks the daemon NOTHING - a guessed
+// $AGENTHUB_SESSION_NAME unset the verb refuses, NAMES the variable, and asks the daemon NOTHING - a guessed
 // actor is a row nobody can audit, so there is no frame to send.
 func TestRoomQueueCreateWithoutTheSessionEnvRefusesAndSendsNothing(t *testing.T) {
 	t.Setenv(sessionEnv, "")
@@ -138,6 +138,21 @@ func TestRoomQueueCreateWithoutTheSessionEnvRefusesAndSendsNothing(t *testing.T)
 		t.Errorf("stdout = %q, want nothing: the pair is printed for a run, and this run never started", stdout)
 	}
 	assertRequests(t, daemon)
+}
+
+// TestRoomQueueActsAsTheNativeSeatSession pins the variable by its literal name: the runtime launches every
+// seat with AGENTHUB_SESSION_NAME and no the rig orchestrator variable, so a verb reading any other name has no actor on a
+// machine without the rig orchestrator.
+func TestRoomQueueActsAsTheNativeSeatSession(t *testing.T) {
+	t.Setenv("AGENTHUB_SESSION_NAME", testSeat)
+	daemon := newFakeDaemon(t, map[string]string{
+		"QueueClaim": okData(queueRowFrame("qitem-new", "in-progress", "normal", "claimed",
+			queueTransitionFrame(2, "2026-10-14T00:18:00Z", "pending", "in-progress", testSeat, "claimed"))),
+	})
+	code, _, stderr := runRoom(t, daemon.args("queue", "claim", testRoom, "qitem-new")...)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
 }
 
 // TestRoomQueueCloseRefusesAnUnknownReasonWithoutARoundTrip pins the local check: a `--reason` outside the

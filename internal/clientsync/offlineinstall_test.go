@@ -53,7 +53,7 @@ func offlineReadJSON(t *testing.T, path string) map[string]any {
 }
 
 // TestOfflineInstallWritesTheStoreAndSkipsAForeignPolicy: seatcheck reads
-// <home>/.openrig/agenthub-seats/<room>/<member>/policy.json, so this is what makes a materialized
+// <home>/.config/4genthub/seats/<room>/<member>/policy.json, so this is what makes a materialized
 // bundle decidable offline. Two members sharing one seat type share one agent directory, so only one
 // of their policies can ride there: installing must refuse a policy naming another seat instead of
 // handing this seat the wrong links.
@@ -74,7 +74,7 @@ pods:
 		"ops": `{"Seat":"gamma"}`,
 	})
 	home := t.TempDir()
-	store := filepath.Join(home, ".openrig", "agenthub-seats")
+	store := filepath.Join(home, ".config", "4genthub", "seats")
 
 	var stdout, stderr bytes.Buffer
 	code := RunOfflineInstallVerb(context.Background(),

@@ -147,10 +147,7 @@ type evidenceCommand struct{}
 func (evidenceCommand) Name() string    { return "evidence" }
 func (evidenceCommand) Summary() string { return "submit evidence for a task" }
 
-// NeedsRig is false: this verb talks to the cloud and to git, never to OpenRig.
-func (evidenceCommand) NeedsRig() bool { return false }
-
-func (evidenceCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (evidenceCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	opts, help, err := parseEvidenceArgs(args)
 	if help {
 		_, _ = io.WriteString(stdout, evidenceUsage)

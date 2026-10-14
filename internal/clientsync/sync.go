@@ -1,6 +1,6 @@
 // Package clientsync is the sync half of 4genteam: pull, rig, bundle, switch, status and watch,
 // ported test-for-test from the Python test now at agenthub_client/tests/test_seat_sync.py (it lived at
-// scripts/tests/test_openrig_seat_sync.py until 2026-10-09, when the scripts left the tree, and at
+// the retired Python seat_sync test until 2026-10-09, when the scripts left the tree, and at
 // agenthub_main/src/tests/scripts/ until 2026-10-08).
 // Those Python tests are the parity spec, so a verb here is done when the Go tests assert WHAT THEY
 // ASSERT, not when the Go tests pass.
@@ -39,9 +39,8 @@ type syncCommand struct{}
 
 func (syncCommand) Name() string    { return "sync" }
 func (syncCommand) Summary() string { return "pull and inspect resolved seats (" + verbList() + ")" }
-func (syncCommand) NeedsRig() bool  { return false }
 
-func (syncCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (syncCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintf(stderr, "4genteam sync: pick a verb: %s\n", verbList())
 		return clientcmd.ExitUsage

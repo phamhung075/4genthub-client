@@ -44,9 +44,8 @@ func (offpeakCommand) Name() string { return "offpeak" }
 func (offpeakCommand) Summary() string {
 	return "is DeepSeek billing at off-peak right now, and may this client start DeepSeek seats now"
 }
-func (offpeakCommand) NeedsRig() bool { return false }
 
-func (offpeakCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (offpeakCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		_, _ = io.WriteString(stdout, offpeakUsage)
 		return clientcmd.ExitOK

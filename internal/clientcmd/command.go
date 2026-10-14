@@ -1,21 +1,16 @@
 // Package clientcmd is the CONTRACT between the 4genteam dispatcher and every subcommand
 // package. It exists so that the two implementation packages (clientsync and clientbridge) share one
-// definition of what a subcommand is and how it reaches OpenRig, rather than each guessing at a type
+// definition of what a subcommand is, rather than each guessing at a type
 // and turning a merge into a rewrite.
 //
-// The dispatcher is thin on purpose: it reads argv[0] and the first argument, resolves the rig tool
-// ONCE for the commands that need it, and calls Run. Registering a subcommand means returning a
+// The dispatcher is thin on purpose: it reads argv[0] and the first argument and calls Run. Registering a subcommand means returning a
 // Command from your package; it never means editing main.go, which is why this lives outside it.
 package clientcmd
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"os/exec"
-	"runtime"
-	"strings"
 )
 
 // Version is the CLIENT's own version. It lives here because TWO callers need the same string and
@@ -35,7 +30,7 @@ const (
 	// build can never look like one that ran. It coincides with the Python client's EXIT_FAILED (3).
 	ExitUnavailable = 3
 	// ExitBehind is a seat whose local pin differs from the cloud's snapshot. MEASURED from
-	// openrig_seat_client.py: EXIT_BEHIND = 4 - the first draft of the Go status core used 1, and the
+	// the retired Python seat client: EXIT_BEHIND = 4 - the first draft of the Go status core used 1, and the
 	// verification its own comment asked for caught it.
 	ExitBehind = 4
 	// ExitRemote is a failure talking to the cloud or to the rig: the verb ran and the remote did not
@@ -54,14 +49,6 @@ const (
 	ExitPartialStart = 2
 	ExitRoomRefused  = 3
 )
-
-// Rig is how a command reaches OpenRig: the resolved program and its argument prefix. On Linux, WSL2
-// and macOS the prefix is empty; the Windows route through WSL puts `-e rig` in it, and having the
-// shape now is what keeps call sites from assuming a bare `rig`.
-type Rig struct {
-	Program string
-	Prefix  []string
-}
 
 // CodedError is the Python client scripts' SyncError: a message plus the exit code the process should
 // end with, so a failure deep in a helper carries its own code to the top instead of every layer
@@ -86,33 +73,11 @@ func CodeOf(err error, fallback int) int {
 	return fallback
 }
 
-// Run executes rig with an ARGUMENT LIST, so the no-shell-string rule has one home - and the Prefix
-// route (the `wsl.exe -e rig` form a native-Windows machine reaches OpenRig through) rides with every
-// argument list a caller builds here.
-//
-// IT IS NOT THE ONLY PLACE A COMMAND STARTS RIG. Three verbs resolve and start the program themselves -
-// clientsync/bundleverb.go (LookPath then exec.Command), clientsync/switchverb.go and
-// clientsync/respawnverb.go (the same shape) - and so they do not carry Prefix. They are NOT routed back
-// through this engine on purpose: each is slated to lose its exec entirely (bundle is a verb rewrite,
-// switch and respawn lose their rig legs), and adding a call to an engine whose caller is being deleted
-// would be work on a path that is going away. Until then the door count is four, not one.
-func (r *Rig) Run(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, r.Program, append(append([]string{}, r.Prefix...), args...)...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("rig %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return string(out), nil
-}
-
 // Command is one subcommand. Name is what the user types.
 type Command interface {
 	Name() string
 	Summary() string
-	// NeedsRig decides whether RequireRig runs before Run, so the platform matrix is applied in ONE
-	// place rather than remembered at each call site.
-	NeedsRig() bool
-	Run(ctx context.Context, rig *Rig, args []string, stdout, stderr io.Writer) int
+	Run(ctx context.Context, args []string, stdout, stderr io.Writer) int
 }
 
 // HelpRequested reports whether an argument list asks for help. EVERY verb funnels `--help` through
@@ -126,41 +91,4 @@ func HelpRequested(args []string) bool {
 		}
 	}
 	return false
-}
-
-// Seams the tests replace. A package-level variable rather than an interface added for testing, which
-// is the repo's rule; the platform matrix is untestable without these two.
-var (
-	// LookPath finds the rig tool.
-	LookPath = exec.LookPath
-	// GOOS is the platform the matrix branches on.
-	GOOS = runtime.GOOS
-)
-
-// RequireRig resolves the rig tool, or returns the ONE message that says what is missing. This is the
-// platform matrix, and there is no second path out of it:
-//
-//   - Linux, WSL2, macOS: rig on PATH, used directly.
-//   - Native Windows with OpenRig inside WSL2: reached as `wsl.exe -e rig ...`, explicitly.
-//   - Native Windows without OpenRig: no rig, and every command that needs one refuses here.
-//
-// The refusal is a non-zero exit with ONE line naming what is missing - the spec's requirement that a
-// command which needs rig and cannot reach it must never downgrade silently.
-func RequireRig() (*Rig, error) {
-	path, err := LookPath("rig")
-	if err == nil {
-		return &Rig{Program: path}, nil
-	}
-	if GOOS == "windows" {
-		return nil, errors.New(
-			"rig is not on PATH and this is native Windows: OpenRig supports Linux and macOS only " +
-				"(its own docs say native Windows is unsupported and WSL2 is untested), so the supported " +
-				"route is OpenRig inside WSL2, reached as `wsl.exe -e rig ...`. Install OpenRig there, or " +
-				"run a command that does not need it: sync status, sync pull, feedback",
-		)
-	}
-	return nil, errors.New(
-		"rig is not on PATH: this command needs the local OpenRig daemon. Install OpenRig, or run a " +
-			"command that does not need it: sync status, sync pull, feedback",
-	)
 }

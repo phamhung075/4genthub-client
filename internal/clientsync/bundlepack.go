@@ -1,7 +1,7 @@
 // The bundle archive `sync bundle` writes: a gzip tar of the rig spec and the agent directories the rig root
 // holds, with a manifest naming every file and its hash.
 //
-// It is built here, not by the OpenRig tool, so a machine without OpenRig can ship a seat. The archive is
+// It is built here, not by the rig orchestrator tool, so a machine without the rig orchestrator can ship a seat. The archive is
 // DETERMINISTIC - sorted entries, a zero mtime, fixed modes - so the same pin and the same rig root always
 // produce the same bytes, and a bundle's hash is a fact about its contents rather than about the day it was
 // built. `offline-install` reads the unpacked directory (`rig.yaml` and `agents/<agent>/`), which is the

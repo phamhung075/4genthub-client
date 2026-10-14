@@ -2,32 +2,11 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
-
-func rigMissing(t *testing.T) {
-	t.Helper()
-	previous := clientcmd.LookPath
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
-	t.Cleanup(func() { clientcmd.LookPath = previous })
-}
-
-// rigPresent is rigMissing's other half, and it exists because a test that leaves the seam at the real
-// exec.LookPath does not test the dispatcher, it tests the HOST: `4genteam` with no arguments reaches
-// `up`'s own argument check only when rig is on PATH, and stops at the platform matrix when it is not.
-// A masked clone at b01a211 with no rig on PATH took the second answer and failed this package, which is
-// the mission's own rule - tests need no network, rig or seat - broken in the one place a reader would
-// not look for it. The stub is a PATH string: RequireRig only looks the tool up, it does not run it.
-func rigPresent(t *testing.T) {
-	t.Helper()
-	previous := clientcmd.LookPath
-	clientcmd.LookPath = func(string) (string, error) { return "/stub/bin/rig", nil }
-	t.Cleanup(func() { clientcmd.LookPath = previous })
-}
 
 // TestUnportedCommandRefusesRatherThanStubbing closes the hole a stub would leave: a command that
 // exists in the Python client and not yet here must say exactly that and exit non-zero. A command that
@@ -40,7 +19,6 @@ func rigPresent(t *testing.T) {
 // remains, because the checker is its own binary rather than a verb this client implements, and that is
 // what this test exists to keep honest.
 func TestUnportedCommandRefusesRatherThanStubbing(t *testing.T) {
-	rigMissing(t)
 	for _, args := range [][]string{
 		{"seatcheck", "send", "x", "y"},
 	} {
@@ -104,7 +82,6 @@ func TestPortedVerbsRefuseOnTheEnvironment(t *testing.T) {
 // agenthub runtime, so a machine with no rig tool is not refused for it. With no rig on PATH the verb reaches
 // its own argument check (here, a missing cloud setting) instead of stopping at the matrix.
 func TestBridgeIsNotGovernedByThePlatformMatrix(t *testing.T) {
-	rigMissing(t)
 	var out, errOut bytes.Buffer
 	if code := run([]string{"bridge", "once"}, &out, &errOut); code == clientcmd.ExitUnavailable {
 		t.Fatalf("exit code = %d: the bridge was refused as if it needed rig", code)
@@ -123,25 +100,23 @@ func TestBridgeIsNotGovernedByThePlatformMatrix(t *testing.T) {
 // PATH got the matrix's answer and this assertion failed, on exactly the machine the client must stay
 // honest on. Both answers are now asserted rather than one assumed.
 func TestUsageAndVersionAreTheOnlyFreeCommands(t *testing.T) {
-	rigPresent(t)
 	var out, errOut bytes.Buffer
 	if code := run(nil, &out, &errOut); code != clientcmd.ExitRoomRefused {
 		t.Errorf("no arguments: exit code = %d, want %d", code, clientcmd.ExitRoomRefused)
 	}
 	// No argument means `up`, as the Python client's dispatcher did, so the failure names THAT verb and the
 	// argument it is missing - not the command list it would have printed before. `up` is room-scoped now
-	// (NeedsRig is false) and takes its seats from a LOCAL definition, so the argument it is missing is
+	// and takes its seats from a LOCAL definition, so the argument it is missing is
 	// --team, and the room contract numbers that 3 rather than the CLI-wide ExitUsage (2).
 	if !strings.Contains(errOut.String(), "4genteam up:") || !strings.Contains(errOut.String(), "--team") {
 		t.Errorf("no arguments: stderr = %q, want up's missing-definition error", errOut.String())
 	}
 
-	// THE OTHER HALF: a machine that has never had OpenRig. No verb consults the platform matrix any more -
+	// THE OTHER HALF: a machine that has never had the rig orchestrator. No verb consults the platform matrix any more -
 	// the room's start, the restore, the bridge and `ui` all go through the runtime or the browser - so with no
 	// rig on PATH `up` still reaches its own argument check and answers exactly as it did with one.
 	out.Reset()
 	errOut.Reset()
-	rigMissing(t)
 	if code := run(nil, &out, &errOut); code != clientcmd.ExitRoomRefused {
 		t.Errorf("no arguments, no rig on PATH: exit code = %d, want %d", code, clientcmd.ExitRoomRefused)
 	}
@@ -184,7 +159,7 @@ func TestSyncRefusesAnUnknownVerbAsUsageNotAsUnavailable(t *testing.T) {
 }
 
 // TestHelpIsAnsweredBeforeThePlatformMatrix: a verb's own usage must be readable on a machine that has
-// never had OpenRig, and the client's README states that rule without conditions. Six verbs used to
+// never had the rig orchestrator, and the client's README states that rule without conditions. Six verbs used to
 // refuse here instead - `up`, `ui`, `bridge`, and bridge's `run`, `once` and `install-service` - because
 // the dispatcher resolved rig BEFORE it called the verb, so the verb's own help path, which every one of
 // them answers first, was never reached. Those six are the whole extent: measured against the binary with
@@ -195,7 +170,6 @@ func TestSyncRefusesAnUnknownVerbAsUsageNotAsUnavailable(t *testing.T) {
 // still refuse with the matrix's reason, which is what makes this a move of the gate rather than its
 // removal.
 func TestHelpIsAnsweredBeforeThePlatformMatrix(t *testing.T) {
-	rigMissing(t)
 
 	for _, args := range [][]string{
 		{"up", "--help"},

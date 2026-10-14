@@ -13,7 +13,7 @@ import (
 // read as an unknown verb, so it printed an error and exited non-zero.
 func TestSyncAnswersHelp(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := (syncCommand{}).Run(context.Background(), nil, []string{"--help"}, &out, &errOut)
+	code := (syncCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Errorf("sync --help exited %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut.String())
 	}
@@ -32,7 +32,7 @@ func TestSyncAnswersHelp(t *testing.T) {
 func TestEveryDeclaredVerbAnswersHelp(t *testing.T) {
 	for _, verb := range syncVerbs {
 		var out, errOut bytes.Buffer
-		code := (syncCommand{}).Run(context.Background(), nil, []string{verb, "--help"}, &out, &errOut)
+		code := (syncCommand{}).Run(context.Background(), []string{verb, "--help"}, &out, &errOut)
 		if code != clientcmd.ExitOK {
 			t.Errorf("sync %s --help exited %d, want %d (stderr %q)", verb, code, clientcmd.ExitOK, errOut.String())
 		}
@@ -49,7 +49,7 @@ func TestEveryDeclaredVerbAnswersHelp(t *testing.T) {
 // asserts the row's own two sentences on stdout with exit 0 - `script` became `client` in the port.
 func TestHelpStatesOfflineUseIsManual(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := (syncCommand{}).Run(context.Background(), nil, []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (syncCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("sync --help exited %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut.String())
 	}
 	for _, want := range []string{"rig up <bundle> --target <dir>", "never falls back"} {
@@ -65,7 +65,7 @@ func TestHelpStatesOfflineUseIsManual(t *testing.T) {
 func TestSyncRejectsAVerbItDoesNotDeclare(t *testing.T) {
 	for _, args := range [][]string{{"nonsense"}, {"watch"}, nil} {
 		var out, errOut bytes.Buffer
-		if code := (syncCommand{}).Run(context.Background(), nil, args, &out, &errOut); code != clientcmd.ExitUsage {
+		if code := (syncCommand{}).Run(context.Background(), args, &out, &errOut); code != clientcmd.ExitUsage {
 			t.Errorf("sync %v exited %d, want %d", args, code, clientcmd.ExitUsage)
 		}
 	}
@@ -95,7 +95,7 @@ func TestUsageErrorsNameTheOffendingArgument(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			code := (syncCommand{}).Run(context.Background(), nil, testCase.args, &out, &errOut)
+			code := (syncCommand{}).Run(context.Background(), testCase.args, &out, &errOut)
 			if code != clientcmd.ExitUsage {
 				t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
 			}

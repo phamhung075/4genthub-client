@@ -52,7 +52,7 @@ is the native door onto the same stop-then-start path - the room's own spec, no 
 `
 
 // RunRespawnVerb is `sync respawn`: the deliberate primitive for a seat whose agent died outside
-// OpenRig's own stop, since OpenRig has no automatic trigger for that.
+// the runtime's own stop.
 //
 // IT IS ALSO THE ONE THING THIS VERB CANNOT FINISH. Every reading and every refusal it has always made is
 // still here - the seat's own record, the peak gate, the dead reading held for --after-seconds - and the
@@ -151,7 +151,7 @@ func respawn(ctx context.Context, room, seat string, after float64, allowPeak bo
 			return clientcmd.ExitRemote
 		}
 		if node == nil {
-			fmt.Fprintf(stderr, "4genteam sync respawn: OpenRig lists no node %s.%s\n", room, seat)
+			fmt.Fprintf(stderr, "4genteam sync respawn: the runtime lists no seat %s.%s\n", room, seat)
 			return clientcmd.ExitUsage
 		}
 		// THE PEAK GATE, on the seat this verb decides about, and before the dead-reading wait: a respawn is
@@ -173,9 +173,9 @@ func respawn(ctx context.Context, room, seat string, after float64, allowPeak bo
 		}
 		if !agentIsGone(node) {
 			fmt.Fprintf(stderr,
-				"4genteam sync respawn: %s.%s is not in the dead-agent state (sessionStatus=%s, "+
-					"agentActivity=%s); refusing to respawn\n",
-				room, seat, jsonText(node["sessionStatus"]), jsonText(node["agentActivity"]))
+				"4genteam sync respawn: %s.%s is not in a dead-agent state (sessionStatus=%s); "+
+					"refusing to respawn\n",
+				room, seat, jsonText(node["sessionStatus"]))
 			return clientcmd.ExitUsage
 		}
 		if !time.Now().Before(deadline) {
@@ -213,7 +213,7 @@ func respawn(ctx context.Context, room, seat string, after float64, allowPeak bo
 // act on), and a read that could not be made is the error - an unreadable record is NOT the answer "no
 // such seat", and `respawn` must refuse on it rather than decide for a seat it could not read.
 func seatNode(ctx context.Context, room, seat string) (map[string]any, error) {
-	node, found, err := clientruntime.SeatNode(ctx, room, seat)
+	node, found, err := clientruntime.SeatNode(room, seat)
 	if err != nil {
 		return nil, err
 	}
@@ -223,19 +223,18 @@ func seatNode(ctx context.Context, room, seat string) (map[string]any, error) {
 	return node, nil
 }
 
-// agentIsGone is the reading a dead agent leaves: the session is up, the runtime hook is not.
+// agentIsGone is the reading a dead agent leaves: the runtime's own death states, the ones its supervisor
+// restarts a seat from. A seat that is running or stopped is not one.
 func agentIsGone(node map[string]any) bool {
 	if node == nil {
 		return true
 	}
 	status, _ := node["sessionStatus"].(string)
-	if status == "stopped" || status == "exited" {
-		return false
+	switch status {
+	case "agent_socket_closed", "agent_stdio_eof", "agent_exited":
+		return true
 	}
-	activity, _ := node["agentActivity"].(map[string]any)
-	state, _ := activity["state"].(string)
-	reason, _ := activity["reason"].(string)
-	return state == "unknown" && reason == "no_runtime_hook"
+	return false
 }
 
 // canonicalSession is the live canonical session name of a seat, or "" when the room's records do not list
@@ -244,7 +243,7 @@ func agentIsGone(node map[string]any) bool {
 // that the refusal below would print as a composed room.seat: an operator told to start the seat by hand
 // must be told the session that exists, not one this verb invented.
 func canonicalSession(ctx context.Context, room, seat string) (string, error) {
-	node, found, err := clientruntime.SeatNode(ctx, room, seat)
+	node, found, err := clientruntime.SeatNode(room, seat)
 	if err != nil {
 		return "", err
 	}

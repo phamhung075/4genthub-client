@@ -33,19 +33,13 @@ func (continueCommand) Summary() string {
 	return "restore a stopped rig from its latest snapshot and brief its seats"
 }
 
-// NeedsRig is false and the verb resolves the rig tool itself, because ONE of its four forms does not
-// need it: the listing prints the briefs that are on disk, and a machine that has no rig tool is exactly
-// where a reader wants to know which rigs have briefs. The restore forms refuse through the same platform
-// matrix every other verb uses.
-func (continueCommand) NeedsRig() bool { return false }
-
-func (continueCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (continueCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, continueUsage,
 			"Restores a rig from its latest snapshot (every seat resumes its own session) and sends each\n"+
 				"seat its brief. The rig is the parameter: its seats are discovered from tmux at run time.\n\n"+
-				"  BRIEF  a file whose text every seat gets; default <home>/.openrig/briefs/<rig>.txt\n"+
-				"         <home>/.openrig/briefs/<rig>/<seat>.txt replaces it for that seat\n"+
+				"  BRIEF  a file whose text every seat gets; default <home>/.config/4genthub/briefs/<rig>.txt\n"+
+				"         <home>/.config/4genthub/briefs/<rig>/<seat>.txt replaces it for that seat\n"+
 				"  --all  every stopped rig that has a brief; the run exits non-zero when a rig it visited is\n"+
 				"         not up (its restore failed, or the peak gate refused it)\n"+
 				"  no argument  list the rigs and the briefs on disk\n\n"+
@@ -88,7 +82,7 @@ func runContinue(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	if brief == "" && !noBrief {
-		// The shell's default: <home>/.openrig/briefs/<rig>.txt. It is resolved here rather than in the
+		// The default: <home>/.config/4genthub/briefs/<rig>.txt. It is resolved here rather than in the
 		// caller so the help, the listing and this default cannot name three different files.
 		defaultPath, err := defaultBrief(rigName)
 		if err != nil {
@@ -220,42 +214,23 @@ func briefsOnDisk(dir string) []string {
 	return found
 }
 
-// list is the shell's no-argument form: which rigs exist, which briefs are on disk, and the usage line. It
-// needs no rig tool: the briefs are the files on disk, and the rig list is the daemon's own route
-// (clientruntime.RigEntries), which is also where every other read of these rigs comes from. When that read
-// cannot be made the section says so on one line - and when this shell names no daemon it prints no rig
-// line at all, because there is no list to print and no failure either.
+// list is the shell's no-argument form: which rooms exist, which briefs are on disk, and the usage line. The
+// briefs are the files on disk, and the room list is the runtime's own (ListAllRooms, with each room's seat
+// states). When the runtime cannot be read the section says so on one line rather than printing an empty list.
 func list(stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "Rigs that can be continued:")
-	entries, ok, err := clientruntime.RigEntries(context.Background(), true)
-	switch {
-	case err != nil:
-		fmt.Fprintf(stdout, "  (the rig list could not be read: %v)\n", err)
-	case !ok:
-		// NO RECORDS is not a FAILURE - this shell names no OpenRig daemon - but it is also not a list, and an
-		// empty section under this heading reads as "no rigs here". So it is said, one line, for the same
-		// reason the line it replaces named the absent rig tool: a listing that can see no rigs says why.
-		fmt.Fprintln(stdout, "  (no OpenRig daemon is named here, so there is no rig list to read)")
-	default:
-		// The shell piped the rig tool through `head -30`: a machine with many rigs should not bury the
-		// briefs under its rig list. Sorted by name - the id breaks a tie, so two runs against one daemon
-		// print one list - and an archived rig is marked as such rather than dropped, because the listing
-		// asked for them.
-		sort.Slice(entries, func(i, j int) bool {
-			if entries[i].Name != entries[j].Name {
-				return entries[i].Name < entries[j].Name
-			}
-			return entries[i].RigID < entries[j].RigID
-		})
-		for i, entry := range entries {
+	client := clientruntime.NewClient("")
+	rooms, err := client.ListAllRooms()
+	if err != nil {
+		fmt.Fprintf(stdout, "  (the room list could not be read from the runtime: %v)\n", err)
+	} else {
+		// A machine with many rooms should not bury the briefs under its room list.
+		sort.Strings(rooms)
+		for i, room := range rooms {
 			if i == 30 {
 				break
 			}
-			line := "  " + entry.Name + "  " + entry.Status
-			if entry.IsArchived {
-				line += "  [archived]"
-			}
-			fmt.Fprintln(stdout, line)
+			fmt.Fprintln(stdout, "  "+room+"  "+roomWord(client, room))
 		}
 	}
 	fmt.Fprintln(stdout)
@@ -276,4 +251,26 @@ func list(stdout, stderr io.Writer) int {
 // printHelp is the two-line help shape the lifecycle verbs print: the usage line, then what the verb does.
 func printHelp(out io.Writer, usage, description string) {
 	fmt.Fprintf(out, "%s\n\n%s\n", usage, description)
+}
+
+// roomWord is a room's state in one word: running when every seat runs, stopped when none does, partial
+// otherwise, and "unknown" when the runtime would not list the room's seats.
+func roomWord(client *clientruntime.Client, room string) string {
+	seats, err := client.GetRoomStatus(room)
+	if err != nil || len(seats) == 0 {
+		return "unknown"
+	}
+	running := 0
+	for _, seat := range seats {
+		if strings.EqualFold(seat.State, "running") {
+			running++
+		}
+	}
+	switch running {
+	case len(seats):
+		return "running"
+	case 0:
+		return "stopped"
+	}
+	return "partial"
 }

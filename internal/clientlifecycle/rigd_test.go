@@ -366,7 +366,7 @@ func TestUpRefusesWhenACredentialIsMissingWithoutPrintingItsValue(t *testing.T) 
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"demo", "--team", writeRoomDefinition(t, "demo")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"demo", "--team", writeRoomDefinition(t, "demo")}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("up returned %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}
@@ -414,7 +414,7 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"demo", "--team", writeRoomDefinition(t, "demo")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"demo", "--team", writeRoomDefinition(t, "demo")}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("up returned %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}

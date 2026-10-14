@@ -2,7 +2,6 @@
 package clientseat
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"math"
@@ -190,7 +189,7 @@ type QuietWaiter struct {
 	PollSeconds  float64
 }
 
-// NewQuietWaiter is the real one: OpenRig for the activity, the seat's session files for the stillness.
+// NewQuietWaiter is the real one: the rig orchestrator for the activity, the seat's session files for the stillness.
 func NewQuietWaiter(stateRoot string) QuietWaiter {
 	return QuietWaiter{
 		Activity:     seatActivity,
@@ -261,7 +260,7 @@ func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 // seatActivity is seat_activity: the activity word for one seat, and it is the SECOND reader of the same answer
 // rigIdle reads - so it is a DECLARED EXCEPTION with the same retirement. Both readers now call ONE function,
 // clientruntime.ReadSeatActivity, which asks the agent's own activity report over the client's OWN transport: the
-// OpenRig daemon's node table today, the runtime's producer at cutover.
+// rig daemon's node table today, the runtime's producer at cutover.
 //
 // WHY THE PROGRAM NAME IS GONE FROM HERE. This used to exec `rig ps --nodes --json`, resolved with
 // exec.LookPath("rig") - and on this box `rig` on PATH is the compat shim to 4genteam, whose own `ps` carries
@@ -278,14 +277,14 @@ func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 // call answers false and a reseat waits out its deadline and does NOT proceed - far better than proceeding past a
 // seat whose agent is mid-turn.
 func seatActivity(rig, seat string) (string, bool) {
-	read := clientruntime.ReadSeatActivity(context.Background(), rig, seat)
+	read := clientruntime.ReadSeatActivity(rig, seat)
 	return read.Word, read.Read
 }
 
 // secondsSinceLastWrite is seconds_since_last_write: how long the seat's session files have been still.
 // No session at all is infinite, which the wait reads as "not quiet yet" - the Python's float("inf").
 func secondsSinceLastWrite(stateRoot, rig, seat string) float64 {
-	files, _ := filepath.Glob(filepath.Join(stateRoot, rig+"-"+seat+"@"+rig, "sessions", "*.jsonl"))
+	files, _ := filepath.Glob(filepath.Join(clientruntime.SeatSessionsDir(stateRoot, rig, seat), "*.jsonl"))
 	if len(files) == 0 {
 		return math.Inf(1)
 	}
@@ -311,7 +310,7 @@ var restartSeat = func(rig, seat string) error {
 }
 
 // deliverSeatSkills is a variable because the function it stands for writes into the REAL account's seat store
-// (~/.openrig/agenthub-seats), which is resolved from the passwd entry rather than $HOME - so a test that ran the real
+// (~/.config/4genthub/seats), which is resolved from the passwd entry rather than $HOME - so a test that ran the real
 // one would write into the owner's tree. Everything else about it is deliverSkillsDefault's.
 var deliverSeatSkills = deliverSkillsDefault
 

@@ -16,7 +16,7 @@ import (
 // The cloud already knows how to carry an agent-to-human message: the dashboard stores and toasts a
 // frame whose payload.entity is 'notification', and the server replays one from the
 // missed-notification store on reconnect. What did not exist is a producer. This file is it: the
-// bridge reads the OpenRig rows ADDRESSED TO A HUMAN and posts one notification frame per row.
+// bridge reads the rig orchestrator rows ADDRESSED TO A HUMAN and posts one notification frame per row.
 //
 // THE FRAME CONTRACT IS FIXED BY THE CONSUMER, NOT CHOSEN HERE (each line read, 2026-10-10):
 //   - POST /api/v2/broadcast/notify requires event_type, entity_type and entity_id, and takes the
@@ -55,7 +55,7 @@ const (
 	notifyStateLimit = 500
 )
 
-// HumanRow is one OpenRig queue row addressed to a human, reduced to what a notification needs.
+// HumanRow is one the rig orchestrator queue row addressed to a human, reduced to what a notification needs.
 type HumanRow struct {
 	ID       string
 	Rig      string

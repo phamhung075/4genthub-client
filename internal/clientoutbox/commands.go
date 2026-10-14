@@ -34,9 +34,8 @@ type outboxCommand struct{}
 
 func (outboxCommand) Name() string    { return "outbox" }
 func (outboxCommand) Summary() string { return "manage local ledger outbox (status, drain)" }
-func (outboxCommand) NeedsRig() bool  { return false }
 
-func (outboxCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (outboxCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) || len(args) == 0 {
 		fmt.Fprintln(stdout, "usage: 4genteam outbox <status|drain|prefetch|cached> [--path <outbox.json>]")
 		return clientcmd.ExitOK
@@ -132,11 +131,12 @@ func (outboxCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, s
 
 type ledgerCommand struct{}
 
-func (ledgerCommand) Name() string    { return "ledger" }
-func (ledgerCommand) Summary() string { return "sync and pull events from 4genthub ledger (pull, sync)" }
-func (ledgerCommand) NeedsRig() bool  { return false }
+func (ledgerCommand) Name() string { return "ledger" }
+func (ledgerCommand) Summary() string {
+	return "sync and pull events from 4genthub ledger (pull, sync)"
+}
 
-func (ledgerCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (ledgerCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) || len(args) == 0 {
 		fmt.Fprintln(stdout, "usage: 4genteam ledger <pull|sync> [--path <outbox.json>]")
 		return clientcmd.ExitOK

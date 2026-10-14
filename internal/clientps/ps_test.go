@@ -10,13 +10,19 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-func TestSplitSession(t *testing.T) {
-	rig, member, ok := splitSession("4genthub-min-go-dev@4genthub-min")
-	if !ok || rig != "4genthub-min" || member != "go-dev" {
-		t.Fatalf("got %q %q %v", rig, member, ok)
+func TestCollectReadsANativeRoom(t *testing.T) {
+	root := t.TempDir()
+	sessions := filepath.Join(root, "rooms", "R", "seats", "S", "sessions")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if _, _, ok := splitSession("plain-session"); ok {
-		t.Fatal("a session without @rig is not a seat")
+	log := filepath.Join(sessions, "x.jsonl")
+	if err := os.WriteFile(log, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seats := collect(root, []session{{name: "agenthub--R--S"}, {name: "plain-session"}, {name: "R-S@R"}, {name: "agenthub--R"}}, "")
+	if len(seats) != 1 || seats[0].Rig != "R" || seats[0].Member != "S" || seats[0].Runtime != "omp" || seats[0].LogPath != log {
+		t.Fatalf("got %+v", seats)
 	}
 }
 
@@ -53,8 +59,8 @@ func TestAnEmptyInventoryIsAnEmptyListAndNotNull(t *testing.T) {
 }
 
 func TestNodeRecordKeys(t *testing.T) {
-	seats := collect(t.Context(), []session{{name: "r-a@r"}}, "r")
-	if len(seats) != 1 || seats[0].LogicalID != "r.a" || seats[0].CanonicalName != "r-a@r" || seats[0].SessionStatus != "running" {
+	seats := collect("", []session{{name: "agenthub--r--a"}}, "r")
+	if len(seats) != 1 || seats[0].LogicalID != "r.a" || seats[0].CanonicalName != "agenthub--r--a" || seats[0].SessionStatus != "running" {
 		t.Fatalf("got %+v", seats)
 	}
 }

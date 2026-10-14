@@ -67,8 +67,7 @@ func TestBridgeOncePrintRedactsThroughTheEnvironment(t *testing.T) {
 	t.Setenv("DEMO_TOKEN", value)
 
 	var out, errOut bytes.Buffer
-	code := (bridgeCommand{}).Run(context.Background(), nil,
-		[]string{"once", "--print", "--machine-id", "test-machine"}, &out, &errOut)
+	code := (bridgeCommand{}).Run(context.Background(), []string{"once", "--print", "--machine-id", "test-machine"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("bridge once --print exited %d (stderr %q)", code, errOut.String())
 	}
@@ -94,7 +93,7 @@ func TestBridgeOncePrintRedactsThroughTheEnvironment(t *testing.T) {
 func TestBridgeSubVerbsAnswerHelp(t *testing.T) {
 	for _, args := range [][]string{{"run", "--help"}, {"once", "-h"}} {
 		var out, errOut bytes.Buffer
-		code := (bridgeCommand{}).Run(context.Background(), nil, args, &out, &errOut)
+		code := (bridgeCommand{}).Run(context.Background(), args, &out, &errOut)
 		if code != clientcmd.ExitOK {
 			t.Errorf("bridge %v exited %d, want %d (stderr %q)", args, code, clientcmd.ExitOK, errOut.String())
 		}
@@ -110,7 +109,7 @@ func TestBridgeSubVerbsAnswerHelp(t *testing.T) {
 // WITHOUT --help the unit is still what prints: the gate moved, it was not removed.
 func TestBridgeInstallServiceAnswersHelpNotTheUnit(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := (bridgeCommand{}).Run(context.Background(), nil, []string{"install-service", "--help"}, &out, &errOut)
+	code := (bridgeCommand{}).Run(context.Background(), []string{"install-service", "--help"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("install-service --help exited %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut.String())
 	}
@@ -123,7 +122,7 @@ func TestBridgeInstallServiceAnswersHelpNotTheUnit(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	if code := (bridgeCommand{}).Run(context.Background(), nil, []string{"install-service"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (bridgeCommand{}).Run(context.Background(), []string{"install-service"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("install-service exited %d (stderr %q)", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "[Unit]") {
@@ -132,7 +131,7 @@ func TestBridgeInstallServiceAnswersHelpNotTheUnit(t *testing.T) {
 }
 
 // test_the_path_defaults_do_not_follow_home pins the Python test of that name: the pins dir and the
-// state path resolve from the ACCOUNT home, so a decoy $HOME - what OpenRig gives a seat - does not move
+// state path resolve from the ACCOUNT home, so a decoy $HOME - what the rig orchestrator gives a seat - does not move
 // either of them.
 func TestThePathDefaultsDoNotFollowHome(t *testing.T) {
 	decoy := t.TempDir()
@@ -146,14 +145,14 @@ func TestThePathDefaultsDoNotFollowHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("defaultPinsDir: %v", err)
 	}
-	if want := filepath.Join(home, ".openrig", "agenthub-seats"); pins != want {
+	if want := filepath.Join(home, ".config", "4genthub", "seats"); pins != want {
 		t.Errorf("pins dir followed $HOME: %q, want %q", pins, want)
 	}
 	state, err := DefaultStatePath()
 	if err != nil {
 		t.Fatalf("DefaultStatePath: %v", err)
 	}
-	if want := filepath.Join(home, ".openrig", "bridge-sync.json"); state != want {
+	if want := filepath.Join(home, ".config", "4genthub", "bridge-sync.json"); state != want {
 		t.Errorf("state path followed $HOME: %q, want %q", state, want)
 	}
 	if strings.HasPrefix(pins, decoy) || strings.HasPrefix(state, decoy) {

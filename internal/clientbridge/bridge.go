@@ -47,7 +47,7 @@ type Bridge struct {
 	MachineID string
 	Interval  time.Duration
 	Send      Sender
-	// Notify posts one dashboard notification frame per human-addressed OpenRig row (D3). Nil
+	// Notify posts one dashboard notification frame per human-addressed the rig orchestrator row (D3). Nil
 	// disables the producer: 4genteam bridge once --print and the parity fixtures build payloads
 	// without talking to anything, and a bridge that cannot notify must still report.
 	Notify Sender

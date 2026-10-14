@@ -37,7 +37,7 @@ const bundleRigYAML = "version: \"0.2\"\n" +
 // rather than the environment; the Python tests monkeypatch DEFAULT_OUT for the same reason.
 func bundleStoreHome(t *testing.T) string {
 	t.Helper()
-	store := filepath.Join(t.TempDir(), ".openrig", "agenthub-seats")
+	store := filepath.Join(t.TempDir(), ".config", "4genthub", "seats")
 	original := seatStore
 	seatStore = func(string) (string, error) { return store, nil }
 	t.Cleanup(func() { seatStore = original })

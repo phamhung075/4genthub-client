@@ -1,9 +1,9 @@
 ---
 skill: agent-browser
-openrig-relationship: vendored-supplemented
+vendoring-relationship: vendored-supplemented
 ---
 
-# OpenRig and this skill
+# Vendoring of this skill
 
 ## Origin
 
@@ -11,13 +11,13 @@ openrig-relationship: vendored-supplemented
 - **Vendoring pattern**: `add-supplementary-files`
 - **Last upstream check**: 2026-05-13 (initial relationship declaration)
 
-## How OpenRig uses this skill
+## How the client uses this skill
 
-OpenRig ships `agent-browser` so any agent dispatched by an OpenRig topology can drive a real browser (snapshots, form fills, screenshots, scraping, web-app testing) without operators having to separately install a browser-automation skill. It's referenced from any agent profile whose role includes web work.
+The client ships `agent-browser` so any agent dispatched by a room topology can drive a real browser (snapshots, form fills, screenshots, scraping, web-app testing) without operators having to separately install a browser-automation skill. It's referenced from any agent profile whose role includes web work.
 
-## OpenRig-specific modifications
+## Client-specific modifications
 
-This is the canonical example of the **add-supplementary-files** pattern (see `writing-skills-for-openrig` SKILL.md §"Vendored skills"). The upstream skill is kept structurally intact; OpenRig adds a companion file that captures local-use insights without polluting the upstream content.
+This is the canonical example of the **add-supplementary-files** pattern (see the skill-writing guide §"Vendored skills"). The upstream skill is kept structurally intact; the client adds a companion file that captures local-use insights without polluting the upstream content.
 
 | Surface | What changed | Why |
 |---|---|---|

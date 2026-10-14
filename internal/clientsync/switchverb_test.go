@@ -165,7 +165,7 @@ func TestSwitchAcceptsTheAgyRuntime(t *testing.T) {
 }
 
 // test_switch_runtime_only_keeps_current_model_and_prints_manual_steps.
-// The port's name for this pin said "prints manual steps"; the steps are gone (they were the OpenRig
+// The port's name for this pin said "prints manual steps"; the steps are gone (they were the rig orchestrator
 // CLI's, and following them took the machine's safeguards down), so the name moved with the text.
 func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsTheLimit(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
@@ -184,7 +184,7 @@ func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsTheLimit(t *testing.T) {
 		t.Errorf("a runtime change touched a seat: %v", stub.calls)
 	}
 	if strings.Contains(errOut, "rig down") || strings.Contains(errOut, "rig up") {
-		t.Errorf("stderr = %q, want no OpenRig CLI lifecycle verb in the notice", errOut)
+		t.Errorf("stderr = %q, want no rig CLI lifecycle verb in the notice", errOut)
 	}
 	if !strings.Contains(errOut, "4genteam sync rig room1 --update") {
 		t.Errorf("stderr = %q, want the client's own read of the room's definition", errOut)
@@ -268,13 +268,13 @@ func TestSwitchRuntimeChangePrintsTheLimitAndSkipsTheSeat(t *testing.T) {
 	}
 }
 
-// THE PIN THE 06:0xZ INCIDENT EARNED. The runtime-change notice used to print the OpenRig CLI's own
+// THE PIN THE 06:0xZ INCIDENT EARNED. The runtime-change notice used to print the rig CLI's own
 // three-line sequence. Its middle line was measured on this box to stop the MACHINE's safeguards (rigd
 // reaped with its children, for every rig) and its last line could not run at all, so a reader who
 // followed it took every rig's supervisors down and could not start the room again from it. A reader
 // cannot tell the two vocabularies apart by name - `down` and `stop` read alike - so the notice may
 // name no verb from the lead's machine-wide list (room-wide rule, 2026-10-14 06:08Z), and, since the
-// cutover removes the tool, no OpenRig CLI verb at all.
+// cutover removes the tool, no rig CLI verb at all.
 func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
 	stub := &switchSeatStub{}
@@ -300,7 +300,7 @@ func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 
 	for _, needle := range []string{"rig seat", "rig remove", "rig daemon", "rig bundle", "rig export", "rig ps", "rig queue"} {
 		if strings.Contains(printed, needle) {
-			t.Errorf("the runtime-change notice prints the OpenRig CLI verb %q, which a reader cannot run after the cutover:\n%s", needle, printed)
+			t.Errorf("the runtime-change notice prints the rig CLI verb %q, which a reader cannot run after the cutover:\n%s", needle, printed)
 		}
 	}
 }

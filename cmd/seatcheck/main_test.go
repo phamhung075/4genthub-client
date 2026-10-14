@@ -235,7 +235,7 @@ func TestDefaultPinsDoesNotFollowHome(t *testing.T) {
 	if strings.HasPrefix(first, seatHome) {
 		t.Fatalf("the store followed HOME into the seat's own directory: %s", first)
 	}
-	if !strings.HasSuffix(first, filepath.Join(".openrig", "agenthub-seats")) {
+	if !strings.HasSuffix(first, filepath.Join(".config", "4genthub", "seats")) {
 		t.Fatalf("the store is not the pins directory: %s", first)
 	}
 
