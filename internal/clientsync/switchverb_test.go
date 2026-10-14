@@ -205,7 +205,9 @@ func TestSwitchAcceptsTheAgyRuntime(t *testing.T) {
 }
 
 // test_switch_runtime_only_keeps_current_model_and_prints_manual_steps.
-func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsManualSteps(t *testing.T) {
+// The port's name for this pin said "prints manual steps"; the steps are gone (they were the OpenRig
+// CLI's, and following them took the machine's safeguards down), so the name moved with the text.
+func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsTheLimit(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
 	stub := &switchRigStub{nodes: switchPSNodes()}
 	switchStubRig(t, stub)
@@ -221,8 +223,11 @@ func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsManualSteps(t *testing.T) {
 	if len(stub.calls) != 0 {
 		t.Errorf("a runtime change called rig: %v", stub.calls)
 	}
-	if !strings.Contains(errOut, "rig down room1") {
-		t.Errorf("stderr = %q, want the manual steps", errOut)
+	if strings.Contains(errOut, "rig down") || strings.Contains(errOut, "rig up") {
+		t.Errorf("stderr = %q, want no OpenRig CLI lifecycle verb in the notice", errOut)
+	}
+	if !strings.Contains(errOut, "4genteam sync rig room1 --update") {
+		t.Errorf("stderr = %q, want the client's own read of the room's definition", errOut)
 	}
 	if want := "switched:room1/seat1 runtime=codex model=old-model applied=manual\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
@@ -279,8 +284,9 @@ func TestSwitchRestartStopsThenLaunchesFreshWithWarning(t *testing.T) {
 	}
 }
 
-// test_switch_runtime_change_prints_manual_steps_and_skips_rig.
-func TestSwitchRuntimeChangePrintsManualStepsAndSkipsRig(t *testing.T) {
+// test_switch_runtime_change_prints_manual_steps_and_skips_rig — the port's name; the steps it printed
+// are gone because following them took the machine's safeguards down, so this pin now asserts the limit.
+func TestSwitchRuntimeChangePrintsTheLimitAndSkipsRig(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
 	stub := &switchRigStub{nodes: switchPSNodes()}
 	switchStubRig(t, stub)
@@ -293,13 +299,50 @@ func TestSwitchRuntimeChangePrintsManualStepsAndSkipsRig(t *testing.T) {
 	if len(stub.calls) != 0 {
 		t.Errorf("a runtime change called rig: %v", stub.calls)
 	}
-	for _, want := range []string{"4genteam sync rig room1 --update", "rig down room1", "rig up"} {
+	for _, want := range []string{"4genteam sync rig room1 --update", "4genteam seat reseat", "owner's call"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("stderr does not say %q:\n%s", want, errOut)
 		}
 	}
 	if want := "switched:room1/seat1 runtime=codex model=m2 applied=manual\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
+	}
+}
+
+// THE PIN THE 06:0xZ INCIDENT EARNED. The runtime-change notice used to print the OpenRig CLI's own
+// three-line sequence. Its middle line was measured on this box to stop the MACHINE's safeguards (rigd
+// reaped with its children, for every rig) and its last line could not run at all, so a reader who
+// followed it took every rig's supervisors down and could not start the room again from it. A reader
+// cannot tell the two vocabularies apart by name - `down` and `stop` read alike - so the notice may
+// name no verb from the lead's machine-wide list (room-wide rule, 2026-10-14 06:08Z), and, since the
+// cutover removes the tool, no OpenRig CLI verb at all.
+func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
+	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
+	stub := &switchRigStub{nodes: switchPSNodes()}
+	switchStubRig(t, stub)
+
+	_, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--runtime", "codex", "--model", "m2"})
+	printed := out + errOut
+
+	machineWide := []struct{ needle, why string }{
+		{"rig down", "measured: a machine-wide safeguard stop - rigd reaped with its children, for every rig"},
+		{"rig up", "measured: fails with `--team DIR is required`, so the sequence cannot be finished"},
+		{"4genteam stop", "a machine-wide stop of rigd and its children"},
+		{"rig launch", "a seat launch: lifecycle stays in the lead's hands"},
+		{"seat launch", "the same launch, spelled the client's own way"},
+		{"tmux kill-server", "it takes every pane on the machine with it"},
+		{"tmux kill-session", "the same, narrower"},
+	}
+	for _, f := range machineWide {
+		if strings.Contains(printed, f.needle) {
+			t.Errorf("the runtime-change notice prints %q (%s):\n%s", f.needle, f.why, printed)
+		}
+	}
+
+	for _, needle := range []string{"rig seat", "rig remove", "rig daemon", "rig bundle", "rig export", "rig ps", "rig queue"} {
+		if strings.Contains(printed, needle) {
+			t.Errorf("the runtime-change notice prints the OpenRig CLI verb %q, which a reader cannot run after the cutover:\n%s", needle, printed)
+		}
 	}
 }
 

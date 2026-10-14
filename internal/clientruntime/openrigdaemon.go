@@ -376,7 +376,11 @@ func openRigSendBody(sender, recipient, body string, stamp time.Time, generation
 	}
 	reply := `↩ Reply: 4genteam send ` + label + ` "..."`
 	if strings.HasSuffix(label, "@external") {
-		reply = `↩ Reply if needed: rig queue create --destination ` + label + ` --body "..." --verify`
+		// The footer this replaces printed the OpenRig CLI's own queue write. On this box that write is
+		// refused by name ("create is not a read this shim performs", exit 2), so the footer told a
+		// reader to run something that does not exist here. Rather than name another verb, it states
+		// the limit: nothing local delivers to a destination that is not a session.
+		reply = `↩ Reply: ` + label + ` is not a local session, and this client's queue reads only - no local command delivers a reply to it.`
 	}
 	return strings.Join(append(header, "---", body, "---", reply), "\n")
 }

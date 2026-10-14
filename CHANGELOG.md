@@ -3,6 +3,31 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the two printed sites the gate called gaps are defects, and the text says so now
+
+### Changed
+- `internal/clientsync/switchverb.go` — the runtime-change notice printed the OpenRig CLI's own three-line
+  sequence as a procedure. Following it does not switch a runtime: its middle line is a MACHINE-WIDE
+  safeguard stop on this box (measured: rigd reaped with its children, for every rig) and its last line
+  cannot run at all (`--team DIR is required`). The notice now prints no verb from the lead's machine-wide
+  list and no OpenRig CLI verb anywhere: it says this client has no sequence that completes the switch,
+  names the two verbs it does own — `4genteam sync rig ROOM --update` writes the room's definition and each
+  seat's pinned snapshot; `4genteam seat reseat RIG --seat NAME` stops and restarts a seat so it loads the
+  configuration it now has — and states that neither is run for the reader and that whether a restart
+  carries a changed RUNTIME is not established. Neither printed command was run: both write (the second
+  restarts a live seat) and the lead's room-wide rule of 06:08Z forbids executing lifecycle or spawn verbs
+  as probes, so their shapes come from `--help` and from the source, and the limit is what the text prints.
+  `TestSwitchRuntimeChangePrintsNoMachineWideVerb` is the pin the incident earned: it fails on the text
+  this commit replaces, naming each machine-wide verb and what was measured about it. Both pins whose names
+  claimed "manual steps" moved with the text.
+- `internal/clientruntime/openrigdaemon.go` — the `@external` reply footer named `rig queue create`, which
+  fails here by name ("create is not a read this shim performs", exit 2). It now states the limit: the
+  destination is not a local session and this client's queue reads only. Its pin asserts the absence of the
+  removed verb instead of its presence.
+- Not touched: no exec path, no policy matcher, no `up`. The client still cannot switch a runtime in place;
+  that finding now lives in the printed text instead of in a procedure that takes the machine's supervisors
+  down.
+
 ## 2026-10-14 — every printed rig reference names a command that exists on this box
 
 ### Changed

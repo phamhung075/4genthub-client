@@ -245,12 +245,26 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 	applied := "none"
 	if mode != "none" && runtimeChanged {
 		applied = "manual"
+		// NOTHING IN THIS BRANCH IS A PROCEDURE ANY MORE. The three lines it printed were the OpenRig
+		// CLI's own sequence; the middle one was measured on this box to stop the MACHINE's safeguards
+		// rather than the room's (rigd reaped with its children, for every rig), and the last could not
+		// run at all (`--team DIR is required`), so a reader who followed it took the supervisors down
+		// and could not start the room again from it. A reader cannot tell those two vocabularies apart
+		// by name, so the branch names only what this client itself owns and documents, and prints no
+		// OpenRig CLI verb. It runs neither: both write, and a restart is peak-gated. Whether a restart
+		// carries a changed RUNTIME is not established here, and saying so IS the finding - the printed
+		// text is pinned by TestSwitchRuntimeChangePrintsNoMachineWideVerb.
 		fmt.Fprintf(stderr,
-			"runtime changed: OpenRig cannot switch a runtime in place. Run:\n"+
-				"  4genteam sync rig %s --update\n"+
-				"  rig down %s\n"+
-				"  rig up <path of the rig.yaml printed by the first command>\n",
-			room, room)
+			"runtime changed: OpenRig cannot switch a runtime in place, and this client prints no "+
+				"sequence that completes the switch (it has none that can be run):\n"+
+				"  4genteam sync rig %s --update writes the room's definition and each seat's pinned "+
+				"snapshot.\n"+
+				"  4genteam seat reseat <rig> --seat <name> stops and restarts a seat so it loads the "+
+				"configuration it now has.\n"+
+				"  Neither is run here (both write; a restart is peak-gated for a deepseek seat), and "+
+				"whether a restart carries a changed RUNTIME is not established. The switch is the "+
+				"owner's call.\n",
+			room)
 	} else if mode != "none" {
 		modelForRig := ""
 		if modelChanged {

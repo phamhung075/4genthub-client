@@ -244,8 +244,11 @@ func TestSendBodyIsTheOpenRigCLIsProse(t *testing.T) {
 	}
 
 	external := openRigSendBody("human@external", "go-dev@rig", "x", stamp, "")
-	if !strings.Contains(external, `↩ Reply if needed: rig queue create --destination human@external`) {
-		t.Errorf("an @external sender got the seat reply hint: %q", external)
+	if !strings.Contains(external, "no local command delivers a reply to it") {
+		t.Errorf("an @external sender was not told the local queue cannot reach it: %q", external)
+	}
+	if strings.Contains(external, "rig queue create") || strings.Contains(external, "Reply if needed") {
+		t.Errorf("the @external footer names a command this box refuses, instead of the limit: %q", external)
 	}
 
 	// Gate finding m4: the label is rendered EXACTLY as it arrived — the CLI's twin is
