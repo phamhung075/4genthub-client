@@ -21,12 +21,25 @@ Against this rig's own live room the verb is unchanged: five seats, empty stderr
 
 ### The state-root half stays owed, and the reason is a runtime one
 
-The measurement that killed the state-root knob (`TMUX_TMPDIR` does not redirect tmux here) was reproduced
-independently: `env -u TMUX TMUX_TMPDIR=/tmp/fa-probe-tmux tmux new-session -d -s fa-probe-only` created the session on
-the HOST DEFAULT server, and the probe directory stayed empty. What this change adds is WHY the client cannot map a
-state root to a socket: `rust/agenthub-runtime/src/pty/mod.rs:19` starts plain `tmux` with no `-S` and relies only on
-`own_tmux_root` setting `TMUX_TMPDIR`, so the private server the runtime's own comment promises is not created on this
-box - every room's panes land on the host default server, including a room started under its own `--state-dir`. A
-client-side map to `<root>/tmux/tmux-<uid>/default` would therefore point at a socket that never exists. The owed half
-is a Rust change that names the socket outright; the design choice (runtime `-S`, or an explicit `ps --tmux-socket`) is
-with the lead rather than decided here.
+**CORRECTED 2026-10-14, after the architect's ruling (ARCH-RULING-u6-socket-selection-explicit-S-2026-10-14.md) and
+a direct re-measurement: the paragraph that stood here said tmux "ignores TMUX_TMPDIR" on this box. That is FALSE,
+and it was inherited from the reverted attempt's message and reproduced by me instead of being tested.** Measured
+both ways on tmux 3.4 here:
+
+- the base directory EXISTS: `mkdir -p /tmp/p4 && TMUX_TMPDIR=/tmp/p4 tmux -L p ls` → the error names
+  `/tmp/p4/tmux-1000/p`, and tmux creates `/tmp/p4/tmux-1000` itself with mode `drwx------`. The variable IS honoured.
+- the base directory is ABSENT: the same command with `/tmp/p4-absent` → the error names
+  **`/tmp/tmux-1000/p2`**, the HOST DEFAULT server, and the scratch directory is never created. tmux falls back
+  **silently**.
+
+My probe's scratch directory was never created, so what it measured was the fallback, not the variable. The same
+reading is why the earlier attempt's state-root knob "had no effect": the chosen base did not exist. `-S` is the only
+form that cannot fall back - an absent socket is a hard error, as `tmux -S /tmp/absent/default ls` shows.
+
+What this leaves owed is therefore narrower and better founded: `own_tmux_root` (main.rs:100-108) does create its root
+and set the variable, so the runtime's private server IS created today; what lacks `-S` is **every tmux call**
+(`pty/mod.rs:19-21` starts plain tmux). The architect's ruling is per-ROOM explicit sockets -
+`-S <base state dir>/rooms/<room>/run/tmux-<uid>/default` on every call, root created 0700 before the room's first
+session - and a `ps --tmux-socket` flag was refused because the runtime needs that path itself and a forgotten flag
+reads the host server. That is the unit that makes the state-root half of F-A deliverable, and it is not built here.
+
