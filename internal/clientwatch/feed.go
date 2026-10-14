@@ -87,9 +87,7 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 			if header != nil {
 				name = view.meter(header.tag(), header.percent())
 			}
-			prefix := view.stamp(at) + " " + name
-			text = strings.ReplaceAll(text, "\n", "\n"+strings.Repeat(" ", visibleLen(prefix)))
-			fmt.Fprintf(out, "%s%s\n", prefix, text)
+			fmt.Fprintf(out, "%s %s%s\n", view.stamp(at), name, text)
 		}
 	}
 
