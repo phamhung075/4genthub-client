@@ -12,7 +12,7 @@
 //! * an append-only transitions table (who, when, from-state, to-state, note) — the audit trail.
 //! * wake fields (`blocked_on`, `wake_after_seconds`) so the idle-seat alert has something to stand on.
 //!
-//! Deliberately NOT ported: the OpenRig table's human-notification, identity-provenance and bridge
+//! Deliberately NOT ported: the rig orchestrator table's human-notification, identity-provenance and bridge
 //! columns. Sender identity stays on the wire and is stamped by the transport, not stored as history.
 //!
 //! Two anti-lying rules, because both are defects this rig has already seen:
@@ -30,7 +30,7 @@ use std::path::Path;
 /// The five states a row may occupy.
 pub const STATES: [&str; 5] = ["pending", "in-progress", "blocked", "handed-off", "done"];
 
-/// The closure reasons, exactly the set the OpenRig daemon enforced.
+/// The closure reasons, exactly the set the rig daemon enforced.
 pub const CLOSURE_REASONS: [&str; 7] = [
     "handed_off_to",
     "blocked_on",

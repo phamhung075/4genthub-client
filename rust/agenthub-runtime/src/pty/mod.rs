@@ -96,13 +96,17 @@ impl TerminalManager {
         cmd.args(["new-session", "-d", "-s", session_name, "-c"]);
         cmd.arg(cwd.as_os_str());
 
-        // Inject env variables into session. A denied key is dropped even when a caller supplied it: the
-        // default deny is the point, and "this seat needs to address another rig" is the case being closed.
+        // Inject env variables into the session with `-e`. Setting them on the tmux CLIENT does not work:
+        // tmux builds a new session's environment from the server's global environment, which is whatever
+        // the first seat's launch created it with, so every later seat came up with the first seat's
+        // AGENTHUB_SEAT/ROLE/SESSION_NAME (measured: dev and reviewer ran as `lead`). A denied key is
+        // dropped even when a caller supplied it: the default deny is the point, and "this seat needs to
+        // address another rig" is the case being closed.
         for (k, v) in env_vars {
             if crate::env_is_denied(k) {
                 continue;
             }
-            cmd.env(k, v);
+            cmd.arg("-e").arg(format!("{k}={v}"));
         }
 
         // The pane command is exec'd through `env -u <key>` for every denied variable this process carries,
@@ -317,5 +321,42 @@ mod submit_tests {
     fn outcomes_serialize_kebab_case() {
         assert_eq!(serde_json::to_string(&SendOutcome::Submitted).unwrap(), "\"submitted\"");
         assert_eq!(serde_json::to_string(&SendOutcome::Unconfirmed).unwrap(), "\"unconfirmed\"");
+    }
+}
+
+#[cfg(test)]
+mod launch_env_tests {
+    use super::*;
+
+    /// The second seat launched into a server the first one created must carry its OWN identity. tmux
+    /// builds a session's environment from the server's, so this fails whenever the variables ride the
+    /// client's environment instead of `new-session -e`.
+    #[test]
+    fn each_session_gets_its_own_env_not_the_servers() {
+        let dir = std::env::temp_dir().join(format!("pty-launch-env-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let sessions: Vec<(String, std::path::PathBuf)> = ["first", "second"]
+            .iter()
+            .map(|seat| {
+                let session = format!("pty-launch-env-{}-{}", std::process::id(), seat);
+                let out = dir.join(seat);
+                let env = HashMap::from([("AGENTHUB_SEAT".to_string(), seat.to_string())]);
+                let cmd = format!("sh -c 'printf %s \"$AGENTHUB_SEAT\" > {}; sleep 5'", out.display());
+                TerminalManager::launch_session(&session, &dir, &cmd, &env).unwrap();
+                (session, out)
+            })
+            .collect();
+
+        for (seat, (_, out)) in ["first", "second"].iter().zip(&sessions) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !out.exists() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(fs::read_to_string(out).unwrap_or_default(), *seat);
+        }
+        for (session, _) in &sessions {
+            let _ = TerminalManager::stop_session(session);
+        }
+        let _ = fs::remove_dir_all(&dir);
     }
 }

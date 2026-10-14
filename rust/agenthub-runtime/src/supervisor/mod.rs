@@ -180,7 +180,7 @@ pub struct PendingNudge {
 /// The three that exist in this tree's world: the session name this runtime derives
 /// (`agenthub--<room>--<seat>`, the same one `SendTextToSeat` and the pane's `AGENTHUB_SESSION_NAME` use),
 /// the bare seat key (what the design's own room recipe named and what a row written by hand usually
-/// says), and the OpenRig session name the live rig's rows carry (`<rig>-<seat>@<rig>`, where this
+/// says), and the rig orchestrator session name the live rig's rows carry (`<rig>-<seat>@<rig>`, where this
 /// runtime's room IS the rig name). A row written by a seat on the live rail is addressed with the third.
 fn addressed_names(room: &str, session: &str, seat: &str) -> [String; 3] {
     [
@@ -351,15 +351,8 @@ impl RoomSupervisor {
             started_at: None,
             token_estimate: 0,
             last_active: None,
-            transcript_path: Some(
-                base_state_dir
-                    .join("rooms")
-                    .join(room)
-                    .join("logs")
-                    .join(format!("{}.jsonl", seat.seat_key))
-                    .to_string_lossy()
-                    .to_string(),
-            ),
+            transcript_path: seat_transcript_path(&base_state_dir.join("rooms").join(room), &seat.seat_key)
+                .map(|p| p.to_string_lossy().to_string()),
             // A seat that never came up has nothing waiting *for it* - it is not the seat the rail's rows
             // name - so there is no join to report.
             alert: None,
@@ -495,11 +488,6 @@ impl RoomSupervisor {
             std::thread::sleep(Duration::from_millis(100));
         }
 
-        // Transcript log path
-        let logs_dir = room_dir.join("logs");
-        let _ = fs::create_dir_all(&logs_dir);
-        let transcript_path = logs_dir.join(format!("{}.jsonl", seat.seat_key));
-
         let status = SeatStatus {
             room: room.to_string(),
             seat: seat.seat_key.clone(),
@@ -527,7 +515,9 @@ impl RoomSupervisor {
             started_at: Some(Utc::now()),
             token_estimate: 0,
             last_active: Some(Utc::now()),
-            transcript_path: Some(transcript_path.to_string_lossy().to_string()),
+            // The agent has only just been launched, so it has usually written no session file yet.
+            transcript_path: seat_transcript_path(&room_dir, &seat.seat_key)
+                .map(|p| p.to_string_lossy().to_string()),
             // A seat that just launched has not had time to be owed anything; the join is read when the
             // status is read, not remembered from the launch.
             alert: None,
@@ -600,7 +590,7 @@ impl RoomSupervisor {
     /// Drop the agent sessions a seat saved, so its next agent starts without them. Nothing saved is not a
     /// failure.
     fn clear_saved_sessions(&self, room: &str, seat: &str) -> Result<(), String> {
-        let sessions = self.room_dir(room).join("seats").join(seat).join("sessions");
+        let sessions = seat_sessions_dir(&self.room_dir(room), seat);
         match fs::remove_dir_all(&sessions) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -724,8 +714,7 @@ impl RoomSupervisor {
                 }
             };
 
-            let logs_dir = room_dir.join("logs");
-            let transcript_path = logs_dir.join(format!("{}.jsonl", seat.seat_key));
+            let transcript_path = seat_transcript_path(&room_dir, &seat.seat_key);
 
             statuses.push(SeatStatus {
                 room: room.to_string(),
@@ -741,7 +730,7 @@ impl RoomSupervisor {
                 started_at: None,
                 token_estimate: 0,
                 last_active: facts.last_active,
-                transcript_path: Some(transcript_path.to_string_lossy().to_string()),
+                transcript_path: transcript_path.map(|p| p.to_string_lossy().to_string()),
                 alert: alert_for(&facts),
             });
         }
@@ -885,16 +874,12 @@ impl RoomSupervisor {
     ) -> Result<TranscriptAnswer, String> {
         let (room, seat) = self.resolve_seat(session)?;
         let canonical = Self::canonical_session_name(&room, &seat);
-        let path = self
-            .room_dir(&room)
-            .join("logs")
-            .join(format!("{seat}.jsonl"));
-        if !path.is_file() {
+        let Some(path) = seat_transcript_path(&self.room_dir(&room), &seat) else {
             return Err(format!(
-                "no transcript file for {canonical:?} at {}",
-                path.display()
+                "no transcript file for {canonical:?}: the agent has written no session file under {}",
+                seat_sessions_dir(&self.room_dir(&room), &seat).display()
             ));
-        }
+        };
         let content = fs::read_to_string(&path)
             .map_err(|e| format!("cannot read transcript {}: {e}", path.display()))?;
         let content = match lines {
@@ -1139,8 +1124,8 @@ impl RoomSupervisor {
                                     }
                                 }
 
-                                let transcript_path = entry.path().join("logs").join(format!("{}.jsonl", seat.seat_key));
-                                let transcript_str = transcript_path.to_string_lossy().to_string();
+                                let transcript_str = seat_transcript_path(&entry.path(), &seat.seat_key)
+                                    .map(|p| p.to_string_lossy().to_string());
 
                                 return Ok(WhoamiResponse {
                                     resolved_by: "session_name".into(),
@@ -1157,8 +1142,8 @@ impl RoomSupervisor {
                                     edges: WhoamiEdges { outgoing, incoming },
                                     transcript: WhoamiTranscript {
                                         enabled: true,
-                                        path: Some(transcript_str.clone()),
-                                        tail_command: Some(format!("tail -f {transcript_str}")),
+                                        tail_command: transcript_str.as_ref().map(|p| format!("tail -f {p}")),
+                                        path: transcript_str,
                                     },
                                 });
                             }
@@ -1200,6 +1185,23 @@ impl RoomSupervisor {
 
         Err("seat identity could not be resolved from active rooms".into())
     }
+}
+
+/// The directory the agent is launched with (`--session-dir`) and writes its session files into.
+fn seat_sessions_dir(room_dir: &Path, seat: &str) -> PathBuf {
+    room_dir.join("seats").join(seat).join("sessions")
+}
+
+/// THE ONE DEFINITION OF A SEAT'S TRANSCRIPT: the newest `*.jsonl` the agent wrote into its sessions dir
+/// (`<UTC-timestamp>_<uuid>.jsonl`, so the newest sorts last by name). Resolved when asked, so a restart
+/// that starts a new session is followed; `None` while the agent has written no session file.
+fn seat_transcript_path(room_dir: &Path, seat: &str) -> Option<PathBuf> {
+    fs::read_dir(seat_sessions_dir(room_dir, seat))
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "jsonl"))
+        .max_by(|a, b| a.file_name().cmp(&b.file_name()))
 }
 
 /// The newest `lines` lines of `text`, terminators kept, or all of it when it has fewer. A trailing newline
@@ -1622,10 +1624,10 @@ mod tests {
         let _ = fs::remove_dir_all(&state_dir);
     }
 
-    /// THE FILE THE RUNNER PUBLISHES IS THE TRANSCRIPT, and a seat whose log does not exist yet is refused BY
-    /// NAME: an empty string here would be uploaded as "nothing happened", which is the opposite fact.
+    /// THE TRANSCRIPT IS THE NEWEST SESSION FILE THE AGENT WROTE, and a seat with none is refused BY NAME: an
+    /// empty string here would be uploaded as "nothing happened", which is the opposite fact.
     #[tokio::test]
-    async fn the_transcript_reads_the_runners_log_and_refuses_when_it_is_absent() {
+    async fn the_transcript_reads_the_newest_agent_session_and_refuses_when_there_is_none() {
         let state_dir = scratch("session-transcript");
         let room = "transcript-room";
         let seat = seat_key("transcript");
@@ -1634,20 +1636,26 @@ mod tests {
 
         let absent = supervisor
             .read_transcript(&RoomSupervisor::canonical_session_name(room, &seat), None)
-            .expect_err("the runner has written no log");
+            .expect_err("the agent has written no session file");
         assert!(absent.contains("no transcript file"), "{absent}");
         assert!(
-            absent.contains(".jsonl"),
-            "the refusal names the path it looked for, so a reader can check it: {absent}"
+            absent.contains("sessions"),
+            "the refusal names the directory it looked in, so a reader can check it: {absent}"
         );
+        let status = supervisor.get_room_status(room).expect("status");
+        assert_eq!(status[0].transcript_path, None, "no session file, no path");
 
-        let logs = state_dir.join("rooms").join(room).join("logs");
-        fs::create_dir_all(&logs).expect("logs dir");
-        fs::write(logs.join(format!("{seat}.jsonl")), "one\ntwo\nthree\n").expect("log");
+        let sessions = state_dir.join("rooms").join(room).join("seats").join(&seat).join("sessions");
+        fs::create_dir_all(&sessions).expect("sessions dir");
+        fs::write(sessions.join("2026-10-14T15-43-38-600Z_aaa.jsonl"), "old\n").expect("old session");
+        fs::write(sessions.join("2026-10-14T16-00-00-000Z_bbb.jsonl"), "one\ntwo\nthree\n").expect("new session");
+        fs::write(sessions.join("notes.txt"), "not a session").expect("noise");
 
         let whole = supervisor.read_transcript(&seat, None).expect("whole log");
         assert_eq!(whole.content, "one\ntwo\nthree\n");
-        assert!(whole.path.ends_with(&format!("{seat}.jsonl")));
+        assert!(whole.path.ends_with("2026-10-14T16-00-00-000Z_bbb.jsonl"), "{}", whole.path);
+        let status = supervisor.get_room_status(room).expect("status");
+        assert_eq!(status[0].transcript_path.as_deref(), Some(whole.path.as_str()));
         assert_eq!(
             whole.session,
             RoomSupervisor::canonical_session_name(room, &seat),
@@ -1980,7 +1988,7 @@ mod tests {
     }
 
     /// The rail's rows have been written with more than one spelling of a seat's name, and the join has to
-    /// see all of them: a row addressed to the native session name, to the OpenRig session name, or to the
+    /// see all of them: a row addressed to the native session name, to the rig orchestrator session name, or to the
     /// bare seat key all belong to the same seat. A spelling the join missed would read as "nothing
     /// waiting" - the lie the alert exists to prevent.
     #[tokio::test]
@@ -1989,7 +1997,7 @@ mod tests {
         let seat = seat_key("spellings");
         write_spec(&dir, "demo", &seat);
         let session = RoomSupervisor::session_name("demo", &seat);
-        let openrig = format!("demo-{seat}@demo");
+        let orchestrator = format!("demo-{seat}@demo");
         let supervisor = supervisor_at(&dir);
         let mut expected_ids = Vec::new();
         {
@@ -1997,7 +2005,7 @@ mod tests {
             let store = supervisor.queue_store("demo").expect("open the rail");
             for (to, summary) in [
                 (session.as_str(), "native"),
-                (openrig.as_str(), "openrig"),
+                (orchestrator.as_str(), "orchestrator"),
                 (seat.as_str(), "bare key"),
             ] {
                 let row = store

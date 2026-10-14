@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Two measured facts shape this port (references are `pi-runner.js`, **P**, and
-//! `pi-runner-protocol.js`, **PR**, in `@openrig/cli/daemon/dist/adapters`):
+//! `pi-runner-protocol.js`, **PR**, in `the rig CLI package/daemon/dist/adapters`):
 //!
 //! * the reference child's channel is a pair of **pipes** on fd 0/1/2, not a socketpair
 //!   (`P:818-822`); the design calls it a socketpair. Ownership is what matters — nobody else holds
@@ -823,13 +823,13 @@ pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<Stri
 /// "`yolo` means the seat runs unattended with no approval prompts"), and the value the client actually
 /// materialises is `builtin:yolo` (`internal/clientsync/rigverb.go:62`), whose comment gives the reason:
 /// without a full-bypass launch "omp's always-ask floor cancels approvals headlessly and the seat parks".
-/// `internal/clientpolicy/policy.go` states the same shape from the runner's side: "OpenRig launches an omp
+/// `internal/clientpolicy/policy.go` states the same shape from the runner's side: "the rig orchestrator launches an omp
 /// seat in exactly one of two postures - yolo, or always-ask which the managed runner auto-cancels".
 ///
 /// So the unattended posture belongs to `yolo`, to the materialised `builtin:yolo`, and to an **omitted**
 /// policy — the last as the documented default, not as a description of the live rig: the reviewer measured
 /// that the live rig's own seat specs carry `permission_policy: builtin:yolo` **explicitly**
-/// (`~/.openrig/agenthub-seats/4genthub-min/rig/rig-*.yaml`). Both spellings map to the same launch posture,
+/// (`the room spec directory/rig-*.yaml`). Both spellings map to the same launch posture,
 /// and an **empty string is refused by name** above, because a blank field is a config accident far more
 /// often than a stated intent.
 /// The four restrictive words take `always-ask`, whose dialogs this runner does not leave hanging: a dialog
@@ -875,7 +875,7 @@ pub fn state_file_path(state_dir: &Path, room: &str, seat: &str) -> PathBuf {
 
 /// What a failure this runner sees *is*, so a dead turn is not mistaken for a prompt.
 ///
-/// The defect this replaces is named and measured: the OpenRig activity store maps an omp
+/// The defect this replaces is named and measured: the rig orchestrator activity store maps an omp
 /// `Notification`/`runtime_error` to `needs_input` (`agent-activity-store.js:262-265`), and `needs_input`
 /// is the one state that fails closed (`session-transport.ts:1893-1900`) — so a dead turn's own error
 /// report refuses the wakes it needs. Here a runtime error gets its own retryable classification, and

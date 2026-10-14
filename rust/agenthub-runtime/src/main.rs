@@ -31,7 +31,7 @@ use supervisor::RoomSupervisor;
 /// `/proc/<pid>/environ`.
 ///
 /// `RIGGED_` is denied for the same reason one rename later: the client still reads `RIGGED_SESSION_NAME` as
-/// `legacySessionEnv` (`internal/clientruntime/openrigdaemon.go:50`), so an agent that inherits a live rig's
+/// `legacySessionEnv` (a client-side constant), so an agent that inherits a live rig's
 /// pre-rename session name is handed an identity that is not its seat's - exactly the falsification this list
 /// exists to stop. Measured while widening it: the harness sets seven variables for a seat and every one is
 /// already covered (`OPENRIG_HOME`, `OPENRIG_NODE_ID`, `OPENRIG_OCCUPANT_GENERATION`, `OPENRIG_PORT`,
@@ -51,7 +51,7 @@ pub fn env_is_denied(key: &str) -> bool {
 /// The denied keys actually present in this process's environment.
 ///
 /// Used to launch a seat's pane through `env -u <key> …`, which is the only mechanism that satisfies the
-/// design's predicate — "no `~/.openrig` path in any room pid's argv or environ" — for *every* process the
+/// design's predicate — "no orchestrator state path in any room pid's argv or environ" — for *every* process the
 /// room owns, not just the agent: `/proc/<pid>/environ` is the environment the kernel was given at `exec`,
 /// so removing a variable from a running process would not be visible where the predicate is measured, and
 /// tmux gives a pane its session environment from the tmux *server* when the variable is not in the client's.
