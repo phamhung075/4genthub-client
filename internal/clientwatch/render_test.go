@@ -35,10 +35,65 @@ func TestAToolCallShowsItsNameAndTheMainArgument(t *testing.T) {
 	if len(rendered) != 1 {
 		t.Fatalf("got %d lines, want 1: %v", len(rendered), rendered)
 	}
-	for _, want := range []string{"bash", "command=git status", "+cwd"} {
-		if !strings.Contains(rendered[0], want) {
-			t.Errorf("line %q missing %q", rendered[0], want)
+	if !strings.Contains(rendered[0], "→ bash") || !strings.Contains(rendered[0], "git status") {
+		t.Errorf("line %q lacks the tool name or its command", rendered[0])
+	}
+	for _, noise := range []string{"command=", "+cwd"} {
+		if strings.Contains(rendered[0], noise) {
+			t.Errorf("line %q still carries %q", rendered[0], noise)
 		}
+	}
+}
+
+func TestACallsStatedPurposeHeadsItAndTheArgumentFollows(t *testing.T) {
+	rendered := events(toolCall("bash", map[string]any{"i": "Checking the tree", "command": "git status"}), 200, false, 25)
+	if len(rendered) != 1 {
+		t.Fatalf("got %d entries, want 1: %v", len(rendered), rendered)
+	}
+	head, body, found := strings.Cut(rendered[0], "\n")
+	if !found || !strings.Contains(head, "→ bash") || !strings.Contains(head, "Checking the tree") || !strings.Contains(body, "git status") {
+		t.Errorf("purpose not on the head line, argument not below it: %q", rendered[0])
+	}
+	if strings.Contains(rendered[0], "i=") {
+		t.Errorf("the purpose leaked into the argument: %q", rendered[0])
+	}
+}
+
+func TestAnMCPDeviceCallNamesTheToolAndShowsItsArguments(t *testing.T) {
+	write := events(toolCall("write", map[string]any{"i": "Opening a task", "path": "xd://mcp__agenthub_http_manage_task", "content": `{"action":"list"}`}), 200, false, 25)
+	read := events(toolCall("read", map[string]any{"path": "xd://mcp__agenthub_http_manage_task"}), 200, false, 25)
+	if len(write) != 1 || !strings.Contains(write[0], "→ mcp agenthub_http_manage_task") || !strings.Contains(write[0], `{"action":"list"}`) {
+		t.Errorf("a write to a device is not shown as the MCP call: %v", write)
+	}
+	if len(read) != 1 || !strings.Contains(read[0], "→ mcp agenthub_http_manage_task") {
+		t.Errorf("a read of a device is not shown as the MCP tool: %v", read)
+	}
+}
+
+func TestAResultNamesTheToolThatAnswered(t *testing.T) {
+	line := `{"message":{"role":"toolResult","toolName":"bash","content":[{"type":"text","text":"ok"}]}}`
+	rendered := events(line, 200, false, 25)
+	if len(rendered) != 1 || !strings.Contains(rendered[0], "← bash") {
+		t.Errorf("the result does not name its tool: %v", rendered)
+	}
+}
+
+func TestInjectedNoticesAreMarkedAsHooks(t *testing.T) {
+	notice := `{"type":"custom_message","customType":"mid-run-todo-nudge","content":"<system-reminder>\n10 todo items still open.\n</system-reminder>"}`
+	exit := `{"type":"custom","customType":"session_exit","data":{"reason":"sighup"}}`
+	rule := `{"type":"ttsr_injection","injectedRules":["rs-lazylock"]}`
+	start := `{"type":"custom","customType":"tool_execution_start","data":{"toolName":"read"}}`
+	for line, want := range map[string]string{notice: "HOOK mid-run-todo-nudge", exit: "EXIT", rule: "RULE"} {
+		rendered := events(line, 200, false, 25)
+		if len(rendered) != 1 || !strings.Contains(rendered[0], want) {
+			t.Errorf("%s: got %v, want a %q badge", line, rendered, want)
+		}
+	}
+	if rendered := events(notice, 200, false, 25); strings.Contains(rendered[0], "system-reminder") {
+		t.Errorf("the tag leaked into the notice: %v", rendered)
+	}
+	if rendered := events(start, 200, false, 25); len(rendered) != 0 {
+		t.Errorf("a tool start is not a hook: %v", rendered)
 	}
 }
 

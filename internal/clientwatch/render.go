@@ -246,29 +246,49 @@ func cutRunes(text string, width int) string {
 }
 
 // callBody is (the names of the arguments not shown, the main argument as text).
-func callBody(args any) (string, string) {
+func callBody(args any) string {
 	object, ok := args.(*orderedJSONObject)
 	if !ok {
-		return "", pythonText(args)
+		return pythonText(args)
 	}
 	for _, key := range []string{"command", "CommandLine", "path", "AbsolutePath", "TargetFile", "target_file", "intent", "prompt", "code"} {
-		value, present := object.get(key)
-		if !present {
-			continue
+		if value, present := object.get(key); present {
+			return pythonText(value)
 		}
-		others := []string{}
-		for _, candidate := range object.keys {
-			if candidate != key {
-				others = append(others, candidate)
+	}
+	rest := &orderedJSONObject{}
+	for index, key := range object.keys {
+		if key != "i" {
+			rest.keys = append(rest.keys, key)
+			rest.values = append(rest.values, object.values[index])
+		}
+	}
+	return indentPython(rest)
+}
+
+// callIntent is the purpose a seat states in the "i" argument of its call.
+func callIntent(args any) string {
+	if object, ok := args.(*orderedJSONObject); ok {
+		if value, present := object.get("i"); present {
+			if text, ok := value.(string); ok {
+				return strings.TrimSpace(text)
 			}
 		}
-		extra := ""
-		if len(others) > 0 {
-			extra = " (+" + strings.Join(others, ", ") + ")"
-		}
-		return extra, key + "=" + pythonText(value)
 	}
-	return "", indentPython(object)
+	return ""
+}
+
+// mcpDevice is the tool named by the device path a seat reads or writes to reach an MCP tool,
+// xd://mcp__<server>_<tool>: a write sends the tool its arguments, a read returns its schema.
+func mcpDevice(name string, args any) (string, bool) {
+	object, ok := args.(*orderedJSONObject)
+	if !ok || (name != "write" && name != "read") {
+		return "", false
+	}
+	path, _ := object.get("path")
+	text, _ := path.(string)
+	device, found := strings.CutPrefix(text, "xd://mcp__")
+	return device, found
 }
 
 // pythonText is Python's str() for the values that reach a header: a string is itself, everything else
@@ -308,6 +328,56 @@ func detailLines(role string, part *orderedJSONObject, width, lines int) []strin
 	return nil
 }
 
+// hookColor is the colour of what the runtime injects into a seat on its own, so a reader tells it from
+// the seat's own calls.
+const hookColor = 215
+
+var systemTags = strings.NewReplacer("<system-reminder>", "", "</system-reminder>", "", "<system-notice>", "", "</system-notice>", "")
+
+// hookMaxLines caps an injected notice: they repeat, and the seat's own work is what the feed is for.
+const hookMaxLines = 3
+
+// hookEvents renders what the runtime injects into a seat itself: a reminder or notice, a rule it injected
+// and the end of a session. The second result is false for a record that is none of these.
+func hookEvents(record *orderedJSONObject, width, lines int) ([]string, bool) {
+	kind, _ := record.get("type")
+	badge := func(label string) string {
+		return "\033[1;38;5;16;48;5;" + fmt.Sprint(hookColor) + "m " + label + " " + reset + " "
+	}
+	switch kind {
+	case "custom_message":
+		customType, _ := record.get("customType")
+		label, _ := customType.(string)
+		content, _ := record.get("content")
+		text := strings.TrimSpace(systemTags.Replace(pythonText(content)))
+		return []string{block(badge("HOOK "+label), fg(hookColor), text, width, min(lines, hookMaxLines))}, true
+	case "ttsr_injection":
+		names := []string{}
+		if rules, ok := record.get("injectedRules"); ok {
+			if list, ok := rules.([]any); ok {
+				for _, rule := range list {
+					names = append(names, pythonText(rule))
+				}
+			}
+		}
+		return []string{block(badge("RULE"), fg(hookColor), strings.Join(names, ", "), width, lines)}, true
+	case "custom":
+		if customType, _ := record.get("customType"); customType != "session_exit" {
+			return nil, false
+		}
+		reason := ""
+		if data, ok := record.get("data"); ok {
+			if object, ok := data.(*orderedJSONObject); ok {
+				if value, present := object.get("reason"); present {
+					reason = pythonText(value)
+				}
+			}
+		}
+		return []string{block(badge("EXIT"), fg(hookColor), reason, width, lines)}, true
+	}
+	return nil, false
+}
+
 // events renders one session-log line. A line that is not JSON, or that carries no event, renders
 // nothing - the caller tells the two apart by the empty result.
 func events(line string, width int, detail bool, lines int) []string {
@@ -327,6 +397,9 @@ func events(line string, width int, detail bool, lines int) []string {
 				reset, bold, fg(120), kilo(*before), kilo(*after), reset)}
 		}
 		return []string{}
+	}
+	if rendered, isHook := hookEvents(record, width, lines); isHook {
+		return rendered
 	}
 	if converted, isAgy := agyToOMP(record); isAgy {
 		out := []string{}
@@ -522,6 +595,15 @@ func wrapContent(msg *orderedJSONObject, role string, content []any) *orderedJSO
 	inner := &orderedJSONObject{}
 	inner.keys = append(inner.keys, "role", "content")
 	inner.values = append(inner.values, role, content)
+	for _, key := range []string{"toolName", "isError"} {
+		if msg == nil {
+			break
+		}
+		if value, present := msg.get(key); present {
+			inner.keys = append(inner.keys, key)
+			inner.values = append(inner.values, value)
+		}
+	}
 	wrapper := &orderedJSONObject{}
 	wrapper.keys = append(wrapper.keys, "message")
 	wrapper.values = append(wrapper.values, inner)
@@ -565,6 +647,12 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 		}
 		text := strings.Join(pieces, " ")
 		body := pretty(text)
+		tool := ""
+		if value, present := msg.get("toolName"); present {
+			if name, ok := value.(string); ok && name != "" {
+				tool = name + " "
+			}
+		}
 		head120 := cutRunes(text, 120)
 		switch {
 		case strings.HasPrefix(text, "Tool ") && strings.Contains(head120, "is blocked by tool policy"):
@@ -572,9 +660,9 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 		default:
 			isError, _ := msg.get("isError")
 			if flag, _ := isError.(bool); flag {
-				return []string{block(bold+fg(203)+"✗ "+reset, fg(203), body, width, lines)}
+				return []string{block(bold+fg(203)+"✗ "+tool+reset, fg(203), body, width, lines)}
 			}
-			return []string{block(fg(resultColor)+"← "+reset, fg(resultColor), body, width, lines)}
+			return []string{block(fg(resultColor)+"← "+tool+reset, fg(resultColor), body, width, lines)}
 		}
 	}
 	items, ok := rawContent.([]any)
@@ -606,8 +694,28 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 			colour = mapped
 		}
 		arguments, _ := part.get("arguments")
-		extra, body := callBody(arguments)
-		out = append(out, block(fmt.Sprintf("%s%s→ %s%s%s ", bold, fg(colour), name, extra, reset), fg(255), body, width, lines))
+		label, body := name, callBody(arguments)
+		if device, isDevice := mcpDevice(name, arguments); isDevice {
+			label, colour = "mcp "+device, mcpColor
+			body = ""
+			if name == "write" {
+				if object, ok := arguments.(*orderedJSONObject); ok {
+					if content, present := object.get("content"); present {
+						body = pythonText(content)
+					}
+				}
+			}
+		}
+		head := fmt.Sprintf("%s%s→ %s%s", bold, fg(colour), label, reset)
+		intent := callIntent(arguments)
+		switch {
+		case intent == "":
+			out = append(out, block(head+" ", fg(255), body, width, lines))
+		case body == "":
+			out = append(out, head+"  "+fg(250)+"\033[3m"+intent+reset)
+		default:
+			out = append(out, head+"  "+fg(250)+"\033[3m"+intent+reset+"\n"+block("    ", fg(255), body, width, lines))
+		}
 	}
 	return out
 }

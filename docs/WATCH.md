@@ -43,9 +43,13 @@ does not scroll out of view.
 
 | Mark | Meaning |
 |---|---|
-| `→ <tool> key=value` | a tool call; `(+a, b)` lists arguments that are not shown |
-| `← text` | the tool's result, dim |
-| `✗ text` | an error result, red |
+| `→ <tool> <intent>` | a tool call; the dim italic intent is the purpose the seat stated, and the main argument (command, path, prompt) follows on the lines below, with no `key=` |
+| `→ mcp <server_tool>` | a call to an MCP tool, made as a read or write on its `xd://mcp__<server>_<tool>` device; the body is the request |
+| `← <tool> text` | the result, dim, headed by the tool that answered |
+| `✗ <tool> text` | an error result, red |
+| an orange `HOOK <name>` block | a reminder or notice the runtime injected into the seat (the `<system-reminder>` tags are removed; three lines at most) |
+| an orange `RULE` block | a rule the runtime injected, by name |
+| an orange `EXIT` block | the seat's session ended, with the reason |
 | a white-on-red `BLOCKED` block | the seat's own policy refused the call |
 | `~ think` | the agent's reasoning before it acts |
 | `▸ say` | what the agent writes back |
