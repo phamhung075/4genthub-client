@@ -48,6 +48,12 @@ var SupervisorStartGrace = 1500 * time.Millisecond
 // DaemonReadyWindow is how long a freshly started runtime daemon has to answer on its socket, and
 // RoomStartWindow how long a room's seats have to reach Running after StartRoom returns. Both are
 // variables for the same reason SupervisorStartGrace is: the suite must not have to wait them out.
+//
+// RoomStartWindow is NOT the runtime's readiness window and must not be read as one: that one is
+// `SEAT_READY_WINDOW_SECS` in rust/agenthub-runtime/src/supervisor/mod.rs (60 s, the time a seat is given to
+// hand back its own proof), spent inside StartRoom before this poll ever begins. This one is the client's own
+// patience afterwards. They were both 20 s by coincidence; the relation that is pinned lives in
+// internal/clientruntime (the client's request deadline must outlast the runtime's window), not here.
 var (
 	DaemonReadyWindow = 10 * time.Second
 	RoomStartWindow   = 20 * time.Second
@@ -438,6 +444,13 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 	reported, statusErr := client.GetRoomStatus(name)
 	restart, sendSpec := seatStartPlan(reported, statusErr)
 	seats := reported
+	// The seats are about to be started, and a seat proves itself by handshake: the runtime gives it a window
+	// that has to cover a first launch in a fresh cache, which builds the agent's model cache and is measured in
+	// tens of seconds. Say so before going quiet, so a first `up` on a new box does not read as a hang.
+	if sendSpec || len(restart) > 0 {
+		fmt.Fprintln(stdout, "4genteam up: starting the room's seats and waiting for them to prove themselves "+
+			"(a first launch in a fresh cache builds the agent's model cache, so this can take a while)")
+	}
 	if sendSpec {
 		started, err := client.StartRoom(spec)
 		if err != nil {

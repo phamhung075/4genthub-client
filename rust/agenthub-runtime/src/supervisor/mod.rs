@@ -13,14 +13,41 @@ use tracing::{error, info, warn};
 
 /// How long a seat is given to prove it is actually up before `start_seat` refuses to call it running. The
 /// signal is the seat's own state file (`runner::state_file_path`), which the runner publishes only after the
-/// agent answered the transport handshake; a seat that dies takes its tmux session with it, so the loop
-/// normally exits in well under a second either way. Named, because it is the window U1's exit-code contract
-/// has to be built on: 0 only when every seat is running, and a seat that never proved itself is not.
-const SEAT_READY_WINDOW_SECS: u64 = 20;
+/// agent answered the transport handshake.
+///
+/// 60 s, not 20: the window has to cover the FIRST-EVER launch of an omp seat in a fresh cache. Measured by the
+/// reviewer on a cold start (00:27Z, off-peak): the seat was still coming up at 20.18 s, refused, and handshook
+/// in 8.90 s on the retry (6.44 s in a fresh control tree) because that first launch builds the agent's model
+/// cache (a 7.5 MB `models.db`) - so `up` on a new box could refuse a seat that was merely slow to publish.
+/// Widening this alone would be wrong: it would leave a DEAD seat unreported for longer, which is why the loop
+/// below reports a fresh death record the moment the runner writes one, and why the pane check stays where it is.
+/// A seat that dies takes its tmux session with it, so either way the loop normally exits in well under a second.
+/// Named, because it is the window U1's exit-code contract has to be built on: 0 only when every seat is
+/// running, and a seat that never proved itself is not.
+const SEAT_READY_WINDOW_SECS: u64 = 60;
 
 /// What the runtimes without a runner get: their signal is only that the session survived, so the window is
 /// a grace period, not a handshake. Short, because it proves nothing about the agent inside the pane.
 const NON_OMP_READY_GRACE_MS: u64 = 1500;
+
+/// The states a seat's own record publishes when its agent is gone rather than answering. Shared by the
+/// readiness check (which must not accept one as a handshake) and by `fresh_death_state` (which reports one
+/// immediately, so a longer window cannot delay the news that a seat is dead).
+const DEATH_STATES: [&str; 3] = ["agent_socket_closed", "agent_stdio_eof", "agent_exited"];
+
+/// The death this generation has already recorded, if any: the seat's own file, written after the launch, and
+/// publishing one of `DEATH_STATES`. `None` if there is no such file - which is the ordinary case while a first
+/// launch is still building its cache, and is why this cannot be inferred from the file being absent.
+fn fresh_death_state(path: &Path, launched_at: std::time::SystemTime) -> Option<String> {
+    let modified = fs::metadata(path).and_then(|meta| meta.modified()).ok()?;
+    if modified < launched_at {
+        return None;
+    }
+    match published_state(path).as_deref() {
+        Some(state) if DEATH_STATES.contains(&state) => Some(state.to_string()),
+        _ => None,
+    }
+}
 
 /// Whether `path` is a readiness signal written by THIS generation's pane: it must exist, be NEWER than the
 /// launch, and not be a death record.
@@ -40,7 +67,7 @@ fn readiness_written_by(path: &Path, launched_at: std::time::SystemTime) -> bool
         return false;
     }
     match published_state(path).as_deref() {
-        Some("agent_socket_closed" | "agent_stdio_eof" | "agent_exited") => false,
+        Some(state) if DEATH_STATES.contains(&state) => false,
         _ => true,
     }
 }
@@ -55,6 +82,31 @@ fn published_state(path: &Path) -> Option<String> {
         .get("state")
         .and_then(|s| s.as_str())
         .map(str::to_string)
+}
+
+/// What to say when a seat never handed back its proof, and it is two different worlds: no document at all, or
+/// a record from an earlier generation that this launch cannot accept as a handshake.
+///
+/// The refusal used to print only the first world - "(no <path>)" - while a STALE record sat on disk, which
+/// tells a reader who can see that file nothing about why the start was refused. Kept as a function so both
+/// worlds are pinned by a test rather than by a live run that has to be staged to reach them.
+fn readiness_refusal(room: &str, seat: &str, path: &Path, launched_at: std::time::SystemTime) -> String {
+    let stale = fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .map(|modified| modified < launched_at)
+        .unwrap_or(false);
+    match (stale, published_state(path)) {
+        (true, Some(state)) => format!(
+            "seat {room}/{seat} did not report readiness within {SEAT_READY_WINDOW_SECS}s: the only record on \
+             disk is a stale `{state}` from an earlier generation, which this launch cannot accept as its \
+             handshake; not reporting it as running"
+        ),
+        _ => format!(
+            "seat {room}/{seat} did not report readiness within {SEAT_READY_WINDOW_SECS}s (no readiness document \
+             from this generation at {}); not reporting it as running",
+            path.display()
+        ),
+    }
 }
 
 pub struct RoomSupervisor {
@@ -378,16 +430,23 @@ impl RoomSupervisor {
                     }
                 ));
             }
+            // A DEATH THE SEAT ITSELF RECORDED ENDS THE WAIT NOW, not at the deadline. The runner publishes
+            // `agent_socket_closed` and friends when it survives to see the agent go; a pane that outlives its
+            // agent is exactly the case liveness cannot see. Waiting the window out for a seat that has already
+            // said it is dead is what would make a longer window cost a real verdict, so this clause is the
+            // reason `SEAT_READY_WINDOW_SECS` can cover a cold first launch.
+            if let Some(path) = signal.as_ref() {
+                if let Some(state) = fresh_death_state(path, launched_at) {
+                    return Err(format!(
+                        "seat {room}/{} died before it reported readiness: its own record says `{state}`, written \
+                         after this launch; not reporting it as running",
+                        seat.seat_key
+                    ));
+                }
+            }
             if std::time::Instant::now() >= deadline {
                 match signal {
-                    Some(path) => {
-                        return Err(format!(
-                            "seat {room}/{} did not report readiness within {SEAT_READY_WINDOW_SECS}s (no {}); \
-                             not reporting it as running",
-                            seat.seat_key,
-                            path.display()
-                        ))
-                    }
+                    Some(path) => return Err(readiness_refusal(room, &seat.seat_key, &path, launched_at)),
                     // The other runtimes have no runner that could hand a readiness word back, so the proof they
                     // can give is the one taken above: the session is STILL ALIVE after the grace period. Reaching
                     // this point means that check passed on this very iteration, so the seat is up - and the grace
@@ -922,6 +981,119 @@ mod tests {
         assert!(
             readiness_written_by(&path, before_the_file),
             "running is a handshake too"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE FAST-FAIL THAT MAKES A LONGER WINDOW SAFE: a death the seat itself recorded, after this launch, ends
+    /// the wait where it is written instead of at the deadline.
+    ///
+    /// The window grew to 60 s to cover a first-ever launch in a fresh cache. Widening alone would have bought
+    /// that with false patience: a pane that outlives its agent - the case liveness cannot see - would have sat
+    /// unreported for a full minute. Measured live before this clause, on the 20 s build: rc=3 at 20.14 s with
+    /// the staged death record untouched. Each arm is one fact.
+    #[test]
+    fn a_death_recorded_by_this_generation_is_reported_where_it_is_written() {
+        let dir = scratch("fresh-death");
+        let path = dir.join("solo.state.json");
+
+        let write = |state: &str| {
+            let payload = serde_json::json!({
+                "state": state,
+                "classification": "",
+                "resume_attempts": 0,
+                "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            });
+            fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
+        };
+
+        // The launch instant handed in decides the generation, exactly as in the readiness test above.
+        let after_the_file = std::time::SystemTime::now() + Duration::from_secs(60);
+        let before_the_file = std::time::SystemTime::now() - Duration::from_secs(60);
+
+        let _ = fs::remove_file(&path);
+        assert_eq!(
+            fresh_death_state(&path, before_the_file),
+            None,
+            "no file is not a recorded death"
+        );
+
+        write("agent_socket_closed");
+        assert_eq!(
+            fresh_death_state(&path, after_the_file),
+            None,
+            "a death from an earlier generation is not this launch's news"
+        );
+        assert_eq!(
+            fresh_death_state(&path, before_the_file),
+            Some("agent_socket_closed".to_string()),
+            "a death written after the launch IS this launch's news"
+        );
+
+        write("agent_exited");
+        assert_eq!(
+            fresh_death_state(&path, before_the_file),
+            Some("agent_exited".to_string()),
+            "every state in the shared list counts"
+        );
+
+        write("idle");
+        assert_eq!(
+            fresh_death_state(&path, before_the_file),
+            None,
+            "a live state is not a death, however fresh"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE REFUSAL MUST SAY WHICH WORLD THE SEAT IS IN. Two different worlds - nothing on disk, or a record
+    /// from an earlier generation - and the message used to describe only the first, printing "(no <path>)"
+    /// while a stale record sat there. A live run cannot reach the second world reliably (the runner tears the
+    /// pane down before the window ends), which is exactly why this is pinned here.
+    #[test]
+    fn the_deadline_refusal_names_the_document_it_is_missing() {
+        let dir = scratch("refusal");
+        let path = dir.join("solo.state.json");
+        let write = |state: &str| {
+            let payload = serde_json::json!({
+                "state": state,
+                "classification": "",
+                "resume_attempts": 0,
+                "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            });
+            fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
+        };
+        let after_the_file = std::time::SystemTime::now() + Duration::from_secs(60);
+        let before_the_file = std::time::SystemTime::now() - Duration::from_secs(60);
+
+        // World one: nothing on disk. The refusal must not claim a record exists.
+        let _ = fs::remove_file(&path);
+        let absent = readiness_refusal("leg", "solo", &path, before_the_file);
+        assert!(
+            absent.contains("no readiness document from this generation"),
+            "the absent case must say the document is missing, got: {absent}"
+        );
+
+        // World two: a stale record is RIGHT THERE. The refusal must name it, not pretend the path is empty.
+        write("agent_socket_closed");
+        let stale = readiness_refusal("leg", "solo", &path, after_the_file);
+        assert!(
+            stale.contains("stale `agent_socket_closed` from an earlier generation"),
+            "the stale case must name the record it ignored, got: {stale}"
+        );
+        assert!(
+            !stale.contains("no readiness document"),
+            "and must not tell a reader looking at that file that nothing is there, got: {stale}"
+        );
+
+        // A live record written after the launch is not a refusal case at all: the loop breaks before this.
+        write("idle");
+        let fresh = readiness_refusal("leg", "solo", &path, before_the_file);
+        assert!(
+            fresh.contains("no readiness document from this generation"),
+            "a fresh record is 'waiting', not 'stale', got: {fresh}"
         );
 
         let _ = fs::remove_dir_all(&dir);

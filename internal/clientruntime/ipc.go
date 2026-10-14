@@ -111,13 +111,14 @@ func (c *Client) EnsureDaemon(ctx context.Context) error {
 const callDeadline = 10 * time.Second
 
 // seatStartDeadline is how long the client waits for a verb that STARTS A SEAT and therefore waits for that
-// seat to prove itself. It MUST outlast the runtime's own readiness window - `SEAT_READY_WINDOW_SECS = 20` in
-// rust/agenthub-runtime/src/supervisor/mod.rs - and it did not: measured, a cold start returned `read error:
-// i/o timeout` at 10.15 s while the runtime was still legitimately waiting, so a verdict that would have
-// landed at 15 s could never reach the client and read as a transport error instead of a verdict. The two
+// seat to prove itself. It MUST outlast the runtime's own readiness window - `SEAT_READY_WINDOW_SECS = 60` in
+// rust/agenthub-runtime/src/supervisor/mod.rs - and it did not, twice over: measured, a cold start returned
+// `read error: i/o timeout` at 10.15 s while the runtime was still legitimately waiting, so a verdict that
+// would have landed at 15 s could never reach the client and read as a transport error instead of a verdict.
+// The window then grew to 60 s to cover a first-ever launch in a fresh cache, and this grew with it. The two
 // constants cannot be read from one another across the language boundary, so the runtime's number is named
 // here and a test pins that this one stays larger.
-const seatStartDeadline = 30 * time.Second
+const seatStartDeadline = 90 * time.Second
 
 // Call sends a request and reads a response.
 func (c *Client) Call(action string, payload any) (*IpcResponse, error) {

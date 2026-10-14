@@ -3,7 +3,51 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 2026-10-14 — the readiness verdict and its message: a restart cannot inherit the previous generation's green, a verdict near the window reaches the client, and the proof travels with the state
+## 2026-10-14 — the readiness window now covers a first launch, and a dead seat is reported where it dies
+
+### Changed
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — **`SEAT_READY_WINDOW_SECS` 20 → 60, and the two clauses that
+  pay for it.** The window has to cover the FIRST-EVER launch of an omp seat in a fresh cache, which builds the
+  agent's model cache: measured by the reviewer, the seat was still coming up at 20.18 s, `up` refused, and the
+  retry handshook in 8.90 s. Widening alone would have been wrong, so:
+  - a **death this generation recorded** (`fresh_death_state`: the seat's own file, written after the launch,
+    publishing `agent_socket_closed`/`agent_stdio_eof`/`agent_exited`) now ends the wait **where it is written**
+    instead of at the deadline — a pane that outlives its agent is exactly the case liveness cannot see;
+  - the deadline refusal is **`readiness_refusal`**, which says which world the seat is in: a stale record from
+    an earlier generation is named as such, instead of printing `(no <path>)` at a reader who can see that file.
+  `DEATH_STATES` is shared by the readiness check and the fast-fail, so the two cannot drift apart.
+- `internal/clientruntime/ipc.go` — `seatStartDeadline` 30 → **90 s**: it must outlast the runtime's window, and
+  the test that pins that relation now names 60 s.
+- `internal/clientruntime/deadline_test.go` — the runtime window named at 60 s; the comment's path corrected to
+  `rust/agenthub-runtime/...`; and `RoomStartWindow` explicitly documented as NOT this window (it is the poll
+  after `StartRoom` returns; that both were 20 s was a coincidence).
+- `internal/clientlifecycle/lifecycle.go` — `RoomStartWindow` carries the same warning, and `up` now says
+  `starting the room's seats and waiting for them to prove themselves ...` before going quiet, so a first `up`
+  on a new box does not read as a hang while the longer window runs.
+
+### Verified
+- `cargo +stable test` in `rust/agenthub-runtime` → **54 passed / 0 failed**, including
+  `a_death_recorded_by_this_generation_is_reported_where_it_is_written` (four arms: no file, an inherited death,
+  a fresh death, a fresh live state) and `the_deadline_refusal_names_the_document_it_is_missing` (the absent
+  world, the stale world naming the record it ignored, and the fresh world).
+- `go build ./...`, `go vet ./...`, `gofmt -l` on the touched packages clean; `go test ./... -count=1` →
+  **24 packages ok / 0 failing**, with `TestTheSeatStartDeadlineOutlastsTheRuntimesReadyWindow` PASS by name.
+- LIVE, off-peak (gate read OFF-PEAK 00:37Z), scratch `HOME`/`TMUX_TMPDIR`/state dirs, the frozen pair's own
+  binaries (`/tmp/go-window/measure.sh`):
+  - **A, first-ever launch in a fresh HOME and a fresh seat dir**: rc=0 in **2.13 s**, the state file written
+    +2.08 s after the launch, and the new wait notice printed. The window change did not cost the fast path.
+  - **B, a death this generation recorded, staged 4 s into the wait**: rc=3 in **4.38 s**, `died before it
+    reported readiness: its own record says agent_socket_closed, written after this launch` — against **20.14 s**
+    for the same fixture on the 20 s build. **A dead seat is reported five times faster than before this unit,
+    not slower**, which is what widening alone would have broken.
+  - **C, a stale death record an hour old**: rc=3 in 30.30 s, refused by the pane-gone clause (the record was
+    never accepted as a handshake). The runner tears a non-handshaking pane down before the window ends, so the
+    stale-record WORDING is pinned by the rust test rather than by a live arm.
+  - Honest limit: my fresh-cache launches handshook in 2.13–4.77 s and built a 4096-byte `models.db`, so they do
+    not reproduce the reviewer's 20.18 s cold start. That number is what justifies the window; mine neither
+    reproduces nor contradicts it, and 20.18 s is inside 60 s by construction.
+
+
 
 ### Changed
 - `rust/agenthub-runtime/src/supervisor/mod.rs` — **the omp readiness proof is a HANDSHAKE, not an artifact.**
