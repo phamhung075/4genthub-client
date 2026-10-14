@@ -58,3 +58,35 @@ func TestNodeRecordKeys(t *testing.T) {
 		t.Fatalf("got %+v", seats)
 	}
 }
+
+// An empty list and a verb that cannot see the room read identically on stdout, so a NAMED room that
+// matched nothing has to say so on stderr - that is the difference F-A was reported over, a live room
+// whose inventory came back empty with nothing to distinguish it from a blind verb. The silence cases are
+// pinned for the same reason: the reason belongs to the one case where the reader cannot tell, and a
+// second message on top of Run's own would be noise.
+func TestANamedRoomThatMatchedNothingSaysSo(t *testing.T) {
+	for _, tc := range []struct {
+		what            string
+		rig             string
+		sessions, seats int
+		wantNamed       string
+	}{
+		{what: "a named room with no live seats", rig: "leg-solo", sessions: 3, wantNamed: "leg-solo"},
+		{what: "no room named", sessions: 3},
+		{what: "no sessions at all", rig: "leg-solo"},
+		{what: "the named room's seats are right there", rig: "leg-solo", sessions: 1, seats: 1},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			reason := emptyReason(tc.rig, tc.sessions, tc.seats)
+			if tc.wantNamed == "" {
+				if reason != "" {
+					t.Fatalf("got %q, want silence", reason)
+				}
+				return
+			}
+			if !strings.Contains(reason, tc.wantNamed) {
+				t.Fatalf("reason %q does not name the room asked for, %q", reason, tc.wantNamed)
+			}
+		})
+	}
+}

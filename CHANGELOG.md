@@ -3,6 +3,15 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — ps names the room it could not see
+
+### Fixed
+- `internal/clientps/ps.go` — a NAMED room that matched nothing while tmux sessions existed now says so on stderr
+  (`no seats for rig <room> on the server this process would use (N session(s) there, none named <room>-*)`) instead
+  of printing an empty list with nothing to read. An empty list and a blind verb were indistinguishable on stdout,
+  which is how F-A was reported: a live room whose inventory came back empty. Detail and the measurement of the still
+  owed state-root half: `CHANGELOG/2026-10-14--ps-names-the-room-it-could-not-see.md`.
+
 ## 2026-10-14 — the runtime answers the session list, a transcript and a pane, and the last execs go
 
 ### Added

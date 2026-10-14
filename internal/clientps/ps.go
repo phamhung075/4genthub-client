@@ -114,6 +114,9 @@ func (command) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout,
 		fmt.Fprintln(stderr, "4genteam ps: no tmux sessions on the server this process would use")
 	}
 	seats := collect(ctx, sessions, rig)
+	if reason := emptyReason(rig, len(sessions), len(seats)); reason != "" {
+		fmt.Fprintf(stderr, "4genteam ps: %s\n", reason)
+	}
 	if asJSON {
 		return writeJSON(stdout, stderr, view, seats)
 	}
@@ -297,6 +300,20 @@ func rollup(seats []Seat) []RigRow {
 		rows = append(rows, *byRig[rig])
 	}
 	return rows
+}
+
+// emptyReason is what a caller is told when a named room matched nothing while sessions DID exist. An
+// empty list and a verb that cannot see the room read identically on stdout, and that is the difference
+// F-A was reported over: `ps <room> --nodes --json` answering `null` while the room was alive. The list
+// is never `null` now, so the reason has to travel on stderr or the reader still cannot tell the two
+// apart. Silence is the answer when there is nothing to distinguish: no room was named, the server had
+// no sessions at all (Run already says so), or the room's seats are right there in the list.
+func emptyReason(rig string, sessions, seats int) string {
+	if rig == "" || sessions == 0 || seats > 0 {
+		return ""
+	}
+	return fmt.Sprintf("no seats for rig %s on the server this process would use (%d session(s) there, none named %s-*)",
+		rig, sessions, rig)
 }
 
 func writeJSON(stdout, stderr io.Writer, view string, seats []Seat) int {
