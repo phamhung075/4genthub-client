@@ -316,7 +316,6 @@ type seatView struct {
 	bucketSet bool
 	last      string
 	repeated  int
-	kind      string // kind of the last tool call shown, so a change of kind is marked
 }
 
 // stamp is the clock of a line: shown when the minute changes and blank under it.
@@ -359,7 +358,7 @@ func callKind(text string) (toolStyle, bool) {
 	return toolStyle{}, false
 }
 
-// kindRule is the divider printed when the work changes kind: the kind's glyph and name in its own colour
+// kindRule is the divider printed before every tool call: the kind's glyph and name in its own colour
 // on a rule, so a run of reads, then an edit, then a shell command is seen at a glance.
 func kindRule(style toolStyle, width int) string {
 	label := " " + style.glyph + " " + style.kind + " "
