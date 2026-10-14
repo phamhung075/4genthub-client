@@ -501,10 +501,18 @@ func TestCompactRunRequiresARig(t *testing.T) {
 	}
 }
 
-// unreadableRoom is a failed room reading, without pulling an error package into this test.
+// daemonRefusal is the runtime's OWN refusal - it answered on the socket and will not serve this request. For a
+// status read that means a room it does not know, and the definition is then the only source of its seats (U1).
+func daemonRefusal() error {
+	return &clientruntime.DaemonRefused{Reason: "cannot read room spec: No such file or directory (os error 2)"}
+}
+
+// unreadableRoom is a room reading NOBODY COULD READ - a frame that never parsed, say. The daemon may know the room
+// perfectly well, so this process has learned nothing about what is running and must not start anything from the
+// definition: StartRoom kills and re-creates a session it finds running, so that start would cycle live agents.
 type unreadableRoom struct{}
 
-func (unreadableRoom) Error() string { return "the daemon does not know this room" }
+func (unreadableRoom) Error() string { return "decode error: unexpected end of JSON input" }
 
 // TestSeatStartPlan pins the check-then-start decision, and the stake is the runtime's own semantics:
 // StartRoom KILLS AND RE-CREATES a session it finds running (pty::launch_session), so "send the whole spec"
@@ -527,8 +535,13 @@ func TestSeatStartPlan(t *testing.T) {
 	}{
 		{
 			name:     "a room the daemon does not know: the definition is the only source of its seats",
-			readErr:  unreadableRoom{},
+			readErr:  daemonRefusal(),
 			wantSend: true,
+		},
+		{
+			name:     "an answer nobody could read: nothing is learned, so nothing is sent",
+			readErr:  unreadableRoom{},
+			wantSend: false,
 		},
 		{
 			name:     "a reading with no seats at all: same, the definition starts the room",
@@ -596,17 +609,34 @@ func TestAnUnreadableStatusRefusesInsteadOfStartingTheRoomFromTheDefinition(t *t
 	}
 }
 
-// AND THE OTHER KIND OF ERROR STILL STARTS THE ROOM, so the split is not over-tightened into "any error refuses":
-// the daemon not knowing the room is exactly when the definition is the only source of its seats (U1).
-func TestAnOrdinaryStatusErrorStillStartsFromTheDefinition(t *testing.T) {
-	restart, send, fail := seatStartPlan(nil, errors.New("no such room 'x' is not a room directory"))
+// AND ONLY THE DAEMON'S OWN REFUSAL STILL STARTS THE ROOM, so the split is not over-tightened into "any error
+// refuses" either: the daemon not knowing the room is exactly when the definition is the only source of its seats
+// (U1). This is the half U1 rests on, and the wire measurement for it is a daemon that answers ok=false for a room
+// whose spec.json does not exist yet.
+func TestADaemonRefusalStillStartsFromTheDefinition(t *testing.T) {
+	restart, send, fail := seatStartPlan(nil, daemonRefusal())
 	if !send {
-		t.Error("an ordinary status error did not send the definition: U1's unknown room would no longer start")
+		t.Error("the daemon's own refusal did not send the definition: U1's unknown room would no longer start")
 	}
 	if len(restart) != 0 {
 		t.Errorf("restart = %v, want none", restart)
 	}
 	if fail != nil {
-		t.Errorf("an ordinary status error refused: %v", fail)
+		t.Errorf("the daemon's own refusal was turned into a refusal of ours: %v", fail)
+	}
+}
+
+// AND A FAILURE THAT IS NOT THE DAEMON'S OWN REFUSAL REFUSES. A transport that never answered tells this process
+// nothing about what is running, so the definition must not be sent - this is the arm the reviewer's measurement
+// failed on: a status whose line was cut short reached StartRoom, because that error was a bare one and every bare
+// error was read as "the room is unknown".
+func TestATransportFailureRefusesInsteadOfStartingTheRoom(t *testing.T) {
+	restart, send, fail := seatStartPlan(nil, errors.New(
+		"cannot connect to agenthub-runtime at /tmp/undec-fake/rt.sock: connection refused"))
+	if send || len(restart) != 0 {
+		t.Errorf("a transport failure planned a start: restart=%v sendSpec=%v", restart, send)
+	}
+	if fail == nil {
+		t.Fatal("a transport failure was not refused: the caller would go on to StartRoom")
 	}
 }

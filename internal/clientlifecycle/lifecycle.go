@@ -525,15 +525,18 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 // already runs returns neither: that is the second `up`, and it must change nothing.
 func seatStartPlan(reported []clientruntime.SeatStatus, err error) (restart []string, sendSpec bool, fail error) {
 	if err != nil {
-		// TWO KINDS OF ERROR, AND ONLY ONE OF THEM MAY START A ROOM. The runtime answering "no such room" is U1's
-		// case: the definition is the only source of its seats, so `up` sends it. An answer nobody could READ is the
-		// opposite fact - the runtime may know the room perfectly well - and starting from the definition then is a
-		// blind start, the one outcome check-then-start exists to prevent. Both arrive as errors and both leave with
-		// the room contract's exit 3, so they are told apart by TYPE rather than by the code they share.
-		if _, unreadable := err.(*clientruntime.UnreadableAnswer); unreadable {
-			return nil, false, err
+		// ONLY THE DAEMON'S OWN REFUSAL MAY START A ROOM. A *clientruntime.DaemonRefused means the daemon ANSWERED and
+		// will not serve this request - for a status read, a room it does not know, and the definition is then the only
+		// source of its seats (U1). EVERY OTHER error means this process learned NOTHING about what is running: an
+		// unreadable answer (*UnreadableAnswer), a frame that never parsed, a transport that never answered. Starting
+		// from the definition then is a blind start, the one outcome check-then-start exists to prevent, and StartRoom
+		// cycles a room of live agents when it finds one running. Both kinds used to leave with exit 3 and be collapsed
+		// here; they are told apart by TYPE now, not by the code they share.
+		var refused *clientruntime.DaemonRefused
+		if errors.As(err, &refused) {
+			return nil, true, nil
 		}
-		return nil, true, nil
+		return nil, false, err
 	}
 	if len(reported) == 0 {
 		return nil, true, nil

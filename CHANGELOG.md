@@ -3,6 +3,38 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the daemon's refusal is a different fact from an answer nobody could read
+
+### Changed
+- `internal/clientruntime/ipc.go` — **two new errors where there was one bare one**, both raised at the seam that sees
+  the raw line:
+  - `DaemonRefused`: a frame arrived, parsed as an envelope, and said `ok=false`. The runtime ANSWERED and will not
+    serve this request — for a status read, a room it does not know. The wire carries no code (`IpcResponse` is
+    `{ok, error, data}`) and the daemon's sentence is carried VERBATIM as `Error()`, exactly as before.
+  - a frame that cannot be parsed is now an `*UnreadableAnswer`, like a `data` document whose shape is wrong. Both are
+    answers this client cannot read; both already left with the room contract's exit 3; now they are the same TYPE.
+- `internal/clientlifecycle/lifecycle.go` — **`seatStartPlan` sends the definition only for `*DaemonRefused`**, and
+  refuses on every other error. The first version of this split asked whether the error was an `*UnreadableAnswer` and
+  sent the definition otherwise — which still read a TRUNCATED FRAME as an unknown room, because that failure happens
+  in `Call`'s envelope guard, before any verb's decode. Measured on the wire against a fake runtime: the fixed-but-
+  incomplete split still put `StartRoom` on the wire; it does not now.
+
+### Verified, on the wire rather than in the abstract
+`up room-a --team <dir>` against a fake runtime on `OPENRIG_RUNTIME_SOCKET`, its request log read afterwards (no
+daemon spawned, checked):
+
+- answer truncated mid-document → `GetRoomStatus` only, **no `StartRoom`**, exit 3, message "the runtime's
+  GetRoomStatus answer could not be read … decode error: unexpected end of JSON input".
+- `data` an object where an array belongs → same: **no `StartRoom`**, exit 3, "… cannot unmarshal object into Go
+  value of type []clientruntime.SeatStatus".
+- the daemon's own refusal (`ok=false`, the sentence a real daemon gives for a room whose spec is not there) →
+  `StartRoom` IS sent, which is U1 and must stay that way.
+
+Unit arms: `TestADaemonRefusalIsTypedApartFromAnUnreadableAnswer` (the pair, at the wire seam, with the daemon's
+sentence asserted verbatim), `TestSeatStartPlan` (now 7 cases: the unreadable answer refuses beside the refusal that
+sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailureRefusesInsteadOfStartingTheRoom`.
+`go test ./...` green, `go vet ./...` clean, `gofmt -l` empty on every file touched.
+
 ## 2026-10-14 — an unreadable answer refuses, and a bare ok envelope is not an empty list
 
 ### Changed
@@ -28,11 +60,11 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   split is not over-tightened into "any error refuses"; `TestSeatStartPlan`'s six cases are unchanged.
 - `go test ./...` green across the tree, `go vet` clean.
 
-### Open, named rather than implied
+### Open, named rather than implied — superseded the same day
 - There is no `up`-over-a-socket integration test in the tree, so the wire-level half of the acceptance — a fake
-  runtime answering an undecodable `GetRoomStatus`, with **no `StartRoom` in its request log** — is covered at the
-  decode and plan levels, not end to end through `up`. The unit arms assert what `up` now does; a socket-level `up`
-  arm would assert it where the reviewer measured it.
+  runtime answering an undecodable `GetRoomStatus`, with **no `StartRoom` in its request log** — was covered at the
+  decode and plan levels only. Measured afterwards, that gap was not academic: this commit's split still sent
+  `StartRoom` for a truncated frame, and the section above records the fix and the wire evidence.
 
 ## 2026-10-14 — the quiet gate releases on one word, and the rule lives in one place
 

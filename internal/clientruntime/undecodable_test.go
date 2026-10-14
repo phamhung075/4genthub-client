@@ -253,6 +253,52 @@ func TestAnAnswerWithNoDataRefusesWhileAnEmptyArrayStillDecodes(t *testing.T) {
 	}
 }
 
+// AND THE DAEMON'S OWN REFUSAL IS A DIFFERENT FACT FROM AN ANSWER NOBODY COULD READ, typed at the same seam.
+// The wire carries no code - IpcResponse is {ok, error, data} - so both used to arrive as bare errors, and the one
+// caller that has to act on the difference read a truncated frame as "this room is unknown" and sent the whole
+// definition: `up` against an unreadable status reached StartRoom on the wire, which is a blind start against a
+// room that may be running perfectly well. This pins the pair the caller now branches on.
+func TestADaemonRefusalIsTypedApartFromAnUnreadableAnswer(t *testing.T) {
+	t.Run("refusal", func(t *testing.T) {
+		client, requests := captureQueueRequest(t,
+			`{"ok":false,"error":"cannot read room spec: No such file or directory (os error 2)","data":null}`+"\n")
+
+		_, err := client.GetRoomStatus(queueTestRoom)
+		_ = requestLine(t, requests)
+
+		var refused *DaemonRefused
+		if !errors.As(err, &refused) {
+			t.Fatalf("the daemon's own refusal = %T (%v), want *DaemonRefused", err, err)
+		}
+		var unreadable *UnreadableAnswer
+		if errors.As(err, &unreadable) {
+			t.Fatal("the daemon's own refusal was taken for an answer nobody could read")
+		}
+		if want := "cannot read room spec: No such file or directory (os error 2)"; refused.Error() != want {
+			t.Fatalf("the daemon's own sentence was not carried verbatim: %q, want %q", refused.Error(), want)
+		}
+	})
+
+	t.Run("truncated frame", func(t *testing.T) {
+		client, requests := captureQueueRequest(t, truncatedAnswer("GetRoomStatus"))
+
+		_, err := client.GetRoomStatus(queueTestRoom)
+		_ = requestLine(t, requests)
+
+		var unreadable *UnreadableAnswer
+		if !errors.As(err, &unreadable) {
+			t.Fatalf("a truncated frame = %T (%v), want *UnreadableAnswer", err, err)
+		}
+		var refused *DaemonRefused
+		if errors.As(err, &refused) {
+			t.Fatal("a frame nobody could read was taken for the daemon's own refusal: `up` would start the room")
+		}
+		if code := clientcmd.CodeOf(err, clientcmd.ExitOK); code != clientcmd.ExitRoomRefused {
+			t.Fatalf("exit code = %d, want %d", code, clientcmd.ExitRoomRefused)
+		}
+	})
+}
+
 func TestTheZeroValueIsNeverAWrongAnswer(t *testing.T) {
 	t.Run("Whoami", func(t *testing.T) {
 		client, requests := captureQueueRequest(t, wrongShapeAnswer("Whoami"))

@@ -154,11 +154,17 @@ func (c *Client) CallWithDeadline(action string, payload any, timeout time.Durat
 
 	var resp IpcResponse
 	if err := json.Unmarshal(line, &resp); err != nil {
-		return nil, fmt.Errorf("decode error: %w", err)
+		// AN ANSWER NOBODY CAN READ IS A REFUSAL, not a failure of the transport: the daemon answered on the socket -
+		// something wrote a line back - and what it wrote cannot be used. Typed here, at the one place that sees the
+		// raw line, so the caller that must not guess (`up`) can tell "the daemon does not know this room" from
+		// "nothing about this room could be read".
+		return nil, unreadableAnswer(action, fmt.Errorf("decode error: %w", err))
 	}
 
 	if !resp.Ok {
-		return nil, errors.New(resp.Error)
+		// THE DAEMON'S OWN REFUSAL, typed because it is the one failure that says something about the ROOM: the daemon
+		// answered, and it will not serve this request - for a status read, a room it does not know.
+		return nil, &DaemonRefused{Reason: resp.Error}
 	}
 
 	return &resp, nil
@@ -206,6 +212,16 @@ func decodeAnswer(action string, data any, out any) error {
 // whose shape is not the one this verb asks for, and the decoder's own words kept so a reader can see which
 // shape arrived. It carries exit 3 (see decodeAnswer), so the verb's caller cannot mistake it for a
 // transport that was merely absent.
+// DaemonRefused is the runtime's OWN refusal: a frame arrived, parsed as an envelope, and said ok=false. It is a
+// TYPE rather than a bare error because "the daemon answered and refused" and "this client could not read an
+// answer" are different facts about the world, and one caller has to act on the difference: `up` may send a room's
+// whole definition when the daemon does not know the room (the definition is then the only source of its seats),
+// and must never send it when nothing was learned about what is running - StartRoom kills and re-creates a session
+// it finds running, so a blind start cycles a room of live agents.
+type DaemonRefused struct{ Reason string }
+
+func (e *DaemonRefused) Error() string { return e.Reason }
+
 // UnreadableAnswer is the refusal decodeAnswer raises, and it is a TYPE rather than only a code so that a caller can
 // tell the two kinds of error apart: the runtime ANSWERED and refused (a room it does not know, say - `up` must still
 // send the definition, because the definition is then the only source of its seats), versus nobody could READ the
