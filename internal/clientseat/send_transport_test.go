@@ -77,7 +77,7 @@ func TestSendGoesThroughTheRuntimeSocket(t *testing.T) {
 			return `{"ok":true,"data":[{"room":"4genthub-min","seat":"fe-dev",` +
 				`"session_name":"4genthub-min-fe-dev@4genthub-min","runtime":"omp","state":"Running"}]}` + "\n"
 		}
-		return `{"ok":true,"data":{"delivered":"4genthub-min-fe-dev@4genthub-min"}}` + "\n"
+		return `{"ok":true,"data":{"delivered":"4genthub-min-fe-dev@4genthub-min","outcome":"submitted"}}` + "\n"
 	})
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
@@ -136,7 +136,7 @@ func TestSendJsonPrintsTheRuntimesOwnAnswer(t *testing.T) {
 	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
 
 	sock, _ := fakeRuntime(t, func(string) string {
-		return `{"ok":true,"data":{"delivered":"peer@r"}}` + "\n"
+		return `{"ok":true,"data":{"delivered":"peer@r","outcome":"submitted"}}` + "\n"
 	})
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
@@ -146,7 +146,7 @@ func TestSendJsonPrintsTheRuntimesOwnAnswer(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("send --json exit = %d, stderr = %q", code, errOut.String())
 	}
-	if strings.TrimSpace(out.String()) != `{"delivered":"peer@r"}` {
+	if strings.TrimSpace(out.String()) != `{"delivered":"peer@r","outcome":"submitted"}` {
 		t.Errorf("stdout = %q, want the runtime's own answer document", out.String())
 	}
 }
@@ -239,7 +239,7 @@ func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *te
 				return `{"ok":true,"data":[{"room":"leg-solo","seat":"solo","session_name":"` + native +
 					`","runtime":"omp","state":"Running"}]}` + "\n"
 			}
-			return `{"ok":true,"data":{}}` + "\n"
+			return `{"ok":true,"data":{"delivered":"` + native + `","outcome":"submitted"}}` + "\n"
 		})
 		t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
