@@ -109,6 +109,10 @@ func (command) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout,
 		fmt.Fprintf(stderr, "4genteam ps: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
+	if len(sessions) == 0 {
+		// An empty answer is an answer only when it says what was looked at: the server this process would use.
+		fmt.Fprintln(stderr, "4genteam ps: no tmux sessions on the server this process would use")
+	}
 	seats := collect(ctx, sessions, rig)
 	if asJSON {
 		return writeJSON(stdout, stderr, view, seats)
@@ -296,6 +300,12 @@ func rollup(seats []Seat) []RigRow {
 }
 
 func writeJSON(stdout, stderr io.Writer, view string, seats []Seat) int {
+	if seats == nil {
+		// A documented list is never `null`: callers parse this output, and a room this verb cannot see used to
+		// come back as `null`, which reads as a bug rather than as an empty answer. `Run` says on stderr what it
+		// looked at; here the shape of the answer is fixed.
+		seats = []Seat{}
+	}
 	var payload any = seats
 	if view == "summary" {
 		payload = rollup(seats)
