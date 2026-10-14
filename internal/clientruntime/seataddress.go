@@ -50,8 +50,22 @@ func CanonicalRigSeat(session string) (rig, seat string, ok bool) {
 // ResolveSeatAddress reads the session name a seat's pane actually carries from the room's runtime. The name
 // is READ, never composed - a convention is what produced `agenthub--RIG--SEAT`, a string no seat carries - so a
 // seat the runtime does not list is a refusal that names it, not a name built from the caller's two arguments.
+//
+// A FAILED READ IS NOT THAT REFUSAL. Measured 2026-10-14 on this box, during a transport outage: the shared
+// daemon's socket had been unlinked, and `send 4genthub-min lead` answered "no record of 4genthub-min/lead: the
+// room's runtime does not list that seat" while the truth was `cannot connect to agenthub-runtime at
+// /mnt/wslg/runtime-dir/agenthub.sock: ... no such file or directory`. The two send an operator to different
+// places - a room definition versus a dead socket - and this file's own rule is that an unreadable record is
+// not an answer about the room. So the read answers three things and each is reported as itself.
 func ResolveSeatAddress(rig, seat string) (SeatAddress, error) {
-	if session := seatAddressFromRuntime(rig, seat); session != "" {
+	session, found, err := seatAddressFromRuntime(rig, seat)
+	switch {
+	case err != nil:
+		return SeatAddress{}, &clientcmd.CodedError{
+			Message: fmt.Sprintf("the session name of %s/%s could not be read: %v", rig, seat, err),
+			Code:    clientcmd.ExitUnavailable,
+		}
+	case found:
 		return SeatAddress{SessionName: session, Source: "the runtime's room record"}, nil
 	}
 	return SeatAddress{}, &clientcmd.CodedError{
@@ -61,14 +75,22 @@ func ResolveSeatAddress(rig, seat string) (SeatAddress, error) {
 	}
 }
 
-// seatAddressFromRuntime is the FIELD path: ask the room's own runtime for the seat's real session name.
+// seatStatuses is the room read this file makes. A package-level var, which is the repo's rule for a seam - not
+// an interface invented for a test - so both answers below can be driven without a daemon.
+var seatStatuses = func(room string) ([]SeatStatus, error) {
+	return NewClient("").GetRoomStatus(room)
+}
+
+// seatAddressFromRuntime is the FIELD path: ask the room's own runtime for the seat's real session name. It
+// answers THREE things - the name, whether the room's record listed the seat, and the error the read made -
+// because collapsing the error into "" is what made a dead socket read as a room without the seat.
 //
 // The room is `AGENTHUB_ROOM` when this shell is a native seat - the launcher that hosts a seat states the
 // room as a field, and the native shape's first positional argument names the same room. A runtime that has
 // no such room answers nothing.
-func seatAddressFromRuntime(rig, seat string) string {
+func seatAddressFromRuntime(rig, seat string) (string, bool, error) {
 	if seat == "" {
-		return ""
+		return "", false, nil
 	}
 	// THE ROOM THE CALLER NAMED WINS over the ambient `AGENTHUB_ROOM`. A seat shell always carries the room it
 	// sits in, so an env-first read answers for the WRONG room the moment a seat addresses another one -
@@ -79,16 +101,16 @@ func seatAddressFromRuntime(rig, seat string) string {
 		room = strings.TrimSpace(os.Getenv(agentHubRoomEnv))
 	}
 	if room == "" {
-		return ""
+		return "", false, nil
 	}
-	statuses, err := NewClient("").GetRoomStatus(room)
+	statuses, err := seatStatuses(room)
 	if err != nil {
-		return ""
+		return "", false, err
 	}
 	for _, status := range statuses {
 		if status.Seat == seat && strings.TrimSpace(status.SessionName) != "" {
-			return strings.TrimSpace(status.SessionName)
+			return strings.TrimSpace(status.SessionName), true, nil
 		}
 	}
-	return ""
+	return "", false, nil
 }
