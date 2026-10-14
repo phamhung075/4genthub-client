@@ -140,8 +140,11 @@ type session struct {
 }
 
 func listSessions(ctx context.Context) ([]session, error) {
-	out, err := exec.CommandContext(ctx, "tmux", "list-sessions", "-F",
-		"#{session_name}\t#{session_created}\t#{session_attached}").Output()
+	argv, err := clientenv.TmuxArgv("list-sessions", "-F", "#{session_name}\t#{session_created}\t#{session_attached}")
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && strings.Contains(string(exitErr.Stderr), "no server running") {
 			return nil, nil

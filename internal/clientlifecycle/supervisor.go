@@ -5,6 +5,7 @@ package clientlifecycle
 import (
 	"errors"
 	"fmt"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"io"
 	"os"
 	"os/exec"
@@ -454,11 +455,11 @@ func rigAbort(rig, seat string) {
 }
 
 func tmuxInterrupt(rig, seat string) {
-	path, err := exec.LookPath("tmux")
+	cmd, err := clientenv.TmuxCommand("send-keys", "-t", rig+"-"+seat+"@"+rig, "Escape")
 	if err != nil {
 		return
 	}
-	_ = exec.Command(path, "send-keys", "-t", rig+"-"+seat+"@"+rig, "Escape").Run()
+	_ = cmd.Run()
 }
 
 // rpcCompact sends an RPC compact straight to the seat's omp, which reads it whatever the seat is doing.

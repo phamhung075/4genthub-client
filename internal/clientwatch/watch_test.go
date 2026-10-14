@@ -206,6 +206,27 @@ func TestGridPrintsTheSeatAndColumnCount(t *testing.T) {
 	}
 }
 
+// The seats are read from the tmux server the runtime owns, not from whatever server the caller's environment names.
+func TestGridReadsSeatsFromTheRuntimesTmuxServer(t *testing.T) {
+	t.Setenv("TMUX_TMPDIR", "/not/the/runtime")
+	fake := newFakeExec(t)
+	fake.answerHerdr(nil)
+	fake.seatsFromTmux("r", []string{"lead"})
+	withSeatStore(t, "r", "lead")
+	root := withStateRoot(t)
+	if code, _, errOut := runVerbT(t, "grid", "--rig", "r", "--state-root", root); code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if len(fake.tmuxRoots) == 0 {
+		t.Fatal("the grid never reached tmux through the runtime's root")
+	}
+	for _, got := range fake.tmuxRoots {
+		if want := clientenv.TmuxRoot(clientenv.DefaultStateRoot()); got != want {
+			t.Errorf("TMUX_TMPDIR = %q, want %q", got, want)
+		}
+	}
+}
+
 // Mirrors test_a_relaunched_grid_replaces_the_old_one_and_keeps_the_same_layout.
 func TestARelaunchedGridReplacesTheOldOneAndKeepsTheSameLayout(t *testing.T) {
 	fake := newFakeExec(t)

@@ -3,6 +3,11 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — every client tmux call reaches the runtime's own tmux server
+
+### Fixed
+- `ps`, `feed`, `watch`, `grid`, `seat status`, the watchdog, the supervisor interrupt and the install checker asked the caller's default tmux server, so `4genteam ps --nodes --json` printed `[]` for a running native room unless `TMUX_TMPDIR` was exported. They now run `env -u TMUX TMUX_TMPDIR=<state root>/tmux tmux ...` through `clientenv.TmuxArgv`, which refuses rather than fall back to the default server. Tests: `clientenv`, `clientps`, `clientwatch`.
+
 ## 2026-10-14 — the TypeSafe skill joins the shared seat skills
 
 ### Added

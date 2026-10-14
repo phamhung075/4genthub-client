@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -58,7 +58,11 @@ var (
 	// server answered as "none" rather than as an error - the crash case is exactly when there is no
 	// server to ask.
 	tmuxServerIdentity = func() string {
-		out, err := exec.Command("tmux", "display-message", "-p", "#{pid} #{start_time}").Output()
+		cmd, err := clientenv.TmuxCommand("display-message", "-p", "#{pid} #{start_time}")
+		if err != nil {
+			return "none"
+		}
+		out, err := cmd.Output()
 		if err != nil {
 			return "none"
 		}

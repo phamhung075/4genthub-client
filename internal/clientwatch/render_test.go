@@ -267,6 +267,9 @@ type fakeExec struct {
 	failures   map[string]error
 	working    map[string]bool
 	splitCount int
+	// tmuxRoots is the TMUX_TMPDIR every unwrapped tmux call carried: the client reaches tmux only through
+	// `env -u TMUX TMUX_TMPDIR=<root> tmux ...`, and the fake answers it as the plain `tmux ...` call it stands for.
+	tmuxRoots []string
 }
 
 func newFakeExec(t *testing.T) *fakeExec {
@@ -274,8 +277,15 @@ func newFakeExec(t *testing.T) *fakeExec {
 	fake := &fakeExec{responses: map[string]string{}, failures: map[string]error{}, working: map[string]bool{}}
 	previousExec, previousPath := execCommand, lookPath
 	execCommand = func(_ context.Context, name string, args ...string) (string, error) {
+		var root string
+		if name == "env" && len(args) >= 4 && args[0] == "-u" && args[1] == "TMUX" && strings.HasPrefix(args[2], "TMUX_TMPDIR=") && args[3] == "tmux" {
+			root, name, args = strings.TrimPrefix(args[2], "TMUX_TMPDIR="), "tmux", args[4:]
+		}
 		key := strings.Join(append([]string{name}, args...), " ")
 		fake.mu.Lock()
+		if root != "" {
+			fake.tmuxRoots = append(fake.tmuxRoots, root)
+		}
 		fake.calls = append(fake.calls, append([]string{name}, args...))
 		failure := fake.failures[key]
 		response := fake.responses[key]

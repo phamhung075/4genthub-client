@@ -174,7 +174,11 @@ func number(value any) (int, bool) {
 // RigSeats is rig_seats: the seats of a rig that have a live tmux session, sorted. The omp state
 // directories outlive removed seats, so the tmux session list is what says a seat is really there.
 func RigSeats(rig string) []string {
-	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	cmd, err := clientenv.TmuxCommand("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return nil
+	}
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}

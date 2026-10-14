@@ -2,12 +2,14 @@ package clientps
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 func TestCollectReadsANativeRoom(t *testing.T) {
@@ -94,5 +96,27 @@ func TestANamedRoomThatMatchedNothingSaysSo(t *testing.T) {
 				t.Fatalf("reason %q does not name the room asked for, %q", reason, tc.wantNamed)
 			}
 		})
+	}
+}
+
+// listSessions reaches the tmux server the runtime owns whatever the caller's environment names: a tmux that
+// answers only for the runtime's TMUX_TMPDIR stands in for the two servers.
+func TestListSessionsReadsTheRuntimesServerWhateverTheEnvironmentNames(t *testing.T) {
+	want := clientenv.TmuxRoot(clientenv.DefaultStateRoot())
+	bin := t.TempDir()
+	script := "#!/bin/sh\n[ \"$TMUX_TMPDIR\" = \"" + want + "\" ] && [ -z \"$TMUX\" ] || { echo 'no server running on /tmp/x' >&2; exit 1; }\nprintf 'agenthub--r--lead\\t1\\t0\\n'\n"
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX_TMPDIR", "/not/the/runtime")
+	t.Setenv("TMUX", "/tmp/default,1,0")
+
+	sessions, err := listSessions(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].name != "agenthub--r--lead" {
+		t.Fatalf("sessions = %+v, want the runtime's one seat", sessions)
 	}
 }

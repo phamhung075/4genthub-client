@@ -1,7 +1,7 @@
 package clientrestore
 
 import (
-	"os/exec"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"sort"
 	"strings"
 )
@@ -11,7 +11,11 @@ import (
 // "no sessions" rather than as a failure, so the caller does too - a watchdog that treated a dead tmux
 // server as an error would be silent in exactly the case it exists for.
 func tmuxSessionNames() (string, error) {
-	out, err := exec.Command("tmux", "ls", "-F", "#{session_name}").Output()
+	cmd, err := clientenv.TmuxCommand("ls", "-F", "#{session_name}")
+	if err != nil {
+		return "", err
+	}
+	out, err := cmd.Output()
 	return string(out), err
 }
 

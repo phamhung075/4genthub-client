@@ -80,7 +80,11 @@ var captureCommand = func(command []string, timeout time.Duration) (string, int,
 
 // tmuxGlobalPath is the PATH new seats inherit, and false without a tmux server.
 func tmuxGlobalPath() (string, bool) {
-	stdout, code, err := captureCommand([]string{"tmux", "show-environment", "-g", "PATH"}, tmuxTimeoutSeconds)
+	argv, err := clientenv.TmuxArgv("show-environment", "-g", "PATH")
+	if err != nil {
+		return "", false
+	}
+	stdout, code, err := captureCommand(argv, tmuxTimeoutSeconds)
 	if err != nil || code != 0 || !strings.HasPrefix(stdout, "PATH=") {
 		return "", false
 	}

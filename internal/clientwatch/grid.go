@@ -55,7 +55,11 @@ const (
 
 // rigSeats is the seats with a live tmux session; the omp state dirs outlive removed seats.
 func rigSeats(ctx context.Context, rig string) ([]string, error) {
-	out, err := execCommand(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+	argv, err := clientenv.TmuxArgv("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return nil, err
+	}
+	out, err := execCommand(ctx, argv[0], argv[1:]...)
 	if err != nil {
 		return nil, fmt.Errorf("tmux list-sessions failed: %w", err)
 	}
