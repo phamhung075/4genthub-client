@@ -282,6 +282,36 @@ func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
 	}
 }
 
+// TestAnUndeliveredBriefIsAFailedRestore: the seats are up but the brief the caller asked for did not arrive,
+// and that is not a success and must not be reported as one. The restore answers false - which is what the
+// restorer's own doc promises ("a brief the caller asked for is not there to send") - the seats that were
+// missed are named, and the verb leaves non-zero. Before this, each seat was logged as failed and the verb
+// still ended saying done, which is the shape R3 forbids: a delivery reported that never happened.
+func TestAnUndeliveredBriefIsAFailedRestore(t *testing.T) {
+	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	brief := w.brief("rig-a.txt", "Take the next board row.\n")
+
+	previousSteps := restoreSteps
+	restoreSteps = func(r *restorer) {
+		r.send = func(context.Context, string, string) error { return errors.New("no transport answered") }
+		r.wall = func(string) (bool, string) { return true, "" }
+	}
+	t.Cleanup(func() { restoreSteps = previousSteps })
+
+	code, _, _ := w.run("continue", "rig-a", brief)
+	if code != ExitRestoreFailed {
+		t.Fatalf("exit = %d, want %d: a brief that did not arrive is not a completed restore", code, ExitRestoreFailed)
+	}
+	for _, line := range []string{"rig-a: send failed for alpha", "rig-a: brief did not reach alpha"} {
+		if !strings.Contains(w.log(), line) {
+			t.Errorf("the log is missing %q:\n%s", line, w.log())
+		}
+	}
+	if strings.Contains(w.log(), "rig-a: done") {
+		t.Errorf("an undelivered brief was reported as done:\n%s", w.log())
+	}
+}
+
 // TestADeadRigIsRestoredFromItsSnapshot is the other half: no sessions means `rig up --existing`, and the
 // seat count is read AFTER it, which is why the stub's sessions appear only once the restore has run.
 func TestADeadRigIsRestoredFromItsSnapshot(t *testing.T) {
@@ -504,7 +534,7 @@ func TestAllReportsARigItCouldNotBringUp(t *testing.T) {
 	if !strings.Contains(w.log(), "rig-b: no seats up, aborting for this rig") {
 		t.Errorf("the log does not say rig-b could not be brought up:\n%s", w.log())
 	}
-	if !strings.Contains(w.log(), "--all: 1 of 2 rigs are not up: rig-b") {
+	if !strings.Contains(w.log(), "--all: 1 of 2 rigs did not complete: rig-b") {
 		t.Errorf("the summary does not name rig-b:\n%s", w.log())
 	}
 	if !strings.Contains(w.log(), "rig-a: already live, skipping restore") {
@@ -532,7 +562,7 @@ func TestAllCountsARefusedRig(t *testing.T) {
 	if code != ExitRestoreFailed {
 		t.Fatalf("exit = %d, want %d", code, ExitRestoreFailed)
 	}
-	if !strings.Contains(w.log(), "--all: 2 of 2 rigs are not up: rig-a, rig-b") {
+	if !strings.Contains(w.log(), "--all: 2 of 2 rigs did not complete: rig-a, rig-b") {
 		t.Errorf("the summary does not name both refused rigs:\n%s", w.log())
 	}
 	for _, call := range w.calls() {

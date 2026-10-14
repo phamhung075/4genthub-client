@@ -3,6 +3,37 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — `sync respawn` refuses its launch in words, and an undelivered brief fails the restore
+
+### Changed
+- `internal/clientsync/respawnverb.go` — the launch leg is off `rig` entirely: `runRigCapture`, `rigResult` and
+  `lastLine` are deleted and the `os/exec` import with them. The leg's semantics were `seat launch <session>
+  --fresh --stop --reason R` — one session, started fresh, the old occupant stopped first, an audit reason
+  recorded — and the native runtime has no equivalent: `StartRoom` takes a whole room from a spec and
+  `RestartSeat` ({room, seat}) carries NO reason field at all, so wiring it would drop the caller's `--reason`
+  while the verb reported a respawn. The ruling's own option is taken instead: the step is not taken and it is
+  spoken — the session that could not be launched is named, the exit is `ExitUnavailable`, nothing goes to
+  stdout, and `rig` is never consulted (R1/R4). Every other reading and refusal is unchanged and in place.
+  `--reason` is still parsed and validated, then set aside where the launch would have spent it. The refusal
+  names `4genteam room reseat ROOM SEAT` as the native door onto StopSeat+RestartSeat, because the ruling's
+  suggested `4genteam seat launch` is not a command this client has.
+- `internal/clientrestore/restore.go` — `brief` returns the seats its text did not reach, and `restore` answers
+  false when that list is non-empty, naming them. The send closure has returned an error since 4203d96, so each
+  failure was already logged — but the restore still answered true, which is the shape R3 forbids: a delivery
+  reported that never happened. The seats are up and the brief did not arrive, so `continue <rig>` now exits
+  `ExitRestoreFailed` naming the missed seats.
+- `internal/clientrestore/continue.go` — the `--all` summary is `rigs did not complete`, not `rigs are not up`:
+  a rig whose seats are up but whose brief did not arrive is in that list now, and the old wording would state a
+  fact about the room that is false.
+
+### Tests
+- `internal/clientsync/respawn_test.go` — the command-leg stub is gone; the suite plants a `rig` FIRST on PATH
+  that records having been run, so the assertion is stronger than the call list it replaces: nothing reaching
+  for the program anywhere on this path can hide, and the refusal test pins the session named plus the exit.
+- `internal/clientrestore/continue_test.go` — `TestAnUndeliveredBriefIsAFailedRestore` pins exit 1, the missed
+  seat named twice (the send failure and the brief that did not reach it) and the ABSENCE of `done`. Shown
+  failing against the swallowing version (exit 0), then restored byte-identically.
+
 ## 2026-10-14 — the peak gate says when it did NOT run for a room it has no records of
 
 ### Changed

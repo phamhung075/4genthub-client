@@ -112,7 +112,14 @@ func (r *restorer) restore(rigName, brief string) bool {
 			r.log.printf("%s: brief file missing (%s) — restored but nothing sent", rigName, brief)
 			return false
 		}
-		r.brief(rigName, seats, string(body))
+		if undelivered := r.brief(rigName, seats, string(body)); len(undelivered) > 0 {
+			// R3: a delivery is never reported as delivered. The seats are up but the brief the caller asked
+			// for did not arrive, so this restore did NOT complete and answers false - which is what the doc
+			// above already promised ("false when a brief the caller asked for is not there to send") and what
+			// the caller's own exit code and summary hang off. The seats that were missed are named here.
+			r.log.printf("%s: brief did not reach %s", rigName, strings.Join(undelivered, ", "))
+			return false
+		}
 	}
 	r.openWatch(rigName)
 	r.log.printf("%s: done — verify with: rig ps --nodes --rig %s", rigName, rigName)
@@ -123,8 +130,13 @@ func (r *restorer) restore(rigName, brief string) bool {
 // (briefs/<rig>/<seat>.txt) replacing the shared one, so no generic text is pushed onto a seat that has
 // its own. Both texts keep the shell's `$(cat …)` shape: trailing newlines are dropped, because the rig
 // tool presses Enter after what it sends and a trailing newline would submit an empty prompt.
-func (r *restorer) brief(rigName string, seats []string, body string) {
+//
+// IT RETURNS THE SEATS ITS TEXT DID NOT REACH, because a brief that was asked for and did not arrive is not a
+// success. The log line alone left the caller answering true - "done" over a seat nobody briefed - which is the
+// failure the restorer's own doc says its `false` is for: a brief the caller asked for is not there to send.
+func (r *restorer) brief(rigName string, seats []string, body string) []string {
 	body = strings.TrimRight(body, "\n")
+	var undelivered []string
 	for _, seat := range seats {
 		text := "Your seat: " + seat + ". " + body
 		if own, err := os.ReadFile(filepath.Join(r.briefs, rigName, seat+".txt")); err == nil {
@@ -135,10 +147,12 @@ func (r *restorer) brief(rigName string, seats []string, body string) {
 		cancel()
 		if err != nil {
 			r.log.printf("%s: send failed for %s", rigName, seat)
+			undelivered = append(undelivered, seat)
 			continue
 		}
 		r.log.printf("%s: briefed %s", rigName, seat)
 	}
+	return undelivered
 }
 
 // watchEnv is the shell's RIG_CONTINUE_WATCH: 0 skips the wall, which is what keeps a headless resume -

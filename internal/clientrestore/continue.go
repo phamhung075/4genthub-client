@@ -223,7 +223,7 @@ func continueAll(allowPeak bool, log *teeLog, stderr io.Writer) int {
 		}
 	}
 	if len(notUp) > 0 {
-		log.printf("--all: %d of %d rigs are not up: %s", len(notUp), len(briefs), strings.Join(notUp, ", "))
+		log.printf("--all: %d of %d rigs did not complete: %s", len(notUp), len(briefs), strings.Join(notUp, ", "))
 		return ExitRestoreFailed
 	}
 	return clientcmd.ExitOK
