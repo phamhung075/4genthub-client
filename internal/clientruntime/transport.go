@@ -136,6 +136,20 @@ func RuntimeSendText(session, text string, opts SendOptions) ([]byte, error) {
 	return raw, nil
 }
 
+// RuntimeSendLine is the one line a native send prints for the runtime's answer document. The runtime
+// reports `outcome: "unconfirmed"` when the pane did not change after Enter, so the text may still sit in
+// the seat's input box; that is not claimed as a delivery. An answer with no outcome (an older runtime)
+// reads as sent, which is what it claimed.
+func RuntimeSendLine(session string, answer []byte) string {
+	var doc struct {
+		Outcome string `json:"outcome"`
+	}
+	if json.Unmarshal(answer, &doc) == nil && doc.Outcome == "unconfirmed" {
+		return fmt.Sprintf("Pasted to %s, submission unconfirmed: the pane did not change after Enter, so the text may still be staged\n", session)
+	}
+	return fmt.Sprintf("Sent to %s\n", session)
+}
+
 // runtimeJSONDocument renders a value the runtime answered with as the document `--json` prints. The answer
 // arrived as JSON and is re-encoded rather than re-typed, so a field this build has not heard of — and a
 // null the runtime sent explicitly — still reaches the caller, the same rule printDaemonJSON follows.
@@ -259,12 +273,12 @@ func ResolveIdentity(ctx context.Context, session string, compact bool) (Resolve
 func DeliverToSession(ctx context.Context, session, text string, stdout, stderr io.Writer) int {
 	switch ResolveTransport() {
 	case TransportRuntime:
-		_, err := RuntimeSendText(session, text, SendOptions{})
+		answer, err := RuntimeSendText(session, text, SendOptions{})
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam send: the runtime at %s refused it: %v\n", DefaultSocketPath(), err)
 			return clientcmd.ExitRemote
 		}
-		fmt.Fprintf(stdout, "Sent to %s\n", session)
+		fmt.Fprint(stdout, RuntimeSendLine(session, answer))
 		return clientcmd.ExitOK
 	case TransportDaemon:
 		result, status, err := OpenRigSend(ctx, session, text, SendOptions{})

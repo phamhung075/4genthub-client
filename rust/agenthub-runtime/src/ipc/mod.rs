@@ -151,7 +151,7 @@ impl IpcServer {
             },
 
             IpcRequest::SendText { session, text } => match TerminalManager::send_text(&session, &text) {
-                Ok(_) => IpcResponse::success(serde_json::json!({"delivered": session})),
+                Ok(outcome) => IpcResponse::success(serde_json::json!({"delivered": session, "outcome": outcome})),
                 Err(e) => IpcResponse::err(e),
             },
 

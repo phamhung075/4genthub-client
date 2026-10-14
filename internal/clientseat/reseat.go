@@ -446,7 +446,7 @@ func runtimeSend(session, text string, opts map[string]string, stdout, stderr io
 		_, _ = stdout.Write(append(raw, '\n'))
 		return clientcmd.ExitOK
 	}
-	fmt.Fprintf(stdout, "Sent to %s\n", session)
+	fmt.Fprint(stdout, clientruntime.RuntimeSendLine(session, raw))
 	return clientcmd.ExitOK
 }
 

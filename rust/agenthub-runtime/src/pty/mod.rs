@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 pub struct TerminalManager;
@@ -15,6 +16,53 @@ pub struct TerminalManager;
 /// carried the host's variables just as the shared one did (7 of them), because a server takes the
 /// environment of whoever creates it. The first tmux call in `launch_session` runs before any other scrub,
 /// and it is exactly the call that would create ours.
+/// Pane lines compared before and after Enter: enough to hold the input box and what sits around it.
+const SUBMIT_CAPTURE_LINES: usize = 30;
+/// Time the pane gets to repaint after a paste and after each Enter.
+const SUBMIT_SETTLE: Duration = Duration::from_millis(400);
+
+/// What `send_text` can say about a send. tmux accepting the keystrokes is not the same as the seat
+/// receiving a message, so the answer names which one was observed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SendOutcome {
+    /// The pane changed after Enter: the input box took the text.
+    Submitted,
+    /// The pane did not change after a second Enter, or could not be read: the text may still be staged.
+    Unconfirmed,
+}
+
+/// Press Enter and decide from two pane captures whether the text was submitted. A pane identical to the
+/// one before Enter means the input did not move, so Enter is pressed once more; a pane still identical
+/// is `Unconfirmed`. A pane that changes for another reason (a spinner) reads as submitted, so
+/// `Submitted` is an observation about the pane, not a receipt from the agent.
+fn confirm_submission(
+    before: Option<String>,
+    mut press_enter: impl FnMut() -> Result<(), String>,
+    mut capture: impl FnMut() -> Option<String>,
+    settle: Duration,
+) -> Result<SendOutcome, String> {
+    let Some(before) = before else {
+        std::thread::sleep(settle);
+        press_enter()?;
+        return Ok(SendOutcome::Unconfirmed);
+    };
+    for _ in 0..SUBMIT_ENTER_ATTEMPTS {
+        std::thread::sleep(settle);
+        press_enter()?;
+        std::thread::sleep(settle);
+        match capture() {
+            Some(after) if after != before => return Ok(SendOutcome::Submitted),
+            Some(_) => {}
+            None => return Ok(SendOutcome::Unconfirmed),
+        }
+    }
+    Ok(SendOutcome::Unconfirmed)
+}
+
+/// Enter presses before a send is reported unconfirmed: the first, and one retry.
+const SUBMIT_ENTER_ATTEMPTS: usize = 2;
+
 fn tmux_command() -> Command {
     let mut cmd = Command::new("tmux");
     crate::scrub_env(&mut cmd);
@@ -123,7 +171,7 @@ impl TerminalManager {
     }
 
     /// Send text reliably using bracketed paste to avoid mangling escape chars and newlines.
-    pub fn send_text(session_name: &str, text: &str) -> Result<(), String> {
+    pub fn send_text(session_name: &str, text: &str) -> Result<SendOutcome, String> {
         let temp_dir = std::env::temp_dir();
         let buf_id = format!("agenthub-buf-{}", uuid::Uuid::new_v4());
         let temp_file = temp_dir.join(format!("{buf_id}.txt"));
@@ -154,17 +202,27 @@ impl TerminalManager {
             return Err(format!("tmux paste-buffer failed: {}", String::from_utf8_lossy(&paste_out.stderr)));
         }
 
-        // 3. Send Enter key
+        // 3. Press Enter, then check the pane moved. A TUI that was not reading when the paste landed
+        // leaves the text staged in its input box, and tmux reports success either way.
+        let before = Self::capture_pane(session_name, SUBMIT_CAPTURE_LINES).ok();
+        confirm_submission(
+            before,
+            || Self::press_enter(session_name),
+            || Self::capture_pane(session_name, SUBMIT_CAPTURE_LINES).ok(),
+            SUBMIT_SETTLE,
+        )
+    }
+
+    fn press_enter(session_name: &str) -> Result<(), String> {
         let enter = tmux_command()
             .args(["send-keys", "-t", session_name, "Enter"])
             .output()
             .map_err(|e| format!("tmux send-keys Enter failed: {e}"))?;
-
-        if !enter.status.success() {
-            return Err(format!("tmux send-keys Enter failed: {}", String::from_utf8_lossy(&enter.stderr)));
+        if enter.status.success() {
+            Ok(())
+        } else {
+            Err(format!("tmux send-keys Enter failed: {}", String::from_utf8_lossy(&enter.stderr)))
         }
-
-        Ok(())
     }
 
     /// Check if a session is currently running.
@@ -188,5 +246,76 @@ impl TerminalManager {
         } else {
             Err(String::from_utf8_lossy(&out.stderr).to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod submit_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    const ZERO: Duration = Duration::ZERO;
+
+    #[test]
+    fn a_pane_that_changes_after_enter_is_submitted_with_one_press() {
+        let presses = Cell::new(0);
+        let out = confirm_submission(
+            Some("> hello".into()),
+            || { presses.set(presses.get() + 1); Ok(()) },
+            || Some("> ".into()),
+            ZERO,
+        );
+        assert_eq!(out, Ok(SendOutcome::Submitted));
+        assert_eq!(presses.get(), 1);
+    }
+
+    #[test]
+    fn a_staged_pane_gets_one_retry_then_submits() {
+        let presses = Cell::new(0);
+        let out = confirm_submission(
+            Some("> hello".into()),
+            || { presses.set(presses.get() + 1); Ok(()) },
+            || Some(if presses.get() < 2 { "> hello".into() } else { "> ".into() }),
+            ZERO,
+        );
+        assert_eq!(out, Ok(SendOutcome::Submitted));
+        assert_eq!(presses.get(), 2);
+    }
+
+    #[test]
+    fn a_pane_that_never_moves_is_unconfirmed_after_two_presses() {
+        let presses = Cell::new(0);
+        let out = confirm_submission(
+            Some("> hello".into()),
+            || { presses.set(presses.get() + 1); Ok(()) },
+            || Some("> hello".into()),
+            ZERO,
+        );
+        assert_eq!(out, Ok(SendOutcome::Unconfirmed));
+        assert_eq!(presses.get(), 2);
+    }
+
+    #[test]
+    fn an_unreadable_pane_is_unconfirmed_not_submitted() {
+        assert_eq!(
+            confirm_submission(None, || Ok(()), || None, ZERO),
+            Ok(SendOutcome::Unconfirmed)
+        );
+        assert_eq!(
+            confirm_submission(Some("x".into()), || Ok(()), || None, ZERO),
+            Ok(SendOutcome::Unconfirmed)
+        );
+    }
+
+    #[test]
+    fn a_failed_enter_is_an_error() {
+        let out = confirm_submission(Some("x".into()), || Err("boom".into()), || None, ZERO);
+        assert_eq!(out, Err("boom".to_string()));
+    }
+
+    #[test]
+    fn outcomes_serialize_kebab_case() {
+        assert_eq!(serde_json::to_string(&SendOutcome::Submitted).unwrap(), "\"submitted\"");
+        assert_eq!(serde_json::to_string(&SendOutcome::Unconfirmed).unwrap(), "\"unconfirmed\"");
     }
 }
