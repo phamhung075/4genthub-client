@@ -158,3 +158,37 @@ func TestAVerbsOwnRefusalIsNotRewrittenAsAVersionMismatch(t *testing.T) {
 		t.Errorf("a verb's own refusal left with ExitUnavailable")
 	}
 }
+
+// TestSeatControlWritesTheFramesTheRuntimeReads pins the three seat-control frames at the wire: the plain restart is
+// still exactly {room, seat} (older callers and their tests write it), the fresh restart adds `fresh`, and the model
+// is its own action.
+func TestSeatControlWritesTheFramesTheRuntimeReads(t *testing.T) {
+	sock, requests := fakeRuntime(t, func(line string) string {
+		if strings.Contains(line, `"SetSeatModel"`) {
+			return `{"ok":true,"data":{"seat":"seat-1","model":"m"}}` + "\n"
+		}
+		return `{"ok":true,"data":{"room":"room-a","seat":"seat-1","session_name":"agenthub--room-a--seat-1","runtime":"omp","status":"running"}}` + "\n"
+	})
+	client := NewClient(sock)
+
+	if _, err := client.RestartSeat("room-a", "seat-1"); err != nil {
+		t.Fatalf("RestartSeat: %v", err)
+	}
+	if _, err := client.RestartSeatFresh("room-a", "seat-1"); err != nil {
+		t.Fatalf("RestartSeatFresh: %v", err)
+	}
+	if err := client.SetSeatModel("room-a", "seat-1", "deepseek/deepseek-flash"); err != nil {
+		t.Fatalf("SetSeatModel: %v", err)
+	}
+
+	want := []string{
+		`{"action":"RestartSeat","payload":{"room":"room-a","seat":"seat-1"}}`,
+		`{"action":"RestartSeat","payload":{"fresh":true,"room":"room-a","seat":"seat-1"}}`,
+		`{"action":"SetSeatModel","payload":{"model":"deepseek/deepseek-flash","room":"room-a","seat":"seat-1"}}`,
+	}
+	for _, frame := range want {
+		if got := strings.TrimSpace(<-requests); got != frame {
+			t.Errorf("frame = %s, want %s", got, frame)
+		}
+	}
+}

@@ -347,6 +347,27 @@ func (c *Client) RestartSeat(room, seat string) (*SeatStatus, error) {
 	return &status, nil
 }
 
+// RestartSeatFresh is RestartSeat with the seat's saved agent sessions dropped before the start, so the agent that
+// comes up has none of the previous one's context. The plain RestartSeat wire is unchanged: `fresh` is only sent here.
+func (c *Client) RestartSeatFresh(room, seat string) (*SeatStatus, error) {
+	resp, err := c.CallWithDeadline("RestartSeat", map[string]any{"room": room, "seat": seat, "fresh": true}, seatStartDeadline)
+	if err != nil {
+		return nil, err
+	}
+	var status SeatStatus
+	if err := decodeAnswer("RestartSeat", resp.Data, &status); err != nil {
+		return nil, err
+	}
+	return &status, nil
+}
+
+// SetSeatModel records the model a seat starts with in the room's own spec. A running agent keeps the model it was
+// spawned with, so the change applies at the seat's next start.
+func (c *Client) SetSeatModel(room, seat, model string) error {
+	_, err := c.Call("SetSeatModel", map[string]string{"room": room, "seat": seat, "model": model})
+	return err
+}
+
 func (c *Client) SendText(session, text string) error {
 	_, err := c.Call("SendText", map[string]string{"session": session, "text": text})
 	return err

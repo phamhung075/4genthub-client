@@ -422,7 +422,17 @@ pub enum IpcRequest {
     StartRoom(RoomSpec),
     StopRoom { room: String },
     StopSeat { room: String, seat: String },
-    RestartSeat { room: String, seat: String },
+    /// `fresh` drops the seat's saved agent sessions before the start, so the new agent begins without the
+    /// old one's context; absent means a plain restart (the wire older callers already write).
+    RestartSeat {
+        room: String,
+        seat: String,
+        #[serde(default)]
+        fresh: bool,
+    },
+    /// Record the model a seat starts with. It is written to the room's own spec, so it applies to the
+    /// seat's NEXT start (a running agent keeps the model it was spawned with).
+    SetSeatModel { room: String, seat: String, model: String },
     SendText { session: String, text: String },
     GetRoomStatus { room: String },
     ListAllRooms,

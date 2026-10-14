@@ -575,9 +575,40 @@ impl RoomSupervisor {
         TerminalManager::stop_session(&session)
     }
 
-    /// Restart one seat.
-    pub fn restart_seat(&self, room: &str, seat: &str) -> Result<SeatStatus, String> {
+    /// Record the model one seat starts with, in the room's own spec. A running agent keeps the model it
+    /// was spawned with, so this takes effect at the seat's next start.
+    pub fn set_seat_model(&self, room: &str, seat: &str, model: &str) -> Result<(), String> {
+        let model = model.trim();
+        if model.is_empty() {
+            return Err("a seat model must not be empty".into());
+        }
+        let spec_file = self.room_dir(room).join("spec.json");
+        let content = fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
+        let mut spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        let seat_spec = spec
+            .seats
+            .iter_mut()
+            .find(|s| s.seat_key == seat)
+            .ok_or_else(|| format!("seat {seat} not found in room {room}"))?;
+        seat_spec.model = Some(model.to_string());
+        // Compute the document before the file is opened for writing: a failed serialize must not leave
+        // the room's only spec truncated.
+        let spec_json = serde_json::to_string_pretty(&spec).map_err(|e| format!("serialize spec: {e}"))?;
+        fs::write(&spec_file, spec_json).map_err(|e| format!("cannot write room spec: {e}"))
+    }
+
+    /// Restart one seat. `fresh` removes the seat's saved agent sessions after the stop, so the agent that
+    /// starts has none of the previous one's context.
+    pub fn restart_seat(&self, room: &str, seat: &str, fresh: bool) -> Result<SeatStatus, String> {
         self.stop_seat(room, seat)?;
+        if fresh {
+            let sessions = self.room_dir(room).join("seats").join(seat).join("sessions");
+            match fs::remove_dir_all(&sessions) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("cannot clear the seat's saved sessions: {e}")),
+            }
+        }
         let room_dir = self.room_dir(room);
         let spec_file = room_dir.join("spec.json");
         let content = fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
@@ -2080,6 +2111,46 @@ mod tests {
                 .expect("create");
         }
         assert!(supervisor.pending_nudges().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The model a seat starts with is recorded in the room's own spec, for the seat's next start, and the
+    /// other seats' records survive the rewrite.
+    #[tokio::test]
+    async fn set_seat_model_is_written_to_the_room_spec() {
+        let dir = scratch("set-model");
+        write_spec(&dir, "lab", "dev");
+        let supervisor = supervisor_at(&dir);
+
+        supervisor.set_seat_model("lab", "dev", "  deepseek/deepseek-flash ").unwrap();
+
+        let saved: RoomSpec =
+            serde_json::from_str(&fs::read_to_string(dir.join("rooms/lab/spec.json")).unwrap()).unwrap();
+        assert_eq!(saved.seats[0].model.as_deref(), Some("deepseek/deepseek-flash"));
+        assert_eq!(saved.seats[0].runtime, "omp", "the rest of the seat record is untouched");
+
+        assert!(supervisor.set_seat_model("lab", "nobody", "m").unwrap_err().contains("not found"));
+        assert!(supervisor.set_seat_model("lab", "dev", " ").unwrap_err().contains("empty"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `fresh` removes the seat's saved agent sessions before the start, and a plain restart keeps them.
+    /// The seat is absent from the spec on purpose: the restart then stops after the clearing and before any
+    /// pane is launched, so this proves the clearing without starting an agent.
+    #[tokio::test]
+    async fn a_fresh_restart_clears_the_seats_saved_sessions_and_a_plain_one_keeps_them() {
+        let dir = scratch("fresh-restart");
+        write_spec(&dir, "lab", "dev");
+        let sessions = dir.join("rooms/lab/seats/ghost/sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(sessions.join("a.jsonl"), "x").unwrap();
+        let supervisor = supervisor_at(&dir);
+
+        assert!(supervisor.restart_seat("lab", "ghost", false).is_err());
+        assert!(sessions.join("a.jsonl").exists(), "a plain restart keeps the saved sessions");
+
+        assert!(supervisor.restart_seat("lab", "ghost", true).unwrap_err().contains("not found"));
+        assert!(!sessions.exists(), "a fresh restart clears them");
         let _ = fs::remove_dir_all(&dir);
     }
 }

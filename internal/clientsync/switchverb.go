@@ -1,13 +1,15 @@
 // The `sync switch` verb: change the LLM of a seat. The CLOUD records the new occupant first, and
-// OpenRig applies it where it can - which is not always, and the verb says so rather than pretending.
+// the agenthub runtime applies it where it can - which is not always, and the verb says so rather than
+// pretending.
 //
-// THE CLOUD CHANGE IS THE AUTHORITY, so it is recorded even when OpenRig cannot be reached: a missing
-// rig or a seat the room's own records do not list still exits 0 with `applied=none`, because the
-// operator's intent has been recorded and only the local half is outstanding.
+// THE CLOUD CHANGE IS THE AUTHORITY, so it is recorded even when the runtime cannot be reached: no
+// runtime daemon or a seat the runtime's room does not list still exits 0 with `applied=none`, because
+// the operator's intent has been recorded and only the local half is outstanding.
 //
-// A RUNTIME CHANGE CANNOT BE APPLIED IN PLACE. OpenRig has no runtime-swap primitive, so a changed
-// runtime prints the manual steps and touches no rig at all; only a model change is applied, and only
-// `--apply restart` stops and relaunches the seat fresh.
+// A RUNTIME CHANGE CANNOT BE APPLIED IN PLACE. A changed runtime prints the manual steps and touches
+// no seat at all; only a model change is applied. The model is written to the room's own spec and
+// takes effect at the seat's next start; `--apply restart` makes that start now, with the seat's saved
+// agent sessions dropped.
 package clientsync
 
 import (
@@ -15,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"regexp"
 	"strings"
 
@@ -25,9 +26,10 @@ import (
 
 const switchUsage = `usage: 4genteam sync switch ROOM SEAT [--runtime R] [--model M] [--apply none|set-model|restart] [--reason TEXT]
 
-Change the LLM of one seat. The cloud records the occupant; OpenRig applies it when it can. At least
-one of --runtime or --model is required. A runtime change cannot be applied in place, so it prints the
-manual steps instead of touching a rig.
+Change the LLM of one seat. The cloud records the occupant; the agenthub runtime applies it when it can.
+At least one of --runtime or --model is required. A runtime change cannot be applied in place, so it
+prints the manual steps instead of touching a seat. --apply set-model records the model for the seat's
+next start; --apply restart also restarts the seat now with a fresh agent context.
 `
 
 // switchRuntimes is the Python's RUNTIMES.
@@ -39,28 +41,27 @@ var switchApplyModes = []string{"none", "set-model", "restart"}
 // switchModelPattern is MODEL_RE.
 var switchModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
-// errSwitchRigNotFound is the ONE sentinel for "no rig on PATH", so the verb can tell the Python's
-// FileNotFoundError from a genuine `rig seat` command failure.
-var errSwitchRigNotFound = errors.New("`rig` executable not found on PATH")
+// errSwitchRuntimeAbsent is the ONE sentinel for "no runtime daemon answers on its socket", so the verb can
+// tell a machine that hosts no seats from a runtime that answered and refused.
+var errSwitchRuntimeAbsent = errors.New("the agenthub runtime is not running")
 
-// switchRigAnswer is one `rig` invocation: its stdout, and the failure when it had one.
-type switchRigAnswer struct {
-	stdout string
-	err    error
+// switchSetModel and switchRestartFresh are the two places this file asks the runtime to touch a seat. Vars
+// so a test drives the verb without a daemon.
+var switchSetModel = func(room, seat, model string) error {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return errSwitchRuntimeAbsent
+	}
+	return client.SetSeatModel(room, seat, model)
 }
 
-// switchRunRig is the one place this file starts `rig`, with an ARGUMENT LIST (the first element is the
-// program). A var so a test drives the verb without a rig.
-var switchRunRig = func(argv ...string) switchRigAnswer {
-	path, err := exec.LookPath(argv[0])
-	if err != nil {
-		return switchRigAnswer{err: errSwitchRigNotFound}
+var switchRestartFresh = func(room, seat string) error {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return errSwitchRuntimeAbsent
 	}
-	cmd := exec.Command(path, argv[1:]...)
-	var stdout strings.Builder
-	cmd.Stdout = &stdout
-	err = cmd.Run()
-	return switchRigAnswer{stdout: stdout.String(), err: err}
+	_, err := client.RestartSeatFresh(room, seat)
+	return err
 }
 
 // switchArgs is the parsed command line. runtimeSet/modelSet distinguish "the flag was absent" from
@@ -270,7 +271,7 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 		if modelChanged {
 			modelForRig = model
 		}
-		applied, err = switchApplyToRig(ctx, room, seat, modelForRig, mode == "restart", reason, stderr)
+		applied, err = switchApplyToRuntime(room, seat, modelForRig, mode == "restart", stderr)
 		if err != nil {
 			return fail(err)
 		}
@@ -307,79 +308,51 @@ func switchCurrentOccupant(ctx context.Context, baseURL, token, room, seat strin
 	}
 }
 
-// switchApplyToRig ports apply_to_rig: the model goes through `rig seat set-model`, `--apply restart`
-// also stops and relaunches fresh, and a seat the room's records do not list is a NOTE rather than a
-// failure. Only the COMMAND legs resolve `rig` now; the seat's canonical name is read over the client's
-// own transport, so an unreadable node record is refused rather than mistaken for an absent seat.
-func switchApplyToRig(ctx context.Context, room, seat, model string, restart bool, reason string, stderr io.Writer) (string, error) {
-	session, err := switchCanonicalSession(ctx, room, seat)
-	if err != nil {
-		return "", err
-	}
-	if session == "" {
-		fmt.Fprintf(stderr, "note: seat %s/%s is not in the room's records; the cloud change is recorded only\n", room, seat)
-		return "none", nil
-	}
-
-	var commands [][]string
+// switchApplyToRuntime applies the change through the runtime: the model is written to the room's spec,
+// `--apply restart` also restarts the seat fresh, and a seat the runtime's room does not list is a NOTE
+// rather than a failure. The runtime keys a seat by room and seat key, so no session name is read first.
+func switchApplyToRuntime(room, seat, model string, restart bool, stderr io.Writer) (string, error) {
 	if model != "" {
-		commands = append(commands,
-			[]string{"rig", "seat", "set-model", session, "--model", model, "--reason", reason})
-	}
-	if restart {
-		fmt.Fprintf(stderr, "warning: restarting %s interrupts it and loses its live context\n", session)
-		commands = append(commands, []string{"rig", "seat", "stop", session, "--reason", reason})
-		commands = append(commands, []string{"rig", "seat", "launch", session, "--fresh", "--reason", reason})
-	}
-	for _, command := range commands {
-		answer := switchRunRig(command...)
-		if answer.err == nil {
-			continue
-		}
-		if errors.Is(answer.err, errSwitchRigNotFound) {
-			// THIS VERB'S CONTRACT, kept where the absence now surfaces: a machine without `rig` on PATH
-			// is a NOTE rather than a failure, because the cloud change is the authority and has already
-			// been recorded - the local half is what is outstanding, not the operator's intent. The read
-			// no longer goes through `rig`, so this is no longer detected by the read failing.
-			fmt.Fprintln(stderr, "note: `rig` not found on PATH; the cloud change is recorded only")
-			return "none", nil
-		}
-		return "", &clientcmd.CodedError{
-			Message: fmt.Sprintf("`rig seat %s` failed with exit code %d", command[2], switchExitCode(answer.err)),
-			Code:    clientcmd.ExitRemote,
+		if applied, done, err := switchSeatStep("set-model", switchSetModel(room, seat, model), room, seat, stderr); done {
+			return applied, err
 		}
 	}
 	if restart {
+		fmt.Fprintf(stderr, "warning: restarting %s/%s interrupts it and loses its live context\n", room, seat)
+		if applied, done, err := switchSeatStep("restart", switchRestartFresh(room, seat), room, seat, stderr); done {
+			return applied, err
+		}
 		return "restart", nil
 	}
-	if len(commands) > 0 {
+	if model != "" {
+		fmt.Fprintf(stderr, "note: the model is recorded for %s/%s and applies at the seat's next start\n", room, seat)
 		return "set-model", nil
 	}
 	return "none", nil
 }
 
-// switchCanonicalSession ports canonical_session: the live canonical session name of a seat, or "" when
-// the room's records do not list that seat - which, for a question about one seat, is the same answer
-// whether the room has no seats or only other ones.
-//
-// The read is the client's own node read rather than a `rig ps` exec, so a read that FAILED is a refusal
-// rather than the answer "no such seat": the two used to arrive as one, and a verb that launched or
-// re-modelled the wrong thing on an unreadable record is exactly what the seam exists to stop. Because
-// that read is scoped to the room it was asked about, the old `rigName == room` check is redundant and is
-// gone - a row that answered is one of THIS room's rows.
-func switchCanonicalSession(ctx context.Context, room, seat string) (string, error) {
-	node, found, err := clientruntime.SeatNode(ctx, room, seat)
-	if err != nil {
-		return "", &clientcmd.CodedError{
-			Message: fmt.Sprintf("the room's node records could not be read: %v", err),
-			Code:    clientcmd.ExitRemote,
-		}
+// switchSeatStep reads one runtime call's outcome. done is true when the apply must stop here, with the
+// applied value and error to return; a nil failure continues.
+func switchSeatStep(step string, err error, room, seat string, stderr io.Writer) (applied string, done bool, outErr error) {
+	if err == nil {
+		return "", false, nil
 	}
-	if !found {
-		return "", nil
+	// THIS VERB'S CONTRACT: the cloud change is the authority and has already been recorded, so a machine
+	// whose runtime is down, or whose room does not list this seat, is a NOTE - the local half is what is
+	// outstanding, not the operator's intent.
+	if errors.Is(err, errSwitchRuntimeAbsent) {
+		fmt.Fprintln(stderr, "note: the agenthub runtime is not running; the cloud change is recorded only")
+		return "none", true, nil
 	}
-	name, _ := node["canonicalSessionName"].(string)
-	return name, nil
+	var refused *clientruntime.DaemonRefused
+	if errors.As(err, &refused) && (strings.Contains(refused.Reason, "not found in room") || strings.Contains(refused.Reason, "cannot read room spec")) {
+		fmt.Fprintf(stderr, "note: seat %s/%s is not in the runtime's records; the cloud change is recorded only\n", room, seat)
+		return "none", true, nil
+	}
+	return "", true, &clientcmd.CodedError{
+		Message: fmt.Sprintf("the runtime's %s of %s/%s failed: %v", step, room, seat, err),
+		Code:    clientcmd.ExitRemote,
+	}
 }
 
 // switchValidateChoice ports validate_choice: the allowed-values check, and the pattern check when one
