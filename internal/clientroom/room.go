@@ -331,7 +331,17 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 	inv.printPair(stdout)
 	// A stopped room is one that is no longer meant to run: leave the list first, so the restart authority
 	// never brings a safeguard back for it, even when the runtime cannot be reached to stop the seats.
-	if err := clientservices.WriteRigdState(clientservices.RemoveRig(clientservices.ReadRigdState(), inv.room)); err != nil {
+	//
+	// AND THE LIST IS NOT REWRITTEN WHEN IT COULD NOT BE READ: writing back the empty state would drop every
+	// OTHER room from the rooms meant to run - rigd would stop restarting them - and stopping this room with
+	// its row still unreadable would have rigd bring it straight back. Both are refusals, and the message
+	// names which one happened.
+	state, err := clientservices.ReadRigdState()
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam room stop: the rooms meant to run could not be read, so %s was NOT dropped from them and was not stopped: %v\n", inv.room, err)
+		return clientcmd.ExitRoomRefused
+	}
+	if err := clientservices.WriteRigdState(clientservices.RemoveRig(state, inv.room)); err != nil {
 		fmt.Fprintf(stderr, "4genteam room stop: could not drop %s from the rooms meant to run: %v\n", inv.room, err)
 		return clientcmd.ExitRoomRefused
 	}

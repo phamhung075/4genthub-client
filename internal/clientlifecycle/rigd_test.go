@@ -295,7 +295,10 @@ func TestTheSupervisionFactsArePersistedForDoctor(t *testing.T) {
 	f.survives()
 
 	f.manager.pass()
-	stored := clientservices.ReadRigdState()
+	stored, err := clientservices.ReadRigdState()
+	if err != nil {
+		t.Fatalf("ReadRigdState: %v", err)
+	}
 	if len(stored.Rigs) != 1 || stored.Rigs[0] != "demo" {
 		t.Fatalf("rigs = %v, want the listed room kept", stored.Rigs)
 	}
