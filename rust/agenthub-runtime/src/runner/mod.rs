@@ -276,19 +276,26 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
         }
     });
 
+    // The RPC reader: responses answer a pending id, events drive the pane and the seat's state, and a
+    // turn that dies retryably is resumed from here (never from the sight of an error line alone).
+    let state_path = state_file_path(state_dir, &target.room, &target.seat);
+    let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    // The text a prompt refused mid-turn left behind, waiting for the seat to be free again. It sits beside
+    // the pending slot because the mailbox (which relays the daemon's prompts) writes that slot and the
+    // reader (which sees the refusal) owns both.
+    let held: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+
     let mailbox = target.mailbox(state_dir);
+    // The mailbox relays prompts, so it is given the same pending slot the pane's own input uses: a relayed
+    // prompt whose response this runner did not recognise was how a refusal fell through to "nothing to
+    // resume" while the text was gone.
     spawn_mailbox(
         mailbox.clone(),
         to_child.clone(),
         state_dir.to_path_buf(),
         target.clone(),
+        Arc::clone(&pending),
     )?;
-
-    // The RPC reader: responses are answered to a pending id, events are mirrored to the pane.
-    // The RPC reader: responses answer a pending id, events drive the pane and the seat's state, and a
-    // turn that dies retryably is resumed from here (never from the sight of an error line alone).
-    let state_path = state_file_path(state_dir, &target.room, &target.seat);
-    let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
     // Two reports of the *same* failure for the same prompt are one failure: the reviewer measured two
     // copies of the message in flight and `resume_attempts` reaching 8 while the send bound held at 4. The
     // key is the pending id plus the error text, so a retry that fails again is a *new* failure and still
@@ -298,6 +305,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     let ready = {
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let pending_reader = Arc::clone(&pending);
+        let held_reader = Arc::clone(&held);
         let failures_reader = Arc::clone(&failures_seen);
         let to_child_reader = to_child.clone();
         let state_path = state_path.clone();
@@ -440,6 +448,34 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                         let _ =
                                             write_state(&state_path, "blocked", reason, attempts);
                                     }
+                                    Resume::Hold(reason) => {
+                                        // The agent refused this prompt because its own turn holds it: the
+                                        // text is not dropped (that was the defect) and it is not re-sent
+                                        // into the turn that refused it. It is held for the next turn, and
+                                        // the state file says so while it waits - which is what a reader
+                                        // (the daemon's `status`, an operator's `ps`) sees instead of
+                                        // `idle`, the word that made the refusal invisible.
+                                        let text =
+                                            pending_reader.lock().as_ref().map(|(_, m)| m.clone());
+                                        *pending_reader.lock() = None;
+                                        match text {
+                                            Some(text) => {
+                                                mirror(&format!(
+                                                    "held for the next turn: {reason} :: {err}"
+                                                ));
+                                                *held_reader.lock() = Some((id.to_string(), text));
+                                                let _ = write_state(
+                                                    &state_path,
+                                                    "working",
+                                                    "held: the agent refused this prompt while its turn was running",
+                                                    attempts,
+                                                );
+                                            }
+                                            None => mirror(&format!(
+                                                "rpc error, nothing to hold: {reason}"
+                                            )),
+                                        }
+                                    }
                                 }
                             }
                         } else if is_our_prompt {
@@ -451,8 +487,26 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                     other => {
                         let kind = other.unwrap_or("?");
                         match kind {
-                            "turn_start" => turn_active = true,
-                            "turn_end" => turn_active = false,
+                            "turn_start" => {
+                                turn_active = true;
+                                // A turn just started, whoever relayed the prompt that opened it (the pane's
+                                // input, the daemon's mailbox, a resume): the seat is WORKING, and a state
+                                // file that reads `idle` here is the lie the refused send was blamed on - a
+                                // sender told the text was taken while the seat was mid-turn and busy.
+                                let _ = write_state(&state_path, "working", "", attempts);
+                            }
+                            "turn_end" => {
+                                turn_active = false;
+                                // The seat is free again: a text this runner held for the next turn is
+                                // delivered now rather than kept waiting for a turn that has ended.
+                                deliver_held(
+                                    &held_reader,
+                                    &pending_reader,
+                                    &to_child_reader,
+                                    &state_path,
+                                    &mut attempts,
+                                );
+                            }
                             // omp's own bounded provider retry (`P:180-250`): log it, and do NOT stack a
                             // second retry on top — if it succeeds the prompt response is a success.
                             "auto_retry_start" => {
@@ -482,7 +536,21 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                 }
                             }
                             "agent_end" | "session_settled" => {
-                                let _ = write_state(&state_path, "idle", "", attempts);
+                                deliver_held(
+                                    &held_reader,
+                                    &pending_reader,
+                                    &to_child_reader,
+                                    &state_path,
+                                    &mut attempts,
+                                );
+                                // `idle` is a seat at its prompt, and this arm may have just handed the held
+                                // text back: a prompt in flight — or a text still waiting for the next turn —
+                                // is not that, so only a seat with neither reads as idle here.
+                                if pending_reader.lock().is_some() || held_reader.lock().is_some() {
+                                    let _ = write_state(&state_path, "working", "", attempts);
+                                } else {
+                                    let _ = write_state(&state_path, "idle", "", attempts);
+                                }
                             }
                             _ => {}
                         }
@@ -587,6 +655,7 @@ fn spawn_mailbox(
     to_child: Sender<String>,
     state_dir: PathBuf,
     target: RunnerTarget,
+    pending: Arc<Mutex<Option<(String, String)>>>,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("cannot create run dir: {e}"))?;
@@ -604,7 +673,7 @@ fn spawn_mailbox(
                     continue;
                 }
             };
-            serve_mailbox_stream(stream, &to_child, &state_dir, &target);
+            serve_mailbox_stream(stream, &to_child, &state_dir, &target, &pending);
         }
     });
     Ok(())
@@ -620,6 +689,7 @@ fn serve_mailbox_stream(
     to_child: &Sender<String>,
     state_dir: &Path,
     target: &RunnerTarget,
+    pending: &Arc<Mutex<Option<(String, String)>>>,
 ) {
     let mut reader = BufReader::new(stream);
     let state_path = state_file_path(state_dir, &target.room, &target.seat);
@@ -656,7 +726,7 @@ fn serve_mailbox_stream(
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let mut outcome = relay_frame(&value, &kind, &id, to_child, &state_path, target);
+        let mut outcome = relay_frame(&value, &kind, &id, to_child, &state_path, target, pending);
         // "The channel is closed" is true but not *which* death it was. The runner publishes that fact in
         // its state file (`SPEC` §3), so the answer a caller gets and the file a reader finds agree, and
         // neither side has to infer a cause from an error string.
@@ -703,6 +773,7 @@ fn relay_frame(
     to_child: &Sender<String>,
     state_path: &Path,
     target: &RunnerTarget,
+    pending: &Arc<Mutex<Option<(String, String)>>>,
 ) -> Result<serde_json::Value, String> {
     match kind {
         "compact" => {
@@ -732,6 +803,15 @@ fn relay_frame(
                 to_child,
                 &serde_json::json!({"id": id, "type": "prompt", "message": text}),
             )?;
+            // Remember the prompt where the pane's own input remembers its own (see `spawn_pane_input`):
+            // its response is the one this runner owns, and without the record a refusal of it answered
+            // "nothing to resume" while the text was gone — the send that printed a delivery for text the
+            // agent had refused.
+            *pending.lock() = Some((id.to_string(), text.to_string()));
+            // THE TURN IS PUBLISHED WHEN IT STARTS, not when it ends: a prompt handed to the agent is work
+            // in flight, and a state file left at `idle` is how a mid-turn seat read as a seat at its
+            // prompt while it was busy (`SPEC` §3).
+            let _ = write_state(state_path, "working", "", 0);
             Ok(serde_json::json!({"relayed": "prompt"}))
         }
         "status" => {
@@ -1235,9 +1315,19 @@ pub fn write_state(state_path: &Path, state: &str, classification: &str, attempt
 /// turn is not running, the seat is not healthy, whatever the response's id says. A retryable error with a
 /// pending prompt is resumed even when the id did not line up (the correlation gap is logged, not hidden);
 /// a retryable error with no turn to resume, and any terminal error, publishes `blocked`.
+///
+/// The third rule is the refused send (U3 run 1 and the live room, measured 2026-10-14): a prompt this
+/// runner sent, refused by the agent because a turn of its own was already running, must not be DROPPED.
+/// The refusal is terminal and the turn is live, so neither of the arms above is honest — resuming would
+/// double the work the live turn is doing, and `Nothing` is the arm that loses the text. It is held for the
+/// next turn instead, and the state file says so while it waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resume {
     Nothing(&'static str),
+    /// OUR OWN PROMPT WAS REFUSED WHILE ANOTHER TURN HOLDS THE AGENT: the text is neither dropped
+    /// (`Nothing`) nor re-sent into the turn that refused it (`Retry`) - it is HELD and delivered when that
+    /// turn ends.
+    Hold(&'static str),
     Retry {
         attempt: u32,
         delay_secs: u64,
@@ -1253,11 +1343,18 @@ pub fn decide_resume(
     error: &str,
     failures_so_far: u32,
 ) -> Resume {
+    let ours = ours_by_id || has_pending_prompt;
     if turn_active {
-        // The live turn owns the error; the seat is healthy and nothing here may touch it.
+        // The live turn owns the error; the seat is healthy and nothing here may resume it. The one
+        // exception is a prompt of OUR OWN that the agent refused outright: that turn will never take it,
+        // so holding it for the next one is the only arm that neither drops the text nor doubles the work
+        // the live turn is already doing. A retryable error is not that case — the text stays with the live
+        // turn, which is the rule parity 1 is locked on.
+        if ours && matches!(classify_failure(error), Failure::Terminal(_)) {
+            return Resume::Hold("the agent refused this prompt while its turn was running");
+        }
         return Resume::Nothing("the turn is still running");
     }
-    let ours = ours_by_id || has_pending_prompt;
     match classify_failure(error) {
         Failure::Terminal(label) => Resume::Blocked(label),
         Failure::Retryable(label) => {
@@ -1278,6 +1375,59 @@ pub fn decide_resume(
             }
         }
     }
+}
+
+/// Deliver the text a refused prompt left held, when the seat is free again.
+///
+/// The other half of `Resume::Hold`: the decision says the text must not be dropped, and this is where it
+/// comes back. It is called from the two arms that mark a turn over (`turn_end`, `agent_end` /
+/// `session_settled`) and is the only taker of the held slot, so one held text cannot be delivered twice.
+/// It is bounded exactly like the resume ladder: a seat whose agent refuses the held text every turn ends up
+/// `blocked`, named, rather than looping — and until then the text is published in the state file's
+/// classification, so the queue is visible while it waits.
+fn deliver_held(
+    held: &Arc<Mutex<Option<(String, String)>>>,
+    pending: &Arc<Mutex<Option<(String, String)>>>,
+    to_child: &Sender<String>,
+    state_path: &Path,
+    attempts: &mut u32,
+) {
+    let Some((refused_id, text)) = held.lock().take() else {
+        return;
+    };
+    *attempts += 1;
+    if *attempts > MAX_RESUME_ATTEMPTS {
+        mirror(&format!(
+            "gave up: the text {refused_id} refused was refused {MAX_RESUME_ATTEMPTS} times while held"
+        ));
+        let _ = write_state(
+            state_path,
+            "blocked",
+            "the agent kept refusing the text this runner held for it",
+            *attempts,
+        );
+        return;
+    }
+    let id = format!("runner-held-{}-{}", std::process::id(), *attempts);
+    *pending.lock() = Some((id.clone(), text.clone()));
+    if let Err(e) = send(
+        to_child,
+        &serde_json::json!({"id": id, "type": "prompt", "message": text}),
+    ) {
+        *pending.lock() = None;
+        mirror(&format!("ERROR held delivery: {e}"));
+        return;
+    }
+    mirror(&format!(
+        "delivering the text {refused_id} refused (attempt {}/{MAX_RESUME_ATTEMPTS}): the seat is free again",
+        *attempts
+    ));
+    let _ = write_state(
+        state_path,
+        "working",
+        "delivering the text this runner held for the next turn",
+        *attempts,
+    );
 }
 
 /// The pane's input: typed lines become prompts, Ctrl-C aborts the turn, oversized input is refused in
@@ -1695,17 +1845,27 @@ mod tests {
     /// Item 5 of the change, pinned: the nudge is the runner's own `text` frame on the *agent channel*, and
     /// what the agent receives is a `prompt` on the child's stdin - not a tmux `send-keys`. Fails without
     /// the wiring: an empty channel here is a nudge that reached nobody.
+    ///
+    /// The refused-send half is pinned here too: the relayed prompt is REMEMBERED in the pending slot (its
+    /// response is the one this runner owns, so a refusal of it can be held rather than dropped), and the
+    /// turn is PUBLISHED when it starts - a seat mid-turn no longer reads as `idle` while the sender is
+    /// told the text was taken.
     #[test]
     fn a_text_frame_becomes_the_agents_prompt_on_the_child_channel() {
         let (to_child, from_threads) = mpsc::channel::<String>();
         let target = RunnerTarget::parse("demo/dev").unwrap();
+        let dir = std::env::temp_dir().join(format!("runner-relay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state_path = dir.join("dev.state.json");
+        let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
         let answer = relay_frame(
             &serde_json::json!({"id": "nudge-1", "type": "text", "text": "you have work waiting"}),
             "text",
             "nudge-1",
             &to_child,
-            Path::new("/nonexistent/dev.state.json"),
+            &state_path,
             &target,
+            &pending,
         )
         .expect("a text frame is relayed");
         assert_eq!(answer, serde_json::json!({"relayed": "prompt"}));
@@ -1714,5 +1874,77 @@ mod tests {
         let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
         assert_eq!(frame["type"], "prompt");
         assert_eq!(frame["message"], "you have work waiting");
+        assert_eq!(
+            pending.lock().clone(),
+            Some(("nudge-1".to_string(), "you have work waiting".to_string())),
+            "the relayed prompt is ours: its response is matched by this id, which is what lets a refusal of it be held"
+        );
+        let published: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+        assert_eq!(published["state"], "working", "the turn is published when it starts");
+        assert_eq!(published["activity"], "working");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE REFUSED SEND, at the decision and at the queue: a prompt this runner sent is refused by the agent
+    /// because a turn of its own is running. The text must not be dropped, must not be re-sent into the turn
+    /// that refused it, and must come back when that turn ends - which is what the live room and U3 run 1
+    /// both failed on (the send printed a delivery while the text was gone).
+    #[test]
+    fn a_refused_prompt_is_held_and_delivered_when_the_turn_ends() {
+        let refusal = "Agent is already processing. Use steer() or followUp() or wait for the current turn to finish.";
+        assert_eq!(
+            decide_resume(true, true, true, refusal, 0),
+            Resume::Hold("the agent refused this prompt while its turn was running"),
+            "a refusal of our own prompt mid-turn is held, not dropped"
+        );
+        // The locked rule stands: a retryable error mid-turn is still nothing to resume, and a refusal that
+        // is not ours is not held either.
+        assert_eq!(
+            decide_resume(true, true, true, "RPC response exceeded the transport limit", 0),
+            Resume::Nothing("the turn is still running")
+        );
+        assert_eq!(
+            decide_resume(false, true, false, refusal, 0),
+            Resume::Nothing("the turn is still running")
+        );
+
+        let dir = std::env::temp_dir().join(format!("runner-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state_path = dir.join("dev.state.json");
+        let (to_child, from_threads) = mpsc::channel::<String>();
+        let held: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let mut attempts: u32 = 0;
+        *held.lock() = Some(("send-1-1".to_string(), "the text the agent refused".to_string()));
+        deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
+        let line = from_threads
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the held text is delivered");
+        let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
+        assert_eq!(frame["type"], "prompt");
+        assert_eq!(frame["message"], "the text the agent refused");
+        assert!(held.lock().is_none(), "the slot is emptied: nothing is delivered twice");
+        assert!(pending.lock().is_some(), "the redelivered prompt is ours to watch");
+        assert_eq!(attempts, 1);
+        let published: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+        assert_eq!(published["state"], "working");
+        assert_eq!(published["activity"], "working");
+
+        // Bounded, like the resume ladder: past the bound the seat is `blocked` with the reason and nothing
+        // more is sent.
+        *held.lock() = Some(("send-1-2".to_string(), "refused again".to_string()));
+        attempts = MAX_RESUME_ATTEMPTS;
+        deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
+        assert_eq!(attempts, MAX_RESUME_ATTEMPTS + 1);
+        assert!(
+            from_threads.recv_timeout(Duration::from_millis(100)).is_err(),
+            "a bounded ladder does not keep sending"
+        );
+        let published: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+        assert_eq!(published["state"], "blocked");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

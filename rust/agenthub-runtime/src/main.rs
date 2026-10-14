@@ -214,10 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let answer = supervisor
                 .deliver_text(&session, &text)
                 .map_err(|e| format!("send error: {e}"))?;
-            match answer["outcome"].as_str() {
-                Some("unconfirmed") => println!("pasted to {session}, submission unconfirmed"),
-                _ => println!("delivered to {session}"),
-            }
+            println!("{}", send_receipt(&session, &answer));
             Ok(())
         }
 
@@ -272,10 +269,69 @@ fn shellexpand(path: &str) -> String {
     path.to_string()
 }
 
+/// The one line `agenthub-runtime send` prints for the answer the supervisor produced.
+///
+/// ONLY THE OUTCOME THAT PROVES A SUBMISSION IS A DELIVERY. The runtime has two delivery paths and two
+/// vocabularies: a seat it hosts no runner for gets a pane paste, answered `submitted` (the pane changed
+/// after Enter) or `unconfirmed` (it did not); a runner seat answers `relayed` the moment the runner wrote
+/// the frame into the agent's channel - which is NOT the agent having taken it, its own answer going to the
+/// pane and never back here. This printed `delivered to` for EVERY answer except `unconfirmed`, the refusal
+/// included. `4genteam send` carried the same rule and was cured of it; this is the second consumer of that
+/// document, so it follows the same rule: everything but `submitted` says only what is known.
+fn send_receipt(session: &str, answer: &serde_json::Value) -> String {
+    match answer["outcome"].as_str() {
+        Some("submitted") => format!("delivered to {session}"),
+        Some("relayed") => format!(
+            "relayed to {session}, submission unconfirmed: the runner wrote the frame into the agent's channel and the agent's own answer is not reported back"
+        ),
+        Some("unconfirmed") => format!("pasted to {session}, submission unconfirmed"),
+        Some(other) => format!(
+            "submission unconfirmed for {session}: the runtime answered {other:?}, which is no submission verdict"
+        ),
+        None => format!(
+            "submission unconfirmed for {session}: the runtime's answer carries no submission verdict"
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::process::Command;
+
+    /// The rule the client's own receipt was cured of, applied to the runtime's second consumer of the same
+    /// document: only the outcome that proves a submission is a delivery.
+    #[test]
+    fn only_a_submission_is_a_delivery() {
+        let of = |doc: &str| send_receipt("room-a-dev", &serde_json::from_str(doc).unwrap());
+        assert_eq!(
+            of(r#"{"delivered":"room-a-dev","outcome":"submitted"}"#),
+            "delivered to room-a-dev"
+        );
+        assert!(
+            of(r#"{"delivered":"room-a-dev","outcome":"relayed","runner":{"relayed":"prompt"}}"#)
+                .starts_with("relayed to room-a-dev, submission unconfirmed"),
+            "a relayed frame is the runner having taken it, not the agent"
+        );
+        assert_eq!(
+            of(r#"{"delivered":"room-a-dev","outcome":"unconfirmed"}"#),
+            "pasted to room-a-dev, submission unconfirmed"
+        );
+        for other in [
+            r#"{"delivered":"room-a-dev"}"#,
+            r#"{"delivered":"room-a-dev","outcome":"queued"}"#,
+        ] {
+            let line = of(other);
+            assert!(
+                line.starts_with("submission unconfirmed for room-a-dev"),
+                "{line}"
+            );
+            assert!(
+                !line.contains("delivered to"),
+                "a delivery was claimed for {other}: {line}"
+            );
+        }
+    }
 
     /// The list is a list of *prefixes* because the addresses this runtime must not pass on change names over
     /// time, and the rename left an alias the client still honours. The second half is the boundary: removing
