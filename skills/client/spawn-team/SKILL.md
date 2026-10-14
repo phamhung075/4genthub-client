@@ -44,7 +44,7 @@ One file per rig: `~/.config/4genthub/briefs/<rig>.txt`. It is sent verbatim to 
 
 ### Spawning a new team (new project, new rig)
 
-1. Write a rig spec: `pods[].members[]` with `id`, `agent_ref`, `runtime`, `model`, `cwd`, `permission_policy`, plus `edges` (`delegates_to`, `collaborates_with`, `escalates_to`). Working examples for two runtimes: `~/.config/4genthub/seats/<rig>/rig/rig-omp.yaml` (omp/DeepSeek) and `rig-claude.yaml` (claude-code).
+1. Write a rig spec: `pods[].members[]` with `id`, `agent_ref`, `runtime`, `model`, `cwd`, `permission_policy`, plus **`edges`, which are required: a room is never created without them.** Kinds: `delegates_to`, `collaborates_with`, `escalates_to`, `can_observe`, `spawned_by`. Minimum: the lead `delegates_to` every other seat, each worker `delegates_to` the reviewer, every non-lead seat `escalates_to` the lead. Check them after the room is up: `4genteam whoami --json` returns `edges`, and the cloud lists them under `/rooms/<room>/seats/<seat>/links`. Working examples for two runtimes: `~/.config/4genthub/seats/<rig>/rig/rig-omp.yaml` (omp/DeepSeek) and `rig-claude.yaml` (claude-code).
 2. `rig up <spec.yaml> --cwd <project-root>`; a one-seat rig needs no spec at all: `rig create <name>`.
 3. Resize in place: `rig grow <rig-id> <members...>`, `rig add`, `rig shrink`, `rig remove`.
 4. Write `~/.config/4genthub/briefs/<rig>.txt` and run `4genteam continue <rig>` to brief it — the same command as continuing an existing team.

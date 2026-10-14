@@ -127,6 +127,10 @@ func loadTeam(teamDir string) (*team, error) {
 		to, _ := link["to"].(string)
 		loaded.links = append(loaded.links, teamLink{from: from, kind: kind, to: to})
 	}
+	if len(loaded.seats) > 1 && len(loaded.links) == 0 {
+		return nil, usageError(fmt.Sprintf(
+			"cannot load team definition from %s: a room of %d seats needs its links; with none, no seat can message another and the topology has no edges", teamDir, len(loaded.seats)))
+	}
 	return loaded, nil
 }
 
