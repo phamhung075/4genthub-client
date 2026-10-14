@@ -2,12 +2,15 @@ package clientruntime
 
 import (
 	"bufio"
+	"bytes"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
 // The rail's frames are pinned here as the exact line the client writes, captured at a real Unix socket - the
@@ -32,6 +35,69 @@ const queueTestRowJSON = `{` +
 	`{"transition_id":2,"qitem_id":"q-item-7","ts":"2026-10-14T00:00:01Z","state":"in-progress",` +
 	`"actor_session":"sess-dst","transition_note":"claimed"}` +
 	`]}`
+
+// AND THE OPERATOR'S OWN VERB REFUSES TOO, not only the typed client underneath it. queueListRuntime decoded the
+// answer by hand, and json.Marshal(nil) is `null`: unmarshalling null into a nil slice SUCCEEDS, so a runtime that
+// answered a bare ok envelope printed "Measured 0 pending items" at exit 0 - a reading indistinguishable from a real
+// empty queue, which is the lie this unit exists to remove, told on the verb an operator runs. The third case is the
+// control: a real empty array must still read as zero rows.
+func TestQueueListRefusesAnAnswerItCannotRead(t *testing.T) {
+	t.Setenv(agentHubRoomEnv, "room-a")
+	t.Setenv(agentHubSeatEnv, "seat-1")
+
+	for _, tc := range []struct {
+		name      string
+		response  string
+		wantCode  int
+		wantOut   string
+		wantInErr string
+	}{
+		{
+			name:      "a bare ok envelope carries no document",
+			response:  `{"ok":true}` + "\n",
+			wantCode:  clientcmd.ExitRoomRefused,
+			wantInErr: "carried no data",
+		},
+		{
+			name:      "a document of the wrong shape",
+			response:  okDataResponse(`{"not":"the array this verb reads"}`),
+			wantCode:  clientcmd.ExitRoomRefused,
+			wantInErr: "could not be read",
+		},
+		{
+			name:     "a real empty array is a real reading",
+			response: okDataResponse(`[]`),
+			wantCode: clientcmd.ExitOK,
+			wantOut:  "Measured 0 pending items",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, requests := captureQueueRequest(t, tc.response)
+			t.Setenv(RuntimeSocketEnv, client.SocketPath)
+
+			var stdout, stderr bytes.Buffer
+			code := queueListRuntime("", false, &stdout, &stderr)
+
+			if line := requestLine(t, requests); !strings.Contains(line, `"action":"QueueList"`) {
+				t.Fatalf("request frame = %q, want the QueueList action", line)
+			}
+			if code != tc.wantCode {
+				t.Fatalf("exit = %d, want %d (stdout %q, stderr %q)",
+					code, tc.wantCode, stdout.String(), stderr.String())
+			}
+			if tc.wantOut != "" && !strings.Contains(stdout.String(), tc.wantOut) {
+				t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tc.wantOut)
+			}
+			if tc.wantInErr != "" && !strings.Contains(stderr.String(), tc.wantInErr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tc.wantInErr)
+			}
+			// THE LIE ITSELF, asserted rather than assumed: a refusal may never print a queue reading.
+			if tc.wantCode != clientcmd.ExitOK && strings.Contains(stdout.String(), "pending items") {
+				t.Fatalf("a refusal printed a reading: %q", stdout.String())
+			}
+		})
+	}
+}
 
 // captureQueueRequest answers exactly one call: it accepts one connection, reads the request line the client
 // writes, hands that line to the test, and replies with the canned response (which must end in a newline).

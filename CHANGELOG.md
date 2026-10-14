@@ -3,6 +3,29 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the queue verb reads through the one decoder, so a bare ok envelope cannot print a queue
+
+### Changed
+- `internal/clientruntime/command.go` — **`queueListRuntime` stops decoding the runtime's answer by hand.** It did
+  `json.Marshal(resp.Data)` → `json.Unmarshal(raw, &rows)` → `if len(rows) == 0 { print "Measured 0 pending items" }`,
+  and `json.Marshal(nil)` is `null`: unmarshalling null into a nil slice SUCCEEDS, so a runtime that answered a bare
+  `{"ok":true}` printed "0 pending" at exit 0 — indistinguishable from a real empty queue. That is the defect
+  `decodeAnswer` was fixed for, re-introduced on the one verb an operator actually runs (`--json` printed `null` for
+  the same reason). The typed read is taken FIRST and its refusal is what the verb returns, so the same document now
+  reports the room contract's exit 3 on both paths; the runtime's own bytes are still printed for `--json`, but only
+  once they have been read.
+
+### Verified
+- `TestQueueListRefusesAnAnswerItCannotRead` (new): a bare ok envelope refuses with "carried no data" and a
+  wrong-shaped document refuses with "could not be read", both at exit 3 and both asserted NOT to print any queue
+  reading; the control — a real empty array — still prints "Measured 0 pending items" at exit 0.
+- On the wire, `queue list` against a fake runtime on `OPENRIG_RUNTIME_SOCKET`:
+  bare `{"ok":true}` → "the runtime's QueueList answer could not be read … carried no data at all", exit 3 (before:
+  "Measured 0 pending items", exit 0); wrong shape → refusal, exit 3 (before: exit 1, because this site returned
+  `ExitRemote` while the typed path returns the room contract's 3); real empty array → "Measured 0 pending items",
+  exit 0.
+- `go test ./...` green, `go vet` clean, `gofmt -l` empty on the two files touched.
+
 ## 2026-10-14 — the daemon's refusal is a different fact from an answer nobody could read
 
 ### Changed

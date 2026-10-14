@@ -355,20 +355,22 @@ func queueListRuntime(destination string, asJSON bool, stdout, stderr io.Writer)
 		fmt.Fprintf(stderr, "4genteam queue: the runtime at %s refused it: %v\n", DefaultSocketPath(), err)
 		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
 	}
+	// THE ONE DECODER, EVEN THOUGH THIS VERB PRINTS THE RUNTIME'S OWN DOCUMENT FOR --json. Decoding by hand here
+	// re-introduced the defect decodeAnswer was fixed for, on the verb an operator actually runs: json.Marshal(nil) is
+	// `null`, unmarshalling null into a nil slice SUCCEEDS, and a bare ok envelope therefore printed "Measured 0
+	// pending items" at exit 0 - identical to a real empty queue, which is the same class of lie as printing blanks.
+	// The typed read is taken FIRST, so a document nobody can read refuses at the room contract's exit 3 (the same
+	// code the typed path carries, rather than this site's ExitRemote), and the runtime's bytes are only printed once
+	// they have been read.
+	var rows []QueueRow
+	if err := decodeAnswer("QueueList", resp.Data, &rows); err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitRoomRefused)
+	}
 	if asJSON {
 		_, _ = stdout.Write(runtimeJSONDocument(resp.Data))
 		_, _ = stdout.Write([]byte("\n"))
 		return clientcmd.ExitOK
-	}
-	raw, err := json.Marshal(resp.Data)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam queue: could not read the runtime's queue document: %v\n", err)
-		return clientcmd.ExitRemote
-	}
-	var rows []QueueRow
-	if err := json.Unmarshal(raw, &rows); err != nil {
-		fmt.Fprintf(stderr, "4genteam queue: could not read the runtime's queue document: %v\n", err)
-		return clientcmd.ExitRemote
 	}
 	if len(rows) == 0 {
 		fmt.Fprintf(stdout, "Measured 0 pending items for %s on the runtime at %s.\n", orDash(destination), DefaultSocketPath())
