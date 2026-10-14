@@ -3,6 +3,11 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the TypeSafe skill joins the shared seat skills
+
+### Added
+- `skills/share/typesafe-ai/` (`SKILL.md`, `LICENSE`), copied unchanged from `git@github.com:typesafe-ai/skills.git` at `65a39f3` (v0.5.7). Every seat, whatever its LLM, receives it through the share tier like the other shared skills. It teaches the TypeSafe API: the three question types, the architectural patterns, and how to structure evaluations (Jev is a System One model).
+
 ## 2026-10-13 — `4genteam ps`, and the runtime-switch skills name the right `rig`
 
 ### Added
