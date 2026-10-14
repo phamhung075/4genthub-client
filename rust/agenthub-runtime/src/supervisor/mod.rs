@@ -420,8 +420,8 @@ impl RoomSupervisor {
             }
             if !TerminalManager::is_session_alive(&session_name) {
                 return Err(format!(
-                    "seat {room}/{} died before it reported readiness (its pane is gone within {}; pid {pid} \
-                     was the session record tmux returned)",
+                    "seat {room}/{} died before it reported readiness (its pane is gone and no ready frame ever \
+                     arrived: waited up to {}; pid {pid} was the session record tmux returned)",
                     seat.seat_key,
                     if signal.is_some() {
                         format!("{SEAT_READY_WINDOW_SECS}s")
@@ -1294,6 +1294,15 @@ mod tests {
         assert!(
             !err.contains("did not survive"),
             "a survival verdict is the defect this fix removes, got: {err}"
+        );
+        assert!(
+            err.contains("no ready frame ever arrived"),
+            "the refusal must say what happened - the pane went away and no ready frame arrived - got: {err}"
+        );
+        assert!(
+            !err.contains("pane is gone within"),
+            "naming the window as an elapsed time reads as though the pane survived it and then went, when the \
+             window is the bound the wait was judged against, got: {err}"
         );
 
         let _ = supervisor.stop_seat(&room, &key);

@@ -3,6 +3,30 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the window gate's minors: the pane-gone refusal says what happened, and the heading it replaced is back
+
+### Fixed
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — **the pane-gone refusal no longer names the window as if it were an
+  elapsed time.** It read `its pane is gone within 60s`, which reads as though the pane survived the window and then
+  went; the window is the BOUND the wait was judged against, not the observation. It now reads `its pane is gone and
+  no ready frame ever arrived: waited up to {}`, and the arm that owns this branch
+  (`a_dead_non_omp_seat_is_refused_by_its_real_cause`) asserts both halves — the new sentence present, the old phrase
+  absent — so the next edit cannot slide back. The old wording read worst in the non-omp case, where the bound it
+  printed was the 1500 ms grace period: `gone within 1500ms`.
+- `CHANGELOG.md` — **the `be18ee5` entry had replaced its predecessor's heading**, so the `8915126` unit's
+  `### Changed`/`### Verified` nested under the window entry and its title survived nowhere. Restored verbatim:
+  `## 2026-10-14 — the readiness verdict and its message: a restart cannot inherit the previous generation's green, a
+  verdict near the window reaches the client, and the proof travels with the state`. Two entries for one date are
+  normal in this file.
+
+### Verified
+- `cargo +stable test` in `rust/agenthub-runtime` → **54 passed / 0 failed**, the target arm red before the message
+  change (its failure output carried the old wording) and green after.
+- NOT changed, and refused rather than fixed: the gate's third minor (a stale death record merely *touched* after a
+  launch ends the wait as "died before it reported readiness"). An mtime cannot tell a rewrite from a touch, so the
+  cause is as accurate as that predicate can be; it fails safe (never a false green). Distinguishing them needs
+  content-based generation marking, which is a design change and not a wording one.
+
 ## 2026-10-14 — the readiness window now covers a first launch, and a dead seat is reported where it dies
 
 ### Changed
@@ -47,7 +71,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     not reproduce the reviewer's 20.18 s cold start. That number is what justifies the window; mine neither
     reproduces nor contradicts it, and 20.18 s is inside 60 s by construction.
 
-
+## 2026-10-14 — the readiness verdict and its message: a restart cannot inherit the previous generation's green, a verdict near the window reaches the client, and the proof travels with the state
 
 ### Changed
 - `rust/agenthub-runtime/src/supervisor/mod.rs` — **the omp readiness proof is a HANDSHAKE, not an artifact.**
