@@ -23,7 +23,8 @@ session.
 
 ### Tested
 
-- `cargo test --offline`: 67 passed (2 new: the model is persisted and the other fields untouched; a fresh
-  restart clears the sessions and a plain one keeps them).
+- `cargo test --offline`: 67 passed (2 new: the model is persisted and the other fields untouched; the clearing
+  that a fresh restart does drops one seat's saved sessions, leaves another's, and tolerates none; it is tested
+  apart from the tmux stop, whose process-wide `TMUX_TMPDIR` made the first version flaky).
 - `go test ./internal/clientsync ./internal/clientruntime`: the switch tests now drive a runtime stub; new
   tests pin the absent-runtime, unknown-seat and failed-call branches and the three wire frames.

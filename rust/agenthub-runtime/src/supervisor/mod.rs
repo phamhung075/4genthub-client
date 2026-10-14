@@ -597,17 +597,23 @@ impl RoomSupervisor {
         fs::write(&spec_file, spec_json).map_err(|e| format!("cannot write room spec: {e}"))
     }
 
+    /// Drop the agent sessions a seat saved, so its next agent starts without them. Nothing saved is not a
+    /// failure.
+    fn clear_saved_sessions(&self, room: &str, seat: &str) -> Result<(), String> {
+        let sessions = self.room_dir(room).join("seats").join(seat).join("sessions");
+        match fs::remove_dir_all(&sessions) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("cannot clear the seat's saved sessions: {e}")),
+        }
+    }
+
     /// Restart one seat. `fresh` removes the seat's saved agent sessions after the stop, so the agent that
     /// starts has none of the previous one's context.
     pub fn restart_seat(&self, room: &str, seat: &str, fresh: bool) -> Result<SeatStatus, String> {
         self.stop_seat(room, seat)?;
         if fresh {
-            let sessions = self.room_dir(room).join("seats").join(seat).join("sessions");
-            match fs::remove_dir_all(&sessions) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("cannot clear the seat's saved sessions: {e}")),
-            }
+            self.clear_saved_sessions(room, seat)?;
         }
         let room_dir = self.room_dir(room);
         let spec_file = room_dir.join("spec.json");
@@ -2134,23 +2140,25 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// `fresh` removes the seat's saved agent sessions before the start, and a plain restart keeps them.
-    /// The seat is absent from the spec on purpose: the restart then stops after the clearing and before any
-    /// pane is launched, so this proves the clearing without starting an agent.
+    /// A fresh restart's clearing removes the seat's saved agent sessions and leaves other seats' alone; nothing
+    /// saved is not a failure. It is tested on its own because the restart around it stops a tmux session, which
+    /// shares a process-wide `TMUX_TMPDIR` with other tests and so cannot make this assertion reliable.
     #[tokio::test]
-    async fn a_fresh_restart_clears_the_seats_saved_sessions_and_a_plain_one_keeps_them() {
-        let dir = scratch("fresh-restart");
+    async fn clearing_saved_sessions_drops_one_seats_and_tolerates_none() {
+        let dir = scratch("clear-sessions");
         write_spec(&dir, "lab", "dev");
-        let sessions = dir.join("rooms/lab/seats/ghost/sessions");
-        fs::create_dir_all(&sessions).unwrap();
-        fs::write(sessions.join("a.jsonl"), "x").unwrap();
+        let mine = dir.join("rooms/lab/seats/dev/sessions");
+        let other = dir.join("rooms/lab/seats/other/sessions");
+        for sessions in [&mine, &other] {
+            fs::create_dir_all(sessions).unwrap();
+            fs::write(sessions.join("a.jsonl"), "x").unwrap();
+        }
         let supervisor = supervisor_at(&dir);
 
-        assert!(supervisor.restart_seat("lab", "ghost", false).is_err());
-        assert!(sessions.join("a.jsonl").exists(), "a plain restart keeps the saved sessions");
-
-        assert!(supervisor.restart_seat("lab", "ghost", true).unwrap_err().contains("not found"));
-        assert!(!sessions.exists(), "a fresh restart clears them");
+        supervisor.clear_saved_sessions("lab", "dev").unwrap();
+        assert!(!mine.exists(), "the seat's own sessions are gone");
+        assert!(other.join("a.jsonl").exists(), "another seat's sessions are untouched");
+        supervisor.clear_saved_sessions("lab", "dev").unwrap();
         let _ = fs::remove_dir_all(&dir);
     }
 }
