@@ -202,9 +202,15 @@ func block(head, style, text string, width, lines int) string {
 	if len(rawRows) == 0 {
 		rawRows = []string{""}
 	}
+	// width is the whole line: the head and the 4-column indent come out of it, so a wrapped row never
+	// outgrows the pane and the terminal never wraps it a second time to column 0.
+	rowWidth := width
+	if width > 0 {
+		rowWidth = max(20, width-max(4, visibleLen(head)))
+	}
 	var rows []string
 	for _, r := range rawRows {
-		rows = append(rows, wrapRunes(r, width)...)
+		rows = append(rows, wrapRunes(r, rowWidth)...)
 	}
 	if len(rows) == 0 {
 		rows = []string{""}
