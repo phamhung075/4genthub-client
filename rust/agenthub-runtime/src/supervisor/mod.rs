@@ -3,7 +3,7 @@ use crate::pty::TerminalManager;
 use crate::queue::{ListFilter, QueueStore};
 use crate::types::*;
 use chrono::{DateTime, Utc};
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -122,28 +122,7 @@ fn readiness_refusal(
 pub struct RoomSupervisor {
     base_state_dir: PathBuf,
     active_rooms: Arc<Mutex<HashMap<String, RoomSpec>>>,
-    /// The room's queue store, opened on first use and held for as long as the daemon serves the room.
-    /// SQLite is the rail: one connection per room, the same object every verb reads, so a write is
-    /// visible to the next read without a re-open in between.
-    queue_stores: Arc<Mutex<HashMap<String, QueueStore>>>,
     hook_bus: HookBus,
-}
-
-/// A room's open queue store, borrowed from the supervisor's cache for the length of one verb. Derefs to
-/// the store, so a caller writes `store.create(input)` exactly as it would on an owned store.
-pub struct RoomQueueStore<'a> {
-    stores: MutexGuard<'a, HashMap<String, QueueStore>>,
-    room: String,
-}
-
-impl std::ops::Deref for RoomQueueStore<'_> {
-    type Target = QueueStore;
-
-    fn deref(&self) -> &QueueStore {
-        self.stores
-            .get(&self.room)
-            .expect("the store is inserted for this room before the borrow is handed out")
-    }
 }
 
 /// The one read of a seat's own state file and the room's rail that both the status row and the nudge
@@ -214,7 +193,6 @@ impl RoomSupervisor {
         Self {
             base_state_dir,
             active_rooms: Arc::new(Mutex::new(HashMap::new())),
-            queue_stores: Arc::new(Mutex::new(HashMap::new())),
             hook_bus,
         }
     }
@@ -229,13 +207,22 @@ impl RoomSupervisor {
         self.base_state_dir.join("rooms").join(room)
     }
 
-    /// The room's durable queue store.
+    /// The room's durable queue store, OPENED FOR THIS REQUEST.
+    ///
+    /// The rail is a file the room owns, and it can be replaced while the daemon lives: a rebuilt room, a
+    /// restore, or an instrument's own hygiene (`rm -f queue.sqlite`, which the U3 harness does between legs)
+    /// all hand the daemon a new file at the same path. A store held from the room's first use would keep
+    /// writing into the deleted inode - SQLite answers `attempt to write a readonly database`, naming a
+    /// permission on a file that is writable, and keeps serving the OLD rows as fact - and nothing but a
+    /// daemon restart would clear it. So nothing is held: every verb opens the file it is about to use, and
+    /// the next request cannot see a file that is no longer there. A room's descriptors then live as long as
+    /// its request instead of as long as the daemon has ever touched the room.
     ///
     /// A room that was never started has no directory and no rail, so a queue verb against it is a refusal
     /// naming the room — not an empty queue, which is the same untrue answer as a bare `[]` (Rule 2: no
     /// answer where there is no record). A *stopped* room keeps its directory and its rows, and stays
     /// readable.
-    pub fn queue_store(&self, room: &str) -> Result<RoomQueueStore<'_>, String> {
+    pub fn queue_store(&self, room: &str) -> Result<QueueStore, String> {
         let room_dir = self.room_dir(room);
         if !room_dir.is_dir() {
             return Err(format!(
@@ -243,14 +230,7 @@ impl RoomSupervisor {
                 room_dir.display()
             ));
         }
-        let mut stores = self.queue_stores.lock();
-        if !stores.contains_key(room) {
-            stores.insert(room.to_string(), QueueStore::open(&room_dir)?);
-        }
-        Ok(RoomQueueStore {
-            stores,
-            room: room.to_string(),
-        })
+        QueueStore::open(&room_dir)
     }
 
     /// Derive standard session name: agenthub--<room>--<seat>
@@ -558,9 +538,8 @@ impl RoomSupervisor {
         }
 
         self.active_rooms.lock().remove(room);
-        // The room's store goes with its seats; the next verb for this room opens the file fresh, which is
-        // what makes a stopped room's rows durable-but-not-cached rather than lost.
-        self.queue_stores.lock().remove(room);
+        // Nothing else is dropped with the room: the rail is opened per request and holds no state here, so
+        // a stopped room's rows are durable-but-not-cached without the daemon having to remember anything.
         // A spill outlives no room (`SPEC-runner-relay-protocol-2026-10-13.md` §2): its payloads are the
         // room's bytes, and a tree left behind would be a payload no handle can name again.
         let _ = crate::frame::remove_spill_trees(&room_dir);
@@ -2119,7 +2098,8 @@ mod tests {
         let supervisor = supervisor_at(&dir);
         let mut expected_ids = Vec::new();
         {
-            // Scoped: `queue_store` holds the store mutex for the borrow, and `waiting_rows` takes it again.
+            // The three rows are written before the join reads, and the join opens the rail for itself - the
+            // same path a seat's own request takes.
             let store = supervisor.queue_store("demo").expect("open the rail");
             for (to, summary) in [
                 (session.as_str(), "native"),
@@ -2171,6 +2151,90 @@ mod tests {
         for id in expected_ids {
             assert!(waiting.contains(&id), "{id} missing from {waiting:?}");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE RAIL IS A FILE THE ROOM OWNS, AND IT CAN BE REPLACED UNDER A LIVE DAEMON — a rebuilt room, a
+    /// restore, or an instrument's own hygiene (`rm -f queue.sqlite`, which the U3 harness does between legs)
+    /// hands the daemon a new file at the same path. A store held from the room's first use went on writing
+    /// into the deleted inode: SQLite refused it with `attempt to write a readonly database` (naming a
+    /// permission on a file that is writable) and every read kept answering the OLD rows as fact, for the rest
+    /// of the daemon's life. Nothing is held now, so the next verb opens the file it is about to use.
+    ///
+    /// The check is the one the defect needs: after the replacement, the next write is IN THE NEW FILE — the
+    /// moved file keeps only the row it already had — and a read stops reporting the old rows as this room's.
+    #[tokio::test]
+    async fn a_replaced_rail_is_the_one_the_next_verb_uses() {
+        let dir = scratch("replaced-rail");
+        let seat = seat_key("replaced-rail");
+        write_spec(&dir, "demo", &seat);
+        let supervisor = supervisor_at(&dir);
+        let room_dir = dir.join("rooms").join("demo");
+        let rail = room_dir.join("queue.sqlite");
+
+        let before = supervisor
+            .queue_store("demo")
+            .expect("open the rail")
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: seat.clone(),
+                summary: "before the room was rebuilt".into(),
+                ..Default::default()
+            })
+            .expect("create");
+        assert!(
+            rail.is_file(),
+            "the first verb left the rail at {}",
+            rail.display()
+        );
+
+        // Moved aside rather than deleted, so the test can read afterwards what the daemon did NOT do: write
+        // here. It goes into a room-shaped directory of its own, so the same store API can read it back.
+        let moved_dir = dir.join("rooms").join("demo-before-the-rebuild");
+        fs::create_dir_all(&moved_dir).expect("a home for the replaced rail");
+        let moved = moved_dir.join("queue.sqlite");
+        fs::rename(&rail, &moved).expect("move the rail aside");
+        assert!(!rail.is_file(), "the room's rail is gone from its path");
+
+        let after = supervisor
+            .queue_store("demo")
+            .expect("the next verb opens the file it is about to use")
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: seat.clone(),
+                summary: "after the room was rebuilt".into(),
+                ..Default::default()
+            })
+            .expect("create into the new file");
+
+        let rows = supervisor
+            .queue_store("demo")
+            .expect("open the rail")
+            .list(&ListFilter {
+                active_only: true,
+                ..Default::default()
+            })
+            .expect("list");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the new rail holds the new row and not the old one: {rows:?}"
+        );
+        assert_eq!(rows[0].qitem_id, after.qitem_id);
+
+        let stale = QueueStore::open(&moved_dir)
+            .expect("the moved file is still a rail")
+            .list(&ListFilter {
+                active_only: true,
+                ..Default::default()
+            })
+            .expect("list the moved rail");
+        assert_eq!(stale.len(), 1);
+        assert_eq!(
+            stale[0].qitem_id, before.qitem_id,
+            "the moved file kept its own row: the write went to the new file, not into the deleted inode"
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 

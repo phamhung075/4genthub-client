@@ -762,7 +762,12 @@ impl QueueStore {
     }
 }
 
-/// The store's own handle. One per room, held by the daemon.
+/// A handle on one room's rail.
+///
+/// Opening is per use, never cached: the file can be replaced under a live daemon (a rebuilt room, a
+/// restore, an instrument's own `rm -f queue.sqlite`), so a handle that outlives the request that opened it
+/// is a handle on a file that may no longer be there - and a write into a deleted inode is answered
+/// `attempt to write a readonly database` while a read keeps serving the old rows as fact.
 pub struct QueueStore {
     conn: rusqlite::Connection,
 }
