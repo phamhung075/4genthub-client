@@ -530,3 +530,15 @@ func TestAPaneHeaderGoesToThePaneTitleAsPlainText(t *testing.T) {
 		t.Errorf("escape sequences in the pane title: %q", titles[1])
 	}
 }
+
+func TestEditShowsRemovedAndAddedLinesApart(t *testing.T) {
+	out := strings.Join(events(toolCall("edit", map[string]any{"i": "Fix it", "path": "a.go", "old_string": "x := 1\ny := 2", "new_string": "x := 3"}), 200, false, 25), "\n")
+	for _, want := range []string{"a.go", fg(removedColour) + "x := 1", fg(removedColour) + "y := 2", fg(addedColour) + "x := 3"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %q", want, out)
+		}
+	}
+	if strings.Index(out, "-"+reset) > strings.Index(out, "+"+reset) {
+		t.Errorf("removed lines must come before added lines: %q", out)
+	}
+}

@@ -731,6 +731,14 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 		}
 		head := fmt.Sprintf("%s%s%s %s%s", bold, fg(style.colour), style.glyph, label, reset)
 		intent := callIntent(arguments)
+		if path, removed, added, isEdit := editDiff(name, arguments); isEdit {
+			lead := head + "  " + fg(255) + path + reset
+			if intent != "" {
+				lead += "  " + fg(250) + "\033[3m" + intent + reset
+			}
+			out = append(out, lead+"\n"+diffBlock(removed, added, width, lines))
+			continue
+		}
 		switch {
 		case intent == "":
 			out = append(out, block(head+" ", fg(255), body, width, lines))
@@ -806,4 +814,59 @@ func (h *Header) draw() {
 		h.lastText = title
 		h.lastAt = h.now()
 	}
+}
+
+const (
+	removedColour = 203
+	addedColour   = 120
+)
+
+// editDiff is the path and the removed and added text of an edit call, so the feed can show what changed
+// instead of the arguments as a dump.
+func editDiff(name string, args any) (path, removed, added string, ok bool) {
+	if name != "edit" {
+		return "", "", "", false
+	}
+	object, isObject := args.(*orderedJSONObject)
+	if !isObject {
+		return "", "", "", false
+	}
+	text := func(key string) (string, bool) {
+		value, present := object.get(key)
+		if !present {
+			return "", false
+		}
+		str, isString := value.(string)
+		return str, isString
+	}
+	removed, hasOld := text("old_string")
+	added, hasNew := text("new_string")
+	if !hasOld || !hasNew {
+		return "", "", "", false
+	}
+	path, _ = text("path")
+	return path, removed, added, true
+}
+
+// diffBlock prints the removed lines in red behind "-" and the added lines in green behind "+", each with
+// a tinted background, so a change is read at a glance. The line limit counts both sides together.
+func diffBlock(removed, added string, width, lines int) string {
+	var rows []string
+	emit := func(sign string, colour int, text string) {
+		if text == "" {
+			return
+		}
+		for _, raw := range splitLines(strings.TrimRight(text, "\n")) {
+			for _, row := range wrapRunes(raw, width) {
+				rows = append(rows, "    "+bold+fg(colour)+sign+reset+" "+fg(colour)+row+reset)
+			}
+		}
+	}
+	emit("-", removedColour, removed)
+	emit("+", addedColour, added)
+	if lines > 0 && len(rows) > lines {
+		more := len(rows) - lines
+		rows = append(rows[:lines], "    "+fg(stampColor)+fmt.Sprintf("… +%d more lines", more)+reset)
+	}
+	return strings.Join(rows, "\n")
 }

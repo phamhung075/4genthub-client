@@ -46,6 +46,7 @@ prefixed with the percentage, so the meter is never out of view.
 | Mark | Meaning |
 |---|---|
 | `<glyph> <tool> <intent>` | a tool call, its glyph and colour set by the kind of work: `◉` read (blue), `⌕` search (cyan), `✎` write or edit (yellow), `❯` shell (green), `⌁` web (blue), `⇉` delegate or todo (violet), `?` ask (orange), `→` anything else (white); the dim italic intent is the purpose the seat stated, and the main argument (command, path, prompt) follows on the lines below, with no `key=` |
+| `✎ edit <path>` | an edit shows the change itself: removed lines in red behind `-`, added lines in green behind `+`, removed first |
 | `⬡ mcp <server_tool>` | a call to an MCP tool, made as a read or write on its `xd://mcp__<server>_<tool>` device; the body is the request |
 | `← <tool> text` | the result, dim, headed by the tool that answered |
 | `✗ <tool> text` | an error result, red |
