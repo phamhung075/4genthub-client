@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use parking_lot::Mutex;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -176,9 +176,6 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
 
     let runtime = AgentRuntime::from_str_loose(&seat.runtime);
     let seat_dir = seat_dir(state_dir, &target);
-    // ONE PROCESS IS ONE SEAT'S RUNNER, so its log is decided here, once, before anything can be mirrored
-    // into the pane - including the refusal to launch at all, which is the first line a bad config writes.
-    let _ = SEAT_LOG.set(seat_log_path(state_dir, &target.room, &target.seat));
     // A refusal to launch is a *config* outcome, and the caller must be able to tell it from a crash: the
     // published death carries the refusal's own text, so a mistyped policy word names the word and a blank
     // one says it is empty, instead of both reading as "died before readiness" (the lead's request).
@@ -1328,51 +1325,11 @@ fn send(to_child: &Sender<String>, frame: &serde_json::Value) -> Result<(), Stri
         .map_err(|_| "the agent's channel is closed".to_string())
 }
 
-/// The seat's own log: `<state dir>/rooms/<room>/logs/<seat>.jsonl`.
-///
-/// `logs/` is the third directory of the room's layout (`seats/`, `logs/`, `run/`), and this is what fills
-/// it: every line the runner mirrors into the pane is appended here as well, so its own diagnostics - the
-/// retry ladder, a refused pane input, a mailbox error - are still readable after the pane has scrolled
-/// away. That is what the U3 acceptance reads the seat's log for (`logs/<seat>.jsonl`): a file that only
-/// ever appears once something has gone wrong makes "no log yet" and "nothing happened" the same answer.
-pub fn seat_log_path(state_dir: &Path, room: &str, seat: &str) -> PathBuf {
-    state_dir
-        .join("rooms")
-        .join(room)
-        .join("logs")
-        .join(format!("{seat}.jsonl"))
-}
-
-/// The seat this process is the runner for, decided once at start (`run`). `None` until then, and in a
-/// process that never became a runner, so nothing outside `run` can invent a path.
-static SEAT_LOG: OnceLock<PathBuf> = OnceLock::new();
-
-/// Append one mirrored line to the seat's log, creating `logs/` if the writer got there first.
-///
-/// The pane stays the operator's surface: a log that cannot be written must not stop the seat, so the
-/// failure is said on stderr rather than returned.
-fn append_mirrored(path: &Path, text: &str) {
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let line = serde_json::json!({"ts": Utc::now().to_rfc3339(), "text": text}).to_string();
-    match fs::OpenOptions::new().create(true).append(true).open(path) {
-        Ok(mut file) => {
-            let _ = writeln!(file, "{line}");
-        }
-        Err(e) => eprintln!("{PANE_PREFIX} cannot write the seat's log {}: {e}", path.display()),
-    }
-}
-
-/// Mirror a line into the pane, prefixed the way the reference prefixed its own lines, and append it to
-/// the seat's log so the same line survives the pane.
+/// Mirror a line into the pane, prefixed the way the reference prefixed its own lines.
 fn mirror(text: &str) {
     let mut out = std::io::stdout();
     let _ = writeln!(out, "{PANE_PREFIX} {text}");
     let _ = out.flush();
-    if let Some(path) = SEAT_LOG.get() {
-        append_mirrored(path, text);
-    }
 }
 
 fn wait_child(child: &mut Child) -> Result<String, String> {
@@ -1388,39 +1345,6 @@ fn wait_child(child: &mut Child) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_seat_log_is_the_rooms_logs_dir_and_holds_what_the_pane_showed() {
-        let dir = std::env::temp_dir().join(format!("seat-log-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let path = seat_log_path(&dir, "lab", "dev");
-        assert_eq!(
-            path,
-            dir.join("rooms").join("lab").join("logs").join("dev.jsonl"),
-            "the seat's log is the room's logs/ dir, one file per seat"
-        );
-
-        // The directory does not exist yet: the writer makes it, so a runner that starts before anyone else
-        // touches the room still leaves its line where the acceptance reads it.
-        append_mirrored(&path, PANE_INPUT_REJECTED);
-        append_mirrored(&path, "retry 1/3 in 5s: the turn died");
-
-        let text = fs::read_to_string(&path).expect("the log is written");
-        let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2, "one line per mirrored line: {text}");
-        for line in &lines {
-            let doc: serde_json::Value = serde_json::from_str(line).expect("a line is JSON");
-            assert!(
-                doc["ts"].as_str().is_some_and(|t| !t.is_empty()),
-                "a line carries its own time: {line}"
-            );
-        }
-        // The two things a reader greps this file for: the ladder, and the cap line - legible as text
-        // rather than escaped into a form no reader looking for them would match.
-        assert!(text.contains("retry 1/3"), "the ladder is legible: {text}");
-        assert!(text.contains(PANE_INPUT_REJECTED), "the cap line is legible: {text}");
-        let _ = fs::remove_dir_all(&dir);
-    }
 
     #[test]
     fn target_parsing_names_what_is_wrong() {
