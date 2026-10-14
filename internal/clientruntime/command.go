@@ -574,17 +574,19 @@ func printDaemonJSON(stdout io.Writer, raw []byte) {
 
 type captureCommand struct{}
 
-func (captureCommand) Name() string    { return "capture" }
-func (captureCommand) Summary() string { return "capture a session's pane through the OpenRig daemon" }
-func (captureCommand) NeedsRig() bool  { return false }
+func (captureCommand) Name() string { return "capture" }
+func (captureCommand) Summary() string {
+	return "capture a session's pane through the runtime's own terminal manager"
+}
+func (captureCommand) NeedsRig() bool { return false }
 
 const captureUsage = "usage: 4genteam capture <session> [--lines <n>] [--json]"
 
-func (captureCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (captureCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, captureUsage)
-		fmt.Fprintln(stdout, "\nCaptures the named session's pane from the OpenRig daemon and prints it verbatim.")
-		fmt.Fprintln(stdout, "--lines bounds how many lines are captured; --json prints the daemon's own document.")
+		fmt.Fprintln(stdout, "\nCaptures the named session's pane through the runtime's own terminal manager and prints it verbatim.")
+		fmt.Fprintln(stdout, "--lines bounds how many lines are captured; --json prints this client's capture answer.")
 		return clientcmd.ExitOK
 	}
 	opts, rest, err := SplitFlags(args, []FlagSpec{{Name: "json"}, {Name: "lines", Value: true}})
@@ -608,51 +610,26 @@ func (captureCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, 
 		lines = parsed
 	}
 
-	if !openRigDaemonConfigured() {
-		fmt.Fprintf(stderr, "4genteam capture: no OpenRig daemon is configured in this environment (set %s or %s); nothing was captured\n", openRigURLEnv, openRigPortEnv)
-		return clientcmd.ExitUnavailable
-	}
-
-	payload := map[string]any{"session": name}
-	if lines > 0 {
-		payload["lines"] = lines
-	}
-	raw, err := openRigRequest(ctx, "POST", "/api/transport/capture", payload)
+	// THE PANE IS READ THROUGH THE RUNTIME'S OWN TERMINAL MANAGER - the process that owns the tmux server -
+	// over this client's own transport, which is Client.Capture. This verb used to dial the OpenRig daemon:
+	// it gated on OPENRIG_URL/OPENRIG_PORT, POSTed /api/transport/capture and parsed the document that came
+	// back. That is the OpenRig path this cutover removes, and capture is meant to work with `rig` off PATH
+	// and no OpenRig path at all. A runtime that is not there, or one that refuses, is a refusal in words
+	// (ExitUnavailable) and never an empty pane; nothing falls back to the daemon.
+	answer, err := NewClient("").Capture(name, lines)
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam capture: %v\n", err)
-		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
-	}
-
-	var doc struct {
-		OK      *bool  `json:"ok"`
-		Content string `json:"content"`
-		Reason  string `json:"reason"`
-		Error   string `json:"error"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		fmt.Fprintf(stderr, "4genteam capture: could not read the daemon's capture document: %v\n", err)
-		return clientcmd.ExitRemote
-	}
-	// A refusal is reported by the transport's status (any non-2xx is already an error above) or by an
-	// explicit `ok:false` in a 2xx body. An absent `ok` is NOT a refusal: treating it as one reported a
-	// successful capture as a failure — the same class of untrue answer this row exists to remove.
-	if doc.OK != nil && !*doc.OK {
-		reason := strings.TrimSpace(doc.Reason)
-		if reason == "" {
-			reason = strings.TrimSpace(doc.Error)
-		}
-		if reason == "" {
-			reason = daemonDetail(raw)
-		}
-		fmt.Fprintf(stderr, "4genteam capture: %s\n", reason)
-		return clientcmd.ExitRemote
+		fmt.Fprintf(stderr, "4genteam capture: the runtime at %s could not capture %s: %v\n", DefaultSocketPath(), name, err)
+		return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
 	}
 
 	if asJSON {
-		printDaemonJSON(stdout, raw)
+		// The document is this client's own capture answer now - the seat and its content - because there is
+		// no daemon body to pass through any more. --json still means "the answer, machine-readable".
+		_, _ = stdout.Write(runtimeJSONDocument(answer))
+		_, _ = stdout.Write([]byte("\n"))
 		return clientcmd.ExitOK
 	}
 	// The content is a pane: it goes out verbatim, trailing whitespace and all, with no heading added.
-	_, _ = io.WriteString(stdout, doc.Content)
+	_, _ = io.WriteString(stdout, answer.Content)
 	return clientcmd.ExitOK
 }

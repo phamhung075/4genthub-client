@@ -3,6 +3,26 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — capture reads a pane through the runtime, not through the OpenRig daemon
+
+### Changed
+- `internal/clientruntime/command.go` — `captureCommand` no longer dials the OpenRig daemon. It gated on
+  `OPENRIG_URL`/`OPENRIG_PORT`, POSTed `/api/transport/capture` and parsed the document it got back, so the verb
+  only worked where an OpenRig path existed — exactly what this cutover removes. It now calls
+  `Client.Capture` over the client's own transport (the runtime's terminal manager, the process that owns the tmux
+  server). Verbatim stdout and `--lines` are unchanged; `--json` prints this client's own capture answer (the seat
+  and its content) because there is no daemon body to pass through any more; a runtime that is absent or refuses
+  is a refusal in words with `ExitUnavailable` and nothing on stdout, and nothing falls back to the daemon.
+  The verb's summary and help text name the runtime instead of the daemon.
+
+### Tests
+- The five daemon-path capture tests are gone: a daemon stub would have gone on passing while testing a path the
+  verb no longer walks. Their replacements live in `internal/clientruntime/capture_test.go` and drive the runtime
+  socket: the request frame pinned whole (session plus the line window, and its absence), the pane verbatim,
+  `--json`'s document, a runtime that cannot be reached (named, `ExitUnavailable`, nothing on stdout), and the
+  runtime's own refusal. `TestCaptureCommandReadsASuccessWithoutAnOkField` was DELETED rather than converted: its
+  subject was a daemon body that omitted `ok`, a tolerance with no counterpart once the daemon path is gone.
+
 ## 2026-10-14 — an older runtime is named as what it is, not shown as the verb's answer
 
 ### Fixed
