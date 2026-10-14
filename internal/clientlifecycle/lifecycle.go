@@ -323,7 +323,7 @@ func runUp(rig *clientcmd.Rig, name, teamDir, stateDir string, allowPeak, roomOn
 	// THE GATE RUNS BEFORE THE RESTORE, and after the daemon only because the room's models are read from
 	// the daemon. So a refusal starts the daemon and nothing else: no seat is resumed, which is the step
 	// that would have started DeepSeek work at the peak rate.
-	if code := PeakGate(rig, name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
+	if code := PeakGate(name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	if code := ensureRig(name, spec, daemonLog, stdout, stderr); code != clientcmd.ExitOK {
@@ -588,7 +588,14 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 // The clientseat package reads the SAME runtime call as roomNodes, with the OPPOSITE contract: there a failed read is
 // an ERROR naming the rig, because `reseat` has to say why it will not restart a seat. The names differ on purpose -
 // two same-named functions with opposite contracts is a trap whose only guard would be a commit message.
-var rigNodes = func(rig *clientcmd.Rig, name string) []map[string]any {
+// The reading itself, over the client's OWN transports: the runtime first (a natively hosted room), then
+// the OpenRig daemon's node table (a rig the daemon hosts). It used to fall back to exec-ing
+// `rig ps --nodes --json`, which is the dependency this cutover removes.
+//
+// The second return is the read's reason, and the PAIR is what a caller decides on: rows with no reason
+// are what a transport answered - possibly an empty table, which is a room with no seats - while a reason
+// means nothing could be read at all. An unreadable reading is never read as "this room is safe".
+var rigNodes = func(name string) ([]map[string]any, string) {
 	client := clientruntime.NewClient("")
 	seats, err := client.GetRoomStatus(name)
 	if err == nil && len(seats) > 0 {
@@ -604,44 +611,35 @@ var rigNodes = func(rig *clientcmd.Rig, name string) []map[string]any {
 				"pid":           seat.Pid,
 			})
 		}
-		return nodes
+		return nodes, ""
 	}
-	if rig != nil {
-		out, err := rig.Run(context.Background(), "ps", "--nodes", "--rig", name, "--json")
-		if err != nil {
-			return nil
-		}
-		var nodes []map[string]any
-		if json.Unmarshal([]byte(out), &nodes) != nil {
-			return nil
-		}
-		return nodes
-	}
-	return nil
+	return clientruntime.ReadRigNodes(context.Background(), name)
 }
 
 // PeakGate is the DeepSeek peak gate for every verb in the client that starts or resumes a room's seats
 // - `up` and `compact` here, and the restore verbs in clientrestore, which is why it is exported: the
 // decision must come from ONE reading of the room's node records, not from a second copy per package.
-// The models are in the room's node records - the reading `rig ps --json --nodes --rig NAME` already gives
-// the restore - so the gate costs one local daemon call and no cloud round trip.
+// The models are in the room's node records, read over the client's own transports, so the gate costs one
+// local call and no cloud round trip.
 //
-// It answers the exit code its verb should return: ExitOK to continue, ExitUnavailable when the setting
-// and the schedule refuse, ExitUsage when the schedule cannot be read at all (a malformed OFFPEAK_UTC is
-// a typo in the environment, and this client fails loudly on those rather than guessing a clock).
+// It answers the exit code its verb should return: ExitOK to continue, ExitUnavailable when the reading
+// cannot be taken or the setting and the schedule refuse, ExitUsage when the schedule cannot be read at all
+// (a malformed OFFEPEAK_UTC is a typo in the environment, and this client fails loudly on those rather than
+// guessing a clock).
 //
-// A rig tool it cannot resolve is NOT a refusal: the reading is impossible, so there is nothing to
-// decide, and the verb's own platform matrix - or its supervisor's start - says so in its own words.
-// Guessing "peak" from a missing reading would block a room the client knows nothing about.
-func PeakGate(rig *clientcmd.Rig, name, verb string, allowPeak bool, stderr io.Writer) int {
-	if rig == nil {
-		tool, err := clientcmd.RequireRig()
-		if err != nil {
-			return clientcmd.ExitOK
-		}
-		rig = tool
+// A READING THAT FAILS IS A REFUSAL, in words: this used to resolve a rig tool and return ExitOK when it
+// could not, which is how a peak-time resume could proceed with the gate never having decided. A room with
+// NO records is different and still proceeds - there are no seats to bill, which is the shape of a room
+// being started for the first time on a machine that has no OpenRig daemon at all - and nothing is printed
+// for it, because that is the normal case rather than a diagnostic.
+func PeakGate(name, verb string, allowPeak bool, stderr io.Writer) int {
+	nodes, why := rigNodes(name)
+	if nodes == nil && why != "" {
+		fmt.Fprintf(stderr, "4genteam %s: the room's node records could not be read, so the peak gate cannot "+
+			"say whether starting this room bills at peak: %s\n", verb, why)
+		return clientcmd.ExitUnavailable
 	}
-	proceed, message, err := clientoffpeak.Check(allowPeak, rigNodes(rig, name), os.Getenv)
+	proceed, message, err := clientoffpeak.Check(allowPeak, nodes, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam %s: %v\n", verb, err)
 		return clientcmd.ExitUsage
@@ -736,9 +734,9 @@ func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, st
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	// No rig was resolved for this verb by the dispatcher, so the gate resolves one itself; with no rig
-	// on the machine there is nothing to read and the refusal says so.
-	if code := PeakGate(nil, name, "compact", allowPeak, stderr); code != clientcmd.ExitOK {
+	// The gate reads the room's node records itself; there is no rig to resolve for this verb, and a
+	// reading that cannot be taken is refused in words rather than treated as a safe room.
+	if code := PeakGate(name, "compact", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	if !recordRigFor(name, stderr) {

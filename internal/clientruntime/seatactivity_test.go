@@ -43,6 +43,90 @@ func nodeWithoutActivity(logicalID, canonical string) string {
 
 func nodesTable(rows ...string) string { return "[" + strings.Join(rows, ",") + "]" }
 
+// TestReadRigNodesReadsTheDaemonTableInTheCLIsShape is the acceptance of the node seam: the rows come from
+// the daemon's own table, they carry the keys every consumer of `rig ps --nodes --json` already parses, the
+// seat half is derived from the logical id because the daemon does not send it, and pid is absent - the one
+// key this read is deliberately narrower in, so a consumer that ever needs it has to ask for it by name.
+func TestReadRigNodesReadsTheDaemonTableInTheCLIsShape(t *testing.T) {
+	const rig = "rigx"
+	rows := nodesTable(
+		`{"logicalId":"rigx.lead","canonicalSessionName":"rigx-lead@rigx","rigName":"rigx",`+
+			`"runtime":"omp","sessionStatus":"running","startupStatus":"ready","model":"deepseek/deepseek-flash"}`,
+		`{"logicalId":"rigx.dev","canonicalSessionName":"rigx-dev@rigx","rigName":"rigx",`+
+			`"runtime":"omp","sessionStatus":"stopped","startupStatus":"stopped","model":"anthropic/claude-sonnet-4-5"}`,
+	)
+	srv, asked := fakeActivityDaemon(t, "RID-1", rig, rows)
+	t.Setenv(openRigURLEnv, srv.URL)
+	t.Setenv(openRigPortEnv, "")
+
+	got, why := ReadRigNodes(context.Background(), rig)
+	if why != "" {
+		t.Fatalf("the read refused a served table: %q", why)
+	}
+	if len(got) != 2 {
+		t.Fatalf("rows = %d, want 2 (%v)", len(got), got)
+	}
+	if len(*asked) != 2 || (*asked)[0] != "/api/ps" {
+		t.Errorf("the read asked %v, want the rig list first", *asked)
+	}
+	first := got[0]
+	for key, want := range map[string]any{
+		"logicalId": "rigx.lead", "seat": "lead", "canonicalSessionName": "rigx-lead@rigx",
+		"rigName": "rigx", "runtime": "omp", "sessionStatus": "running",
+		"startupStatus": "ready", "model": "deepseek/deepseek-flash",
+	} {
+		if first[key] != want {
+			t.Errorf("row[%q] = %v, want %v", key, first[key], want)
+		}
+	}
+	if _, present := first["pid"]; present {
+		t.Error("pid appeared in a daemon row: this read is documented as narrower than rig ps --nodes --json in exactly that key")
+	}
+}
+
+// TestReadRigNodesTellsNoRecordsFromAFailedRead: a caller must be able to refuse on a failed read without
+// refusing a room that simply has no records yet, so the two must not collapse into one answer.
+func TestReadRigNodesTellsNoRecordsFromAFailedRead(t *testing.T) {
+	t.Run("a rig the daemon does not know is no records, not a failure", func(t *testing.T) {
+		srv, _ := fakeActivityDaemon(t, "RID-1", "otherrig", nodesTable())
+		t.Setenv(openRigURLEnv, srv.URL)
+		t.Setenv(openRigPortEnv, "")
+
+		got, why := ReadRigNodes(context.Background(), "rigx")
+		if got != nil || why != "" {
+			t.Errorf("ReadRigNodes = (%v, %q), want (nil, \"\")", got, why)
+		}
+	})
+
+	t.Run("no daemon named at all is the same absence", func(t *testing.T) {
+		t.Setenv(openRigURLEnv, "")
+		t.Setenv(openRigPortEnv, "")
+
+		got, why := ReadRigNodes(context.Background(), "rigx")
+		if got != nil || why != "" {
+			t.Errorf("ReadRigNodes = (%v, %q), want (nil, \"\")", got, why)
+		}
+	})
+
+	t.Run("a daemon that fails the read is a failure, in words", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":"the table is unavailable"}`)
+		}))
+		t.Cleanup(srv.Close)
+		t.Setenv(openRigURLEnv, srv.URL)
+		t.Setenv(openRigPortEnv, "")
+
+		got, why := ReadRigNodes(context.Background(), "rigx")
+		if got != nil {
+			t.Errorf("a failed read answered with rows: %v", got)
+		}
+		if !strings.Contains(why, "the node read asked /api/ps") || !strings.Contains(why, "HTTP 500") {
+			t.Errorf("the failure does not say which read failed and with what: %q", why)
+		}
+	})
+}
+
 // TestReadSeatActivityAsksTheDaemonAndRefusesByDefault is the acceptance of the seam: the word arrives from the
 // daemon's own node table, and the predicate's answer over the words the daemon actually serves is the one the
 // ruling fixes - only `idle` releases a destroyer, and nothing else may, including a word nobody has seen and the

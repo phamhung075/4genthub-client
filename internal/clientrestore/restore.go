@@ -2,6 +2,7 @@ package clientrestore
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -48,17 +49,21 @@ func newRestorer(rig *clientcmd.Rig, log *teeLog) (*restorer, error) {
 		rig:    rig,
 		log:    log,
 		briefs: briefs,
+		// send is the brief's delivery, over the client's OWN transports: the runtime socket, then the
+		// OpenRig daemon, then a refusal. It used to try SendTextToSeat behind a guard that parsed the
+		// Python-era agenthub--<room>--<seat> session shape - which the sessions this rig actually has
+		// (4genthub-min-reviewer@4genthub-min) do not match - and then exec `rig send`, whose failure the
+		// closure swallowed: a brief reported as delivered and dropped. DeliverToSession takes the session
+		// name as given, so the native branch is reachable for the real shape, and a refusal in words is
+		// what a caller gets when no transport answers.
 		send: func(ctx context.Context, session, text string) error {
-			parts := strings.Split(session, "--")
-			if len(parts) == 3 && parts[0] == "agenthub" {
-				room, seat := parts[1], parts[2]
-				if err := clientruntime.NewClient("").SendTextToSeat(room, seat, text); err == nil {
-					return nil
+			var refusal strings.Builder
+			if code := clientruntime.DeliverToSession(ctx, session, text, io.Discard, &refusal); code != clientcmd.ExitOK {
+				why := strings.TrimSpace(refusal.String())
+				if why == "" {
+					why = "no transport answered and none said why"
 				}
-			}
-			if rig != nil {
-				_, err := rig.Run(ctx, "send", session, text)
-				return err
+				return errors.New(why)
 			}
 			return nil
 		},
@@ -212,7 +217,7 @@ func (r *restorer) daemonUp() {
 // record, which is the whole point of a watchdog whose restore refuses.
 func (r *restorer) gate(rigName, verb string, allowPeak bool, stderr io.Writer) int {
 	var refusal strings.Builder
-	code := clientlifecycle.PeakGate(r.rig, rigName, verb, allowPeak, io.MultiWriter(stderr, &refusal))
+	code := clientlifecycle.PeakGate(rigName, verb, allowPeak, io.MultiWriter(stderr, &refusal))
 	if code != clientcmd.ExitOK {
 		if text := strings.TrimRight(refusal.String(), "\n"); text != "" {
 			r.log.printf("%s", text)

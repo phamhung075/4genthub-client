@@ -76,7 +76,7 @@ func stubWholeUp(t *testing.T) *[]string {
 func TestUpRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
+	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -125,7 +125,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			restoreAll(t)
 			ran := stubWholeUp(t)
-			rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
+			rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
 			t.Setenv(clientoffpeak.HolidaysEnv, "")
 			t.Setenv(clientoffpeak.PinEnv, c.pin)
 			t.Setenv(clientoffpeak.ModeEnv, c.modeEnv)
@@ -152,7 +152,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 // but a seat did not (design §2.5) - so the two numbers must not mean the same thing.
 func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 	restoreAll(t)
-	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
+	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
 	gateEnv(t, "2026-10-09 02:00")
 
 	for _, args := range [][]string{
@@ -176,7 +176,7 @@ func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 func TestUpTakesTheOneFlagTwice(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
+	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -200,7 +200,7 @@ func TestCompactRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 		return diedChild{}, nil
 	}
 	SupervisorStartGrace = time.Millisecond
-	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
+	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -243,7 +243,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 			rowsFor = func(string) []clientservices.Health {
 				return []clientservices.Health{{Rig: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}
 			}
-			rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
+			rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
 			gateEnv(t, c.pin)
 
 			args := append([]string{"room-alpha"}, c.extra...)
@@ -265,7 +265,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 func TestTheGateIsSkippedWhenTheRoomCannotBeRead(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return nil }
+	rigNodes = func(string) ([]map[string]any, string) { return nil, "" }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -283,7 +283,7 @@ func TestTheGateIsSkippedWhenTheRoomCannotBeRead(t *testing.T) {
 func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 	restoreAll(t)
 	stubWholeUp(t)
-	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return deepSeekRoomNode() }
+	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
 	gateEnv(t, "whenever")
 
 	var out, errOut bytes.Buffer

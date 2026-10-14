@@ -89,10 +89,10 @@ func restoreAll(t *testing.T) {
 		clientcmd.LookPath = lookPath
 		rowsFor, rigdRunning = rows, authorityUp
 	})
-	// A test in this package runs with the peak gate reading NO nodes and with a rig tool that resolves:
-	// the gate then decides nothing, and no test here reaches the machine's own daemon, rig or clock. A
-	// test about the gate replaces rigNodes with the reading it wants to be judged on.
-	rigNodes = func(*clientcmd.Rig, string) []map[string]any { return nil }
+	// A test in this package runs with the peak gate reading NO nodes: the gate then has nothing to
+	// decide, and no test here reaches the machine's own daemon, rig or clock. A test about the gate
+	// replaces rigNodes with the reading it wants to be judged on.
+	rigNodes = func(string) ([]map[string]any, string) { return nil, "" }
 	clientcmd.LookPath = func(string) (string, error) { return "/usr/local/bin/rig", nil }
 	// NO TEST WRITES rigd.json. The seams that would - recording the room and starting the authority -
 	// are replaced with recorders here, so a `up` test can assert the ORDER without touching the machine's

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
@@ -99,14 +98,11 @@ func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *
 	supervisor.RPCCompact = func(r, seat string) string { return supervisor.rpcCompact(r, seat) }
 	supervisor.Abort = rigAbort
 	supervisor.Interrupt = tmuxInterrupt
-	// The gate's reading is the room's `rig ps --nodes` records, the ONE reading this package already
-	// takes for its other gate (rigNodes), reached through the platform matrix in one place.
+	// The gate's reading is the room's node records, the ONE reading this package already takes for its
+	// other gate (rigNodes), reached here without resolving a rig tool: the reading is the client's own.
 	supervisor.Nodes = func(rig string) []map[string]any {
-		tool, err := clientcmd.RequireRig()
-		if err != nil {
-			return nil
-		}
-		return rigNodes(tool, rig)
+		nodes, _ := rigNodes(rig)
+		return nodes
 	}
 	supervisor.Getenv = os.Getenv
 	supervisor.Log = func(text string) {

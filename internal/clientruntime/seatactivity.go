@@ -79,7 +79,7 @@ func ReadSeatActivity(ctx context.Context, rig, seat string) SeatActivity {
 	}
 
 	var nodes []openRigNodeRow
-	if why := openRigGetJSON(ctx, "/api/rigs/"+rigID+"/nodes", &nodes); why != "" {
+	if why := openRigGetJSON(ctx, "activity", "/api/rigs/"+rigID+"/nodes", &nodes); why != "" {
 		return SeatActivity{Read: false, Why: why}
 	}
 
@@ -98,10 +98,73 @@ func ReadSeatActivity(ctx context.Context, rig, seat string) SeatActivity {
 	return SeatActivity{Read: false, Why: "the activity read answered no record for " + rig + "/" + seat}
 }
 
+// ReadRigNodes reads one rig's NODE ROWS over the daemon the client already talks to: GET /api/ps to resolve
+// the rig's id, then GET /api/rigs/<rigId>/nodes - the route the activity read above uses - decoded into the
+// CLI's own node shape, which is what every caller of this read already parses
+// (`rig ps --nodes --json`).
+//
+// IT IS NARROWER THAN `rig ps --json --nodes` IN EXACTLY ONE KEY: pid. The daemon's node table does not carry
+// it, and nothing that consumes this read asks for it - the peak gate reads a seat's name and model
+// (clientoffpeak.SeatsFromNodes), and the restore, switch and reseat paths read logicalId,
+// canonicalSessionName, sessionStatus and model. If pid ever gains a consumer, that is a NEW DECISION to grow
+// this read deliberately rather than a gap to discover at a call site.
+//
+// The three answers are told apart by the pair, because a caller that must refuse needs to know which one it
+// has:
+//
+//   - rows != nil: the daemon answered with this rig's node table, which may be empty (a rig with no seats).
+//   - rows == nil && why == "": NO RECORDS, which is not a failure - either this shell names no OpenRig
+//     daemon at all, or the daemon answered that it knows no rig by that name. A caller for which "no
+//     records" means "nothing to decide" proceeds; one for which it means "I cannot see the room I was asked
+//     about" refuses on its own judgement, which is why this read does not decide that for it.
+//   - rows == nil && why != "": the read was ATTEMPTED and failed - nothing answered, or the answer was not
+//     the table. A caller that needs the reading must refuse in these words rather than proceed as if the
+//     room had no seats.
+func ReadRigNodes(ctx context.Context, rig string) ([]map[string]any, string) {
+	if !openRigDaemonConfigured() {
+		return nil, ""
+	}
+
+	var listed []openRigRigRow
+	if why := openRigGetJSON(ctx, "node", "/api/ps", &listed); why != "" {
+		return nil, why
+	}
+	rigID := ""
+	for _, row := range listed {
+		if row.Name == rig || row.RigName == rig {
+			rigID = row.RigID
+			break
+		}
+	}
+	if rigID == "" {
+		return nil, ""
+	}
+
+	var rows []map[string]any
+	if why := openRigGetJSON(ctx, "node", "/api/rigs/"+rigID+"/nodes", &rows); why != "" {
+		return nil, why
+	}
+	if rows == nil {
+		rows = []map[string]any{}
+	}
+	for _, row := range rows {
+		// The seat half is derived from the logical id, which is the pair "<rig>.<seat>" everywhere this
+		// client reads one - the CLI's own node rows carry it as its own key, and the daemon's do not.
+		if _, ok := row["seat"]; !ok {
+			if logical, ok := row["logicalId"].(string); ok {
+				if at := strings.LastIndex(logical, "."); at >= 0 && at < len(logical)-1 {
+					row["seat"] = logical[at+1:]
+				}
+			}
+		}
+	}
+	return rows, ""
+}
+
 // openRigRigID resolves a rig's name to the id the node route is keyed on, over GET /api/ps.
 func openRigRigID(ctx context.Context, rig string) (string, string) {
 	var rows []openRigRigRow
-	if why := openRigGetJSON(ctx, "/api/ps", &rows); why != "" {
+	if why := openRigGetJSON(ctx, "activity", "/api/ps", &rows); why != "" {
 		return "", why
 	}
 	for _, row := range rows {
@@ -116,17 +179,19 @@ func openRigRigID(ctx context.Context, rig string) (string, string) {
 }
 
 // openRigGetJSON performs one daemon read and decodes it, returning a SENTENCE rather than an error: every caller of
-// this read has to say why nothing could be read, and an error carried up two layers would be re-worded twice.
-func openRigGetJSON(ctx context.Context, path string, out any) string {
+// this read has to say why nothing could be read, and an error carried up two layers would be re-worded twice. The
+// label names WHICH read in those sentences, because two reads now share this helper - the activity read and the node
+// read - and a diagnostic that blames the wrong one sends a reader to the wrong place.
+func openRigGetJSON(ctx context.Context, label, path string, out any) string {
 	raw, status, err := openRigCall(ctx, "GET", path, nil)
 	if err != nil {
-		return "the activity read could not ask " + path + ": " + err.Error()
+		return "the " + label + " read could not ask " + path + ": " + err.Error()
 	}
 	if status != 200 {
-		return fmt.Sprintf("the activity read asked %s and got HTTP %d: %s", path, status, firstLine(raw))
+		return fmt.Sprintf("the %s read asked %s and got HTTP %d: %s", label, path, status, firstLine(raw))
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return fmt.Sprintf("the activity read asked %s and the answer is not the document it expects: %v", path, err)
+		return fmt.Sprintf("the %s read asked %s and the answer is not the document it expects: %v", label, path, err)
 	}
 	return ""
 }

@@ -3,7 +3,11 @@ package clientrestore
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +77,40 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	previousLookPath := clientcmd.LookPath
 	clientcmd.LookPath = func(string) (string, error) { return w.stub, nil }
 	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
+
+	// THE DAEMON THE NODE READ TALKS TO. The world's node JSON is served over the daemon's OWN route (GET
+	// /api/ps, then GET /api/rigs/<id>/nodes), because the gate and the restore now read through
+	// clientruntime.ReadRigNodes rather than through a `rig ps` exec: a stub beside the seam would let this
+	// suite pass while the real read was broken. The rig names come from the nodes the test handed in.
+	daemon := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.URL.Path == "/api/ps":
+			var rows []map[string]any
+			_ = json.Unmarshal([]byte(nodes), &rows)
+			seen := map[string]bool{}
+			list := []map[string]string{}
+			for _, row := range rows {
+				name, _ := row["rigName"].(string)
+				if name == "" || seen[name] {
+					continue
+				}
+				seen[name] = true
+				list = append(list, map[string]string{"rigId": "01TESTRIG" + name, "name": name, "rigName": name})
+			}
+			out.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(out).Encode(list)
+		case strings.HasPrefix(req.URL.Path, "/api/rigs/") && strings.HasSuffix(req.URL.Path, "/nodes"):
+			_, _ = io.WriteString(out, nodes)
+		default:
+			out.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(daemon.Close)
+	t.Setenv("OPENRIG_URL", daemon.URL)
+	t.Setenv("OPENRIG_PORT", "")
+	// And NO runtime room: the socket names a path nothing listens on, so the runtime branch of the read
+	// fails fast and the daemon is the transport that answers - the same order a seat's box takes.
+	t.Setenv("OPENRIG_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
 
 	// The watch wall is skipped unless a test asks for it: herdr is not on this machine, which is the
 	// case the shell logged as a skip rather than a failure.
@@ -625,5 +663,36 @@ func TestTheLogLineKeepsTheShellsShape(t *testing.T) {
 	first := strings.SplitN(w.log(), "\n", 2)[0]
 	if !strings.HasPrefix(first, "2026-10-10T15:00:00+00:00 ") {
 		t.Errorf("log line = %q, want the pinned RFC3339 stamp first", first)
+	}
+}
+
+// TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt drives the REAL delivery seam rather than the
+// stubbed one, because this is the seam whose native branch was unreachable: it looked for the Python-era
+// agenthub--<room>--<seat> session shape, which the sessions this rig actually has do not match, then
+// exec'd `rig send` and SWALLOWED its failure - so a brief for 4genthub-min-reviewer@4genthub-min was
+// reported as briefed and dropped. The seal is the pair of facts below: the delivery is refused for the
+// real session shape, and the refusal says what could not deliver it.
+func TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt(t *testing.T) {
+	home := t.TempDir()
+	previousHome := realHome
+	realHome = func() (string, error) { return home, nil }
+	t.Cleanup(func() { realHome = previousHome })
+
+	// No transport at all: no runtime socket, no OpenRig daemon, no seat environment.
+	for _, name := range []string{"OPENRIG_URL", "OPENRIG_PORT", "OPENRIG_SESSION_NAME", "RIGGED_SESSION_NAME",
+		"AGENTHUB_ROOM", "AGENTHUB_SEAT", "AGENTHUB_SESSION_NAME"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("OPENRIG_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
+
+	var out bytes.Buffer
+	r, err := newRestorer(nil, &teeLog{out: &out})
+	if err != nil {
+		t.Fatalf("newRestorer: %v", err)
+	}
+	if err := r.send(context.Background(), "4genthub-min-reviewer@4genthub-min", "Your seat: reviewer. hello"); err == nil {
+		t.Fatal("a brief no transport delivered was reported as delivered")
+	} else if !strings.Contains(err.Error(), "no runtime is answering") {
+		t.Errorf("the refusal does not name the transport that did not answer: %v", err)
 	}
 }
