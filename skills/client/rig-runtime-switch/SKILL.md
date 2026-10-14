@@ -6,41 +6,55 @@ description: Switch a team rig to another runtime variant (e.g. claude-code to o
 # Rig Runtime Switch — keep a team working through a limit
 
 Swap a rig's runtime variant instead of waiting for a reset. Whether the switch took, and whether a
-pool is still capped, are measurements rather than dates: `rig ps --nodes --rig <rig> --json` reports
-every node's `runtime`, `model` and `startupStatus`, and `$RIG provider signals` reports each account's
-usage window with the `resetsAt` it prints (task e7c7d763).
+pool is still capped, are measurements rather than dates: `4genteam ps <rig> --nodes --json` reports
+every node's `runtime`, `model` and `startupStatus`, and the predecessor CLI's `provider signals`
+reports each account's usage window with the `resetsAt` it prints — `4genteam` has no verb for that
+read (task e7c7d763).
 
 ## Which `rig`: `4genteam` or the rig CLI
 
-`4genteam` is its own binary and does not answer `rig` verbs; its `stop` is machine-wide, not a rig teardown. Everything that works on a rig spec or a node (`down --delete`, `up <spec>.yaml`, `capture`, `launch`, `parked`, `provider signals`) needs the rig CLI itself, so call it by path:
+`4genteam` is this client's own binary: it answers no `rig` verb, and its `stop` is machine-wide, not a room teardown. **It cannot switch a runtime in place, and it prints no sequence that completes the switch** — `4genteam sync switch` says exactly that and names the two steps that do exist:
+
+- `4genteam sync rig <room> --update` writes the room's definition and each seat's pinned snapshot.
+- `4genteam seat reseat <rig> --seat <name>` stops and restarts a seat so it loads the configuration it now has.
+
+Neither runs inside `sync switch` (both write, and a restart is peak-gated for a DeepSeek seat), and **whether a restart carries a changed RUNTIME is not established**. The switch is the owner's call.
+
+The spec- and node-level verbs the predecessor CLI had (`down --delete`, `up <spec>.yaml`, `launch`, `remove`, `parked`, `provider signals`) have no `4genteam` counterpart, and **this skill no longer prints the teardown sequence**: measured on this box, its middle line stopped the MACHINE's safeguards (`rigd` reaped with its children, for every room) and its last could not run at all (`--team DIR is required`). That CLI's daemon is not running either — it answers `daemon unreachable ... Resolved: partial via session name`.
+
+The reads are native:
 
 ```bash
-RIG="node <path to the rig CLI dist/index.js>"
-$RIG ps --nodes --rig <rig> --json     # runtime, model, sessionStatus, startupStatus per seat
+4genteam ps <rig> --nodes --json        # runtime, model, sessionStatus, startupStatus per seat
+4genteam ps <rig> --nodes               # one row per seat: RUNTIME MODEL STATUS ... CTX ACTIVITY ERROR
+4genteam capture <session> --lines 25   # one pane, verbatim (a canonical `<room>-<seat>@<room>` is translated)
+4genteam status <rig>                   # the safeguard rows
 ```
 
-`4genteam ps <rig> [--nodes|--compact|--grid|--json]` reads tmux and the seat transcripts, marks a seat `quota` when its transcript tail shows a quota or credit message, and answers the `rig ps --nodes --rig R --json` contract.
+`4genteam ps <rig> [--nodes|--compact|--grid|--json]` reads tmux and the seat transcripts, marks a seat `quota` when its transcript tail shows a quota or credit message, and prints this client's own JSON — not the predecessor's `rig ps --nodes --rig R --json` shape.
 
 ## When to use
 
-- `$RIG parked --rig <rig>` shows seats **PARKED — needs-input (selection_prompt)** — the
-  `/rate-limit-options` dialog (stop / wait for reset / upgrade).
-- `$RIG capture <seat>` shows that dialog; quota evidence confirms the cap (e.g. transcript
+- A seat sits in the `/rate-limit-options` dialog (stop / wait for reset / upgrade): `4genteam ps <rig> --nodes` shows its RUNTIME/MODEL/STATUS and `4genteam capture <session> --lines 25` shows the dialog itself. The predecessor CLI's `parked` reported these; `4genteam` has no `parked`.
+- `4genteam capture <session> --lines 25` shows that dialog; quota evidence confirms the cap (e.g. transcript
   `quotaLimits.rate_limit_type = seven_day`, or a clean `env -u ANTHROPIC_BASE_URL claude -p …`
   probe returning "You've hit your weekly limit").
 - The team's own brief authorizes the switch (e.g. "the omp/DeepSeek switch if Claude is capped").
 - Note: a pool's cap is a usage signal, not a property of the pool — read it before switching
-  (`$RIG provider signals` prints each account's used percent and its `resetsAt`), and do not switch to
+  (the predecessor CLI's `provider signals` printed each account's used percent and its `resetsAt`; `4genteam` has no verb for that read), and do not switch to
   a pool whose signal says it is capped.
 
 ## Why it is safe
 
-- **Variants are just files**: `~/.config/4genthub/seats/<rig>/rig/` holds `rig.yaml` (agy),
-  `rig-claude.yaml`, and — once authored — `rig-omp.yaml`. Same `name`, same seat keys and edges.
+- **A room's seats are its definition**: `~/.config/4genthub/rooms/<room>/spec.json` holds each seat's
+  `runtime`, `model`, `permission_policy` and `cwd`, and `4genteam sync rig <room> --update` rewrites
+  it from the cloud. (The predecessor kept `rig*.yaml` variants under
+  `~/.config/4genthub/seats/<rig>/rig/`, a path this client does not use.)
 - Stable seat keys ⇒ canonical session names (`<rig>-<seat>@<rig>`) survive the rebuild, so
-  **queue obligations and `rig send` destinations keep resolving** (WORK counts carry over).
-- `$RIG down` snapshots first (restorable); omp reads the launch dir's `.env` and `.mcp.json`, and
-  needs `permission_policy: builtin:yolo` (the `full_bypass` warning at up-time is expected).
+  **queue obligations and `4genteam send` destinations keep resolving** (WORK counts carry over).
+- `4genteam room stop <room>` leaves the room's directory in place (`spec.json`, `seats/`, `logs/`), so
+  the room can be started again — it is a stop, not a delete. omp reads the launch dir's `.env` and
+  `.mcp.json`, and needs `permission_policy: builtin:yolo` (the `full_bypass` warning at up-time is expected).
 
 ## Steps
 
@@ -48,28 +62,28 @@ $RIG ps --nodes --rig <rig> --json     # runtime, model, sessionStatus, startupS
    ```bash
    4genteam sync switch <rig> <seat> --runtime omp --model deepseek/deepseek-flash --apply none --reason "<why>"
    ```
-   This ONLY records the occupant in 4genthub cloud; it never changes a running seat. **Do not use `4genteam seat reseat` to change a runtime**: it kills the seat's tmux session and relaunches through `rig launch`, which fails when the rig is not running in the runtime daemon, leaving the seat dead and the runtime unchanged.
+   This ONLY records the occupant in 4genthub cloud; it never changes a running seat. **Do not use `4genteam seat reseat` to change a runtime**: it restarts a seat so that it reloads the skills, guide and cwd it is now configured with — its own help claims no runtime change — and it kills the seat's tmux session, so a seat in the middle of a turn loses that turn.
 2. **Author or select the variant spec**:
-   In `~/.config/4genthub/seats/<rig>/rig/`:
-   `rig.yaml` (agy), `rig-claude.yaml` (claude-code), `rig-omp.yaml` (omp/DeepSeek).
-   Set per member `runtime: omp` + `model: deepseek/deepseek-flash`, keep `permission_policy: builtin:yolo`.
-   Check the spec's seats equal the live seats: `rig-omp.yaml` can carry more seats than the live room and a member left on `claude-code`. `rig-architect-omp.yaml` is the 5-seat all-omp spec (lead, architect, go-dev, fe-dev, reviewer).
+   In `~/.config/4genthub/rooms/<room>/spec.json` (written by `4genteam sync rig <room> --update`):
+   set per seat `runtime: omp` + `model: deepseek/deepseek-flash`, keep `permission_policy`.
+   Check the definition's seats equal the live seats — `4genteam ps <rig> --nodes` lists the live ones — since a definition can carry a seat the room does not run.
 3. **DeepSeek key**:
    Ensure `~/.config/4genthub/.env` and `~/.config/deepseek/.env` contain `DEEPSEEK_API_KEY`.
-4. **Dry-run**:
-   `cd <rig>/rig && $RIG up rig-omp.yaml --plan` → expect `resolve_spec: ok`, `preflight: ok`.
-5. **Teardown previous rig** (requires owner's explicit confirmation):
-   `$RIG down <rigId> --snapshot --force --delete --json` (use the rig id from `ps`; the name form can answer `HTTP 409`).
-   If the answer is `deleteBlocked` with `Could not confirm session ... is absent ... no server running`, the tmux server is already gone and the rig cannot check. Start a throwaway server (`tmux new-session -d -s zz-teardown-probe`), repeat the down, then `tmux kill-session -t zz-teardown-probe`. Then launch the spec: `$RIG up <spec>.yaml`.
-6. **Re-launch with the client lifecycle (`4genteam up`)**:
-   After `$RIG up <spec>.yaml` creates the seats, do not stop there. Always bring the rig back via `4genteam up` or `4genteam continue` so that `rigd`, the auto-compaction supervisor, the watchdog, and the status bridge are running:
+4. **Read both sides before restarting anything**: `4genteam room status <room>` prints one line per seat (SEAT RUNTIME STATE SESSION) as the runtime sees it, and `4genteam sync rig <rig> --update` writes the definition it will load next. A definition that disagrees with the live room is visible here, before a seat is touched.
+5. **Apply it** — the two native steps, neither of which `sync switch` runs for you (both write, and a restart is peak-gated for a DeepSeek seat):
    ```bash
-   4genteam up <rig> [--allow-peak]
+   4genteam sync rig <rig> --update                           # the room's definition and pinned snapshots
+   4genteam seat reseat <rig> --seat <seat> [--allow-peak]     # stop and restart one seat, once it is quiet
    ```
-   (If pointing to a specific new spec file, launch the spec once and immediately ensure `4genteam up <rig>` or `4genteam compact <rig>` is running).
+   `seat reseat` waits for the seat to be quiet; `--force` skips that wait and a seat mid-turn loses the turn. **Whether the restart carries a changed RUNTIME is not established — measure it after the restart** (`4genteam ps <rig> --nodes --json` per seat) rather than assuming it. The predecessor CLI's teardown/relaunch sequence is deliberately not printed here: measured, its middle line stopped the machine's safeguards rather than the room's, and its last could not run at all.
+6. **Ensure the client lifecycle is running**:
+   ```bash
+   4genteam up <rig> --team <the room's team dir> [--allow-peak]
+   ```
+   `--team DIR` is required — the room's seats come from the local team definition that directory holds, and there is no default. For a room that is stopped rather than new, `4genteam continue <rig>` restores it and briefs its seats.
 7. **Verify & watch**:
    `4genteam watch --rig <rig>` opens the styled 2-column live monitor.
-   `$RIG ps --nodes --rig <rig> --json` must show `runtime: omp`, `model: deepseek/deepseek-flash`, `startupStatus: ready` for every seat; `4genteam ps <rig>` must show 0 needing attention.
+   `4genteam ps <rig> --nodes --json` must show `runtime: omp`, `model: deepseek/deepseek-flash`, `startupStatus: ready` for every seat; `4genteam ps <rig>` must show 0 needing attention.
    `4genteam status <rig>` verifies compaction supervisor and safeguards are running.
 
 ## Gotchas seen live
@@ -77,8 +91,8 @@ $RIG ps --nodes --rig <rig> --json     # runtime, model, sessionStatus, startupS
 - Role files (`agents/<seat>/guidance/role.md`) mention MCP tools because the rendered seat carries
   them; on a seat rendered WITHOUT an mcp block those instructions are inert, and the kickoff message
   is what says so. The kickoff is still what makes the seat's *brief* runtime-correct.
-- The old rig's `needs-input` dialog dies with the teardown — the user's "wait for reset" option
-  is superseded by the switch (the snapshot + handover files are the continuity).
+- The old runtime's `needs-input` dialog dies with the seat's restart — the user's "wait for reset" option
+  is superseded by the switch (the handover files are the continuity).
 - omp seats are per-token billed and share one `DEEPSEEK_API_KEY`; concurrent sessions can make
   requests fail as if the model were unavailable — diagnose key contention before aborting.
 - Prefer this playbook when the reset is far.

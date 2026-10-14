@@ -47,7 +47,7 @@ relaunch or runtime switch, because the layout lives in the client and is not sa
 
 ```bash
 herdr workspace list          # "<RIG> grid" and "<RIG> lead"
-rig ps --nodes --rig <RIG>    # one row per seat, with its lifecycle and activity
+4genteam ps <RIG> --nodes      # one row per seat, with its lifecycle and activity
 ```
 
 If `watch` prints nothing and no workspace appears, check those two first: a stopped seat has no
@@ -80,7 +80,7 @@ pane and header with no events, and a stopped seat has no pane at all.
 4genteam inputs hide --rig <RIG>
 ```
 
-A line typed there is sent with `rig send`, so it takes the same route as any other message.
+A line typed there is sent with `4genteam send`, so it takes the same route as any other message.
 `/hide` or Ctrl-D leaves the loop.
 
 ## Context limits and the supervisor
@@ -122,15 +122,16 @@ back watched; skip that with `RIG_CONTINUE_WATCH=0`.
 
 - **Never press Ctrl-C or type into a raw `tmux attach` pane of a seat.** The runner reads standard
   input: Ctrl-C aborts that seat's work, and typed text becomes a chat message to the agent.
-- `rig terminal open <RIG>` is the secondary view — a seat's own screen, not the way to watch a
-  room.
+- The secondary view is a seat's own screen, and the client has no verb that opens one raw
+  `tmux attach` tile per seat: read that pane with `4genteam capture <session>`, or attach by
+  hand. It is not the way to watch a room.
 - Each pane runs the client with `exec`, so the pane closes when that client exits. Reopen the view
   with the verb instead of expecting a dead pane to come back.
 - A running pane never picks up a code change: each pane runs the binary it started with. After
   editing the client — or changing a `COMPACT_*` value in its env file — run `4genteam watch --rig
   <RIG>` again: it closes and rebuilds both workspaces, which is the only way the panes pick up the
   new value. The supervisor has the same property, so restart it as above.
-- Keep backticks, apostrophes and `$` out of any message sent with `rig send`: **your own shell
-  executes a backtick substitution before `rig` sees the text**, and the seat policy does not catch
+- Keep backticks, apostrophes and `$` out of any message sent with `4genteam send`: **your own shell
+  executes a backtick substitution before `4genteam` sees the text**, and the seat policy does not catch
   it (a refusal matches the command prefix, not a substitution inside an argument). Avoid them, or
   wrap the whole message in SINGLE quotes.

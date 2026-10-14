@@ -5,76 +5,76 @@ description: Switch ONE seat of a team rig to another runtime/LLM (e.g. architec
 
 # Switch one seat's runtime / LLM
 
-`rig launch` and `rig remove` (rig CLI only, see below) act on a node but cannot change a running node's runtime, and editing `rig.yaml` does not touch a live seat. The working path is a **variant spec** plus a rig teardown and rebuild. Example: an architect seat moved from `claude-code`/`opus` to `omp`/`deepseek/deepseek-flash`.
+Nothing changes a *running* seat's runtime in place: the predecessor CLI's `launch` and `remove` acted on a node without changing one, and editing a spec never touched a live seat. `4genteam` says the same of itself — `4genteam sync switch` prints no sequence that completes a runtime change, and names only the two steps that exist (`4genteam sync rig <room> --update`, `4genteam seat reseat <rig> --seat <name>`). Example: an architect seat moved from `claude-code`/`opus` to `omp`/`deepseek/deepseek-flash` — a definition change plus a restart.
 
-## Which `rig`: `4genteam` or the rig CLI
+## Which `rig`: `4genteam`, and what it can and cannot do
 
-`4genteam` is its own binary and does not answer `rig` verbs; its `stop` is machine-wide, not a rig teardown. Everything that works on a rig spec or a node (`down --delete`, `up <spec>.yaml`, `capture`, `launch`, `parked`, `provider signals`) needs the rig CLI itself, so call it by path:
+`4genteam` is this client's own binary: it answers no `rig` verb, and its `stop` is machine-wide, not a room teardown. **It cannot switch a runtime in place, and it prints no sequence that completes the switch** — `4genteam sync switch` says exactly that and names the two steps that do exist:
+
+- `4genteam sync rig <room> --update` writes the room's definition and each seat's pinned snapshot.
+- `4genteam seat reseat <rig> --seat <name>` stops and restarts a seat so it loads the configuration it now has.
+
+Neither runs inside `sync switch` (both write, and a restart is peak-gated for a DeepSeek seat), and **whether a restart carries a changed RUNTIME is not established**. The switch is the owner's call.
+
+The spec- and node-level verbs the predecessor CLI had (`down --delete`, `up <spec>.yaml`, `capture`, `launch`, `parked`, `provider signals`) have no `4genteam` counterpart, and **this skill no longer prints the teardown sequence**: measured on this box, its middle line stopped the MACHINE's safeguards (`rigd` reaped with its children, for every room) and its last could not run at all (`--team DIR is required`). That CLI's daemon is not running either — it answers `daemon unreachable ... Resolved: partial via session name`.
+
+The reads are native:
 
 ```bash
-RIG="node <path to the rig CLI dist/index.js>"
-$RIG ps --nodes --rig <rig> --json     # runtime, model, sessionStatus, startupStatus per seat
+4genteam ps <rig> --nodes --json        # runtime, model, sessionStatus, startupStatus per seat
+4genteam ps <rig> --nodes               # one row per seat: RUNTIME MODEL STATUS ... CTX ACTIVITY ERROR
+4genteam capture <session> --lines 25   # one pane, verbatim (a canonical `<room>-<seat>@<room>` is translated)
+4genteam room status <room>             # one line per seat: SEAT RUNTIME STATE SESSION
 ```
 
-`4genteam ps <rig> [--nodes|--compact|--grid|--json]` reads tmux and the seat transcripts, marks a seat `quota` when its transcript tail shows a quota or credit message, and answers the `rig ps --nodes --rig R --json` contract.
+## Gate: the restart and the definition change need the owner
 
-## Gate: the teardown needs the owner
+A room-wide rebuild kills **every** seat in the room, not just the one switching, and even a single-seat restart ends that seat's turn. Nothing below runs without the owner's explicit yes. Before asking:
 
-`$RIG down <rig> --delete --force` kills **every** seat in the rig, not just the one switching, and the permission guard blocks it until the owner explicitly approves that rig's teardown. Before asking:
-
-1. `$RIG ps --nodes --rig <rig> --json`: every seat's `runtime`, `model`, `startupStatus`, `activity`.
-2. `$RIG capture <rig>-<seat>@<rig> --lines 25` for each working seat. **Do not tear down over a seat that is mid-task** (a rebase, a commit, a deploy) without telling the owner what will be interrupted.
-3. Ask the owner (ask_question): switch now / wait for the busy seat / start the seat as a separate rig. Then proceed only on an explicit yes.
+1. `4genteam ps <rig> --nodes --json`: every seat's `runtime`, `model`, `startupStatus`, `activity`.
+2. `4genteam capture <rig>-<seat>@<rig> --lines 25` for each working seat. **Do not restart over a seat that is mid-task** (a rebase, a commit, a deploy) without telling the owner what will be interrupted.
+3. Ask the owner (ask_question): switch now / wait for the busy seat / start the seat as a separate room. Then proceed only on an explicit yes.
 
 ## Steps
 
-`<L>` is the rig's launch directory (where the seats start and omp reads `.env`) and `<L>/rig/` is its spec directory.
+`<room>` is the room's slug and `<rig>` its rig name — the same string in this layout. Its definition is `~/.config/4genthub/rooms/<room>/spec.json`, written by `4genteam sync rig <room> --update`.
 
-1. **Back up and author the variant** (never edit the original spec in place):
+1. **Record the change in cloud, once per seat.** The cloud is the authority on the occupant, and the verb prints what it did not apply:
    ```bash
-   cd <L>/rig && cp rig.yaml rig.yaml.pre-<seat>-<runtime>.bak
-   python3 - <<'E'
-   s=open('rig.yaml').read()
-   a="          id: <seat>\n          model: <old model>\n          permission_policy: builtin:yolo\n          profile: default\n          runtime: <old runtime>\n"
-   b="          id: <seat>\n          model: deepseek/deepseek-flash\n          permission_policy: builtin:yolo\n          profile: default\n          runtime: omp\n"
-   assert a in s
-   open('rig-<seat>-<runtime>.yaml','w').write(s.replace(a,b))
-   E
+   4genteam sync switch <room> <seat> --runtime omp --model deepseek/deepseek-flash --apply none --reason "<why>"
    ```
-   Keep seat ids and edges identical: the canonical session names `<rig>-<seat>@<rig>` then survive, so queue WORK counts and `rig send` destinations still resolve. The block must match the spec's real indentation; check with `sed -n 1,50p rig.yaml` first.
-2. **DeepSeek key, in the LAUNCH dir.** omp reads `<L>/.env`. Check it **before** the rebuild:
+   Keep seat keys and edges identical: the canonical session names `<rig>-<seat>@<rig>` then survive, so queue WORK counts and `4genteam send` destinations still resolve.
+2. **DeepSeek key.** omp needs `DEEPSEEK_API_KEY` in its environment. The two files this client and its launchers read are `~/.config/4genthub/.env` and `~/.config/deepseek/.env` (both hold it — measured 2026-10-14), and the seats' tmux server needs it too. Check it **before** restarting a seat:
    ```bash
-   grep -c DEEPSEEK_API_KEY <L>/.env   # must be 1; the link must not point at a file without it
-   # If missing, ensure DEEPSEEK_API_KEY is populated in ~/.config/4genthub/.env (copied from ~/.config/deepseek/env)
-   # and relink if needed: ln -sfn ~/.config/deepseek/env <L>/.env or ln -sfn ~/.config/4genthub/.env <L>/.env
+   grep -c DEEPSEEK_API_KEY ~/.config/4genthub/.env ~/.config/deepseek/.env   # each must be 1
+   tmux set-environment -g DEEPSEEK_API_KEY <key>                             # for the seats' panes
    ```
-   **Pitfall seen live:** `<L>/.env` pointed at `~/.config/4genthub/.env` when it lacked `DEEPSEEK_API_KEY`, or `~/.config/deepseek/env` was missing its `.env` sibling, so the rebuild left omp seats on `runtime_error: No API key found for deepseek`, and `rig send` refused with "interactive prompt (runtime_error)". Ensure `~/.config/4genthub/.env` and `~/.config/deepseek/.env` both contain `DEEPSEEK_API_KEY`. Also ensure the global tmux environment has `DEEPSEEK_API_KEY` set (`tmux set-environment -g DEEPSEEK_API_KEY <key>`).
-3. **Dry-run**: `cd <L>/rig && $RIG up rig-<seat>-<runtime>.yaml --plan` expects `resolve_spec: ok`, `preflight: ok` (yolo `full_bypass` warnings are expected).
-4. **Switch** (after the owner's yes):
-   `$RIG down <rigId> --snapshot --force --delete --json` (prints a snapshot id; if it answers `deleteBlocked` because no tmux server runs, see the throwaway-session step in rig-runtime-switch), then launch the new spec and bring up the supervisor stack with `4genteam up`:
+   **Pitfall seen live:** a launch environment that lacked the key left omp seats on `runtime_error: No API key found for deepseek`, and the send verb refused with "interactive prompt (runtime_error)".
+3. **Read both sides**: `4genteam room status <room>` prints one line per seat (SEAT RUNTIME STATE SESSION) as the runtime sees it, and `4genteam sync rig <room> --update` writes the definition the seats will load. This client has no dry-run verb for a definition change — these two reads are what makes a disagreement visible before a seat is touched.
+4. **Switch** (after the owner's yes) — the two native steps, and nothing that stops the machine's safeguards:
    ```bash
-   $RIG up <L>/rig/rig-<seat>-<runtime>.yaml --yes
-   4genteam up <rig> [--allow-peak]
+   4genteam sync rig <room> --update                          # the definition the seats will load
+   4genteam seat reseat <rig> --seat <seat> [--allow-peak]     # stop and restart that one seat, once it is quiet
    ```
-   **Never stop at `$RIG up`**: always run `4genteam up <rig>` immediately afterwards to start `rigd`, the auto-compaction loop, the watchdog, and the status bridge.
+   `seat reseat` waits for the seat to be quiet; `--force` skips that wait and a seat mid-turn loses the turn. **Whether the restart carries a changed RUNTIME is not established — measure it (step 5)** rather than assuming it. If the room is not running at all, `4genteam up <rig> --team <the room's team dir>` starts it (`--team DIR` is required), and `4genteam continue <rig>` restores a stopped room and briefs its seats.
 5. **Verify with a measurement**, not silence:
    ```bash
-   $RIG ps --nodes --rig <rig> --json    # every node runtime/model/startupStatus=ready
-   $RIG ps --nodes --rig <rig>           # REASON must not read runtime_error
-   $RIG capture <rig>-<seat>@<rig> --lines 10
+   4genteam ps <rig> --nodes --json              # every seat runtime/model/startupStatus=ready
+   4genteam ps <rig> --nodes                     # the ERROR column must not read runtime_error
+   4genteam capture <rig>-<seat>@<rig> --lines 10
    ```
-   If REASON is `runtime_error`, read the capture: a missing key is step 2; fix it and repeat step 4.
+   If the ERROR column reads `runtime_error`, read the capture: a missing key is step 2; fix it and repeat step 4.
 6. **Brief the seats.** The rebuilt seats are fresh sessions with no memory. Send each busy or relevant seat a kickoff:
    ```bash
    4genteam send --from owner <rig-short> <seat> '<message>'
    ```
-   Use **single quotes** and no backticks or `$`: your shell runs a backtick substitution before rig sees it. Say: the runtime changed and why; which files hold its state (`handover/_shared.md`, `state-<seat>.md`, `NEXT_GEN.md`); anything left half-done (check `git status` before continuing a rebase); the rules (commit locally only, stage by explicit path, owner approves every push).
-7. **Reopen the watch grid**: `4genteam watch watch --rig <rig>` (idempotent; it rebuilds both workspaces).
+   Use **single quotes** and no backticks or `$`: your shell runs a backtick substitution before `4genteam` sees it. Say: the runtime changed and why; which files hold its state (`handover/_shared.md`, `state-<seat>.md`, `NEXT_GEN.md`); anything left half-done (check `git status` before continuing a rebase); the rules (commit locally only, stage by explicit path, owner approves every push).
+7. **Reopen the watch grid**: `4genteam watch --rig <rig>` (idempotent; it rebuilds both workspaces).
 
 ## Switching back after the reset
 
-Repeat with the original runtime and model, repoint `<L>/.env` to its recorded old target, or use the `.bak` spec. The seat's state lives in the handover files and the queue, not in the session.
+Repeat with the original runtime and model through the same three verbs: `4genteam sync switch` records it, `4genteam sync rig --update` writes the definition, `4genteam seat reseat` loads it. The seat's state lives in the handover files and the queue, not in the session.
 
 ## Relaying to a seat that refuses (`interactive prompt`)
 
-`rig send` refuses when a pane sits at a prompt. Read `$RIG capture` first: if it shows only error text and no menu, `--dangerously-interact --reason "<why>"` stages the text without submitting it, and `rig send` will not accept a bare Enter (`message is empty`). Submit it with `tmux send-keys -t '<session>' Enter`. Never do this over a real selection or approval dialog.
+`4genteam send` refuses when a pane sits at a prompt, and it refuses `--dangerously-interact`/`--reason` outright (`--dangerously-interact is not a switch the runtime has`), so the staging path the old text used no longer exists. Read the pane first with `4genteam capture <session> --lines 25`: if it shows only error text and no menu, the way in is `tmux send-keys -t '<session>'` from that pane's own tmux server. Never do this over a real selection or approval dialog.

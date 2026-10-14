@@ -107,8 +107,8 @@ fix: ask for a key, and never paste one into a message.
 | the client says `AGENTHUB_URL` and `AGENTHUB_TOKEN` must be set | neither the file nor the environment has them | ask the user for the key, write `~/.config/4genthub/.env` |
 | `403 Not authenticated` from `<SERVER-URL>` or the MCP endpoint | no bearer token reached the server | ask the user for a key; never paste one into a message |
 | `401 Invalid authentication credentials` | a token arrived and is invalid or expired | ask the user for a new key; nothing else in the client or `.mcp.json` needs to change |
-| `rig daemon status` says the daemon is not running | the daemon is stopped | `rig daemon start` |
-| `rig ps` shows no node for the room | the room was never materialized on this machine | `4genteam sync rig <ROOM>`, then `rig up <spec>` (step 2.5) |
+| `4genteam doctor` reports a safeguard row that is not running | the runtime daemon or that safeguard is stopped | `4genteam up <RIG> --team <DIR>`; `doctor` itself is read-only and starts nothing |
+| `4genteam ps <RIG> --nodes` shows no seat for the room | the room was never materialized on this machine | `4genteam sync rig <ROOM>`, then `4genteam up <RIG> --team <DIR>` (step 2.5) |
 | the watch view does not open | herdr or tmux is missing | `herdr --version`, `tmux -V`; stop and tell the user |
 | `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `4genteam up`, `compact`, `continue`, `watchdog` or `sync respawn` | the room holds a seat on a `deepseek/` model, and `OFFPEAK_ONLY` is on (the default) so the client will not start or resume it inside a peak window (01:00-04:00 and 06:00-10:00 UTC, Monday-Friday) | not a fault. Start it at the peak rate with `--allow-peak`, or `4genteam offpeak set off` to allow it from now on, or wait for the off-peak instant the message names. `4genteam offpeak` reports the state, `4genteam offpeak status` the setting |
 | a seat exits at once after launch | its runtime is not installed, or its runtime and model disagree | read the seat's log and report the missing piece to the user; do not switch the model to make it start |
@@ -117,7 +117,8 @@ fix: ask for a key, and never paste one into a message.
 ## Part 2 — Build a room and its seats, when the user asks
 
 A room is the cloud record: the seats, what each seat is told, who may message whom, and which
-skills each seat carries. A rig is the local rig orchestrator instance that runs those seats. The two share
+skills each seat carries. A room's seats are hosted locally by `agenthub-runtime` and supervised by
+this client (`4genteam`). The two share
 a name unless the user wants them different (`--rig` says otherwise).
 
 ### 2.1 Ask first
@@ -140,7 +141,8 @@ choices the software accepts. Do not answer any of them yourself.
 - whether it **pins a version** (`pinned_version`, a concrete `x.y.z`) or **follows the latest**.
 
 **(b) The permission policy, one answer per seat.** Read the five choices to the user and get an
-explicit answer for each seat. `rig policy list` prints them:
+explicit answer for each seat. `4genteam policy show <SEAT> --rig <RIG> --team <FILE>` prints one
+seat's rendered policy:
 
 | Policy | Means | Stored as |
 |---|---|---|
@@ -150,8 +152,9 @@ explicit answer for each seat. `rig policy list` prints them:
 | `yolo` | the operator/no-guardrails posture — everything the harness allows; the launch posture is **full bypass** | `builtin:yolo` |
 | `none` | the reserved deliberate-none choice: the posture is the floor, the same as naming nothing, but the choice is visible | `none` |
 
-`rig policy list` also prints `auto`, the rig orchestrator's own posture; it is not one of the values a 4genthub
-seat may record, so the five above are the choices to offer.
+This client has no `policy list`: `4genteam policy show <SEAT> --rig <RIG> --team <FILE>` prints one
+seat's rendered policy, and the five postures above are the choices a 4genthub
+seat may record.
 
 A seat that does not name one gets `standard`. **Say what `yolo` means before the user picks it: a
 `yolo` seat runs unattended with no approval prompts.**
@@ -173,8 +176,8 @@ explicit link. Ask which seat may send to which, and with what kind:
 | `escalates_to` | reports and escalations |
 
 `spawned_by` and `can_observe` are also link kinds: `spawned_by` affects launch order and never
-authorizes a send, and `can_observe` allows reading another seat's output (`rig capture`, `rig
-transcript`) but not sending to it.
+authorizes a send, and `can_observe` allows reading another seat's output (`4genteam capture
+<session>`, or that seat's session log through `4genteam watch`) but not sending to it.
 
 One link authorizes one direction only. An answer needs its own link the other way: a developer
 that reports to the lead has `dev escalates_to lead` as well as whatever the lead uses to assign.
@@ -315,16 +318,16 @@ The cloud now knows the room; this machine has no seats yet. Ask the user which 
 use (the room name by default), then:
 
 ```bash
-4genteam sync rig <ROOM>     # writes the rig spec and the seat files
-4genteam up <RIG>            # launches daemon, seats, supervisor, bridge and watch wall
-rig ps --nodes --rig <RIG>   # one row per seat of the room, with its lifecycle and activity
+4genteam sync rig <ROOM>         # writes the room's definition and the seat files
+4genteam up <RIG> --team <DIR>   # launches daemon, seats, supervisor, bridge and watch wall
+4genteam ps <RIG> --nodes        # one row per seat of the room, with its lifecycle and activity
 ```
 
-`4genteam up <RIG>` is the way to bring a room back after a restart: in one command it checks the
-rig daemon, restores the rig, starts the
+`4genteam up <RIG> --team <DIR>` is the way to bring a room back after a restart: in one command it
+checks the runtime daemon, starts the room from the local team definition that directory holds, starts the
 status bridge, then the compaction supervisor, opens the watch view, opens the rig UI and hands
-over to herdr. Its positional is the **rig** name — the room name unless the user asked for a
-different one (`4genteam up` takes no room argument).
+over to herdr. `--team DIR` is required — there is no default team — and its positional is the **rig** name, the room name unless the user asked for a
+different one.
 
 `4genteam up`, `4genteam compact`, `4genteam continue`, `4genteam watchdog` and `sync respawn` are
 the five verbs that start or resume seats, so each of them runs the DeepSeek peak gate before it does:
@@ -372,7 +375,7 @@ direction gets its own link.
 ```
 
 Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam sync rig <ROOM>`,
-`rig up ~/.config/4genthub/seats/<ROOM>/rig/rig.yaml`, `rig ps --nodes --rig <RIG>`, and the brief
+`4genteam up <RIG> --team <DIR>`, `4genteam ps <RIG> --nodes`, and the brief
 to the lead (2.6).
 
 ### 2.8 The questions, in the order to ask them
@@ -401,7 +404,8 @@ is waiting and stop.
 
 Once the room is up, a seat works the same way on any project.
 
-- **Startup.** `rig whoami --json` prints the rig, pod, this seat and its peers. Run it after any
+- **Startup.** `4genteam whoami --json` prints this seat's identity (`rigName`, `memberId`, runtime,
+  session name, role, model), its peers, the edges and the transcript path. Run it after any
   restart, before concluding anything about where the work stands.
 - **Find work.** The task board is the MCP server: `manage_task` with `{"action":"list"}`,
   `{"action":"next","git_branch_id":"<uuid>"}`, or `{"action":"search","query":"<words>"}`. Create

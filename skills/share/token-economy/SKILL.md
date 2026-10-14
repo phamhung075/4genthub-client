@@ -37,7 +37,7 @@ Optimize text for AI context: docs, changelogs, MCP tasks, subtasks.
 
 ## Messages Between Seats
 
-Applies to `rig send`, queue handoffs, replies and reports. Cost is paid by every reader and again by every compaction, so write what changes the reader's next action and nothing else. Quality gate: the reader can act on the message without asking a follow-up.
+Applies to `4genteam send`, queue handoffs, replies and reports. Cost is paid by every reader and again by every compaction, so write what changes the reader's next action and nothing else. Quality gate: the reader can act on the message without asking a follow-up.
 
 | # | Rule | Instead of |
 |---|------|------------|
