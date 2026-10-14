@@ -11,13 +11,14 @@
 //
 // WHERE A SESSION COMES FROM DEPENDS ON THE SHAPE, AND THE REFUSAL IS ABOUT GUESSING. No SERVER table
 // carries a seat's session — the store is keyed by (room, seat) and seat_status has no session column
-// — so the single-seat shape (room and seat) resolves what it has the way the connector verb does
-// (`--session <name>`, else the single session `rig ps --json` reports) and REFUSES when that is
-// ambiguous: typing an operator's message into the wrong prompt is worse than not delivering it,
-// because the wrong prompt is somebody else's. The rig shape (`--rig R`) derives each session from
-// THIS MACHINE's own node table instead — `rig ps --nodes --rig R --json` names every seat of the rig
-// and the canonical session it answers to — and skips a seat that is not running rather than typing
-// into a stopped session.
+// — so the single-seat shape (room and seat) takes the session from `--session <name>` and REFUSES
+// without it: naming the prompt is the caller's job, and typing an operator's message into the wrong
+// prompt is worse than not delivering it, because the wrong prompt is somebody else's. THE MACHINE-WIDE
+// FALLBACK IS DELETED RATHER THAN REPAIRED: asking `rig ps --json` which sessions this machine runs was
+// an exec of the CLI this cutover removes, so it could not survive it in any world. The rig shape
+// (`--rig R`) reads each session from the RUNTIME's own room status instead (`GetRoomStatus`, the source
+// `roomSeats` documents): it names every seat of the rig and the canonical session that seat answers to, and
+// a seat that is not running is skipped rather than typed into.
 //
 // THE RIG SHAPE IS THE SUPERVISED ONE. `sync messages --rig R --watch` is a child of rigd, so it runs
 // one pass over every seat, writes a heartbeat per pass, and never exits on a transient failure: the
@@ -29,12 +30,10 @@ package clientsync
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -42,6 +41,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -60,17 +60,18 @@ re-acknowledged rather than typed twice.
 Requires AGENTHUB_URL and AGENTHUB_TOKEN. The ack names this machine (its hostname) so the audit says
 which client typed the message.
 
-In the room-and-seat shape the session is --session <name>, or the single session ` + "`rig ps --json`" + ` reports;
-the verb refuses rather than guessing which prompt to type into.
+In the room-and-seat shape the session is --session <name>; the verb refuses without it rather than
+guessing which prompt to type into.
 
-In the --rig shape the room is the rig itself and every seat's own session is read from this machine's
-node table (` + "`rig ps --nodes --rig <rig> --json`" + `); a seat that is not running is skipped, and its messages
-stay pending until it is back. rigd supervises this shape with --watch: one pass every 10 s, one
-heartbeat per pass, and a transient failure waits for the next pass instead of ending the child.
+In the --rig shape the room is the rig itself and every seat's own session is read from the runtime's room
+status (the same read the room status verb makes), which names the canonical session each running seat
+answers to; a seat that is not running is skipped, and its messages stay pending until it is back. rigd
+supervises this shape with --watch: one pass every 10 s, one heartbeat per pass, and a transient failure
+waits for the next pass instead of ending the child.
 
   --limit <n>  the page size asked of the cloud (the cloud's own default and clamp apply)
   --dry-run    pull and print, send and acknowledge nothing (a --rig read is one pass; refused with --watch)
-  --out <dir>  where the delivered ledger lives (default ` + "`~/.openrig/agenthub-seats`" + `)`
+  --out <dir>  where the delivered ledger lives (default ` + "`~/.config/4genthub/seats`" + `)`
 
 // HTTPTimeout is not redefined here: RequestJSON owns the timeout this package uses.
 
@@ -83,36 +84,13 @@ const humanSeatSession = "human@kernel"
 // real one types the text into a session on this machine, which no test can do — and no other machine
 // can do at all, which is the whole reason the cloud stores the text instead of delivering it.
 //
-// The envelope is left ON (no --raw): From/To/Sent is the shape the pane already renders, and it is
-// what tells the seat who wrote the text. The sender itself is carried in the environment —
-// `rig send` reads OPENRIG_SESSION_NAME — so the deliverer, which runs outside any seat shell, stamps
-// the human's session on every delivery.
-var sendToSession = func(ctx context.Context, session, text string) error {
-	cmd := exec.CommandContext(ctx, "rig", "send", session, text)
-	cmd.Env = humanSenderEnv(os.Environ())
-	done, err := cmd.CombinedOutput()
-	if err != nil {
-		detail := oneLine(strings.TrimSpace(string(done)))
-		if detail == "" {
-			detail = err.Error()
-		}
-		return fmt.Errorf("rig send %s: %s", session, detail)
+// It delivers through the runtime socket. THE SENDER IS GIVEN RATHER THAN INHERITED: the deliverer runs
+// OUTSIDE any seat shell and the text is the human's, so the envelope must say human@kernel.
+var sendToSession = func(_ context.Context, session, text string) error {
+	if _, err := clientruntime.RuntimeSendText(session, text, clientruntime.SendOptions{Sender: humanSeatSession}); err != nil {
+		return fmt.Errorf("send to %s: %w", session, err)
 	}
 	return nil
-}
-
-// humanSenderEnv stamps the human's session name onto a delivery's environment, replacing the older
-// spelling rather than appending a duplicate: two OPENRIG_SESSION_NAME entries would leave the winner
-// to exec's order, and the sender must be the human every time.
-func humanSenderEnv(environ []string) []string {
-	stamped := make([]string, 0, len(environ)+1)
-	for _, pair := range environ {
-		if strings.HasPrefix(pair, "OPENRIG_SESSION_NAME=") || strings.HasPrefix(pair, "RIGGED_SESSION_NAME=") {
-			continue
-		}
-		stamped = append(stamped, pair)
-	}
-	return append(stamped, "OPENRIG_SESSION_NAME="+humanSeatSession)
 }
 
 // seatMessage is one pulled message, as the pull describes it.
@@ -166,28 +144,22 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 		}
 		return clientcmd.ExitOK
 	}
-	// Whichever session to type into is resolved ONCE, before anything is pulled: a run that cannot
-	// deliver must not spend its ACKs. And it is resolved from the WHOLE candidate set rather than from
-	// the first entry: `rig ps --json` reports every session this machine runs (fourteen here), so
-	// taking the first would type an operator's message into somebody else's prompt — the one outcome
-	// worse than not delivering it.
+	// Whichever session to type into is resolved ONCE, before anything is pulled: a run that cannot deliver must
+	// not spend its ACKs.
+	//
+	// THE MACHINE-WIDE FALLBACK IS DELETED RATHER THAN REPAIRED. Asking `rig ps --json` which sessions this machine
+	// runs was a shell-out to the CLI the cutover removes, so it could not survive it in any world, and the
+	// convenience it existed for is what the rig shape above already answers. THE MESSAGE IS THE INTERFACE HERE: this
+	// is a contract change, so the refusal names BOTH ways to say where a message goes and what each one takes.
+	//
+	// THE !dryRun HALF IS AN ORDERING DEPENDENCY, not a second rule: the `--rig` branch above RETURNS for a
+	// rig-shaped call, so this guard is only ever reached in the room-and-seat shape. A dry run needs no session
+	// because it types nothing. Move this block above the rig branch and a valid `--rig` call starts being refused;
+	// TestMessagesVerbRigPassDeliversEveryRunningSeat pins that.
 	session := parsed.session
 	if !parsed.dryRun && session == "" {
-		candidates, err := rigSessionCandidates(ctx)
-		if err != nil {
-			fmt.Fprintf(stderr, "4genteam sync messages: %v\n", err)
-			return clientcmd.ExitUnavailable
-		}
-		if len(candidates) == 0 {
-			fmt.Fprintf(stderr, "4genteam sync messages: `rig ps --json` named no session to type into; pass --session <name>\n")
-			return clientcmd.ExitUnavailable
-		}
-		if len(candidates) > 1 {
-			fmt.Fprintf(stderr, "4genteam sync messages: %d sessions are running (%s), so this verb will not guess which prompt to type into — the wrong prompt is somebody else's. Name this seat's own with --session <name>\n",
-				len(candidates), strings.Join(candidateNames(candidates), ", "))
-			return clientcmd.ExitUnavailable
-		}
-		session = candidates[0].name
+		fmt.Fprintf(stderr, "4genteam sync messages: name the prompt this message goes to — --rig <room> delivers to every running seat of that room, or --session <name> types into one session\n")
+		return clientcmd.ExitUsage
 	}
 	done, err := syncSeatMessages(ctx, baseURL, token, parsed.room, parsed.seat, session, parsed.out, parsed.limit, parsed.dryRun, stdout, stderr)
 	if err != nil {
@@ -456,32 +428,41 @@ func oneLine(text string) string {
 	return flat
 }
 
-// rigNode is the part of a rig's node table (`rig ps --nodes --rig R --json`) the deliverer reads:
-// logicalId names the seat, canonicalSessionName the session `rig send` reaches it by, and
-// sessionStatus says whether there is a live prompt to type into.
-type rigNode struct {
-	LogicalID            string `json:"logicalId"`
-	CanonicalSessionName string `json:"canonicalSessionName"`
-	SessionStatus        string `json:"sessionStatus"`
-}
-
 // seatSession is one seat of a rig and the session its prompt lives in.
 type seatSession struct {
 	seat, session string
 }
 
-// rigSeats maps a rig's node table to the seats a pass may type into. A node that is not running is
-// skipped rather than typed into: a stopped session has no prompt reading it, so text typed there
-// would be acknowledged for a delivery nobody saw. Skipping is safe — the message stays pending, and
-// the pass after the watchdog has the seat back delivers it.
-func rigSeats(nodes []rigNode, rig string) []seatSession {
-	prefix := rig + "."
-	seats := make([]seatSession, 0, len(nodes))
-	for _, node := range nodes {
-		if !strings.HasPrefix(node.LogicalID, prefix) || node.CanonicalSessionName == "" || node.SessionStatus != "running" {
+// roomSeats is the ONE place this verb asks which seats a room has and where their prompts live. It is a package
+// variable for the same reason sendToSession is: the real one talks to the runtime, and a test must be able to answer
+// without one.
+//
+// IT REPLACES `rig ps --nodes --rig R --json`, which is where this verb failed in the field: the node table it read
+// carried logicalId/canonicalSessionName/sessionStatus, and the runtime's own room status carries the same three facts
+// (Seat, SessionName, State). The room IS the rig slug - the panel writes to the room named in the seat's address.
+var roomSeats = func(room string) ([]seatSession, error) {
+	statuses, err := clientruntime.NewClient("").GetRoomStatus(room)
+	if err != nil {
+		return nil, err
+	}
+	return seatSessionsFrom(statuses), nil
+}
+
+// seatSessionsFrom is the skip rule, kept pure so it is testable without a runtime: a seat that is not running is
+// skipped rather than typed into, because a stopped session has no prompt reading it and text typed there would be
+// acknowledged for a delivery nobody saw. Skipping is safe - the message stays pending, and the pass after the seat is
+// back delivers it. The same rule covers the runtime's own death states (agent_socket_closed, agent_stdio_eof,
+// agent_exited, stopped): none of them is "running", so their mail waits too.
+func seatSessionsFrom(statuses []clientruntime.SeatStatus) []seatSession {
+	seats := make([]seatSession, 0, len(statuses))
+	for _, status := range statuses {
+		// Trimmed and folded, the comparison clientlifecycle/lifecycle.go makes: the runtime's word is `running`, but
+		// an exact match turns a padded or differently-cased one into "not running" for EVERY seat at once - a pass
+		// that delivers nothing and reports nothing. Matching the sibling keeps one rule for one word.
+		if !strings.EqualFold(strings.TrimSpace(status.State), "running") || status.SessionName == "" || status.Seat == "" {
 			continue
 		}
-		seats = append(seats, seatSession{seat: strings.TrimPrefix(node.LogicalID, prefix), session: node.CanonicalSessionName})
+		seats = append(seats, seatSession{seat: status.Seat, session: status.SessionName})
 	}
 	return seats
 }
@@ -491,17 +472,11 @@ func rigSeats(nodes []rigNode, rig string) []seatSession {
 // non-zero on it. The room is the rig slug: the panel writes to the room named in the seat's own
 // address, and a rig and its room carry the same name.
 func messagesPass(ctx context.Context, baseURL, token string, parsed messagesArgs, stdout, stderr io.Writer) int {
-	out, err := runRig(ctx, "ps", "--nodes", "--rig", parsed.rig, "--json")
+	seats, err := roomSeats(parsed.rig)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync messages: %v\n", err)
 		return 1
 	}
-	var nodes []rigNode
-	if err := json.Unmarshal([]byte(out), &nodes); err != nil {
-		fmt.Fprintf(stderr, "4genteam sync messages: `rig ps --nodes --rig %s` did not answer with a node list: %v\n", parsed.rig, err)
-		return 1
-	}
-	seats := rigSeats(nodes, parsed.rig)
 	if len(seats) == 0 {
 		fmt.Fprintf(stderr, "4genteam sync messages: rig %s reports no running seat to deliver to\n", parsed.rig)
 		return 1

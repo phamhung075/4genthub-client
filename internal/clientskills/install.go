@@ -1,4 +1,4 @@
-// The delivery half: the files a seat receives, and the declaration that makes OpenRig project them.
+// The delivery half: the files a seat receives, and the declaration that makes the rig orchestrator project them.
 // Both halves are needed. "Resources are the available pool. They are NOT automatically delivered to
 // agents - profiles select them via uses" (the agent spec reference), so a skill copied into the seat's
 // skills path without a declaration is inert, and a declaration without the files points at nothing.

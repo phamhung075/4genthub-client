@@ -23,9 +23,9 @@ const (
 	numstat = "12\t3\tinternal/foo.go\n0\t7\tdocs/bar.md\n"
 )
 
-// runEvidence drives the verb the dispatcher drives: rig is nil because NeedsRig is false.
+// runEvidence drives the verb the dispatcher drives: no rig is involved.
 func runEvidence(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	return evidenceCommand{}.Run(ctx, nil, args, stdout, stderr)
+	return evidenceCommand{}.Run(ctx, args, stdout, stderr)
 }
 
 // evidenceServer is a routed stand-in for the route: it records the one request it is asked to answer
@@ -667,9 +667,6 @@ func TestCommandsRegistersTheEvidenceVerb(t *testing.T) {
 	}
 	if commands[0].Name() != "evidence" {
 		t.Errorf("Name() = %q, want evidence", commands[0].Name())
-	}
-	if commands[0].NeedsRig() {
-		t.Error("evidence needs no rig: it talks to git and the cloud")
 	}
 }
 

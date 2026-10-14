@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // The compaction limits the token bar is drawn against. Each is read from the environment so it can be
@@ -59,11 +61,9 @@ func rigSeats(ctx context.Context, rig string) ([]string, error) {
 	}
 	seats := []string{}
 	for _, name := range strings.Fields(out) {
-		if !strings.HasPrefix(name, rig+"-") || !strings.HasSuffix(name, "@"+rig) {
-			continue
+		if room, seat, ok := clientruntime.ParseSeatSessionName(name); ok && room == rig {
+			seats = append(seats, seat)
 		}
-		seat := strings.TrimSuffix(strings.TrimPrefix(name, rig+"-"), "@"+rig)
-		seats = append(seats, seat)
 	}
 	sort.Strings(seats)
 	return seats, nil
@@ -293,10 +293,29 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 	return nil
 }
 
-// runInputLoop reads lines and sends each to its seat with `rig send`, the same route any other message
-// takes. An empty line skips; Ctrl-D or /hide leaves.
+// sendLine delivers one typed line to its seat, in process. A var so the tests drive the loop without a
+// daemon or a runtime.
+//
+// The seat's session name is READ from the runtime's room record rather than composed from a convention, and
+// the sender is preserved: a line typed at the grid is written BY that seat's watcher, so it is stamped with
+// the watcher's own session.
+//
+// The three calls below are the send verb's own primitives, and this is the THIRD writer of that shape the
+// `saySender` comment in clientlifecycle names as the moment to consolidate it into the runtime client.
+// Consolidating means touching the gated send path, so it is left to its own unit rather than smuggled in
+// here.
+var sendLine = func(ctx context.Context, rig, seat, text string) error {
+	address, err := clientruntime.ResolveSeatAddress(rig, seat)
+	if err != nil {
+		return err
+	}
+	_, err = clientruntime.RuntimeSendText(address.SessionName, text, clientruntime.SendOptions{Sender: os.Getenv("AGENTHUB_SESSION_NAME")})
+	return err
+}
+
+// runInputLoop reads lines and sends each to its seat, the same route any other message takes. An empty
+// line skips; Ctrl-D or /hide leaves.
 func runInputLoop(ctx context.Context, rig, seat string, in io.Reader, out io.Writer) error {
-	target := fmt.Sprintf("%s-%s@%s", rig, seat, rig)
 	scanner := bufio.NewScanner(in)
 	for {
 		fmt.Fprintf(out, "%s > ", seat)
@@ -310,8 +329,7 @@ func runInputLoop(ctx context.Context, rig, seat string, in io.Reader, out io.Wr
 		if line == "" {
 			continue
 		}
-		_, err := execCommand(ctx, "rig", "send", target, line)
-		if err != nil {
+		if err := sendLine(ctx, rig, seat, line); err != nil {
 			message := err.Error()
 			if len(message) > 200 {
 				message = message[:200]

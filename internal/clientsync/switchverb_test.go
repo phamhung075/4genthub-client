@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // switchPut is one recorded occupant PUT: its path, its decoded body and the Authorization header.
@@ -64,53 +65,29 @@ func switchWriteJSON(w http.ResponseWriter, status int, body any) {
 	_, _ = w.Write(encoded)
 }
 
-// switchRigStub answers `rig ps` from a scripted node list and records every argv in order. A seat
-// command answers seatErr, so a test drives the failure branch without a rig.
-type switchRigStub struct {
-	nodes   []map[string]any
-	missing bool
-	seatErr error
+// switchSeatStub answers the verb's two runtime calls - set-model and the fresh restart - and records each in
+// order as {step, room, seat[, model]}. failure scripts the runtime's answer to every call, so a test drives
+// the absent-daemon, refused and failed branches without a daemon.
+type switchSeatStub struct {
+	failure error
 	calls   [][]string
 }
 
-func (s *switchRigStub) run(argv ...string) switchRigAnswer {
-	s.calls = append(s.calls, append([]string(nil), argv...))
-	if s.missing {
-		return switchRigAnswer{err: errSwitchRigNotFound}
-	}
-	if len(argv) > 1 && argv[1] == "ps" {
-		encoded, _ := json.Marshal(s.nodes)
-		return switchRigAnswer{stdout: string(encoded)}
-	}
-	if s.seatErr != nil {
-		return switchRigAnswer{err: s.seatErr}
-	}
-	return switchRigAnswer{}
+func (s *switchSeatStub) setModel(room, seat, model string) error {
+	s.calls = append(s.calls, []string{"set-model", room, seat, model})
+	return s.failure
 }
 
-func (s *switchRigStub) seatCalls() [][]string {
-	var calls [][]string
-	for _, call := range s.calls {
-		if len(call) > 1 && call[1] == "seat" {
-			calls = append(calls, call)
-		}
-	}
-	return calls
+func (s *switchSeatStub) restartFresh(room, seat string) error {
+	s.calls = append(s.calls, []string{"restart-fresh", room, seat})
+	return s.failure
 }
 
-func switchStubRig(t *testing.T, stub *switchRigStub) {
+func switchStubSeats(t *testing.T, stub *switchSeatStub) {
 	t.Helper()
-	original := switchRunRig
-	switchRunRig = stub.run
-	t.Cleanup(func() { switchRunRig = original })
-}
-
-// switchPSNodes is the Python's PS_NODES: two seats, seat1 the second.
-func switchPSNodes() []map[string]any {
-	return []map[string]any{
-		{"rigName": "room1", "logicalId": "main.other", "canonicalSessionName": "other-1@room1"},
-		{"rigName": "room1", "logicalId": "main.seat1", "canonicalSessionName": "seat1-2@room1"},
-	}
+	originalModel, originalRestart := switchSetModel, switchRestartFresh
+	switchSetModel, switchRestartFresh = stub.setModel, stub.restartFresh
+	t.Cleanup(func() { switchSetModel, switchRestartFresh = originalModel, originalRestart })
 }
 
 func switchOccupant(runtime, model string) map[string]any {
@@ -132,8 +109,8 @@ func switchRun(t *testing.T, cloud *switchCloud, argv []string) (int, string, st
 // test_switch_model_puts_body_keeps_runtime_and_sets_model.
 func TestSwitchModelPutsBodyKeepsRuntimeAndSetsModel(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model", "--reason", "why"})
 
@@ -153,9 +130,12 @@ func TestSwitchModelPutsBodyKeepsRuntimeAndSetsModel(t *testing.T) {
 	if want := map[string]any{"runtime": "claude-code", "model": "new-model"}; !reflect.DeepEqual(put.body, want) {
 		t.Errorf("body = %v, want %v", put.body, want)
 	}
-	want := [][]string{{"rig", "seat", "set-model", "seat1-2@room1", "--model", "new-model", "--reason", "why"}}
-	if got := stub.seatCalls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("rig seat calls = %v, want %v", got, want)
+	want := [][]string{{"set-model", "room1", "seat1", "new-model"}}
+	if got := stub.calls; !reflect.DeepEqual(got, want) {
+		t.Errorf("runtime calls = %v, want %v", got, want)
+	}
+	if !strings.Contains(errOut, "applies at the seat's next start") {
+		t.Errorf("stderr = %q, want the note that a model change waits for the next start", errOut)
 	}
 	if want := "switched:room1/seat1 runtime=claude-code model=new-model applied=set-model\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
@@ -168,8 +148,8 @@ func TestSwitchModelPutsBodyKeepsRuntimeAndSetsModel(t *testing.T) {
 // test_switch_accepts_the_agy_runtime: agy is a legal runtime, and a runtime change is manual.
 func TestSwitchAcceptsTheAgyRuntime(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, out, _ := switchRun(t, cloud, []string{"room1", "seat1", "--runtime", "agy"})
 
@@ -185,10 +165,12 @@ func TestSwitchAcceptsTheAgyRuntime(t *testing.T) {
 }
 
 // test_switch_runtime_only_keeps_current_model_and_prints_manual_steps.
-func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsManualSteps(t *testing.T) {
+// The port's name for this pin said "prints manual steps"; the steps are gone (they were the rig orchestrator
+// CLI's, and following them took the machine's safeguards down), so the name moved with the text.
+func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsTheLimit(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--runtime", "codex"})
 
@@ -199,10 +181,13 @@ func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsManualSteps(t *testing.T) {
 		t.Errorf("body = %v, want %v", cloud.puts[0].body, want)
 	}
 	if len(stub.calls) != 0 {
-		t.Errorf("a runtime change called rig: %v", stub.calls)
+		t.Errorf("a runtime change touched a seat: %v", stub.calls)
 	}
-	if !strings.Contains(errOut, "rig down room1") {
-		t.Errorf("stderr = %q, want the manual steps", errOut)
+	if strings.Contains(errOut, "rig down") || strings.Contains(errOut, "rig up") {
+		t.Errorf("stderr = %q, want no rig CLI lifecycle verb in the notice", errOut)
+	}
+	if !strings.Contains(errOut, "4genteam sync rig room1 --update") {
+		t.Errorf("stderr = %q, want the client's own read of the room's definition", errOut)
 	}
 	if want := "switched:room1/seat1 runtime=codex model=old-model applied=manual\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
@@ -212,8 +197,8 @@ func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsManualSteps(t *testing.T) {
 // test_switch_explicit_apply_none_with_runtime_change_skips_manual.
 func TestSwitchExplicitApplyNoneWithRuntimeChangeSkipsManual(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--runtime", "codex", "--apply", "none"})
 
@@ -221,7 +206,7 @@ func TestSwitchExplicitApplyNoneWithRuntimeChangeSkipsManual(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
 	}
 	if len(stub.calls) != 0 {
-		t.Errorf("--apply none called rig: %v", stub.calls)
+		t.Errorf("--apply none touched a seat: %v", stub.calls)
 	}
 	if errOut != "" {
 		t.Errorf("stderr = %q, want nothing: --apply none skips the manual steps too", errOut)
@@ -231,11 +216,11 @@ func TestSwitchExplicitApplyNoneWithRuntimeChangeSkipsManual(t *testing.T) {
 	}
 }
 
-// test_switch_restart_stops_then_launches_fresh_with_warning.
-func TestSwitchRestartStopsThenLaunchesFreshWithWarning(t *testing.T) {
+// test_switch_restart_sets_the_model_then_restarts_fresh_with_warning.
+func TestSwitchRestartSetsTheModelThenRestartsFreshWithWarning(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, out, errOut := switchRun(t, cloud,
 		[]string{"room1", "seat1", "--model", "new-model", "--apply", "restart", "--reason", "r"})
@@ -244,12 +229,11 @@ func TestSwitchRestartStopsThenLaunchesFreshWithWarning(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
 	}
 	want := [][]string{
-		{"rig", "seat", "set-model", "seat1-2@room1", "--model", "new-model", "--reason", "r"},
-		{"rig", "seat", "stop", "seat1-2@room1", "--reason", "r"},
-		{"rig", "seat", "launch", "seat1-2@room1", "--fresh", "--reason", "r"},
+		{"set-model", "room1", "seat1", "new-model"},
+		{"restart-fresh", "room1", "seat1"},
 	}
-	if got := stub.seatCalls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("rig seat calls = %v, want %v", got, want)
+	if got := stub.calls; !reflect.DeepEqual(got, want) {
+		t.Errorf("runtime calls = %v, want %v", got, want)
 	}
 	if !strings.Contains(errOut, "warning") || !strings.Contains(errOut, "loses its live context") {
 		t.Errorf("stderr = %q, want the restart warning", errOut)
@@ -259,11 +243,12 @@ func TestSwitchRestartStopsThenLaunchesFreshWithWarning(t *testing.T) {
 	}
 }
 
-// test_switch_runtime_change_prints_manual_steps_and_skips_rig.
-func TestSwitchRuntimeChangePrintsManualStepsAndSkipsRig(t *testing.T) {
+// test_switch_runtime_change_prints_manual_steps_and_skips_rig — the port's name; the steps it printed
+// are gone because following them took the machine's safeguards down, so this pin now asserts the limit.
+func TestSwitchRuntimeChangePrintsTheLimitAndSkipsTheSeat(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--runtime", "codex", "--model", "m2"})
 
@@ -271,9 +256,9 @@ func TestSwitchRuntimeChangePrintsManualStepsAndSkipsRig(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
 	}
 	if len(stub.calls) != 0 {
-		t.Errorf("a runtime change called rig: %v", stub.calls)
+		t.Errorf("a runtime change touched a seat: %v", stub.calls)
 	}
-	for _, want := range []string{"4genteam sync rig room1 --update", "rig down room1", "rig up"} {
+	for _, want := range []string{"4genteam sync rig room1 --update", "4genteam seat reseat", "owner's call"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("stderr does not say %q:\n%s", want, errOut)
 		}
@@ -283,11 +268,48 @@ func TestSwitchRuntimeChangePrintsManualStepsAndSkipsRig(t *testing.T) {
 	}
 }
 
-// test_switch_apply_none_never_calls_rig.
-func TestSwitchApplyNoneNeverCallsRig(t *testing.T) {
+// THE PIN THE 06:0xZ INCIDENT EARNED. The runtime-change notice used to print the rig CLI's own
+// three-line sequence. Its middle line was measured on this box to stop the MACHINE's safeguards (rigd
+// reaped with its children, for every rig) and its last line could not run at all, so a reader who
+// followed it took every rig's supervisors down and could not start the room again from it. A reader
+// cannot tell the two vocabularies apart by name - `down` and `stop` read alike - so the notice may
+// name no verb from the lead's machine-wide list (room-wide rule, 2026-10-14 06:08Z), and, since the
+// cutover removes the tool, no rig CLI verb at all.
+func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
+
+	_, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--runtime", "codex", "--model", "m2"})
+	printed := out + errOut
+
+	machineWide := []struct{ needle, why string }{
+		{"rig down", "measured: a machine-wide safeguard stop - rigd reaped with its children, for every rig"},
+		{"rig up", "measured: fails with `--team DIR is required`, so the sequence cannot be finished"},
+		{"4genteam stop", "a machine-wide stop of rigd and its children"},
+		{"rig launch", "a seat launch: lifecycle stays in the lead's hands"},
+		{"seat launch", "the same launch, spelled the client's own way"},
+		{"tmux kill-server", "it takes every pane on the machine with it"},
+		{"tmux kill-session", "the same, narrower"},
+	}
+	for _, f := range machineWide {
+		if strings.Contains(printed, f.needle) {
+			t.Errorf("the runtime-change notice prints %q (%s):\n%s", f.needle, f.why, printed)
+		}
+	}
+
+	for _, needle := range []string{"rig seat", "rig remove", "rig daemon", "rig bundle", "rig export", "rig ps", "rig queue"} {
+		if strings.Contains(printed, needle) {
+			t.Errorf("the runtime-change notice prints the rig CLI verb %q, which a reader cannot run after the cutover:\n%s", needle, printed)
+		}
+	}
+}
+
+// test_switch_apply_none_never_touches_a_seat.
+func TestSwitchApplyNoneNeverTouchesASeat(t *testing.T) {
+	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, out, _ := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model", "--apply", "none"})
 
@@ -295,19 +317,19 @@ func TestSwitchApplyNoneNeverCallsRig(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
 	}
 	if len(stub.calls) != 0 {
-		t.Errorf("--apply none called rig: %v", stub.calls)
+		t.Errorf("--apply none touched a seat: %v", stub.calls)
 	}
 	if !strings.HasSuffix(out, "applied=none\n") {
 		t.Errorf("stdout = %q, want it to end applied=none", out)
 	}
 }
 
-// test_switch_missing_rig_binary_records_cloud_and_exits_0: the cloud change is the authority, so a
-// missing rig is a NOTE and a zero exit.
-func TestSwitchMissingRigBinaryRecordsCloudAndExitsZero(t *testing.T) {
+// TestSwitchAbsentRuntimeRecordsCloudAndExitsZero: the cloud change is the authority and is recorded first,
+// and a machine with no runtime daemon is a NOTE - the verb answers applied=none and exits 0.
+func TestSwitchAbsentRuntimeRecordsCloudAndExitsZero(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes(), missing: true}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{failure: errSwitchRuntimeAbsent}
+	switchStubSeats(t, stub)
 
 	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model"})
 
@@ -317,42 +339,43 @@ func TestSwitchMissingRigBinaryRecordsCloudAndExitsZero(t *testing.T) {
 	if len(cloud.puts) != 1 {
 		t.Errorf("put %d times, want 1", len(cloud.puts))
 	}
-	if !strings.Contains(errOut, "`rig` not found") {
-		t.Errorf("stderr = %q, want the note about rig", errOut)
+	if !strings.Contains(errOut, "the agenthub runtime is not running") {
+		t.Errorf("stderr = %q, want the note about the runtime", errOut)
 	}
 	if !strings.HasSuffix(out, "applied=none\n") {
 		t.Errorf("stdout = %q, want it to end applied=none", out)
 	}
 }
 
-// test_switch_seat_not_in_rig_ps_exits_0: a seat OpenRig does not list is recorded in the cloud only.
-func TestSwitchSeatNotInRigPsExitsZero(t *testing.T) {
+// test_switch_seat_unknown_to_the_runtime_exits_0: a seat the runtime's room does not list is recorded in
+// the cloud only, and nothing after the refused call runs.
+func TestSwitchSeatUnknownToTheRuntimeExitsZero(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: []map[string]any{}}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{failure: &clientruntime.DaemonRefused{Reason: "seat seat1 not found in room room1"}}
+	switchStubSeats(t, stub)
 
-	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model"})
+	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model", "--apply", "restart"})
 
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
 	}
-	if !strings.Contains(errOut, "not in `rig ps`") {
-		t.Errorf("stderr = %q, want the note about rig ps", errOut)
+	if !strings.Contains(errOut, "not in the runtime's records") {
+		t.Errorf("stderr = %q, want the note that the runtime's records do not list the seat", errOut)
 	}
-	if got := stub.seatCalls(); len(got) != 0 {
-		t.Errorf("rig seat was called for an absent seat: %v", got)
+	if len(stub.calls) != 1 {
+		t.Errorf("runtime calls = %v, want only the set-model that was refused", stub.calls)
 	}
 	if !strings.HasSuffix(out, "applied=none\n") {
 		t.Errorf("stdout = %q, want it to end applied=none", out)
 	}
 }
 
-// test_switch_rig_command_failure_exits_1: a failed `rig seat` call is a remote failure and prints nothing
-// to stdout.
-func TestSwitchRigCommandFailureExitsOne(t *testing.T) {
+// test_switch_runtime_failure_exits_1: a call the runtime refused for another reason is a remote failure
+// that names the step, and prints nothing to stdout.
+func TestSwitchRuntimeFailureExitsOne(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes(), seatErr: exitCodeError(3)}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{failure: &clientruntime.DaemonRefused{Reason: "cannot write room spec: disk full"}}
+	switchStubSeats(t, stub)
 
 	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model"})
 
@@ -362,8 +385,8 @@ func TestSwitchRigCommandFailureExitsOne(t *testing.T) {
 	if out != "" {
 		t.Errorf("stdout = %q, want nothing", out)
 	}
-	if !strings.Contains(errOut, "exit code 3") {
-		t.Errorf("stderr = %q, want the failing code", errOut)
+	if !strings.Contains(errOut, "set-model of room1/seat1 failed") || !strings.Contains(errOut, "disk full") {
+		t.Errorf("stderr = %q, want the step and the runtime's reason", errOut)
 	}
 }
 
@@ -375,8 +398,8 @@ func TestSwitchPutErrorExitsOne(t *testing.T) {
 				occupants: []map[string]any{switchOccupant("claude-code", "old-model")},
 				putStatus: status,
 			}
-			stub := &switchRigStub{nodes: switchPSNodes()}
-			switchStubRig(t, stub)
+			stub := &switchSeatStub{}
+			switchStubSeats(t, stub)
 
 			code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model"})
 
@@ -389,7 +412,7 @@ func TestSwitchPutErrorExitsOne(t *testing.T) {
 			if !strings.Contains(errOut, fmt.Sprintf("HTTP %d", status)) {
 				t.Errorf("stderr = %q, want HTTP %d", errOut, status)
 			}
-			if got := stub.seatCalls(); len(got) != 0 {
+			if got := stub.calls; len(got) != 0 {
 				t.Errorf("rig was called after a failed PUT: %v", got)
 			}
 			if strings.Contains(errOut, "test-token") {
@@ -402,8 +425,8 @@ func TestSwitchPutErrorExitsOne(t *testing.T) {
 // test_switch_unknown_seat_in_cloud_exits_1: the cloud never heard of the seat, so nothing is PUT.
 func TestSwitchUnknownSeatInCloudExitsOne(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, _, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model"})
 
@@ -435,8 +458,8 @@ func TestSwitchUsageErrorsExitTwo(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-			stub := &switchRigStub{nodes: switchPSNodes()}
-			switchStubRig(t, stub)
+			stub := &switchSeatStub{}
+			switchStubSeats(t, stub)
 
 			code, out, errOut := switchRun(t, cloud, testCase.argv)
 
@@ -459,8 +482,8 @@ func TestSwitchUsageErrorsExitTwo(t *testing.T) {
 // test_switch_invalid_apply_choice_exits_2.
 func TestSwitchInvalidApplyChoiceExitsTwo(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
-	stub := &switchRigStub{nodes: switchPSNodes()}
-	switchStubRig(t, stub)
+	stub := &switchSeatStub{}
+	switchStubSeats(t, stub)
 
 	code, _, _ := switchRun(t, cloud, []string{"room1", "seat1", "--model", "m", "--apply", "bogus"})
 

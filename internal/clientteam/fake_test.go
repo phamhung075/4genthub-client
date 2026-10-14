@@ -1,6 +1,7 @@
 package clientteam
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -192,6 +193,6 @@ func runTeam(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	stdout := &strings.Builder{}
 	stderr := &strings.Builder{}
-	code := teamCommand{}.Run(nil, nil, args, stdout, stderr)
+	code := teamCommand{}.Run(context.Background(), args, stdout, stderr)
 	return code, stdout.String(), stderr.String()
 }

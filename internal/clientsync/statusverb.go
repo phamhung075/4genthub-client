@@ -13,7 +13,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// seatStore is the machine's store: clientenv.ResolveSeatStore, the account home's .openrig/agenthub-seats.
+// seatStore is the machine's store: clientenv.ResolveSeatStore, the account home's .config/4genthub/seats.
 // It is a var so a test can point the store at a scratch tree - the store no longer follows $HOME, so
 // t.Setenv("HOME", ...) cannot redirect it, exactly as the Python tests monkeypatch DEFAULT_OUT - and so a
 // test can drive the machine that cannot resolve one.

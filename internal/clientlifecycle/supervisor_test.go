@@ -2,6 +2,7 @@ package clientlifecycle
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +66,7 @@ func supervisorFor(path, runtime string, working bool, sent *[]string, interrupt
 	// The off-peak gate is OFF for every other test in this file: they are about the compaction logic,
 	// so the resume path must behave exactly as it did before the gate existed. The gate's own tests set
 	// both seams themselves.
-	supervisor.Nodes = func(string) []map[string]any { return nil }
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
 	supervisor.Getenv = func(key string) string {
 		if key == clientoffpeak.ModeEnv {
 			return clientoffpeak.ValueOff
@@ -183,6 +184,83 @@ func TestAWorkingSeatOfAnotherRuntimePastTheWarnLimitWaitsThenIsInterruptedAtThe
 	}
 }
 
+// THE PURE HALF: what the read's word means, and what a caller can SAY about it. A DEFINITE answer - `working`,
+// `needs_input`, `running` - is silent, because a sentence is owed for a mystery and not for an answer. FOUR ways a
+// gate goes silent, and each says which one it was: a word nobody knows, `unknown`, an absent field, and an answer
+// that carried no word at all.
+//
+// `unknown` was the one that slipped through unnamed, and it is worth saying why: it is a RECOGNIZED word, so the
+// unrecognized-word branch did not catch it, and it returned an empty why while the daemon's own taxonomy defines it
+// as NOT EVIDENCE - a report that cannot tell. Measured on the live rig: architect and fe-dev both answer `unknown`,
+// so two of five seats read exactly like a busy seat when the truth was that the daemon could not say.
+func TestIdleFromActivityWordNamesWhatItCouldNotRead(t *testing.T) {
+	cases := []struct {
+		name    string
+		word    string
+		present bool
+		idle    bool
+		want    string
+	}{
+		{"idle", "idle", true, true, ""},
+		{"the stored form releases too", "idle-at-prompt", true, true, ""},
+		{"a busy seat is deliberate and silent", "working", true, false, ""},
+		{"needs_input is busy too", "needs_input", true, false, ""},
+		{"unknown is the daemon saying it cannot tell", "unknown", true, false, "not evidence"},
+		{"a word nobody knows is named", "drifting", true, false, "drifting"},
+		{"no agentActivity field at all", "", false, false, "no agentActivity"},
+		{"a field that carried no word", "", true, false, "was empty"},
+	}
+	for _, c := range cases {
+		idle, why := idleFromActivityWord(c.word, c.present)
+		if idle != c.idle {
+			t.Errorf("%s: idle=%v, want %v", c.name, idle, c.idle)
+		}
+		if c.want == "" {
+			if why != "" {
+				t.Errorf("%s: said %q, want nothing (a deliberate refusal is not a failure to read)", c.name, why)
+			}
+			continue
+		}
+		if !strings.Contains(why, c.want) {
+			t.Errorf("%s: said %q, which does not name %q", c.name, why, c.want)
+		}
+	}
+}
+
+// AND THE SENTENCE LANDS WHERE THE FALSE IS ACTED ON - the hard-limit branch, which interrupts and returns every
+// pass, so the quiet-triggered compact below it never fires. Without this line a read that answered nothing reads
+// exactly like a seat that is simply working: a supervisor that never compacts, saying nothing.
+func TestASeatThatCouldNotBeReadSaysWhyItWasNotCompacted(t *testing.T) {
+	withDocumentedLimits(t)
+	var sent, interrupted, logged []string
+	hard := seatLogFile(t, 320_000, 5)
+	supervisor := supervisorFor(hard, "claude-code", true, &sent, &interrupted)
+	supervisor.Log = func(text string) { logged = append(logged, text) }
+	supervisor.IdleWhy = func(string, string) string {
+		return "the node table carries no agentActivity for this seat, so nothing can say whether it is idle"
+	}
+	supervisor.Step()
+	supervisor.Step()
+	if len(interrupted) != 1 {
+		t.Fatalf("interrupted = %v, want exactly one", interrupted)
+	}
+	said := strings.Join(logged, "|")
+	if !strings.Contains(said, "not compacting") || !strings.Contains(said, "no agentActivity") {
+		t.Errorf("the pass acted on a false without saying why: %v", logged)
+	}
+
+	// AND A BUSY SEAT STAYS QUIET: a deliberate refusal carries no sentence, so the acting path says nothing about it.
+	var quiet []string
+	busy := supervisorFor(hard, "claude-code", true, &sent, &interrupted)
+	busy.Log = func(text string) { quiet = append(quiet, text) }
+	busy.IdleWhy = func(string, string) string { return "" }
+	busy.Step()
+	busy.Step()
+	if strings.Contains(strings.Join(quiet, "|"), "not compacting") {
+		t.Errorf("a deliberate refusal was reported as a failure to read: %v", quiet)
+	}
+}
+
 func TestASeatPastTheWarnLimitIsWarnedOnce(t *testing.T) {
 	withDocumentedLimits(t)
 	var sent, interrupted []string
@@ -270,7 +348,7 @@ func gatedSupervisor(t *testing.T, mode, pin string, nodes []map[string]any) (*S
 	var sent, interrupted, logged []string
 	supervisor := supervisorFor(path, "omp", false, &sent, &interrupted)
 	supervisor.Log = func(text string) { logged = append(logged, text) }
-	supervisor.Nodes = func(string) []map[string]any { return nodes }
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) { return nodes, true, nil }
 	supervisor.Getenv = func(key string) string {
 		switch key {
 		case clientoffpeak.ModeEnv:
@@ -311,6 +389,29 @@ func TestAnOffPeakResumeIsSentExactlyAsBefore(t *testing.T) {
 	}
 }
 
+// TestAFailedRoomReadHoldsTheResume: the automatic resume IS a seat action, so a room read that FAILED must
+// hold it back. Collapsed into an empty fleet, the failed read reached the gate as no seats to refuse over
+// and the seat was told to resume with the peak gate never having seen it - failing open on the one path
+// here that starts a seat. Same off-peak clock as the test above, so the failed read is the only thing that
+// can hold this resume.
+func TestAFailedRoomReadHoldsTheResume(t *testing.T) {
+	supervisor, sent, logged := gatedSupervisor(t, "", "2026-10-09 05:00", deepSeekRoomNode())
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) {
+		return nil, false, errors.New("the node read asked /api/ps and got HTTP 500")
+	}
+	supervisor.Step()
+	if len(*sent) != 0 {
+		t.Fatalf("a resume went out over a room read that failed: %v", *sent)
+	}
+	joined := strings.Join(*logged, "|")
+	if !strings.Contains(joined, "resume held, the room's node records could not be read") {
+		t.Errorf("the held resume was not logged with its reason: %v", *logged)
+	}
+	if strings.Contains(joined, "told to resume") {
+		t.Errorf("the log claims a resume that was held: %v", *logged)
+	}
+}
+
 // TestTheResumeIsSentWhenTheGateIsOff: OFFPEAK_ONLY=0 is no check at all - not even the clock is read -
 // so a peak instant cannot hold the resume back. That is the behaviour this path had before the gate.
 func TestTheResumeIsSentWhenTheGateIsOff(t *testing.T) {
@@ -318,5 +419,80 @@ func TestTheResumeIsSentWhenTheGateIsOff(t *testing.T) {
 	supervisor.Step()
 	if len(*sent) != 1 || (*sent)[0] != resumeText {
 		t.Errorf("sent = %v, want exactly the resume text while the gate is off", *sent)
+	}
+}
+
+// THE PROPERTY, PINNED THE WAY IT HAS TO BE PINNED: this FAILS IF AN ENVELOPE APPEARS rather than recording that
+// none is there today. rigAbort's text is the runner's keystroke, so the assertion is on the EXACT string - a
+// "From NAME:" prefix would arrive as a MESSAGE where the runner needs "/abort", which is the difference between
+// aborting a turn and sending a seat a note about aborting one.
+func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
+	previous := runtimeSendText
+	t.Cleanup(func() { runtimeSendText = previous })
+
+	var gotSession, gotText string
+	runtimeSendText = func(session, text string) error {
+		gotSession, gotText = session, text
+		return nil
+	}
+
+	rigAbort("room1", "alpha")
+
+	if gotSession != "room1-alpha@room1" {
+		t.Errorf("session = %q, want the room's canonical session name room1-alpha@room1", gotSession)
+	}
+	if gotText != "/abort" {
+		t.Errorf("barrier text = %q, want the bare /abort: an envelope or any other text arrives as a MESSAGE, "+
+			"not the keystroke the omp runner aborts a turn on", gotText)
+	}
+}
+
+// rigSay's two shapes, pinned the same way: a plain message carries the "From" envelope the CLI used to write, and a
+// raw one is the exact text - a /compact wrapped in an envelope arrives as prose the runner cannot act on.
+func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
+	previous := runtimeSendText
+	t.Cleanup(func() { runtimeSendText = previous })
+
+	var sessions, texts []string
+	runtimeSendText = func(session, text string) error {
+		sessions, texts = append(sessions, session), append(texts, text)
+		return nil
+	}
+
+	rigSay("room1", "alpha", "context was compacted", false)
+	rigSay("room1", "alpha", "/compact", true)
+
+	if len(texts) != 2 {
+		t.Fatalf("sends = %d, want 2", len(texts))
+	}
+	for i, session := range sessions {
+		if session != "room1-alpha@room1" {
+			t.Errorf("send %d session = %q, want the room's canonical session name room1-alpha@room1", i, session)
+		}
+	}
+	if want := "From " + saySender + ": context was compacted"; texts[0] != want {
+		t.Errorf("plain message = %q, want %q: the runtime's send types exactly the bytes it is given, so the caller "+
+			"writes the envelope the CLI used to add", texts[0], want)
+	}
+	if texts[1] != "/compact" {
+		t.Errorf("raw message = %q, want the bare /compact: an envelope arrives as a MESSAGE where the runner needs "+
+			"the command", texts[1])
+	}
+}
+
+// THE ABSENCE, pinned the way the seat-send conversion pinned its own: with no `rig` on PATH the send must still reach
+// the runtime. A fallback to the rig tool would return early and silently, which this test cannot see unless it
+// empties PATH.
+func TestRigSayNeverShellsOutToTheRigTool(t *testing.T) {
+	previous := runtimeSendText
+	t.Cleanup(func() { runtimeSendText = previous })
+
+	called := false
+	runtimeSendText = func(session, text string) error { called = true; return nil }
+	t.Setenv("PATH", t.TempDir())
+
+	rigSay("room1", "alpha", "hello", false)
+	if !called {
+		t.Fatal("rigSay did not reach the runtime with no `rig` on PATH: it shelled out to the rig tool instead")
 	}
 }

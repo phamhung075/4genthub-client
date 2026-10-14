@@ -20,7 +20,7 @@ import (
 
 type LinkKind string
 
-// Edge kinds accepted by OpenRig. Only delegates_to and spawned_by affect
+// Edge kinds accepted by the rig orchestrator. Only delegates_to and spawned_by affect
 // launch order, and edges never route messages.
 const (
 	KindDelegatesTo      LinkKind = "delegates_to"
@@ -101,7 +101,7 @@ var allowedKinds = map[Intent][]LinkKind{
 	IntentNotice:     {KindCollaboratesWith},
 }
 
-// ValidKind reports whether kind is one of the five OpenRig edge kinds.
+// ValidKind reports whether kind is one of the five the rig orchestrator edge kinds.
 func ValidKind(kind LinkKind) bool {
 	switch kind {
 	case KindDelegatesTo, KindSpawnedBy, KindCanObserve, KindCollaboratesWith, KindEscalatesTo:

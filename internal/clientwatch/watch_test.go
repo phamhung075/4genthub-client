@@ -129,6 +129,18 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	}
 
 	sends := 0
+	// THE INVARIANT THIS ARM EXISTS FOR: a typed line is DELIVERED IN PROCESS, and not by starting a
+	// process. The shape this replaces ran `rig send <composed name>`, which after this client's rename
+	// is a self-call, and it invented the session name from a convention (`{rig}-{seat}@{rig}`) instead
+	// of reading it from the seat's record - the same defect the SEAT shape's send path records as fixed.
+	var delivered []string
+	previousSend := sendLine
+	sendLine = func(_ context.Context, rig, seat, text string) error {
+		delivered = append(delivered, rig+"/"+seat+": "+text)
+		return nil
+	}
+	t.Cleanup(func() { sendLine = previousSend })
+
 	stdin := strings.NewReader("hello there\n/hide\n")
 	stdout := &strings.Builder{}
 	if err := runInputLoop(context.Background(), "r", "lead", stdin, stdout); err != nil {
@@ -136,12 +148,13 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	}
 	for _, call := range fake.callsOf("rig") {
 		sends++
-		if got := strings.Join(call, " "); got != "rig send r-lead@r hello there" {
-			t.Errorf("sent %q", got)
-		}
+		t.Errorf("the loop started a rig process: %s", strings.Join(call, " "))
 	}
-	if sends != 1 {
-		t.Errorf("sends = %d, want 1 (the /hide line must not be sent)", sends)
+	if sends != 0 {
+		t.Errorf("rig processes = %d, want 0: the line must be delivered in process", sends)
+	}
+	if len(delivered) != 1 || delivered[0] != "r/lead: hello there" {
+		t.Errorf("delivered = %v, want exactly the one line to r/lead (the /hide line must not be sent)", delivered)
 	}
 	if !strings.Contains(stdout.String(), "sent") {
 		t.Errorf("stdout = %q", stdout.String())
@@ -149,13 +162,11 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	_ = out
 }
 
-// withStateRoot gives the verb a state root to read, so the tests exercise the verb rather than the
-// refusal. The root itself is unused by the grid; the panes it opens read it.
+// withStateRoot makes a state root to read, so the tests exercise the verb rather than the refusal; the
+// caller passes it as --state-root. The root itself is unused by the grid; the panes it opens read it.
 func withStateRoot(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
-	t.Setenv(stateRootEnv, root)
-	return root
+	return t.TempDir()
 }
 
 // withSeatStore gives the verb a seat store holding this room and these seats, so a verb that resolves
@@ -184,9 +195,9 @@ func TestGridPrintsTheSeatAndColumnCount(t *testing.T) {
 	fake.answerHerdr(nil)
 	fake.seatsFromTmux("r", []string{"lead", "go-dev"})
 	withSeatStore(t, "r", "lead", "go-dev")
-	withStateRoot(t)
+	root := withStateRoot(t)
 
-	code, out, errOut := runVerbT(t, "grid", "--rig", "r")
+	code, out, errOut := runVerbT(t, "grid", "--rig", "r", "--state-root", root)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -201,11 +212,11 @@ func TestARelaunchedGridReplacesTheOldOneAndKeepsTheSameLayout(t *testing.T) {
 	fake.answerHerdr(nil)
 	fake.seatsFromTmux("r", []string{"lead", "go-dev", "reviewer"})
 	withSeatStore(t, "r", "lead", "go-dev", "reviewer")
-	withStateRoot(t)
+	root := withStateRoot(t)
 
 	layout := func() []string {
 		before := len(fake.callsOf("herdr"))
-		if code, _, errOut := runVerbT(t, "grid", "--rig", "r"); code != 0 {
+		if code, _, errOut := runVerbT(t, "grid", "--rig", "r", "--state-root", root); code != 0 {
 			t.Fatalf("grid exit %d, stderr %q", code, errOut)
 		}
 		shape := []string{}
@@ -248,9 +259,9 @@ func TestWatchOpensTheGridAndALeadWindowWithItsInput(t *testing.T) {
 		`{"result": {"root_pane": {"pane_id": "w25:lead1"}}}`)
 	fake.on("herdr pane split --pane w25:lead1 --direction down --ratio 0.800 --cwd "+workingDirKey(),
 		`{"result": {"pane": {"pane_id": "w25:lead2"}}}`)
-	withStateRoot(t)
+	root := withStateRoot(t)
 
-	code, out, errOut := runVerbT(t, "watch", "--rig", "r")
+	code, out, errOut := runVerbT(t, "watch", "--rig", "r", "--state-root", root)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -339,12 +350,12 @@ func TestARealRoomWithNoLiveSeatsStillStreams(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.seatsFromTmux("r", nil) // every seat stopped
 	withSeatStore(t, "r", "lead")
-	withStateRoot(t)
+	root := withStateRoot(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	stdout, stderr := &strings.Builder{}, &strings.Builder{}
-	code := runVerb(ctx, "feed", []string{"--rig", "r"}, stdout, stderr)
+	code := runVerb(ctx, "feed", []string{"--rig", "r", "--state-root", root}, stdout, stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
@@ -390,14 +401,12 @@ func TestAMachineWithoutHerdrRefusesByName(t *testing.T) {
 	}
 }
 
-// The state root is `--state-root`, else $OPENRIG_STATE_ROOT, else the machine's own default - the
-// third clause docs/WATCH.md promises. That default is the SHARED one now, so this states the
+// The state root is `--state-root`, else the machine's own default. That default is the SHARED one now, so this states the
 // delegation instead of a path literal, and it holds on any machine: a resolvable default must be
 // adopted, a default that is absent must be refused BY PATH (this group's own extra stat), and a
 // machine with no resolvable home must be refused as well.
 func TestTheStateRootFallsBackToTheMachineDefault(t *testing.T) {
 	newFakeExec(t)
-	t.Setenv(stateRootEnv, "")
 
 	machine, machineErr := clientenv.ResolveStateRoot("")
 	got, gotErr := resolveStateRoot("")
@@ -418,24 +427,17 @@ func TestTheStateRootFallsBackToTheMachineDefault(t *testing.T) {
 	}
 }
 
-// The order the usage text states: the flag wins over the environment, and the environment over the
-// default. The first two clauses are hermetic here; the default is stated in full by
+// The order the usage text states: the flag wins over the default. The default is stated in full by
 // TestTheStateRootFallsBackToTheMachineDefault, so this only checks it when this machine has one.
-func TestTheStateRootOrderIsFlagThenEnvironmentThenDefault(t *testing.T) {
-	flagRoot, envRoot := t.TempDir(), t.TempDir()
+func TestTheStateRootOrderIsFlagThenDefault(t *testing.T) {
+	flagRoot := t.TempDir()
 
-	t.Setenv(stateRootEnv, envRoot)
 	if got, err := resolveStateRoot(flagRoot); err != nil || got != flagRoot {
-		t.Errorf("with a flag and the environment both set, got %q, %v; want the flag %q",
-			got, err, flagRoot)
+		t.Errorf("with a flag set, got %q, %v; want the flag %q", got, err, flagRoot)
 	}
-	if got, err := resolveStateRoot(""); err != nil || got != envRoot {
-		t.Errorf("with only the environment set, got %q, %v; want the environment %q", got, err, envRoot)
-	}
-	t.Setenv(stateRootEnv, "")
 	if machine, err := clientenv.ResolveStateRoot(""); err == nil && isDir(machine) {
 		if got, err := resolveStateRoot(""); err != nil || got != machine {
-			t.Errorf("with neither set, got %q, %v; want the machine default %q", got, err, machine)
+			t.Errorf("with no flag, got %q, %v; want the machine default %q", got, err, machine)
 		}
 	}
 }
@@ -446,7 +448,7 @@ func TestTheStateRootOrderIsFlagThenEnvironmentThenDefault(t *testing.T) {
 func TestTheUsageStatesTheStateRootHomeRelative(t *testing.T) {
 	var usage strings.Builder
 	printVerbUsage(&usage, "feed")
-	if !strings.Contains(usage.String(), "~/.openrig/state/omp") {
+	if !strings.Contains(usage.String(), "~/.config/4genthub") {
 		t.Errorf("the usage does not state the default state root:\n%s", usage.String())
 	}
 	if strings.Contains(usage.String(), "/home/") {
@@ -457,7 +459,7 @@ func TestTheUsageStatesTheStateRootHomeRelative(t *testing.T) {
 	}
 }
 
-// A root that is named but not there is refused BY ITS PATH, whichever clause named it.
+// A root that is named but not there is refused BY ITS PATH.
 func TestAMissingStateRootIsRefusedByItsPath(t *testing.T) {
 	newFakeExec(t)
 	withSeatStore(t, "r")
@@ -468,12 +470,6 @@ func TestAMissingStateRootIsRefusedByItsPath(t *testing.T) {
 		t.Errorf("a missing root named %q at exit %d, want the path and 3", errOut, code)
 	}
 
-	t.Setenv(stateRootEnv, missing)
-	code, _, errOut = runVerbT(t, "feed", "--rig", "r")
-	if code != 3 || !strings.Contains(errOut, missing) {
-		t.Errorf("a missing root named by the environment gave %q at exit %d, want the path and 3",
-			errOut, code)
-	}
 }
 
 // The wrapper's decision, pinned without a machine that cannot resolve a home: a root this group cannot
@@ -487,22 +483,10 @@ func TestTheWatchRootRefusalIsUnavailableNotUsage(t *testing.T) {
 	if code != clientcmd.ExitUnavailable {
 		t.Errorf("the watch root refusal exits %d, want %d (unavailable)", code, clientcmd.ExitUnavailable)
 	}
-	for _, want := range []string{"--state-root", stateRootEnv} {
+	for _, want := range []string{"--state-root"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("the refusal does not name %s: %q", want, stderr.String())
 		}
-	}
-}
-
-func TestTheStateRootComesFromTheEnvironmentToo(t *testing.T) {
-	fake := newFakeExec(t)
-	root := t.TempDir()
-	t.Setenv(stateRootEnv, root)
-	fake.seatsFromTmux("r", nil)
-
-	resolved, err := resolveStateRoot("")
-	if err != nil || resolved != root {
-		t.Fatalf("resolveStateRoot = %q, %v; want %q", resolved, err, root)
 	}
 }
 
@@ -533,9 +517,9 @@ func TestTheUmbrellaDispatchesToItsVerbs(t *testing.T) {
 	fake.answerHerdr(nil)
 	fake.seatsFromTmux("r", []string{"lead"})
 	withSeatStore(t, "r", "lead")
-	withStateRoot(t)
+	root := withStateRoot(t)
 
-	code, out, errOut := runWatchT(t, "grid", "--rig", "r")
+	code, out, errOut := runWatchT(t, "grid", "--rig", "r", "--state-root", root)
 	if code != 0 {
 		t.Fatalf("watch grid exit %d, stderr %q", code, errOut)
 	}
@@ -544,39 +528,30 @@ func TestTheUmbrellaDispatchesToItsVerbs(t *testing.T) {
 	}
 }
 
-// seatLog prefers the omp state directory and falls back to the Claude Code log.
-func TestSeatLogPrefersOmpStateThenClaude(t *testing.T) {
-	fake := newFakeExec(t)
+// seatLog reads the newest *.jsonl of a native room's seat; the per-session artifact directory beside
+// the logs is not a log.
+func TestSeatLogReadsTheNativeSessionsDirectory(t *testing.T) {
 	root := t.TempDir()
-	seatDir := filepath.Join(root, "r-lead@r", "sessions")
-	if err := os.MkdirAll(seatDir, 0o755); err != nil {
+	sessions := filepath.Join(root, "rooms", "R", "seats", "S", "sessions")
+	if err := os.MkdirAll(filepath.Join(sessions, "x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	session := filepath.Join(seatDir, "one.jsonl")
-	if err := os.WriteFile(session, []byte("{}\n"), 0o644); err != nil {
+	session := filepath.Join(sessions, "x.jsonl")
+	if err := os.WriteFile(session, []byte("{\"message\":{\"model\":\"m1\",\"usage\":{\"totalTokens\":42}}}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	path, runtime := seatLog(context.Background(), root, "r", "lead")
+	path, runtime := seatLog(root, "R", "S")
 	if runtime != "omp" || path != session {
-		t.Errorf("omp seat resolved to (%q, %q), want (%q, omp)", path, runtime, session)
+		t.Errorf("native seat resolved to (%q, %q), want (%q, omp)", path, runtime, session)
+	}
+	if path, runtime = seatLog(root, "R", "other"); path != "" || runtime != "" {
+		t.Errorf("a seat with no sessions resolved to (%q, %q), want empty", path, runtime)
 	}
 
-	// No state directory and no claude process: a runtime the client has no reader for.
-	fake.on("pgrep -af claude .*--name r-go-dev@r", "")
-	path, runtime = seatLog(context.Background(), filepath.Join(root, "empty"), "r", "go-dev")
-	if runtime != "claude" || path != "" {
-		t.Errorf("a seat with no log resolved to (%q, %q), want (\"\", claude)", path, runtime)
-	}
-
-	// OpenRig writes a state directory with only agent/AGENTS.md for a Claude Code seat too. It holds no
-	// session, so the seat is not an omp seat and its Claude Code log is looked for.
-	if err := os.MkdirAll(filepath.Join(root, "r-architect@r", "agent"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	fake.on("pgrep -af claude .*--name r-architect@r", "")
-	if _, runtime = seatLog(context.Background(), root, "r", "architect"); runtime != "claude" {
-		t.Errorf("a state directory with no session resolved to runtime %q, want claude", runtime)
+	snap := SeatSnapshot(root, "R", "S")
+	if snap.LogPath != session || snap.Runtime != "omp" || snap.Model != "m1" || snap.ContextTokens != 42 {
+		t.Errorf("SeatSnapshot = %+v", snap)
 	}
 }
 
@@ -608,7 +583,7 @@ func installBareSeam(t *testing.T) {
 // seats and omp state root, so it skips unless the two variables are set. It is the only test here that
 // touches the real machine - every other test in this package runs against the fake seam.
 //
-//	WATCH_SMOKE_ROOT=~/.openrig/state/omp WATCH_SMOKE_RIG=<rig> go test ./internal/clientwatch/ -run Smoke -v
+//	WATCH_SMOKE_ROOT=~/.config/4genthub WATCH_SMOKE_RIG=<rig> go test ./internal/clientwatch/ -run Smoke -v
 func TestSmokeFeedReadsTheLiveRig(t *testing.T) {
 	root := os.Getenv("WATCH_SMOKE_ROOT")
 	rig := os.Getenv("WATCH_SMOKE_RIG")

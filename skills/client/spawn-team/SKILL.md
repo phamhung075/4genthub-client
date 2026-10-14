@@ -28,15 +28,15 @@ Two ways to run a team, and the two are not exclusive:
 - no arguments — lists the rigs and the briefs on disk
 - `<rig>` — restores it from its latest snapshot (every seat resumes its own session), then briefs its seats
 - `--no-brief` restore only; `--all` restores and briefs every stopped rig that has a brief, and exits non-zero when a rig it visited is not up
-- seats are discovered from tmux at run time (`<rig>-<seat>@<rig>`, OpenRig's session naming) — no seat list is hardcoded, so a 1-seat rig and a 20-seat rig both work
-- brief resolution: explicit path, else `~/.openrig/briefs/<rig>.txt`, else `~/.openrig/briefs/<rig>/<seat>.txt` for that seat alone, else nothing is sent
+- seats are discovered from tmux at run time (`<rig>-<seat>@<rig>`) — no seat list is hardcoded, so a 1-seat rig and a 20-seat rig both work
+- brief resolution: explicit path, else `~/.config/4genthub/briefs/<rig>.txt`, else `~/.config/4genthub/briefs/<rig>/<seat>.txt` for that seat alone, else nothing is sent
 - the DeepSeek peak gate runs before the restore; `--allow-peak` skips it for this run
-- log: `~/.openrig/logs/rig-continue.log`
+- log: `~/.config/4genthub/logs/rig-continue.log`
 - the standing watcher is `4genteam watchdog <rig> --watch`: when a rig the daemon expects to be running has no tmux sessions, it runs the same restore
 
 ### Writing a brief
 
-One file per rig: `~/.openrig/briefs/<rig>.txt`. It is sent verbatim to every seat, prefixed with `Your seat: <seat>.`
+One file per rig: `~/.config/4genthub/briefs/<rig>.txt`. It is sent verbatim to every seat, prefixed with `Your seat: <seat>.`
 
 - **Backticks inside a `rig send` message are executed by YOUR OWN shell before rig ever sees the text** — the effect is not mangling. Sending `rig send <seat> "text with a backtick-quoted command"` substitutes that command on the sending side; the seat policy does not catch it, because a refusal matches on the command prefix, not on a substitution buried inside an argument. (Measured 2026-10-10: a ruling reached a seat with every backtick-quoted name replaced by empty output, from a refused command inside them.) **Mitigation**: keep backticks, `$` and unbalanced apostrophes out of the message, or wrap the whole message in SINGLE quotes so your shell substitutes nothing.
 - Phrase it as a re-scan request ("re-scan the board and take the unblocked items, correcting this list if stale"), not an asserted work list. Resumed seats hold fresher context and correct a stale list; on 2026-10-05 the lead corrected two already-verified items within a minute.
@@ -44,10 +44,10 @@ One file per rig: `~/.openrig/briefs/<rig>.txt`. It is sent verbatim to every se
 
 ### Spawning a new team (new project, new rig)
 
-1. Write a rig spec: `pods[].members[]` with `id`, `agent_ref`, `runtime`, `model`, `cwd`, `permission_policy`, plus `edges` (`delegates_to`, `collaborates_with`, `escalates_to`). Working examples for two runtimes: `~/.openrig/agenthub-seats/<rig>/rig/rig-omp.yaml` (omp/DeepSeek) and `rig-claude.yaml` (claude-code).
+1. Write a rig spec: `pods[].members[]` with `id`, `agent_ref`, `runtime`, `model`, `cwd`, `permission_policy`, plus `edges` (`delegates_to`, `collaborates_with`, `escalates_to`). Working examples for two runtimes: `~/.config/4genthub/seats/<rig>/rig/rig-omp.yaml` (omp/DeepSeek) and `rig-claude.yaml` (claude-code).
 2. `rig up <spec.yaml> --cwd <project-root>`; a one-seat rig needs no spec at all: `rig create <name>`.
 3. Resize in place: `rig grow <rig-id> <members...>`, `rig add`, `rig shrink`, `rig remove`.
-4. Write `~/.openrig/briefs/<rig>.txt` and run `4genteam continue <rig>` to brief it — the same command as continuing an existing team.
+4. Write `~/.config/4genthub/briefs/<rig>.txt` and run `4genteam continue <rig>` to brief it — the same command as continuing an existing team.
 
 ### Watching a team (the standing choice, 2026-10-07)
 

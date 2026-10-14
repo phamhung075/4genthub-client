@@ -1,5 +1,5 @@
 // Package clientps is `4genteam ps`: what a room's seats are doing right now, read from local tmux
-// sessions and each seat's own transcript. It needs no OpenRig daemon.
+// sessions and each seat's own transcript. It needs no rig daemon.
 package clientps
 
 import (
@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 )
 
@@ -70,9 +70,8 @@ func (command) Name() string { return "ps" }
 func (command) Summary() string {
 	return "the seats of a room: summary, --nodes, --compact, --grid, --json"
 }
-func (command) NeedsRig() bool { return false }
 
-func (command) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, usage)
 		fmt.Fprintln(stdout, "\nRead from local tmux sessions and the seats' transcripts. A seat whose transcript tail "+
@@ -109,7 +108,15 @@ func (command) Run(ctx context.Context, _ *clientcmd.Rig, args []string, stdout,
 		fmt.Fprintf(stderr, "4genteam ps: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
-	seats := collect(ctx, sessions, rig)
+	if len(sessions) == 0 {
+		// An empty answer is an answer only when it says what was looked at: the server this process would use.
+		fmt.Fprintln(stderr, "4genteam ps: no tmux sessions on the server this process would use")
+	}
+	stateRoot, _ := clientenv.ResolveStateRoot("") // no root: seats list without transcripts
+	seats := collect(stateRoot, sessions, rig)
+	if reason := emptyReason(rig, len(sessions), len(seats)); reason != "" {
+		fmt.Fprintf(stderr, "4genteam ps: %s\n", reason)
+	}
 	if asJSON {
 		return writeJSON(stdout, stderr, view, seats)
 	}
@@ -153,28 +160,14 @@ func listSessions(ctx context.Context) ([]session, error) {
 	return sessions, nil
 }
 
-// splitSession reads `<rig>-<member>@<rig>`, the name every seat session carries.
-func splitSession(name string) (rig, member string, ok bool) {
-	at := strings.LastIndex(name, "@")
-	if at < 0 {
-		return "", "", false
-	}
-	rig = name[at+1:]
-	rest := name[:at]
-	if !strings.HasPrefix(rest, rig+"-") {
-		return "", "", false
-	}
-	return rig, strings.TrimPrefix(rest, rig+"-"), true
-}
-
-func collect(ctx context.Context, sessions []session, only string) []Seat {
+func collect(stateRoot string, sessions []session, only string) []Seat {
 	var seats []Seat
 	for _, s := range sessions {
-		rig, member, ok := splitSession(s.name)
+		rig, member, ok := clientruntime.ParseSeatSessionName(s.name)
 		if !ok || (only != "" && rig != only) {
 			continue
 		}
-		snap := clientwatch.SeatSnapshot(ctx, rig, member)
+		snap := clientwatch.SeatSnapshot(stateRoot, rig, member)
 		seat := Seat{
 			Rig: rig, Member: member, Session: s.name, Runtime: snap.Runtime, Model: snap.Model,
 			Attached: s.attached, Uptime: since(s.created), Tokens: snap.ContextTokens,
@@ -182,7 +175,7 @@ func collect(ctx context.Context, sessions []session, only string) []Seat {
 			RigName: rig, LogicalID: rig + "." + member, CanonicalName: s.name,
 			SessionStatus: "running", StartupStatus: "ready",
 		}
-		if marker := quotaIn(transcriptFor(rig, s.name, snap.LogPath)); marker != "" {
+		if marker := quotaIn(snap.LogPath); marker != "" {
 			seat.Status, seat.Error = "quota", marker
 		}
 		seat.Activity = activity(snap.LogPath)
@@ -195,19 +188,6 @@ func collect(ctx context.Context, sessions []session, only string) []Seat {
 		return seats[i].Member < seats[j].Member
 	})
 	return seats
-}
-
-// transcriptFor prefers the terminal transcript, because a provider error is printed to the terminal
-// and not always written to the session log.
-func transcriptFor(rig, session, fallback string) string {
-	home, err := clientenv.RealHome()
-	if err == nil {
-		path := filepath.Join(home, ".openrig", "transcripts", rig, session+".log")
-		if _, err := os.Stat(path); err == nil {
-			return path
-		}
-	}
-	return fallback
 }
 
 func quotaIn(path string) string {
@@ -295,7 +275,27 @@ func rollup(seats []Seat) []RigRow {
 	return rows
 }
 
+// emptyReason is what a caller is told when a named room matched nothing while sessions DID exist. An
+// empty list and a verb that cannot see the room read identically on stdout, and that is the difference
+// F-A was reported over: `ps <room> --nodes --json` answering `null` while the room was alive. The list
+// is never `null` now, so the reason has to travel on stderr or the reader still cannot tell the two
+// apart. Silence is the answer when there is nothing to distinguish: no room was named, the server had
+// no sessions at all (Run already says so), or the room's seats are right there in the list.
+func emptyReason(rig string, sessions, seats int) string {
+	if rig == "" || sessions == 0 || seats > 0 {
+		return ""
+	}
+	return fmt.Sprintf("no seats for rig %s on the server this process would use (%d session(s) there, none named %s-*)",
+		rig, sessions, rig)
+}
+
 func writeJSON(stdout, stderr io.Writer, view string, seats []Seat) int {
+	if seats == nil {
+		// A documented list is never `null`: callers parse this output, and a room this verb cannot see used to
+		// come back as `null`, which reads as a bug rather than as an empty answer. `Run` says on stderr what it
+		// looked at; here the shape of the answer is fixed.
+		seats = []Seat{}
+	}
 	var payload any = seats
 	if view == "summary" {
 		payload = rollup(seats)
@@ -351,7 +351,7 @@ func ctxCell(s Seat) string {
 	return fmt.Sprintf("%dk", s.Tokens/1000)
 }
 
-// renderNodes prints the node table. Columns whose source (the OpenRig registry) no longer exists are
+// renderNodes prints the node table. Columns whose source (the rig orchestrator registry) no longer exists are
 // not invented: they were dropped, and the columns that remain are the ones a local read can fill.
 func renderNodes(w io.Writer, seats []Seat) {
 	widths := []int{22, 14, 34, 8, 22, 9, 11, 9, 7, 12, 30}

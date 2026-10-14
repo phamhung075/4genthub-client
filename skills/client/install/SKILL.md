@@ -96,9 +96,9 @@ For seats using `omp` with `deepseek/deepseek-flash` or `deepseek-chat`:
 When materializing a rig via `4genteam sync rig <room>`, verify that the launch directory has `.env` linked to a file that contains the necessary provider credentials:
 ```bash
 # Check link
-ls -la "$HOME_REAL/.openrig/agenthub-seats/<rig>/.env"
+ls -la "$HOME_REAL/.config/4genthub/seats/<rig>/.env"
 # Verify key presence (never echo the value)
-grep -c DEEPSEEK_API_KEY "$HOME_REAL/.openrig/agenthub-seats/<rig>/.env"   # Must be >= 1
+grep -c DEEPSEEK_API_KEY "$HOME_REAL/.config/4genthub/seats/<rig>/.env"   # Must be >= 1
 ```
 
 ---
@@ -147,7 +147,7 @@ echo "=== 4. Running Safeguards Doctor ==="
 | Symptom | Cause | Remedy |
 |---|---|---|
 | `[omp-runner] ERROR rpc: No API key found for deepseek` | `DEEPSEEK_API_KEY` missing from tmux environment or launch `.env` | Ensure key is in `~/.config/deepseek/env`, `~/.config/4genthub/.env`, and set in tmux with `tmux set-environment -g DEEPSEEK_API_KEY <key>` |
-| `seat <seat> has no skills to deliver` | Rig was not synchronized with client skills tree | Run `OPENRIG_CLIENT_SKILLS=/path/to/skills 4genteam sync rig <room>` |
-| `Cannot determine identity. Run inside an OpenRig-managed session` | Running `rig whoami` from host shell instead of inside a seat pane | Use `rig whoami --session <session-name> --json` or run from inside a tmux seat pane |
+| `seat <seat> has no skills to deliver` | Rig was not synchronized with client skills tree | Run `AGENTHUB_CLIENT_SKILLS=/path/to/skills 4genteam sync rig <room>` |
+| `Cannot determine identity. Run inside an managed seat session` | Running `rig whoami` from host shell instead of inside a seat pane | Use `rig whoami --session <session-name> --json` or run from inside a tmux seat pane |
 | `bridge: silent, age unknown` | Client background bridge is stopped or unauthenticated | Start client bridge with `4genteam bridge` or check `AGENTHUB_TOKEN` in `~/.config/4genthub/.env` |
 | `Exit 3: at PEAK` | Attempted to start DeepSeek seats during peak pricing | Run `4genteam offpeak` to check window, or use `4genteam up <rig> --allow-peak` if authorized |

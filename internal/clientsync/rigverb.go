@@ -19,12 +19,12 @@
 //
 // THE CLIENT'S OWN SKILL TREE IS DELIVERED BY THIS VERB. `sync rig` is the step that writes each
 // seat's agent directory, so it is also the step that gives a seat the skills this client owns: the
-// tree is found at --skills-root, else $OPENRIG_CLIENT_SKILLS, else skills/ beside this binary, and a
+// tree is found at --skills-root, else $AGENTHUB_CLIENT_SKILLS, else skills/ beside this binary, and a
 // tree that is not there is REFUSED by name rather than skipped, because delivering it is the reason
 // this verb reads one. For each seat internal/clientskills resolves the skills that seat receives
 // (share/, then its room's room-level skills, then its own seat-level ones, and never another room's,
 // another seat's or client/'s), installs them into <agent dir>/skills/, and declares the ids in the
-// seat's agent spec - OpenRig loads a skill only when a profile selects it, so the copy alone is inert.
+// seat's agent spec - the rig orchestrator loads a skill only when a profile selects it, so the copy alone is inert.
 //
 // WHAT IS REUSED RATHER THAN RESTATED: ReadRigspec and ValidateName (rig.go), PullSeat (pull.go),
 // SafeRelative and ValidateHash (seatfiles.go), RequireEnv (statusverb.go) and the seat store's
@@ -84,7 +84,7 @@ rules as ` + "`sync pull`" + `, then build:
   <out>/<room>/.env               a link to the client's one env file, for a member with a
                                   provider/model model
 
-The skills tree is at --skills-root, else $OPENRIG_CLIENT_SKILLS, else skills/ beside this binary, and
+The skills tree is at --skills-root, else $AGENTHUB_CLIENT_SKILLS, else skills/ beside this binary, and
 a tree that is not there is refused by name: each seat receives share/, then its room's room-level
 skills, then its own seat-level skills, and never another room's, another seat's or client/'s.
 
@@ -94,7 +94,7 @@ carried over and named on stderr. Print only ` + "`rig:<path to rig.yaml>`" + ` 
 `
 
 // rigAgentSpecFile is the agent spec in a seat's agent directory: the document that lists the skills a
-// profile selects, and therefore the file the skill delivery edits. A skill OpenRig is not told about
+// profile selects, and therefore the file the skill delivery edits. A skill the rig orchestrator is not told about
 // is not loaded, which is why the delivery declares what it copies.
 const rigAgentSpecFile = "agent.yaml"
 
@@ -233,7 +233,7 @@ var rigMaterializeAgent = func(source, seatDir, target string) error {
 
 // rigDeliverSkills gives one seat the skills this client owns, in the seat's freshly materialized
 // agent directory. It returns false - and writes nothing - for a seat that receives skills but has no
-// agent spec to declare them in, because a copy OpenRig is not told about is dead weight in the seat's
+// agent spec to declare them in, because a copy the rig orchestrator is not told about is dead weight in the seat's
 // tree; the caller names that seat. A seat the tree resolves nothing for is not a failure: it simply
 // receives nothing, and no empty skills/ directory is left in its agent directory.
 func rigDeliverSkills(tree clientskills.Tree, room, seat, agentDir string) (bool, error) {
@@ -387,7 +387,7 @@ func rigRun(ctx context.Context, args rigArgs, stdout, stderr io.Writer) error {
 		return err
 	}
 	// The state root comes from the ONE resolver every verb uses, so the clauses cannot drift: the flag,
-	// else $OPENRIG_STATE_ROOT, else this machine's own default. Nothing resolvable refuses rather than
+	// else this machine's own default. Nothing resolvable refuses rather than
 	// materializing a rig whose state tree sits relative to where this was run from.
 	stateRoot, err := clientenv.ResolveStateRoot(args.stateRoot)
 	if err != nil {

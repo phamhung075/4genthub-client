@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/clientteam"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
 
@@ -43,8 +45,22 @@ const (
 // snappy. It is a variable so the suite need not wait it out.
 var SupervisorStartGrace = 1500 * time.Millisecond
 
+// DaemonReadyWindow is how long a freshly started runtime daemon has to answer on its socket, and
+// RoomStartWindow how long a room's seats have to reach Running after StartRoom returns. Both are
+// variables for the same reason SupervisorStartGrace is: the suite must not have to wait them out.
+//
+// RoomStartWindow is NOT the runtime's readiness window and must not be read as one: that one is
+// `SEAT_READY_WINDOW_SECS` in rust/agenthub-runtime/src/supervisor/mod.rs (60 s, the time a seat is given to
+// hand back its own proof), spent inside StartRoom before this poll ever begins. This one is the client's own
+// patience afterwards. They were both 20 s by coincidence; the relation that is pinned lives in
+// internal/clientruntime (the client's request deadline must outlast the runtime's window), not here.
+var (
+	DaemonReadyWindow = 10 * time.Second
+	RoomStartWindow   = 20 * time.Second
+)
+
 const (
-	upUsage         = "usage: 4genteam up RIG " + clientoffpeak.ModeFlagUsage
+	upUsage         = "usage: 4genteam up RIG --team DIR [--state-dir DIR] [--room-only] " + clientoffpeak.ModeFlagUsage
 	compactUsage    = "usage: 4genteam compact RIG " + clientoffpeak.ModeFlagUsage
 	stopUsage       = "usage: 4genteam stop RIG"
 	statusUsage     = "usage: 4genteam status RIG"
@@ -137,6 +153,9 @@ func requireRig(verb string, args []string, stderr io.Writer) (string, bool) {
 //
 // startBridge IS GONE FROM THIS LIST, and that is 7.1's removed path: `up` starts rigd, and rigd starts
 // the bridge. Two start paths for one safeguard would be two mechanisms.
+// ensureDaemon returns the log file the runtime daemon writes its own output to, and ensureRig returns the
+// room's verdict as this verb's exit code. Their signatures carry the state dir and the definition for one
+// reason beyond the work: the acceptance run has to be able to say WHICH of the two answered.
 var (
 	ensureDaemon       = ensureDaemonImpl
 	ensureRig          = ensureRigImpl
@@ -155,37 +174,157 @@ func (upCommand) Name() string { return "up" }
 func (upCommand) Summary() string {
 	return "start the local stack for a rig: daemon, seats, rigd (which starts the bridge and the supervisor), UI"
 }
-func (upCommand) NeedsRig() bool { return true }
 
-func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, upUsage,
-			"OpenRig daemon, the rig's seats, the status bridge, the compaction supervisor and the OpenRig UI, in that order.\n"+
-				"The DeepSeek peak gate runs BEFORE the seats are restored: with "+clientoffpeak.ModeEnv+" on (the default) a "+
-				"room whose seats run a deepseek/ model is refused at peak, and "+clientoffpeak.FlagAllowPeak+" skips the check "+
-				"for this run.")
+			"The runtime daemon, this rig's room and its seats, and then the safeguards: rigd,\n"+
+				"which owns the compaction supervisor, the watchdog, the seat-message deliverer and the status\n"+
+				"bridge, and finally the watch view and the UI.\n"+
+				"The room's seats come from the LOCAL team definition: --team names the directory that holds\n"+
+				"team.json, and there is no default, so starting a room needs no cloud round trip.\n"+
+				"--room-only stops after the room: it starts the daemon, starts the room from the definition and\n"+
+				"prints one line per seat. It EXCLUDES rigd, the bridge, the watch view, the UI and herdr, whose\n"+
+				"failures are not this verb's verdict - and it must not be used to make a red go away.\n"+
+				"The acceptance invocation, so a reader re-reads the signature instead of remembering it:\n"+
+				"  4genteam up RIG --team DIR [--state-dir DIR] --room-only\n"+
+				"WHAT IT EXITS WITH (design §2.5), counting only the room's own verdict:\n"+
+				"  0  every seat of the room is running. A room that is already up is READ, not restarted: a blind\n"+
+				"     start would cycle sessions of live agents.\n"+
+				"  2  the daemon started but a seat did not - the seats that are not running are named, with the\n"+
+				"     daemon's log path to read next\n"+
+				"  3  the invocation is wrong, or the daemon will not take the definition it was handed\n"+
+				"The state dir and the socket this run talks to are printed BEFORE the room is touched: with the\n"+
+				"flags absent both are chosen from this machine's own environment, and the room's own lines are\n"+
+				"read against that pair.\n"+
+				"The DeepSeek peak gate is LOCAL (it reads the room's own node records) and runs BEFORE the seats\n"+
+				"are started: with "+clientoffpeak.ModeEnv+" on (the default) a room whose seats run a deepseek/\n"+
+				"model is refused at peak with exit 3, and "+clientoffpeak.FlagAllowPeak+" skips the check for\n"+
+				"this run.")
 		return clientcmd.ExitOK
 	}
 	allowPeak, rest := clientoffpeak.ModeFromFlags(args)
-	name, ok := requireRig("up", rest, stderr)
-	if !ok {
-		return clientcmd.ExitUsage
+	flags := flag.NewFlagSet("up", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	teamDir := flags.String("team", "", "the team definition directory that holds team.json (required)")
+	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else ~/.config/4genthub")
+	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before rigd, the bridge, the watch view and the UI")
+	flagArgs, positional := splitFlagsAndPositional(rest)
+	for _, arg := range flagArgs {
+		if name := flagName(arg); name != "" && !upTakesFlag(name) {
+			fmt.Fprintf(stderr, "4genteam up: unknown argument %s. %s\n", arg, upUsage)
+			return clientcmd.ExitRoomRefused
+		}
 	}
-	return runUp(rig, name, allowPeak, stdout, stderr)
+	if err := flags.Parse(flagArgs); err != nil {
+		return clientcmd.ExitRoomRefused
+	}
+	name, ok := requireRig("up", positional, stderr)
+	if !ok {
+		return clientcmd.ExitRoomRefused
+	}
+	if strings.TrimSpace(*teamDir) == "" {
+		fmt.Fprintf(stderr, "4genteam up: --team DIR is required - the room's seats are read from the team definition it holds, and there is no default. %s\n", upUsage)
+		return clientcmd.ExitRoomRefused
+	}
+	root, err := clientenv.ResolveStateRoot(*stateDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
+		return clientcmd.ExitRoomRefused
+	}
+	// THE PAIR IS PRINTED, NOT RESOLVED SILENTLY. The state dir decides which rooms exist and the socket
+	// decides which daemon is asked, and with the flags absent both come from this machine's own
+	// environment - so the run SAYS which daemon it is talking to instead of leaving a reader to guess, and
+	// the room's own lines below are read against it (design §1).
+	fmt.Fprintf(stdout, "state dir: %s\nsocket: %s\n", root, clientruntime.DefaultSocketPath())
+	return runUp(name, *teamDir, root, allowPeak, *roomOnly, stdout, stderr)
 }
 
-func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Writer) int {
-	if err := ensureDaemon(rig, stderr); err != nil {
+// splitFlagsAndPositional separates this verb's flags from its one positional, and puts the positionals
+// LAST: the flag package STOPS at the first bare word, so `up RIG --team DIR` - the order the usage line
+// documents, and the one a reader writes - would otherwise parse no flags at all and report the room name's
+// neighbour as an unexpected argument. clientpolicy's own parser carries this same warning for this same
+// reason, which is exactly why it is spelled out here rather than rediscovered.
+func splitFlagsAndPositional(args []string) (flagArgs, positional []string) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !isFlag(arg) {
+			positional = append(positional, arg)
+			continue
+		}
+		flagArgs = append(flagArgs, arg)
+		// A flag that takes a value takes its VALUE with it, so `--team DIR` is never read as a positional
+		// named DIR. `--team=DIR` carries its own value and needs no lookahead.
+		if upFlagTakesValue(flagName(arg)) && !strings.Contains(arg, "=") && i+1 < len(args) {
+			i++
+			flagArgs = append(flagArgs, args[i])
+		}
+	}
+	return flagArgs, positional
+}
+
+func isFlag(arg string) bool { return strings.HasPrefix(arg, "-") && arg != "-" }
+
+// flagName is a flag's name without its dashes and without any =value; "" for something that is not a flag.
+func flagName(arg string) string {
+	if !isFlag(arg) {
+		return ""
+	}
+	name := strings.TrimLeft(arg, "-")
+	if at := strings.Index(name, "="); at >= 0 {
+		name = name[:at]
+	}
+	return name
+}
+
+func upFlagTakesValue(name string) bool { return name == "team" || name == "state-dir" }
+
+// upTakesFlag is this verb's own flag list, so an argument it does not take is refused HERE with the
+// argument NAMED: the flag package's own message says `-any-time`, and the shape this replaces was a verb
+// that quietly ignored the extra argument.
+func upTakesFlag(name string) bool {
+	switch name {
+	case "team", "state-dir", "room-only", "h", "help":
+		return true
+	}
+	return false
+}
+
+func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, stderr io.Writer) int {
+	// The definition is read FIRST: a --team typo is a caller error, and it must be reported before a daemon
+	// is started or a seat is touched. The room name must be the room the file defines, which is the same
+	// rule clientpolicy applies to its own --rig.
+	// A bad invocation is 3 for this verb, not the CLI-wide ExitUsage (2): 2 is what a PARTIAL START is here
+	// (design §2.5), and one number cannot mean both things to a caller reading an exit code.
+	spec, err := clientteam.LoadRoomSpec(teamDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
+		return clientcmd.ExitRoomRefused
+	}
+	if spec.Room != name {
+		fmt.Fprintf(stderr, "4genteam up: %s defines the room %q, not %q - --rig must name the room the definition defines. %s\n",
+			teamDir, spec.Room, name, upUsage)
+		return clientcmd.ExitRoomRefused
+	}
+	daemonLog, err := ensureDaemon(stateDir, stderr)
+	if err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
 		return clientcmd.ExitRemote
 	}
 	// THE GATE RUNS BEFORE THE RESTORE, and after the daemon only because the room's models are read from
 	// the daemon. So a refusal starts the daemon and nothing else: no seat is resumed, which is the step
 	// that would have started DeepSeek work at the peak rate.
-	if code := PeakGate(rig, name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
+	if code := PeakGate(name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
-	ensureRig(rig, name, stderr)
+	if code := ensureRig(name, spec, daemonLog, stdout, stderr); code != clientcmd.ExitOK {
+		return code
+	}
+	// --room-only is an INSTRUMENT: it ends here, with the room's own verdict. The guard is deliberate - a
+	// red that comes from the bridge, the UI or herdr is not evidence about the room.
+	if roomOnly {
+		return clientcmd.ExitOK
+	}
 	ensureForcecompact(stderr)
 
 	// 7.5: a bridge refused for a missing AGENTHUB_URL or AGENTHUB_TOKEN is a FAILED `up`. The check runs
@@ -215,115 +354,273 @@ func runUp(rig *clientcmd.Rig, name string, allowPeak bool, stdout, stderr io.Wr
 	}
 
 	runWatchView(name, stderr)
-	openUI(rig, stderr)
+	openUI(stderr)
 	if os.Getenv("HERDR_ENV") == "" {
 		return runHerdr(stdout, stderr)
 	}
 	return clientcmd.ExitOK
 }
 
-func ensureDaemonImpl(rig *clientcmd.Rig, stderr io.Writer) error {
+// ensureDaemonImpl makes the runtime daemon reachable for a room whose state lives under stateDir, and
+// returns the log file the daemon's own output goes to.
+//
+// The client starts the daemon itself rather than calling clientruntime's EnsureDaemon: that helper spawns
+// `agenthub-runtime --socket PATH daemon` with NO --state-dir and both streams dropped, so the daemon would
+// land on this machine's default state tree and a start that failed would have nothing to read. `up` that
+// cannot name why a seat did not come up is the silence this client exists to remove.
+func ensureDaemonImpl(stateDir string, stderr io.Writer) (string, error) {
+	logPath := daemonLogPath(stateDir)
 	client := clientruntime.NewClient("")
-	if err := client.EnsureDaemon(context.Background()); err != nil {
-		if rig != nil {
-			if _, rErr := rig.Run(context.Background(), "daemon", "status"); rErr == nil {
-				return nil
-			}
-			if _, rErr := rig.Run(context.Background(), "daemon", "start"); rErr != nil {
-				return errors.New("the OpenRig daemon did not start (see: rig daemon logs)")
-			}
-			return nil
-		}
-		return fmt.Errorf("the agenthub-runtime daemon did not start: %w", err)
+	if client.Reachable() {
+		return logPath, nil
 	}
-	return nil
+	runtimeBin, err := runtimeBinary()
+	if err != nil {
+		return logPath, err
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return logPath, fmt.Errorf("cannot create the directory for the daemon's log: %w", err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return logPath, fmt.Errorf("cannot write the daemon's log at %s: %w", logPath, err)
+	}
+	defer logFile.Close()
+	cmd := exec.Command(runtimeBin, "--state-dir", stateDir, "--socket", client.SocketPath, "daemon")
+	cmd.Stdout, cmd.Stderr = logFile, logFile
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return logPath, fmt.Errorf("cannot start agenthub-runtime: %w", err)
+	}
+	deadline := time.Now().Add(DaemonReadyWindow)
+	for time.Now().Before(deadline) {
+		if client.Reachable() {
+			return logPath, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return logPath, fmt.Errorf("agenthub-runtime did not answer on %s within %s - its own output is in %s",
+		client.SocketPath, DaemonReadyWindow, logPath)
 }
 
-func ensureRigImpl(rig *clientcmd.Rig, name string, stderr io.Writer) {
-	nodes := rigNodes(rig, name)
-	if len(nodes) > 0 {
-		allRunning := true
-		for _, node := range nodes {
-			if node["sessionStatus"] != "running" {
-				allRunning = false
-				break
-			}
-		}
-		if allRunning {
-			return
-		}
+// daemonLogPath is where the runtime daemon's own output goes: beside the state it serves, so a partial room
+// and the reason for it are read from one tree.
+func daemonLogPath(stateDir string) string { return filepath.Join(stateDir, "daemon.log") }
+
+// runtimeBinary is the runtime executable: PATH first, then the per-user install.
+func runtimeBinary() (string, error) {
+	if found, err := exec.LookPath("agenthub-runtime"); err == nil {
+		return found, nil
 	}
+	local := filepath.Join(os.Getenv("HOME"), ".local", "bin", "agenthub-runtime")
+	if _, err := os.Stat(local); err == nil {
+		return local, nil
+	}
+	return "", errors.New("agenthub-runtime is not on PATH or in ~/.local/bin, and a room cannot start without it")
+}
+
+// ensureRigImpl makes the room ready from the definition's own spec and reads it back until every seat is
+// running or RoomStartWindow runs out.
+//
+// CHECK-THEN-START, and the reason is the runtime's own semantics: StartRoom kills and re-creates a session
+// of that name when it finds one running (pty::launch_session), so a blind start CYCLES a room that is
+// already up - live agents included - and every second `up` would move the started_at of a room that was
+// fine. So the room is read first; what that reading says decides the start (seatStartPlan below).
+//
+// It returns the verb's verdict (design §2.5): ExitOK when every seat runs, ExitPartialStart (2) - naming
+// the seats that are not running AND the daemon's log path - when the daemon started but a seat did not,
+// and ExitRoomRefused (3) when the daemon will not take the definition it was handed.
+func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, stdout, stderr io.Writer) int {
 	client := clientruntime.NewClient("")
-	cwd, _ := os.Getwd()
-	if _, err := client.StartRoomByName(name, cwd); err != nil {
-		if rig != nil {
-			if _, rErr := rig.Run(context.Background(), "up", name, "--existing"); rErr != nil {
-				fmt.Fprintf(stderr, "4genteam: could not restore rig %s (see: rig up %s --existing)\n", name, name)
-			}
-			return
-		}
-		fmt.Fprintf(stderr, "4genteam: could not start room %s: %v\n", name, err)
+	reported, statusErr := client.GetRoomStatus(name)
+	restart, sendSpec, planFail := seatStartPlan(reported, statusErr)
+	if planFail != nil {
+		// REFUSED BEFORE ANY StartRoom: the status answer could not be read, so this process does not know what is
+		// running and must not start a room from the definition. Exit 3 is the room contract's number for a request
+		// the daemon did not serve, and the message is the one the decoder wrote - the verb, and the shape it got.
+		fmt.Fprintln(stderr, planFail)
+		return clientcmd.CodeOf(planFail, clientcmd.ExitRoomRefused)
 	}
+	seats := reported
+	// The seats are about to be started, and a seat proves itself by handshake: the runtime gives it a window
+	// that has to cover a first launch in a fresh cache, which builds the agent's model cache and is measured in
+	// tens of seconds. Say so before going quiet, so a first `up` on a new box does not read as a hang.
+	if sendSpec || len(restart) > 0 {
+		fmt.Fprintln(stdout, "4genteam up: starting the room's seats and waiting for them to prove themselves "+
+			"(a first launch in a fresh cache builds the agent's model cache, so this can take a while)")
+	}
+	if sendSpec {
+		started, err := client.StartRoom(spec)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam up: could not start room %s: %v\n", name, err)
+			fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+			return clientcmd.ExitRoomRefused
+		}
+		seats = started
+	}
+	// One seat at a time, and only the ones the reading says are not running: RestartSeat is the per-seat
+	// start (stop that seat if it runs, re-read the materialised spec, start it), so it cannot touch a
+	// running sibling.
+	for _, seat := range restart {
+		if _, err := client.RestartSeat(name, seat); err != nil {
+			fmt.Fprintf(stderr, "4genteam up: could not start %s/%s: %v\n", name, seat, err)
+			fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+			return clientcmd.ExitPartialStart
+		}
+	}
+	deadline := time.Now().Add(RoomStartWindow)
+	for {
+		seats = roomReadings(client, name, seats)
+		if allSeatsRunning(seats) || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if len(seats) == 0 {
+		fmt.Fprintf(stderr, "4genteam up: room %s reported no seats at all\n", name)
+		fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+		return clientcmd.ExitPartialStart
+	}
+	var late []string
+	for _, seat := range seats {
+		// THE PROOF TRAVELS WITH THE VERDICT. `running` alone never said what it rested on - the agent's own
+		// handshake, or a pane that outlived a grace - and the runtime publishes exactly that in `detail`. The
+		// line used to drop the field on the floor, which is the honesty requirement this row was filed for:
+		// the operator read a state name and had no evidence to weigh.
+		line := fmt.Sprintf("%s/%s: %s", name, seat.Seat, seat.State)
+		if seat.Detail != nil && strings.TrimSpace(*seat.Detail) != "" {
+			line += " (" + strings.TrimSpace(*seat.Detail) + ")"
+		}
+		fmt.Fprintln(stdout, line)
+		if !seatRunning(seat) {
+			late = append(late, seat.Seat)
+		}
+	}
+	if len(late) > 0 {
+		fmt.Fprintf(stderr, "4genteam up: room %s is not up: %d of %d seat(s) are not running (%s)\n",
+			name, len(late), len(seats), strings.Join(late, ", "))
+		fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
+		return clientcmd.ExitPartialStart
+	}
+	return clientcmd.ExitOK
+}
+
+// seatStartPlan is the check-then-start decision, pure so it can be pinned without a daemon.
+//
+// sendSpec is true when the WHOLE definition has to be sent: either the daemon does not know the room (the
+// reading failed, or it reported no seats), or every seat it reports is stopped - in both cases nothing is
+// running, so a whole-spec start has nothing to cycle and it is also the path that materialises a room
+// whose spec.json does not exist yet.
+//
+// Otherwise the seats that are not running are returned and started one at a time. A room where every seat
+// already runs returns neither: that is the second `up`, and it must change nothing.
+func seatStartPlan(reported []clientruntime.SeatStatus, err error) (restart []string, sendSpec bool, fail error) {
+	if err != nil {
+		// ONLY THE DAEMON'S OWN REFUSAL MAY START A ROOM. A *clientruntime.DaemonRefused means the daemon ANSWERED and
+		// will not serve this request - for a status read, a room it does not know, and the definition is then the only
+		// source of its seats (U1). EVERY OTHER error means this process learned NOTHING about what is running: an
+		// unreadable answer (*UnreadableAnswer), a frame that never parsed, a transport that never answered. Starting
+		// from the definition then is a blind start, the one outcome check-then-start exists to prevent, and StartRoom
+		// cycles a room of live agents when it finds one running. Both kinds used to leave with exit 3 and be collapsed
+		// here; they are told apart by TYPE now, not by the code they share.
+		var refused *clientruntime.DaemonRefused
+		if errors.As(err, &refused) {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	if len(reported) == 0 {
+		return nil, true, nil
+	}
+	running := false
+	for _, seat := range reported {
+		if seatRunning(seat) {
+			running = true
+			continue
+		}
+		restart = append(restart, seat.Seat)
+	}
+	if !running {
+		return nil, true, nil
+	}
+	return restart, false, nil
+}
+
+// roomReadings is the room's current seats. A reading that fails keeps the last one the runtime gave: the
+// verdict must be about the seats, and an unreadable poll is not news that a seat died.
+func roomReadings(client *clientruntime.Client, name string, fallback []clientruntime.SeatStatus) []clientruntime.SeatStatus {
+	seats, err := client.GetRoomStatus(name)
+	if err != nil || len(seats) == 0 {
+		return fallback
+	}
+	return seats
+}
+
+func allSeatsRunning(seats []clientruntime.SeatStatus) bool {
+	for _, seat := range seats {
+		if !seatRunning(seat) {
+			return false
+		}
+	}
+	return len(seats) > 0
+}
+
+// seatRunning reads the runtime's state string case-insensitively: "Running" and "running" are the same
+// fact, and the runtime's own enum is the only thing that decides it.
+func seatRunning(seat clientruntime.SeatStatus) bool {
+	return strings.EqualFold(strings.TrimSpace(seat.State), "running")
 }
 
 // rigNodes is the ONE reading of a rig's node records here, so the gate and the restore cannot decide
-// from different things. A read that fails, or answers something that is not a list, gives NO nodes: the
-// caller's next step fails loudly on its own, and an unreadable reading must never be read as "this room
-// is safe".
-var rigNodes = func(rig *clientcmd.Rig, name string) []map[string]any {
-	client := clientruntime.NewClient("")
-	seats, err := client.GetRoomStatus(name)
-	if err == nil && len(seats) > 0 {
-		var nodes []map[string]any
-		for _, seat := range seats {
-			nodes = append(nodes, map[string]any{
-				"rigName":       name,
-				"logicalId":     fmt.Sprintf("%s.%s", name, seat.Seat),
-				"seat":          seat.Seat,
-				"runtime":       seat.Runtime,
-				"sessionStatus": seat.State,
-				"model":         seat.Model,
-				"pid":           seat.Pid,
-			})
-		}
-		return nodes
-	}
-	if rig != nil {
-		out, err := rig.Run(context.Background(), "ps", "--nodes", "--rig", name, "--json")
-		if err != nil {
-			return nil
-		}
-		var nodes []map[string]any
-		if json.Unmarshal([]byte(out), &nodes) != nil {
-			return nil
-		}
-		return nodes
-	}
-	return nil
+// from different things. A read that FAILS gives NO nodes and an error: the caller refuses in those words,
+// and an unreadable reading is never read as "this room is safe".
+//
+// The clientseat package reads the SAME runtime call as roomNodes, with the OPPOSITE contract: there a failed read is
+// an ERROR naming the rig, because `reseat` has to say why it will not restart a seat. The names differ on purpose -
+// two same-named functions with opposite contracts is a trap whose only guard would be a commit message.
+//
+// The reading itself is clientruntime.RoomNodes, in one home so the gate here and the watchdog in
+// clientrestore cannot disagree about the same room.
+//
+// The three answers are the seam's own, explicit rather than a sentinel: ok with no error is a transport's
+// answer (possibly an empty table - a room with no seats), no ok and no error is NO RECORDS - the
+// runtime knows no such room, so there is nothing to decide - and an error is a read that FAILED.
+var rigNodes = func(name string) ([]map[string]any, bool, error) {
+	return clientruntime.RoomNodes(name)
 }
 
 // PeakGate is the DeepSeek peak gate for every verb in the client that starts or resumes a room's seats
 // - `up` and `compact` here, and the restore verbs in clientrestore, which is why it is exported: the
 // decision must come from ONE reading of the room's node records, not from a second copy per package.
-// The models are in the room's node records - the reading `rig ps --json --nodes --rig NAME` already gives
-// the restore - so the gate costs one local daemon call and no cloud round trip.
+// The models are in the room's node records, read over the client's own transports, so the gate costs one
+// local call and no cloud round trip.
 //
-// It answers the exit code its verb should return: ExitOK to continue, ExitUnavailable when the setting
-// and the schedule refuse, ExitUsage when the schedule cannot be read at all (a malformed OFFPEAK_UTC is
-// a typo in the environment, and this client fails loudly on those rather than guessing a clock).
+// It answers the exit code its verb should return: ExitOK to continue, ExitUnavailable when the reading
+// cannot be taken or the setting and the schedule refuse, ExitUsage when the schedule cannot be read at all
+// (a malformed OFFEPEAK_UTC is a typo in the environment, and this client fails loudly on those rather than
+// guessing a clock).
 //
-// A rig tool it cannot resolve is NOT a refusal: the reading is impossible, so there is nothing to
-// decide, and the verb's own platform matrix - or its supervisor's start - says so in its own words.
-// Guessing "peak" from a missing reading would block a room the client knows nothing about.
-func PeakGate(rig *clientcmd.Rig, name, verb string, allowPeak bool, stderr io.Writer) int {
-	if rig == nil {
-		tool, err := clientcmd.RequireRig()
-		if err != nil {
-			return clientcmd.ExitOK
-		}
-		rig = tool
+// A READING THAT FAILS IS A REFUSAL, in words: this used to resolve a rig tool and return ExitOK when it
+// could not, which is how a peak-time resume could proceed with the gate never having decided. A room with
+// NO records is different and still proceeds - there are no seats to bill, which is the shape of a room
+// being started for the first time - and blocking a start on
+// a room the client knows nothing about would be the wrong call. But the gate has NOT decided THAT start,
+// and the room may still run a DeepSeek seat, so proceeding is SAID rather than silent: the line below is
+// the whole guard on this fail-open case, and it is here, once, so that no verb reaching this gate - `up`,
+// `compact`, or a restore - can forget to print it.
+func PeakGate(name, verb string, allowPeak bool, stderr io.Writer) int {
+	nodes, ok, err := rigNodes(name)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam %s: the room's node records could not be read, so the peak gate cannot "+
+			"say whether starting this room bills at peak: %v\n", verb, err)
+		return clientcmd.ExitUnavailable
 	}
-	proceed, message, err := clientoffpeak.Check(allowPeak, rigNodes(rig, name), os.Getenv)
+	if !ok {
+		fmt.Fprintf(stderr, "4genteam %s: the room %s has no node records, so the peak gate did NOT run for "+
+			"this start: a DeepSeek seat may be starting on the peak rate\n", verb, name)
+		return clientcmd.ExitOK
+	}
+	proceed, message, err := clientoffpeak.Check(allowPeak, nodes, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam %s: %v\n", verb, err)
 		return clientcmd.ExitUsage
@@ -350,9 +647,35 @@ func ensureForcecompactImpl(stderr io.Writer) {
 	fmt.Fprintf(stderr, "4genteam: run once: sudo setcap cap_sys_ptrace+ep %s\n", helper)
 }
 
-func openUIImpl(rig *clientcmd.Rig, stderr io.Writer) {
-	if _, err := rig.Run(context.Background(), "ui", "open"); err != nil {
-		fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: rig daemon status)")
+// uiURLEnv names the 4genthub web UI to open; the default is the frontend this repository serves in development.
+const (
+	uiURLEnv  = "AGENTHUB_UI_URL"
+	defaultUI = "http://localhost:3800"
+)
+
+// openURL hands a URL to the desktop's opener. It is a seam so a test opens nothing.
+var openURL = openURLImpl
+
+// openURLImpl uses the first opener the machine has: wslview (WSL), xdg-open (Linux), open (macOS). The opener
+// is started and not waited on, because a browser that outlives this verb is the point.
+func openURLImpl(url string) error {
+	for _, opener := range []string{"wslview", "xdg-open", "open"} {
+		if path, err := exec.LookPath(opener); err == nil {
+			return exec.Command(path, url).Start()
+		}
+	}
+	return errors.New("none of wslview, xdg-open or open is on PATH")
+}
+
+// openUIImpl opens the 4genthub web UI. A failure is a line of stderr and nothing else: reaching for the UI and
+// missing is not `up`'s verdict.
+func openUIImpl(stderr io.Writer) {
+	url := os.Getenv(uiURLEnv)
+	if url == "" {
+		url = defaultUI
+	}
+	if err := openURL(url); err != nil {
+		fmt.Fprintf(stderr, "4genteam: could not open the 4genthub UI at %s: %v\n", url, err)
 	}
 }
 
@@ -389,9 +712,8 @@ func (compactCommand) Name() string { return "compact" }
 func (compactCommand) Summary() string {
 	return "record a rig as one meant to run and report its compaction supervisor's row (rigd owns the restart)"
 }
-func (compactCommand) NeedsRig() bool { return false }
 
-func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, compactUsage,
 			"Record RIG as a room that is meant to run, and report its compaction supervisor's row.\n"+
@@ -407,9 +729,9 @@ func (compactCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, st
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	// No rig was resolved for this verb by the dispatcher, so the gate resolves one itself; with no rig
-	// on the machine there is nothing to read and the refusal says so.
-	if code := PeakGate(nil, name, "compact", allowPeak, stderr); code != clientcmd.ExitOK {
+	// The gate reads the room's node records itself; there is no rig to resolve for this verb, and a
+	// reading that cannot be taken is refused in words rather than treated as a safe room.
+	if code := PeakGate(name, "compact", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	if !recordRigFor(name, stderr) {
@@ -438,9 +760,8 @@ func (stopCommand) Name() string { return "stop" }
 func (stopCommand) Summary() string {
 	return "stop rigd and its children (a machine-wide stop: compact, watchdog, messages, bridge)"
 }
-func (stopCommand) NeedsRig() bool { return false }
 
-func (stopCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (stopCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, stopUsage,
 			"Stop rigd. Its children - the compaction supervisors, the watchdogs and the bridge - stop with it,\n"+
@@ -462,9 +783,8 @@ func (statusCommand) Name() string { return "status" }
 func (statusCommand) Summary() string {
 	return "the safeguard rows (--json too) and the supervisor's last log lines"
 }
-func (statusCommand) NeedsRig() bool { return false }
 
-func (statusCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (statusCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, statusUsage,
 			"One line per safeguard row for the rig, then the compaction supervisor's process and the last five\n"+
@@ -507,9 +827,8 @@ type logCommand struct{}
 
 func (logCommand) Name() string    { return "log" }
 func (logCommand) Summary() string { return "follow the supervisor's log" }
-func (logCommand) NeedsRig() bool  { return false }
 
-func (logCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (logCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, logUsage, "Follow the compaction supervisor's log for a rig.")
 		return clientcmd.ExitOK
@@ -539,15 +858,14 @@ func (logCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout
 type uiCommand struct{}
 
 func (uiCommand) Name() string    { return "ui" }
-func (uiCommand) Summary() string { return "open the OpenRig web UI" }
-func (uiCommand) NeedsRig() bool  { return true }
+func (uiCommand) Summary() string { return "open the 4genthub web UI" }
 
-func (uiCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (uiCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		printHelp(stdout, uiUsage, "Open the OpenRig web UI.")
+		printHelp(stdout, uiUsage, "Open the 4genthub web UI (AGENTHUB_UI_URL, default http://localhost:3800).")
 		return clientcmd.ExitOK
 	}
-	openUI(rig, stderr)
+	openUI(stderr)
 	return clientcmd.ExitOK
 }
 
@@ -557,9 +875,8 @@ func (compactRunCommand) Name() string { return "compact-run" }
 func (compactRunCommand) Summary() string {
 	return "the compaction supervisor loop, in the foreground (what compact starts)"
 }
-func (compactRunCommand) NeedsRig() bool { return false }
 
-func (compactRunCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (compactRunCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, compactRunUsage,
 			"The compaction supervisor loop in the foreground. Every pass reads each seat's newest session log and\n"+
@@ -622,7 +939,7 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 	quietFlag := flags.Int("quiet", quiet, "seconds of log silence that mean the job is finished")
 	every := flags.Int("every", 10, "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
-	stateRoot := flags.String("state-root", "", "where OpenRig keeps its per-seat state: the flag, else $OPENRIG_STATE_ROOT, else this machine's own")
+	stateRoot := flags.String("state-root", "", "where the client keeps its state: the flag, else ~/.config/4genthub")
 	forcecompact := flags.String("forcecompact", ForcecompactPath(), "the forcecompact helper, when this machine has one")
 	if err := flags.Parse(args); err != nil {
 		return options, false

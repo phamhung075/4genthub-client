@@ -1,9 +1,5 @@
 package clientwatch
 
-import (
-	"context"
-)
-
 // Snapshot is what one seat's newest session log says about it, for callers outside this package
 // (`4genteam ps`). It reuses seatLog, seatModel and contextTokens so a seat has ONE answer to "which
 // log, which runtime, which model, how full" wherever it is asked.
@@ -15,11 +11,12 @@ type Snapshot struct {
 	CompactLimit  int
 }
 
-// SeatSnapshot reads the seat's newest session log. A seat with no log yields an empty LogPath; the
-// omp state root is optional, so a machine without one still resolves agy and Claude Code seats.
-func SeatSnapshot(ctx context.Context, rig, seat string) Snapshot {
-	root, _ := resolveStateRoot("")
-	logPath, runtime := seatLog(ctx, root, rig, seat)
+// SeatSnapshot reads the seat's newest session log. A seat with no log yields an empty LogPath, and so does an empty root.
+func SeatSnapshot(root, room, seat string) Snapshot {
+	logPath, runtime := "", ""
+	if root != "" { // an unresolved root names no directory; a relative one would read the working tree
+		logPath, runtime = seatLog(root, room, seat)
+	}
 	snap := Snapshot{LogPath: logPath, Runtime: runtime, CompactLimit: compactLimit()}
 	if logPath == "" {
 		snap.Runtime = ""

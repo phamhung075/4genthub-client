@@ -1,13 +1,6 @@
 package clientbridge
 
-import (
-	"fmt"
-	"strings"
-
-	"gopkg.in/yaml.v3"
-)
-
-// edgeKinds are OpenRig's five edge kinds; the server's commpolicy.ValidKind is the other copy of
+// edgeKinds are the rig orchestrator's five edge kinds; the server's commpolicy.ValidKind is the other copy of
 // this list.
 var edgeKinds = map[string]bool{
 	"delegates_to":      true,
@@ -25,32 +18,8 @@ type EdgeStatus struct {
 	Kind string `json:"kind"`
 }
 
-// rigEdge is a (from, to, kind) read from one `rig export` spec, before filtering.
+// rigEdge is a (from, to, kind) read from one room's links, before filtering.
 type rigEdge struct{ from, to, kind string }
-
-// ParseRigEdges reads the pod edges of one `rig export` spec. The CLI ends its output with an
-// `Exported to <path>` status line that is not YAML.
-func ParseRigEdges(output string) ([]rigEdge, error) {
-	spec, _, _ := strings.Cut(output, "\nExported to ")
-	var decoded any
-	if err := yaml.Unmarshal([]byte(spec), &decoded); err != nil {
-		return nil, err
-	}
-	pods, ok := dict(decoded)["pods"].([]any)
-	if !ok {
-		return nil, fmt.Errorf("unexpected rig export YAML shape")
-	}
-	edges := []rigEdge{}
-	for _, pod := range pods {
-		list, _ := dict(pod)["edges"].([]any)
-		for _, item := range list {
-			if edge, ok := item.(map[string]any); ok {
-				edges = append(edges, rigEdge{str(edge["from"]), str(edge["to"]), str(edge["kind"])})
-			}
-		}
-	}
-	return edges, nil
-}
 
 // rigRoom pairs a rig id with the room name it reports under.
 type rigRoom struct{ id, room string }

@@ -1,4 +1,4 @@
-// Package clientseat is the `seat` verb group: keep the local OpenRig seats in step with the cloud.
+// Package clientseat is the `seat` verb group: keep the local the rig orchestrator seats in step with the cloud.
 //
 // The cloud owns what a seat is and resolves it into a snapshot named by a hash. This package compares
 // the hash each local seat is pinned to with the cloud's current one, adopts the newer snapshot THROUGH
@@ -6,7 +6,7 @@
 // the affected seat so it loads it.
 //
 // Three deliberate departures from the Python, all recorded in the phase report:
-//   - the seat store and the OpenRig state root are named, not derived from $HOME, because a seat runs
+//   - the seat store and the rig orchestrator state root are named, not derived from $HOME, because a seat runs
 //     with HOME pointed at its own state directory (seat_policy's real_home() exists for the same
 //     reason);
 //   - adoption spawns this binary rather than a Python interpreter;
@@ -57,9 +57,8 @@ type seatCommand struct{}
 
 func (seatCommand) Name() string    { return "seat" }
 func (seatCommand) Summary() string { return "status, sync and watch of a room's seats" }
-func (seatCommand) NeedsRig() bool  { return false }
 
-func (seatCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (seatCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "4genteam seat: pick a verb: status, sync, watch, reseat")
 		return clientcmd.ExitUsage

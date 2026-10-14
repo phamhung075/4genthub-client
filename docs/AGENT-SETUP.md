@@ -1,4 +1,4 @@
-# Agent setup: 4genthub, OpenRig and herdr, then rooms and seats
+# Agent setup: 4genthub, the rig orchestrator and herdr, then rooms and seats
 
 For an AI agent (or a person) bringing a machine into service for 4genthub, and then building
 rooms and seats when the user asks for them.
@@ -117,7 +117,7 @@ fix: ask for a key, and never paste one into a message.
 ## Part 2 — Build a room and its seats, when the user asks
 
 A room is the cloud record: the seats, what each seat is told, who may message whom, and which
-skills each seat carries. A rig is the local OpenRig instance that runs those seats. The two share
+skills each seat carries. A rig is the local rig orchestrator instance that runs those seats. The two share
 a name unless the user wants them different (`--rig` says otherwise).
 
 ### 2.1 Ask first
@@ -150,7 +150,7 @@ explicit answer for each seat. `rig policy list` prints them:
 | `yolo` | the operator/no-guardrails posture — everything the harness allows; the launch posture is **full bypass** | `builtin:yolo` |
 | `none` | the reserved deliberate-none choice: the posture is the floor, the same as naming nothing, but the choice is visible | `none` |
 
-`rig policy list` also prints `auto`, OpenRig's own posture; it is not one of the values a 4genthub
+`rig policy list` also prints `auto`, the rig orchestrator's own posture; it is not one of the values a 4genthub
 seat may record, so the five above are the choices to offer.
 
 A seat that does not name one gets `standard`. **Say what `yolo` means before the user picks it: a
@@ -188,7 +188,7 @@ differently:
   `.mcp.json` servers as modules.
 - a **skill library** that carries an inventory file. Publish with
   `4genteam team publish-skills --inventory <FILE>`, and pass `--source-root <SKILLS-PATH>` (or set
-  `OPENRIG_SKILLS_ROOT`) to the checkout the inventory's paths are relative to.
+  `AGENTHUB_SKILLS_ROOT`) to the checkout the inventory's paths are relative to.
 
 Both push module versions. `4genteam team drift-check` then reports stored skills whose recorded
 file has changed under the roots it resolves them against. The published modules are what
@@ -214,7 +214,7 @@ seat's agent directory, so it is also the step that gives a seat the skills it r
 them into that seat's skills path (`<out>/<room>/rig/agents/<seat>/skills/<skill>/`) and declares the
 ids in that seat's `agent.yaml` — `resources.skills[]` and each profile's `uses.skills` — because the
 declaration is what the runtime loads from, exactly as below. The tree is found at `--skills-root`,
-else `$OPENRIG_CLIENT_SKILLS`, else `skills/` beside the binary, and a tree that is not there is
+else `$AGENTHUB_CLIENT_SKILLS`, else `skills/` beside the binary, and a tree that is not there is
 refused by name rather than skipped. This route needs no cloud module and no overlay: a seat receives
 `share/`, then its room's room-level skills, then its own seat-level skills, and nothing from another
 room, another seat or `client/`.
@@ -321,8 +321,8 @@ rig ps --nodes --rig <RIG>   # one row per seat of the room, with its lifecycle 
 ```
 
 `4genteam up <RIG>` is the way to bring a room back after a restart: in one command it checks the
-OpenRig daemon, restores the rig, checks the force-compaction helper (`forcecompact`), starts the
-status bridge, then the compaction supervisor, opens the watch view, opens the OpenRig UI and hands
+rig daemon, restores the rig, checks the force-compaction helper (`forcecompact`), starts the
+status bridge, then the compaction supervisor, opens the watch view, opens the rig UI and hands
 over to herdr. Its positional is the **rig** name — the room name unless the user asked for a
 different one (`4genteam up` takes no room argument).
 
@@ -372,7 +372,7 @@ direction gets its own link.
 ```
 
 Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam sync rig <ROOM>`,
-`rig up ~/.openrig/agenthub-seats/<ROOM>/rig/rig.yaml`, `rig ps --nodes --rig <RIG>`, and the brief
+`rig up ~/.config/4genthub/seats/<ROOM>/rig/rig.yaml`, `rig ps --nodes --rig <RIG>`, and the brief
 to the lead (2.6).
 
 ### 2.8 The questions, in the order to ask them

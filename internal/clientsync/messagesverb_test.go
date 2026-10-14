@@ -5,8 +5,9 @@
 // same text twice (the one duplicate at-least-once allows, and what the ledger is for).
 //
 // What this does NOT prove, stated rather than implied: that the real server's pull and ack behave as
-// scripted here (that is the httpapp package's tests, against the real handlers), and that a real `rig
-// send` reaches a real session (that needs a running seat, which is the row's end-to-end check).
+// scripted here (that is the httpapp package's tests, against the real handlers), and that a real daemon
+// send lands in a real seat's pane (the stub daemon proves the request the verb makes, not the pane it
+// reaches — that is the row's end-to-end check).
 package clientsync
 
 import (
@@ -21,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -297,64 +299,134 @@ func TestMessagesVerbAsksForThePageItWasGiven(t *testing.T) {
 	}
 }
 
-// fakeRig puts a `rig` on PATH that answers `ps --json` with the given payload, so the verb's REAL
-// resolution path runs instead of a substituted function. The only other place this verb shells out to
-// rig is the local send, which the fixture replaces.
-func fakeRig(t *testing.T, psJSON string) {
+// fakeRoom answers the verb's seat discovery from the RUNTIME seam rather than from a stub `rig` on PATH, and the
+// difference is the point: these tests no longer need a fake binary, because the verb no longer runs one. The seats
+// are given in the order the tests expect the pass to take them.
+//
+// IT ALSO EMPTIES PATH, and that is what makes these tests able to fail: with the stub `rig` gone and no tool on PATH,
+// a pass that went back to reading the node table cannot succeed, so a reversion is a RED test rather than a silent
+// delivery through the live rig this machine happens to be running.
+func fakeRoom(t *testing.T, seats ...seatSession) {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "rig"), []byte("#!/bin/sh\necho '"+psJSON+"'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	previous := roomSeats
+	t.Cleanup(func() { roomSeats = previous })
+	roomSeats = func(room string) ([]seatSession, error) { return seats, nil }
+	t.Setenv("PATH", t.TempDir())
 }
 
-// THE VERB MUST NOT GUESS WHICH PROMPT TO TYPE INTO, and this is the case that made the difference
-// matter: `rig ps --json` in this environment reports many sessions, and firstRigSession returns the
-// FIRST of them. A verb that typed into that answer would put an operator's message into somebody
-// else's prompt — which this verb's own documentation calls worse than not delivering it. So no
-// --session and more than one candidate means REFUSE, and the refusal must name the candidates rather
-// than call the situation ambiguous.
-func TestMessagesVerbRefusesToGuessWhichSessionToTypeInto(t *testing.T) {
-	cloud := &messageCloud{pending: []map[string]any{message("m1", "hello")}}
-	_, sent, out := messagesFixture(t, cloud, nil)
-	fakeRig(t, `[{"sessionName":"alpha"},{"sessionName":"beta"}]`)
+// THE DELIVERY GOES TO THE RUNTIME, AND THE ENVELOPE IS THE CLIENT'S OWN. This test runs the REAL sendToSession -
+// the fixture's substitute is taken back - against a stub runtime socket, with no `rig` on PATH.
+//
+// The sender is the point of the assertions: the deliverer runs outside any seat shell, and the decoy session in
+// AGENTHUB_SESSION_NAME is what a caller who inherited its identity would write. The envelope must name the human.
+func TestMessagesVerbDeliversThroughTheRuntimeWithTheClientEnvelope(t *testing.T) {
+	const decoy = "agenthub--4genthub-min--go-dev"
+	var got struct {
+		Action  string `json:"action"`
+		Payload struct {
+			Session string `json:"session"`
+			Text    string `json:"text"`
+		} `json:"payload"`
+	}
+	serveRuntimeSocket(t, func(line string) string {
+		if err := json.Unmarshal([]byte(line), &got); err != nil {
+			t.Errorf("request = %s, want the SendText frame: %v", line, err)
+		}
+		return `{"ok":true,"data":{"session":"4genthub-min-lead@4genthub-min","outcome":"delivered","ok":true}}` + "\n"
+	})
+	t.Setenv("AGENTHUB_SESSION_NAME", decoy)
+	t.Setenv("PATH", t.TempDir())
+
+	cloud := &messageCloud{bySeat: map[string][]map[string]any{
+		"4genthub-min/lead": {message("m1", "hello lead")},
+	}}
+	realDelivery := sendToSession
+	_, _, out := messagesFixture(t, cloud, nil)
+	sendToSession = realDelivery
+	fakeRoom(t, seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"})
 
 	var stdout, stderr strings.Builder
-	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--out", out}, &stdout, &stderr)
-	if code != clientcmd.ExitUnavailable {
-		t.Fatalf("exit = %d, want ExitUnavailable: %s", code, stderr.String())
+	if code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
 	}
-	if len(*sent) != 0 {
-		t.Fatalf("typed %v, want NOTHING typed while the session is ambiguous", *sent)
+	if got.Payload.Session != "4genthub-min-lead@4genthub-min" {
+		t.Errorf("delivered to session %q, want the seat's session", got.Payload.Session)
 	}
-	if calls := cloud.seen(); len(calls) != 0 {
-		t.Fatalf("calls = %v, want the cloud untouched: the refusal happens before the pull", calls)
+	if !strings.Contains(got.Payload.Text, "hello lead") {
+		t.Errorf("envelope = %q, want the message body in it", got.Payload.Text)
 	}
-	for _, want := range []string{"alpha", "beta", "--session"} {
-		if !strings.Contains(stderr.String(), want) {
-			t.Errorf("stderr = %q, want it to name %q", stderr.String(), want)
+	if !strings.Contains(got.Payload.Text, "From: "+humanSeatSession) {
+		t.Errorf("envelope = %q, want it written AS %s", got.Payload.Text, humanSeatSession)
+	}
+	if strings.Contains(got.Payload.Text, decoy) {
+		t.Errorf("envelope = %q, want the deliverer's own session absent from the sender", got.Payload.Text)
+	}
+	if !strings.Contains(stdout.String(), "4genthub-min/lead: 1 delivered, 0 re-acked, 0 failed") {
+		t.Errorf("report = %q, want the delivery counted", stdout.String())
+	}
+}
+
+// seatSessionsFrom carries the skip rule, and it is proven here rather than only through a room: a seat that is not
+// running is skipped, whatever the reason - and the runtime's own death states are reasons too, so their mail waits
+// with the stopped seat's instead of being typed into a prompt that is not reading.
+func TestSeatSessionsFromSkipsEverySeatWithoutALivePrompt(t *testing.T) {
+	statuses := []clientruntime.SeatStatus{
+		{Seat: "lead", SessionName: "4genthub-min-lead@4genthub-min", State: "running"},
+		{Seat: "stopped", SessionName: "4genthub-min-stopped@4genthub-min", State: "stopped"},
+		{Seat: "dead", SessionName: "4genthub-min-dead@4genthub-min", State: "agent_socket_closed"},
+		{Seat: "eof", SessionName: "4genthub-min-eof@4genthub-min", State: "agent_stdio_eof"},
+		{Seat: "exited", SessionName: "4genthub-min-exited@4genthub-min", State: "agent_exited"},
+		{Seat: "ghost", SessionName: "", State: "running"},
+		{Seat: "", SessionName: "4genthub-min-nameless@4genthub-min", State: "running"},
+		{Seat: "other", SessionName: "4genthub-min-other@4genthub-min", State: "running"},
+		// The runtime's word is `running`, but a padded or differently-cased one is still that word: the sibling
+		// consumer (clientlifecycle/lifecycle.go) trims and folds before comparing, and matching it here is what
+		// keeps a formatting difference from skipping EVERY seat - which would deliver nothing, silently.
+		{Seat: "padded", SessionName: "4genthub-min-padded@4genthub-min", State: "  Running "},
+	}
+	got := seatSessionsFrom(statuses)
+	want := []seatSession{
+		{seat: "lead", session: "4genthub-min-lead@4genthub-min"},
+		{seat: "other", session: "4genthub-min-other@4genthub-min"},
+		{seat: "padded", session: "4genthub-min-padded@4genthub-min"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("seats = %v, want every seat whose state reads running, normalised: %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("seat %d = %v, want %v (order included: the pass takes seats in the room's own order)", i, got[i], want[i])
 		}
 	}
 }
 
-// AND WITH EXACTLY ONE SESSION THE MESSAGE STILL FLOWS. The refusal is about ambiguity, not about
-// requiring a flag: the resolution the connector verb uses stays usable when it is unambiguous.
-func TestMessagesVerbUsesTheOnlySessionTheRigReports(t *testing.T) {
+// THE FLAG IS NOW REQUIRED, AND THE REFUSAL IS THE INTERFACE. This case used to resolve the session from
+// `rig ps --json` - refusing only when several candidates were running - and that whole path was a shell-out to the
+// CLI the cutover deletes, so it is gone rather than repaired. The user-visible contract is the message, so the
+// message names BOTH ways to say where a message goes and what each takes.
+//
+// THE PROOF IS THE EMPTY PATH: the old resolution could not produce this answer without asking the rig, so with no
+// `rig` anywhere it failed with a dial-shaped error. This refusal is produced without running anything.
+func TestMessagesVerbRequiresAFlagAndSaysSoWithoutShellingOut(t *testing.T) {
 	cloud := &messageCloud{pending: []map[string]any{message("m1", "hello")}}
 	_, sent, out := messagesFixture(t, cloud, nil)
-	fakeRig(t, `[{"sessionName":"only-one"}]`)
+	t.Setenv("PATH", t.TempDir())
 
 	var stdout, stderr strings.Builder
-	if code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--out", out}, &stdout, &stderr); code != 0 {
-		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
+	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--out", out}, &stdout, &stderr)
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit = %d, want ExitUsage: %s", code, stderr.String())
 	}
-	if got := strings.Join(*sent, ","); got != "only-one hello" {
-		t.Fatalf("typed %q, want the one session the rig reported", got)
+	if len(*sent) != 0 {
+		t.Fatalf("typed %v, want NOTHING typed when no prompt was named", *sent)
 	}
-	want := []string{"GET", "SEND only-one hello", "ACK m1"}
-	if got := strings.Join(cloud.seen(), " | "); got != strings.Join(want, " | ") {
-		t.Fatalf("calls = %s\nwant    %s", got, strings.Join(want, " | "))
+	if calls := cloud.seen(); len(calls) != 0 {
+		t.Fatalf("calls = %v, want the cloud untouched: the refusal happens before the pull", calls)
+	}
+	for _, want := range []string{"--rig <room>", "--session <name>"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want it to name %q and what it takes", stderr.String(), want)
+		}
 	}
 }
 
@@ -368,7 +440,10 @@ func TestMessagesVerbRigPassDeliversEveryRunningSeat(t *testing.T) {
 		"4genthub-min/stopped": {message("m3", "stays pending")},
 	}}
 	_, sent, out := messagesFixture(t, cloud, nil)
-	fakeRig(t, `[{"logicalId":"4genthub-min.lead","canonicalSessionName":"4genthub-min-lead@4genthub-min","sessionStatus":"running"},{"logicalId":"4genthub-min.stopped","canonicalSessionName":"4genthub-min-stopped@4genthub-min","sessionStatus":"stopped"},{"logicalId":"4genthub-min.ghost","canonicalSessionName":"","sessionStatus":"running"},{"logicalId":"4genthub-min.other","canonicalSessionName":"4genthub-min-other@4genthub-min","sessionStatus":"running"}]`)
+	fakeRoom(t,
+		seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"},
+		seatSession{seat: "other", session: "4genthub-min-other@4genthub-min"},
+	)
 
 	var stdout, stderr strings.Builder
 	code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr)
@@ -424,7 +499,10 @@ func TestMessagesVerbRigPassIsolatesOneSeatFailure(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { sendToSession = previous })
-	fakeRig(t, `[{"logicalId":"4genthub-min.lead","canonicalSessionName":"4genthub-min-lead@4genthub-min","sessionStatus":"running"},{"logicalId":"4genthub-min.other","canonicalSessionName":"4genthub-min-other@4genthub-min","sessionStatus":"running"}]`)
+	fakeRoom(t,
+		seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"},
+		seatSession{seat: "other", session: "4genthub-min-other@4genthub-min"},
+	)
 
 	var stdout, stderr strings.Builder
 	code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr)
@@ -459,7 +537,7 @@ func TestMessagesVerbWatchBeatsEachPassAndExitsOnCancel(t *testing.T) {
 		"4genthub-min/lead": {message("m1", "hello lead")},
 	}}
 	_, sent, out := messagesFixture(t, cloud, nil)
-	fakeRig(t, `[{"logicalId":"4genthub-min.lead","canonicalSessionName":"4genthub-min-lead@4genthub-min","sessionStatus":"running"}]`)
+	fakeRoom(t, seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"})
 
 	var beaten []string
 	previousBeat := clientservices.WriteHeartbeat
@@ -510,7 +588,7 @@ func TestMessagesVerbRigShapeRefusals(t *testing.T) {
 	t.Run("a rig with no running seat", func(t *testing.T) {
 		cloud := &messageCloud{}
 		_, _, out := messagesFixture(t, cloud, nil)
-		fakeRig(t, `[{"logicalId":"4genthub-min.stopped","canonicalSessionName":"4genthub-min-stopped@4genthub-min","sessionStatus":"stopped"}]`)
+		fakeRoom(t)
 
 		var stdout, stderr strings.Builder
 		if code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr); code != clientcmd.ExitRemote {

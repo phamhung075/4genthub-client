@@ -29,7 +29,7 @@ import (
 // http.RoundTripper for the sender itself), and the wait the loop would take comes back from Cycle as a
 // VALUE, so a test asserts it instead of living through it.
 
-// fixtureNodes is one OpenRig node in the shape `rig ps --json --nodes` prints. It carries a
+// fixtureNodes is one the rig orchestrator node in the shape `rig ps --json --nodes` prints. It carries a
 // latestError on purpose: the seat's detail must be NON-EMPTY, or the 422 strip would be asserted
 // against a field that could not have differed in the first place.
 const fixtureNodes = `[{"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp",` +
@@ -104,13 +104,22 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 			// empty source, not a failed report.
 			return "", fmt.Errorf("herdr: not on PATH")
 		}
-		if f.queueJSON != "" && len(argv) > 1 && argv[1] == "queue" {
-			return f.queueJSON, nil
-		}
-		return f.rigJSON, nil
+		return "", fmt.Errorf("%s: not a tool this fixture runs", argv[0])
 	}
+	f.bridge.Nodes = func() ([]any, error) { return ParseRigNodes(f.rigJSON) }
+	f.bridge.Links = func(string) ([]rigEdge, error) { return nil, nil }
 	f.clock = &fakeClock{at: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	f.bridge.clock = f.clock.now
+
+	// THE RUNTIME THE NOTIFICATION SWEEP TALKS TO: it hosts the room the nodes describe, and its rail holds
+	// the human rows the test scripts, so the sweep and the report talk about one room.
+	f.bridge.Rooms = func() ([]string, error) { return []string{"room-a"}, nil }
+	f.bridge.Queue = func(string) ([]any, error) {
+		if f.queueJSON == "" {
+			return nil, nil
+		}
+		return parseItems(f.queueJSON, "rig queue list")
+	}
 	return f
 }
 
@@ -151,7 +160,7 @@ func (f *fixture) reported(t *testing.T, i int) Payload {
 	return payload
 }
 
-func (f *fixture) cycle() time.Duration { return f.bridge.Cycle(context.Background(), nil) }
+func (f *fixture) cycle() time.Duration { return f.bridge.Cycle(context.Background()) }
 
 func (f *fixture) logged() string { return strings.Join(f.notes, "\n") }
 
@@ -369,7 +378,7 @@ func TestRunOnceExitCodes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, tc.step)
-			if got := f.bridge.Run(context.Background(), nil, true); got != tc.want {
+			if got := f.bridge.Run(context.Background(), true); got != tc.want {
 				t.Errorf("run once against %s exited %d, want %d", tc.name, got, tc.want)
 			}
 		})
@@ -384,7 +393,7 @@ func TestRunReturnsWhenTheContextIsDone(t *testing.T) {
 	cancel()
 
 	done := make(chan int, 1)
-	go func() { done <- f.bridge.Run(ctx, nil, false) }()
+	go func() { done <- f.bridge.Run(ctx, false) }()
 	select {
 	case code := <-done:
 		if code != clientcmd.ExitOK {
@@ -470,7 +479,7 @@ func TestAnUnreadableRecordReadsAsEmptyRatherThanInventingAHash(t *testing.T) {
 	}
 	f.bridge.state = ReadSyncState(f.bridge.StatePath)
 
-	payload := f.bridge.BuildPayload(nil)
+	payload := f.bridge.BuildPayload()
 	record := f.bridge.LocalRecord(payload.Seats)
 	if len(record) == 0 {
 		t.Fatalf("the fixture reported no seats to compare: %+v", payload.Seats)
@@ -483,7 +492,7 @@ func TestAnUnreadableRecordReadsAsEmptyRatherThanInventingAHash(t *testing.T) {
 }
 
 // A node whose room or seat name fails this client's pattern is NOT reported, and the count is: the
-// report is an allow-list, so an OpenRig value this client does not understand must not travel as a
+// report is an allow-list, so an the rig orchestrator value this client does not understand must not travel as a
 // field the cloud then has to defend against. The Python asserted both halves - only the good seat
 // survives, and the caller says how many were skipped - and this is that case.
 func TestBuildSeatsSkipsInvalidNamesAndCountsThem(t *testing.T) {
@@ -572,7 +581,7 @@ func TestTheRecordSurvivesARestartAndNamesAChangedSeat(t *testing.T) {
 			t.Errorf("the changed seat's note does not carry %s: %q", want, logged)
 		}
 	}
-	payload := restarted.bridge.BuildPayload(nil)
+	payload := restarted.bridge.BuildPayload()
 	note := restarted.bridge.LocalRecord(payload.Seats)["room-a/seat-a"]
 	if note.Running != "run999" || note.LastInSync != "cloud456" || note.SinceLastInSync != "changed" {
 		t.Errorf("the local record reads %+v, want running=run999 last_in_sync=cloud456 since=changed", note)
@@ -700,7 +709,7 @@ func TestSenderWithoutTheTokenIsAUsageError(t *testing.T) {
 	t.Setenv("AGENTHUB_URL", "http://bridge.invalid")
 	t.Setenv("AGENTHUB_TOKEN", "")
 	var out, errOut bytes.Buffer
-	if code := (bridgeCommand{}).Run(context.Background(), nil, []string{"once"}, &out, &errOut); code != clientcmd.ExitUsage {
+	if code := (bridgeCommand{}).Run(context.Background(), []string{"once"}, &out, &errOut); code != clientcmd.ExitUsage {
 		t.Errorf("bridge once without a credential exited %d, want %d", code, clientcmd.ExitUsage)
 	}
 	if !strings.Contains(errOut.String(), "AGENTHUB_TOKEN") {

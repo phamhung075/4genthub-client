@@ -35,12 +35,13 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 const (
 	// rigdTick is one pass of the socket loop: publish what changed, register what appeared, send what is
-	// new. It is small because the tail's cost is one `rig transcript` per session.
+	// new. It is small because the tail's cost is one transcript read per session.
 	rigdTick = time.Second
 	// rigdAckTimeout is how long one stop-and-wait acknowledgement may take before the socket is declared
 	// dead. It is not a retry: a socket that cannot answer one frame inside this window is one the
@@ -59,8 +60,9 @@ const (
 	// backfillLimit bounds what a FIRST registration uploads: a cloud that has no cursor for a session
 	// gets the newest lines, not the whole history (2.2: "bounded by the client's own backfill limit").
 	backfillLimit = 500
-	// captureLines is what `rig capture --lines` takes for a session whose transcript is empty (a seat
-	// whose runtime renders to an alternate screen has no scrollback to read).
+	// captureLines is the window a capture read takes for a session whose transcript is empty (a seat
+	// whose runtime renders to an alternate screen has no scrollback to read). The runtime's own default
+	// is the same number, so a caller that asks for nothing gets the same answer as this caller.
 	captureLines = 200
 	// withheldBackstop is 4.4's last resort: every event withheld for this long means a broken redactor,
 	// not one bad line, so the session's upload stops.
@@ -158,12 +160,25 @@ func NewRigDaemon(opts RigDaemonOptions) *RigDaemon {
 	if daemon.opts.Pending == nil {
 		daemon.opts.Pending = func() []clientservices.Health { return nil }
 	}
-	daemon.Sessions = rigNodeCandidates
+	// THE THREE LOCAL READS GO THROUGH THE RUNTIME'S OWN SOCKET. They were execs of `rig ps --json`,
+	// `rig transcript` and `rig capture`; the last two are not verbs the installed client has at all
+	// ("4genteam: unknown command transcript"), so wherever `rig` resolved to that client rigd could not
+	// read a transcript or a pane. The session list is the runtime's, which answers one entry per seat of
+	// every room it hosts - the same set `--nodes --all-rigs` was asked for, from the daemon that owns it.
+	daemon.Sessions = rigSessionCandidates
 	daemon.Transcript = func(ctx context.Context, session string) (string, error) {
-		return runRig(ctx, "transcript", session, "--tail", strconv.Itoa(transcriptTail))
+		answer, err := clientruntime.NewClient("").Transcript(session, transcriptTail)
+		if err != nil {
+			return "", err
+		}
+		return answer.Content, nil
 	}
 	daemon.Capture = func(ctx context.Context, session string) (string, error) {
-		return runRig(ctx, "capture", session, "--lines", strconv.Itoa(captureLines))
+		answer, err := clientruntime.NewClient("").Capture(session, captureLines)
+		if err != nil {
+			return "", err
+		}
+		return answer.Content, nil
 	}
 	return daemon
 }
@@ -764,22 +779,6 @@ func transcriptLines(text string) []string {
 		return nil
 	}
 	return strings.Split(strings.TrimRight(text, "\n"), "\n")
-}
-
-// rigNodeCandidates is the reading a session frame is built from: `rig ps --json --nodes`, for EVERY rig
-// on the machine and not only the listed ones, because rigd registers every local rig session.
-//
-// IT ASKS FOR NODES, and that is not a preference: `rig ps --json` alone answers RIGS - rooms with a
-// name, a status and a node count, carrying no session identity at all - while `--nodes` is the list
-// whose entries carry canonicalSessionName, rigName, logicalId, sessionStatus and agentActivity. The
-// candidate extraction and its canonical-name ordering are parseRigPsSessions, the one the sync verbs
-// already use; this only supplies the arguments.
-func rigNodeCandidates(ctx context.Context) ([]sessionCandidate, error) {
-	out, err := runRig(ctx, "ps", "--json", "--nodes", "--all-rigs")
-	if err != nil {
-		return nil, err
-	}
-	return parseRigPsSessions(out)
 }
 
 // candidateState maps a node record's status onto 2.2's two values. The vocabulary is deliberately

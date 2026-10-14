@@ -164,7 +164,7 @@ func TestDriftCheckResolvesALibraryPathUnderLibraryRoot(t *testing.T) {
 	}
 }
 
-// Mirrors test_drift_check_library_root_defaults_to_openrig_skills_root.
+// Mirrors test_drift_check_library_root_defaults_to_the_skills_root.
 func TestDriftCheckLibraryRootDefaultsToTheEnvironment(t *testing.T) {
 	fake := installFake(t)
 	withCredentials(t, fake)

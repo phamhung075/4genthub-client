@@ -3,7 +3,6 @@
 package clientlifecycle
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
@@ -66,15 +65,24 @@ type Supervisor struct {
 	Abort      func(rig, seat string)
 	Interrupt  func(rig, seat string)
 	Log        func(text string)
-	// Nodes is the room's node records - the reading the off-peak gate decides over, the same one the
-	// gated verbs take. Getenv is the environment the gate resolves its setting and its clock from.
-	Nodes  func(rig string) []map[string]any
+	// IdleWhy carries the sentence behind an Idle=false, so the pass that ACTS on the false can say it rather than
+	// letting "the seat is working" and "nothing ever answered" print the same way - as nothing. Empty means the
+	// refusal was a deliberate one and there is nothing to say. nil means the wiring says nothing, as in tests.
+	IdleWhy func(rig, seat string) string
+	// Nodes is the room's node records - the reading the off-peak gate decides over, the same one the gated
+	// verbs take - and it carries the three answers the reading itself has, because the resume below is an
+	// AUTOMATIC seat action: a read that FAILED must hold the resume back rather than arrive at the gate as an
+	// empty fleet (no DeepSeek seats, nothing to refuse, the seat told to resume with the gate never having
+	// seen a seat). Answered-with-no-records still proceeds - a room with no seats has nothing to bill - so
+	// the two must stay distinguishable here. Getenv is the environment the gate resolves its setting and its
+	// clock from.
+	Nodes  func(rig string) ([]map[string]any, bool, error)
 	Getenv func(string) string
 
 	State map[string]*seatState
 }
 
-// New is a supervisor wired to the real world: tmux for the seat list, OpenRig for idleness and
+// New is a supervisor wired to the real world: tmux for the seat list, the runtime for idleness and
 // messages, and the forcecompact helper for an omp compact.
 func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *Supervisor {
 	supervisor := &Supervisor{
@@ -89,18 +97,19 @@ func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *
 	supervisor.Seats = seatlog.RigSeats
 	supervisor.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	supervisor.Idle = rigIdle
+	supervisor.IdleWhy = func(rig, seat string) string { _, why := rigIdleReason(rig, seat); return why }
 	supervisor.Say = rigSay
 	supervisor.RPCCompact = func(r, seat string) string { return supervisor.rpcCompact(r, seat) }
 	supervisor.Abort = rigAbort
 	supervisor.Interrupt = tmuxInterrupt
-	// The gate's reading is the room's `rig ps --nodes` records, the ONE reading this package already
-	// takes for its other gate (rigNodes), reached through the platform matrix in one place.
-	supervisor.Nodes = func(rig string) []map[string]any {
-		tool, err := clientcmd.RequireRig()
-		if err != nil {
-			return nil
-		}
-		return rigNodes(tool, rig)
+	// The gate's reading is the room's node records, the ONE reading this package already takes for its other
+	// gate (rigNodes), reached here without resolving a rig tool: the reading is the client's own. The seam
+	// carries all three of that reading's answers, so the resume path below can tell a read that FAILED from a
+	// room with no seats; the peaked decision that must refuse is still PeakGate's above, which sees its own.
+	supervisor.Nodes = func(rig string) ([]map[string]any, bool, error) {
+		// rigNodes is read at CALL time rather than captured at wiring time, so a test that replaces the
+		// reading after the supervisor is built still reaches the gate.
+		return rigNodes(rig)
 	}
 	supervisor.Getenv = os.Getenv
 	supervisor.Log = func(text string) {
@@ -145,10 +154,20 @@ func (s *Supervisor) Step() {
 				if done {
 					// The resume is an AUTOMATIC wake, so it passes the same gate every other automatic
 					// wake passes. --allow-peak is never automatic on this path: allowPeak is false, so
-					// the gate is ON unless the setting itself turns it off. A refusal (or a schedule the
-					// gate cannot read) holds the resume back and says why in this log, so a held-back
-					// resume is observable rather than silent.
-					if proceed, message, err := clientoffpeak.Check(false, s.Nodes(s.Rig), s.Getenv); err != nil {
+					// the gate is ON unless the setting itself turns it off. A refusal, a schedule the
+					// gate cannot read, or a room whose records could not be read at all holds the resume
+					// back and says why in this log, so a held-back resume is observable rather than silent.
+					nodes, ok, err := s.Nodes(s.Rig)
+					if err != nil {
+						// FAILING OPEN WOULD BE THE BUG HERE: an unreadable reading is not an empty room, and a
+						// resume that proceeded on one would be the gate deciding over no seats at all.
+						s.Log(fmt.Sprintf("%s: resume held, the room's node records could not be read: %v", seat, err))
+					} else if !ok {
+						// NO RECORDS is not a failure: there are no seats here to bill, so the gate has nothing
+						// to hold back and the resume proceeds - said plainly rather than implied by silence.
+						s.Say(s.Rig, seat, resumeText, false)
+						s.Log(seat + ": told to resume (the room's records list no seats)")
+					} else if proceed, message, err := clientoffpeak.Check(false, nodes, s.Getenv); err != nil {
 						s.Log(fmt.Sprintf("%s: resume held, off-peak gate: %v", seat, err))
 					} else if !proceed {
 						s.Log(fmt.Sprintf("%s: resume held, %s", seat, message))
@@ -197,6 +216,15 @@ func (s *Supervisor) Step() {
 				s.Interrupt(s.Rig, seat)
 				state.interrupted = now
 				s.Log(fmt.Sprintf("%s: interrupted at %s (hard limit)", seat, seatlog.Kilo(used)))
+				// AND WHY NOTHING WAS COMPACTED, on this line, where the false is ACTED ON: this branch returns every
+				// pass, so the quiet-triggered compact below never fires, and a read that answered nothing must not
+				// look the same as a seat that is simply working. Rate-limited with the interrupt above; a deliberate
+				// refusal (a busy seat) carries no sentence and says nothing here.
+				if s.IdleWhy != nil {
+					if why := s.IdleWhy(s.Rig, seat); why != "" {
+						s.Log(fmt.Sprintf("%s: not compacting at %s: %s", seat, seatlog.Kilo(used), why))
+					}
+				}
 			}
 			continue
 		}
@@ -297,63 +325,132 @@ func modTime(path string) float64 {
 	return float64(info.ModTime().UnixNano()) / 1e9
 }
 
+// rigIdle reads a seat's idleness through clientruntime.ReadSeatActivity, the runtime's own session list.
+// Every failure answers false, and false means "not idle" to both callers: a seat that cannot be proved
+// idle WAITS rather than racing a working turn, because a check that failed open would send /compact into a
+// running seat, which is the one outcome the gate exists to prevent.
 func rigIdle(rig, seat string) bool {
-	path, err := exec.LookPath("rig")
-	if err != nil {
-		return false
-	}
-	out, err := exec.Command(path, "ps", "--nodes", "--rig", rig, "--json").Output()
-	if err != nil {
-		return false
-	}
-	var nodes []map[string]any
-	if json.Unmarshal(out, &nodes) != nil {
-		return false
-	}
-	for _, node := range nodes {
-		if node["canonicalSessionName"] != rig+"-"+seat+"@"+rig {
-			continue
-		}
-		activity, _ := node["agentActivity"].(map[string]any)
-		return activity["state"] == "idle"
-	}
-	return false
+	idle, _ := rigIdleReason(rig, seat)
+	return idle
 }
 
-// rigSay sends a seat a message through the rig tool. A plain message waits for the seat to go idle,
-// which must not hold up the other seats, so it is started and released rather than waited on; a raw
-// one is the exact text (without it the tool wraps the message in a From/To envelope and a /compact
-// becomes plain text).
+// rigIdleReason is rigIdle with the sentence that says WHY a false came back, and it exists because the two kinds of
+// false are not the same fact: "the seat is working" is a healthy answer, while "nothing ever answered" is this box's
+// actual state - on the compaction path the not-idle branch is taken EVERY pass (`:196`, rate-limited, interrupt and
+// continue), so the quiet-triggered compact below it never fires and a supervisor that never compacts looks exactly
+// like a supervisor with nothing to do. The bool the Idle hook trades in stays a bool; the sentence is said where the
+// false is ACTED ON, and only when the read could not answer at all.
+func rigIdleReason(rig, seat string) (idle bool, why string) {
+	read := clientruntime.ReadSeatActivity(rig, seat)
+	if !read.Read {
+		// THE SENTENCE IS THE READ'S, not this caller's: it names what could not be asked - no daemon named in the
+		// environment, the rig absent from the list, the route's HTTP status, no record for this seat. One read, one
+		// diagnosis; the two readers used to word their own failures, and the wording drifted with the program they
+		// exec'd.
+		return false, read.Why
+	}
+	return idleFromActivityWord(read.Word, read.Present)
+}
+
+// idleFromActivityWord is the pure half of the read: it turns the word the node table carried into the answer the
+// hook returns AND the sentence a caller can say. A recognized, non-quiet word is a DELIBERATE false and has nothing
+// to report - the seat is simply busy; an absent or unrecognized one is the failure this box has been living in
+// silently, and it is named rather than left to be discovered.
+func idleFromActivityWord(word string, present bool) (idle bool, why string) {
+	released, unrecognized := clientruntime.ActivityReleasesTheWait(word)
+	if released {
+		return true, ""
+	}
+	if unrecognized != "" {
+		return false, fmt.Sprintf("the activity word %q is not one this client recognizes", unrecognized)
+	}
+	if !present {
+		return false, "the node table carries no agentActivity for this seat, so nothing can say whether it is idle"
+	}
+	// UNKNOWN IS NAMED, because silence here is indistinguishable from a busy seat: `unknown` is a word this client
+	// RECOGNIZES, so the branch above does not catch it, and it is the daemon's own never-evidence value - a report
+	// that cannot tell. Measured on the live rig: architect and fe-dev both answer `unknown` and both used to give an
+	// empty why, so two of five seats read exactly like a seat that is mid-turn when the truth was that the daemon
+	// could not say. The definite words stay silent on purpose: `running`/`working`/`needs_input` are ANSWERS ("not
+	// idle"), and a sentence is owed for a mystery, not for an answer.
+	if word == "unknown" {
+		return false, "the activity word for this seat is unknown, which the daemon's own taxonomy defines as not " +
+			"evidence - a report that cannot tell is not a seat that is at its prompt"
+	}
+	if word == "" {
+		return false, "the activity read answered, and the word it carried was empty"
+	}
+	return false, ""
+}
+
+// saySender is the "From" prefix a plain message carries, and it is REPRODUCED rather than invented: the client's own
+// seat send writes these words when the caller names no sender (`clientseat`'s send verb, defaultSender = "owner
+// session"), and the supervisor's messages are the same class - the client speaking to a seat it supervises. The
+// constant lives here instead of being exported from the verb package because a supervisor importing a verb package
+// for one string inverts the dependency; if a third writer appears, that is the moment to move it to the runtime
+// client, not before.
+const saySender = "owner session"
+
+// rigSay sends a seat one message through the RUNTIME, not through the rig tool. Two differences from the shell-out
+// it replaces, and both are deliberate:
+//
+//   - THE ENVELOPE is written HERE, because the runtime's send has none: it types the exact bytes it is given. A plain
+//     message is prefixed "From <sender>: " so the seat reads who spoke, which is what the CLI's envelope did; a raw
+//     message is the exact text, or a /compact arrives as prose the runner cannot act on.
+//
+//   - THE WAIT IS GONE, and its removal is declared rather than silent. The shell-out passed --wait-for-idle 120, and
+//     WHAT THAT WAIT WAS WORTH DEPENDS ON WHICH SEND IT WAS, because the two shapes did not observe it equally:
+//
+//     FOR THE THREE PLAIN SENDS the wait was a PRETENCE. They were non-raw, so they ran `cmd.Start` + `Process.Release`
+//     with no `Wait`: a detached CLI that timed out failed where nobody was listening, and this package never observed
+//     its outcome at all - the pretence of a guarantee rather than one.
+//
+//     FOR /compact the wait was REDUNDANT, because raw was `cmd.Run`: that one DID observe its wait, and the call site
+//     already gates the send on s.Idle. So the removal costs that caller nothing it was actually relying on - which is
+//     a stronger reason than the pretence alone, and the reason the gate is named below rather than assumed.
+//
+//     The runtime's send has no idle wait to escape (the same reason rigAbort's start-and-release dance was
+//     unnecessary), and BOTH idle readings on this machine are the same shell-out this unit removes: this file's
+//     rigIdle, and QuietWaiter's Activity - clientseat's seatActivity, which also runs `rig ps --nodes --json` and reads
+//     agentActivity.state. So honouring the wait would re-add the dependency being cut, in a second package.
+//
+//     EVERY CALLER THAT LOSES THE WAIT, and why each is safe. /compact (raw, on the urgent path) is gated by s.Idle at
+//     its own call site - the one place a race with a working seat matters - so the wait was redundant with a gate that
+//     was already there. The resume is sent after a WITNESSED compaction, which is a turn boundary, and text typed at a
+//     boundary is the next prompt, which is the resume's purpose. The notice and the warning are each latched once by
+//     state.told/state.warned and read whenever the seat next looks at its pane, so arriving later changes nothing
+//     except that they are no longer held behind a busy seat.
 func rigSay(rig, seat, text string, raw bool) {
-	path, err := exec.LookPath("rig")
-	if err != nil {
+	session := rig + "-" + seat + "@" + rig
+	if raw {
+		_ = runtimeSendText(session, text)
 		return
 	}
-	args := []string{"send", rig + "-" + seat + "@" + rig, text, "--wait-for-idle", "120"}
-	if raw {
-		args = append(args, "--raw")
-	}
-	cmd := exec.Command(path, args...)
-	if raw {
-		_ = cmd.Run()
-		return
-	}
-	if err := cmd.Start(); err == nil {
-		_ = cmd.Process.Release()
-	}
+	_ = runtimeSendText(session, "From "+saySender+": "+text)
 }
 
-// rigAbort sends /abort, the one pane text the omp runner turns into an abort of the running turn. It is
-// sent without waiting for idle, because the seat is working by definition.
+// runtimeSendText is the ONE place this package types text into a seat's pane. It is a package-level variable rather
+// than an interface added for testing, which is the repo's rule, and it is what makes both sends' text observable:
+// rigSay ABOVE rebuilds the CLI's "From <sender>: " envelope for a plain message and sends a raw one bare, and
+// rigAbort BELOW sends the bare "/abort" keystroke. The one thing in this file that still reaches the rig tool is
+// rigIdle, which READS and types nothing (declared as an exception above).
+var runtimeSendText = func(session, text string) error {
+	return clientruntime.NewClient("").SendText(session, text)
+}
+
+// rigAbort sends /abort, the one pane text the omp runner turns into an abort of the running turn, and it goes
+// out WITHOUT the From/To envelope the send verb adds: a sender prefix would arrive as a MESSAGE and the runner
+// would see text where it needs a keystroke, so the bare "/abort" is the contract, not a detail. It is sent
+// without waiting for idle, because the seat is working by definition - and the runtime's send has no idle wait
+// to escape, so the old start-and-release dance is unnecessary rather than dropped.
 func rigAbort(rig, seat string) {
-	path, err := exec.LookPath("rig")
-	if err != nil {
-		return
-	}
-	cmd := exec.Command(path, "send", rig+"-"+seat+"@"+rig, "/abort", "--raw")
-	if err := cmd.Start(); err == nil {
-		_ = cmd.Process.Release()
-	}
+	// The error is DELIBERATELY discarded, and it is the deliberate kind rather than an oversight: the caller is
+	// aborting a turn that is already running, so a refusal has nothing useful to do here - the seat is being
+	// interrupted either way, and the supervisor's next step is its own interrupt/escalation ladder, not a retry of
+	// this keystroke. The old code discarded it too (Start + Release), so this is not a new silence. The alternative
+	// is a supervisor log line, which this function cannot reach without a logger seam of its own: if a reader needs
+	// the refusal visible, THAT seam is the change to make - not a silent retry here.
+	_ = runtimeSendText(rig+"-"+seat+"@"+rig, "/abort")
 }
 
 func tmuxInterrupt(rig, seat string) {

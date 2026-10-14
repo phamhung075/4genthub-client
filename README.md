@@ -23,7 +23,7 @@ its own skills path.
 - creates the cloud room from a definition and pushes a project's MCP servers and skills as modules
   (`team`), shows and applies the per-seat policy (`policy`), and sends friction reports (`feedback`).
 
-The server is hosted. The seats run in OpenRig (the local orchestrator) and are not part of this
+The server is hosted. The seats run in the rig orchestrator (local) and are not part of this
 repository.
 
 ## Requirements (check each before you start)
@@ -31,7 +31,7 @@ repository.
 | Need | Check |
 |---|---|
 | A 4genthub account key | you hold a value for `AGENTHUB_TOKEN` |
-| OpenRig daemon on `127.0.0.1:7433` | `rig ps` answers |
+| rig daemon on `127.0.0.1:7433` | `rig ps` answers |
 | `herdr` and `tmux`, for the watch view | `herdr --version`, `tmux -V` |
 | Go 1.26 or newer, only to build from source | `go version` |
 | Rust toolchain, only for the force-compaction helper | `cargo --version` |
@@ -49,7 +49,7 @@ install -m 0755 4genteam ~/.local/bin/     # or any directory that is already on
 ```
 
 A binary installed on its own has no `skills/` tree beside it, and `sync rig` refuses until it finds
-the tree it delivers to the seats: set `OPENRIG_CLIENT_SKILLS=/path/to/4genthub-client/skills`, or
+the tree it delivers to the seats: set `AGENTHUB_CLIENT_SKILLS=/path/to/4genthub-client/skills`, or
 pass `--skills-root DIR` to that verb. A checkout has it at `skills/`.
 
 **From source, with Go 1.26 or newer.** One module, one dependency (`gopkg.in/yaml.v3`):
@@ -131,7 +131,7 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `status` | the safeguard rows (--json too) and the supervisor's last log lines |
 | `ps` | the seats of a room read from tmux and the seat transcripts: summary, `--nodes`, `--compact`, `--grid`, `--json`; a seat whose transcript shows a quota or credit message is `quota` and counts as needing attention |
 | `log` | follow the supervisor's log |
-| `ui` | open the OpenRig web UI |
+| `ui` | open the 4genthub web UI |
 | `offpeak` | is DeepSeek billing at off-peak right now: exit 0 off-peak, 1 peak, so it works as a gate; `status` prints the setting, `set on\|off` writes it |
 | `seat` | status, sync and watch of a room's seats |
 | `send` | send one signed message to one seat |
@@ -241,7 +241,7 @@ shows only `supervising` is not broken: no seat has reached the limit yet.
 Run from the project's directory. `ROOM` is the room's name on the server.
 
 ```bash
-4genteam sync rig ROOM      # writes ~/.openrig/agenthub-seats/ROOM/rig/rig.yaml and the seat files
+4genteam sync rig ROOM      # writes ~/.config/4genthub/seats/ROOM/rig/rig.yaml and the seat files
 4genteam up ROOM            # starts the full lifecycle: daemon, seats, supervisor, bridge and watch view
 ```
 
@@ -341,7 +341,7 @@ This tree is the one source of skills. A project does not keep its own copy.
 | `error: team apply: --team DIR is required (the directory that holds team.json)` | no default team exists | pass the team directory |
 | `error: team publish-skills: --inventory FILE is required (the skill library inventory JSON)` | no default inventory exists | pass the inventory file |
 | `the room has a provider/model seat and … does not exist: omp reads the key from the launch directory's .env` | this client's env file is missing, so the room's `.env` has nothing to link to | create `~/.config/4genthub/.env`, then run `sync rig` again |
-| `the client's skill tree is not at … (no share/ directory)` | `sync rig` writes the skills this client owns into each seat, and could not find that tree | pass `--skills-root DIR`, or set `OPENRIG_CLIENT_SKILLS` to a tree that holds `share/` |
+| `the client's skill tree is not at … (no share/ directory)` | `sync rig` writes the skills this client owns into each seat, and could not find that tree | pass `--skills-root DIR`, or set `AGENTHUB_CLIENT_SKILLS` to a tree that holds `share/` |
 | `seatcheck does not resolve to … on PATH` | the seat checker is not where the seats will look for it | run `4genteam sync install-checker --go-dir .` and put that directory on `PATH` |
 | a seat's working directory shows `(deleted)` | the room was built by an older client | run `sync rig`, then relaunch the seat |
 | a seat waits at an approval prompt | the room was not synced by this client | run `sync rig` and `rig up` again |

@@ -8,6 +8,26 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
+// THE ELEVEN-SITE CLASS, PINNED FOR THE READING. rigNodes used to shell out to `rig ps --nodes --rig RIG
+// --json`, and after this client's rename that name resolves to this binary. PATH is emptied here so the
+// assertion is about the ABSENCE of the call rather than about a message: with the exec in place the
+// function answers "rig is not on PATH" (an exec.LookPath failure), and without it the only possible
+// failure comes from the local runtime.
+func TestRoomNodesNeverShellsOutToRig(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	nodes, err := roomNodes("nosuchrig")
+	if err != nil && strings.Contains(err.Error(), "is not on PATH") {
+		t.Fatalf("roomNodes shelled out to `rig`: %v", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), "nosuchrig") {
+		t.Errorf("the failure does not name the rig it could not read: %v", err)
+	}
+	if err == nil && len(nodes) != 0 {
+		t.Errorf("an unreadable room answered with %d node records", len(nodes))
+	}
+}
+
 func reseatFixture(waitOK bool) (*reseatDeps, *[]string) {
 	var log []string
 	return &reseatDeps{

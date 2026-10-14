@@ -21,7 +21,7 @@ func TestParseStatusArgsMirrorsTheSubparser(t *testing.T) {
 	if err != nil || room != "dev-min" || len(seats) != 0 {
 		t.Fatalf("room=%q out=%q seats=%v err=%v", room, out, seats, err)
 	}
-	if !strings.HasSuffix(out, filepath.Join(".openrig", "agenthub-seats")) {
+	if !strings.HasSuffix(out, filepath.Join(".config", "4genthub", "seats")) {
 		t.Errorf("default out = %q, want the Python's seat store", out)
 	}
 
@@ -166,12 +166,11 @@ func TestRunStatusVerbEndToEnd(t *testing.T) {
 }
 
 // test_the_store_and_state_root_do_not_follow_home pins the Python test of that name: the store and the
-// state root are resolved from the ACCOUNT home, so a decoy $HOME - what OpenRig gives a seat - does not
+// state root are resolved from the ACCOUNT home, so a decoy $HOME - what the rig orchestrator gives a seat - does not
 // move either of them.
 func TestTheStoreAndStateRootDoNotFollowHome(t *testing.T) {
 	decoy := t.TempDir()
 	t.Setenv("HOME", decoy)
-	t.Setenv(clientenv.StateRootEnv, "")
 
 	home, err := clientenv.RealHome()
 	if err != nil {
@@ -181,14 +180,14 @@ func TestTheStoreAndStateRootDoNotFollowHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveSeatStore: %v", err)
 	}
-	if want := filepath.Join(home, ".openrig", "agenthub-seats"); store != want {
+	if want := filepath.Join(home, ".config", "4genthub", "seats"); store != want {
 		t.Errorf("the store followed $HOME: %q, want %q", store, want)
 	}
 	root, err := clientenv.ResolveStateRoot("")
 	if err != nil {
 		t.Fatalf("ResolveStateRoot: %v", err)
 	}
-	if want := filepath.Join(home, ".openrig", "state", "omp"); root != want {
+	if want := filepath.Join(home, ".config", "4genthub"); root != want {
 		t.Errorf("the state root followed $HOME: %q, want %q", root, want)
 	}
 	if strings.HasPrefix(store, decoy) || strings.HasPrefix(root, decoy) {

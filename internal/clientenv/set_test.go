@@ -155,7 +155,7 @@ func TestSetFollowsASymlinkInsteadOfReplacingIt(t *testing.T) {
 // honours on the next run. The name is unique to this test so the process environment cannot interfere.
 func TestLoadReadsBackWhatSetWrote(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
-	name := "OPENRIG_SET_ROUNDTRIP_TEST"
+	name := "AGENTHUB_SET_ROUNDTRIP_TEST"
 	if err := Set(path, name, "0"); err != nil {
 		t.Fatal(err)
 	}

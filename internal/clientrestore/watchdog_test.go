@@ -21,12 +21,12 @@ var beats []string
 
 // isolate points the package's home at a temporary directory and stubs every seam the watchdog can reach:
 // no real home, no tmux, no rig. It restores them when the test ends. Everything a test sets AFTER calling
-// it (a per-test tmuxRead, watchdogNodesJSON, LookPath) is restored by the same cleanup.
+// it (a per-test tmuxRead, watchdogNodesJSON) is restored by the same cleanup.
 func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	oldHome, oldTmux, oldIdent := realHome, tmuxRead, tmuxServerIdentity
-	oldNodes, oldSleep, oldLimit, oldLook := watchdogNodesJSON, watchSleep, watchPollLimit, clientcmd.LookPath
+	oldNodes, oldSleep, oldLimit := watchdogNodesJSON, watchSleep, watchPollLimit
 	// Every poll of the watch loop now beats. The seam is replaced here, so no test writes into the
 	// machine's own log directory; the beat is recorded for the focused test that asserts it.
 	oldBeat := clientservices.WriteHeartbeat
@@ -38,21 +38,21 @@ func isolate(t *testing.T) string {
 	realHome = func() (string, error) { return home, nil }
 	tmuxRead = func() (string, error) { return "", nil }
 	tmuxServerIdentity = func() string { return "1 2" }
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) { return "[]", nil }
+	watchdogNodesJSON = func(string) (string, error) { return "[]", nil }
 	watchSleep = func(time.Duration) {}
 	watchPollLimit = 0
 	t.Cleanup(func() {
 		realHome, tmuxRead, tmuxServerIdentity = oldHome, oldTmux, oldIdent
-		watchdogNodesJSON, watchSleep, watchPollLimit, clientcmd.LookPath = oldNodes, oldSleep, oldLimit, oldLook
+		watchdogNodesJSON, watchSleep, watchPollLimit = oldNodes, oldSleep, oldLimit
 		clientservices.WriteHeartbeat = oldBeat
 	})
 	return home
 }
 
-// writeBrief drops <home>/.openrig/briefs/<rig>.txt, which is what "a rig that has a brief" means.
+// writeBrief drops <home>/.config/4genthub/briefs/<rig>.txt, which is what "a rig that has a brief" means.
 func writeBrief(t *testing.T, home, rigName string) {
 	t.Helper()
-	dir := filepath.Join(home, ".openrig", "briefs")
+	dir := filepath.Join(home, ".config", "4genthub", "briefs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func drivePolls(states []string) {
 		}
 		return "", nil
 	}
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) {
+	watchdogNodesJSON = func(string) (string, error) {
 		idx++
 		if idx >= len(states) {
 			idx = len(states) - 1
@@ -83,7 +83,6 @@ func drivePolls(states []string) {
 
 func testWatcher(buf *bytes.Buffer) *watcher {
 	return &watcher{
-		rig:      &clientcmd.Rig{Program: "rig"},
 		log:      &teeLog{out: buf},
 		stderr:   io.Discard,
 		logPath:  "/tmp/rig-watchdog.log",
@@ -157,19 +156,67 @@ func TestCountRunningSeats(t *testing.T) {
 	}
 }
 
-// TestExpectedSeatsUsesTheRigSeam: the count flows through the rig-JSON seam, and a malformed answer is 0.
-func TestExpectedSeatsUsesTheRigSeam(t *testing.T) {
+// TestExpectedSeatsUsesTheNodeSeam: the count flows through the node seam, a malformed answer is 0, and a
+// reading that FAILED comes back as an error rather than as a zero the caller would print as a fact.
+func TestExpectedSeatsUsesTheNodeSeam(t *testing.T) {
 	isolate(t)
-	rig := &clientcmd.Rig{Program: "rig"}
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) {
+	watchdogNodesJSON = func(string) (string, error) {
 		return `[{"lifecycleState":"running"},{"lifecycleState":"stopped"}]`, nil
 	}
-	if got := expectedSeats(rig, "demo"); got != 1 {
-		t.Errorf("expectedSeats = %d, want 1", got)
+	if got, err := expectedSeats("demo"); got != 1 || err != nil {
+		t.Errorf("expectedSeats = %d, %v, want 1 and no error", got, err)
 	}
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) { return "garbage", nil }
-	if got := expectedSeats(rig, "demo"); got != 0 {
-		t.Errorf("expectedSeats on malformed input = %d, want 0", got)
+	watchdogNodesJSON = func(string) (string, error) { return "garbage", nil }
+	if got, err := expectedSeats("demo"); got != 0 || err != nil {
+		t.Errorf("expectedSeats on malformed input = %d, %v, want 0 and no error", got, err)
+	}
+	watchdogNodesJSON = func(string) (string, error) { return "", errors.New("HTTP 500 from /api/ps") }
+	if got, err := expectedSeats("demo"); err == nil {
+		t.Errorf("expectedSeats = %d, nil: a reading that failed was reported as an answer", got)
+	}
+}
+
+// TestAnUnreadableRoomIsNotReportedAsStopped: the sentence "daemon reports no running seats" is a fact about
+// the room, and a read that FAILED does not have it. The pass says what happened and touches nothing - the
+// same inaction the shell's zero produced, without the false sentence.
+func TestAnUnreadableRoomIsNotReportedAsStopped(t *testing.T) {
+	isolate(t)
+	watchdogNodesJSON = func(string) (string, error) { return "", errors.New("HTTP 500 from /api/ps") }
+	buf := &bytes.Buffer{}
+	w := testWatcher(buf)
+	if code := w.check("demo", "report"); code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d: an unreadable room is not a dead one", code, clientcmd.ExitOK)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "the room's node records could not be read; no action") {
+		t.Errorf("the failed read was not named:\n%s", out)
+	}
+	if strings.Contains(out, "daemon reports no running seats") || strings.Contains(out, "DEAD —") {
+		t.Errorf("a reading that failed was reported as a fact about the room:\n%s", out)
+	}
+}
+
+// TestWatchDoesNotCountAnUnreadableRoomAsAMiss: the miss counter is for seats that vanished. Two unreadable
+// polls must not add up to a restore of a room this watcher never read.
+func TestWatchDoesNotCountAnUnreadableRoomAsAMiss(t *testing.T) {
+	isolate(t)
+	watchdogNodesJSON = func(string) (string, error) { return "", errors.New("HTTP 500 from /api/ps") }
+	watchPollLimit = 2
+	buf := &bytes.Buffer{}
+	w := testWatcher(buf)
+	restores := 0
+	w.restore = func(string, string) bool { restores++; return true }
+	w.watch("demo", time.Minute, defaultWatchBeat)
+
+	if restores != 0 {
+		t.Errorf("restores = %d, want 0: an unreadable reading is not a miss", restores)
+	}
+	out := buf.String()
+	if strings.Contains(out, "MISS ") {
+		t.Errorf("an unreadable reading was counted as a miss:\n%s", out)
+	}
+	if !strings.Contains(out, "the room's node records could not be read; not counted as a miss") {
+		t.Errorf("the failed read was not named:\n%s", out)
 	}
 }
 
@@ -296,7 +343,7 @@ func TestServerIdentityFirstWriteAndChange(t *testing.T) {
 	if got := buf.String(); !strings.Contains(got, "tmux server identity: 100 2026-01-01 (no change recorded before this poll)") {
 		t.Errorf("first write did not log the identity:\n%s", got)
 	}
-	path := filepath.Join(home, ".openrig", "state", watchdogServerIDName)
+	path := filepath.Join(home, ".config", "4genthub", "state", watchdogServerIDName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("identity file: %v", err)
@@ -377,27 +424,12 @@ func TestRestoreRunsTheGateBeforeRestoring(t *testing.T) {
 // TestAllWithoutWatchIsUsage: --all needs --watch, and exits 2 when it has none.
 func TestAllWithoutWatchIsUsage(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	code := watchdogCommand{}.Run(context.Background(), nil, []string{"--all"}, &out, &errBuf)
+	code := watchdogCommand{}.Run(context.Background(), []string{"--all"}, &out, &errBuf)
 	if code != clientcmd.ExitUsage {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitUsage)
 	}
 	if !strings.Contains(errBuf.String(), "--all requires --watch") {
 		t.Errorf("stderr = %q, want it to name the requirement", errBuf.String())
-	}
-}
-
-// TestNoRigToolIsUnavailable: the daemon-reading forms refuse in one message with ExitUnavailable when the
-// rig tool is missing.
-func TestNoRigToolIsUnavailable(t *testing.T) {
-	isolate(t)
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
-	var out, errBuf bytes.Buffer
-	code := watchdogCommand{}.Run(context.Background(), nil, []string{"demo"}, &out, &errBuf)
-	if code != clientcmd.ExitUnavailable {
-		t.Fatalf("exit %d, want %d", code, clientcmd.ExitUnavailable)
-	}
-	if !strings.Contains(errBuf.String(), "rig is not on PATH") {
-		t.Errorf("stderr = %q, want the platform matrix's message", errBuf.String())
 	}
 }
 
@@ -410,16 +442,15 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 	home := isolate(t)
 	writeBrief(t, home, "alpha")
 	writeBrief(t, home, "zulu")
-	clientcmd.LookPath = func(string) (string, error) { return "/stub/rig", nil }
 	// The daemon expects a running seat in both, and tmux has one for zulu only: alpha is dead, and it is
 	// the FIRST rig in the pass, which is the position the shell's last-status exit code got wrong.
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) {
+	watchdogNodesJSON = func(string) (string, error) {
 		return `[{"lifecycleState":"running"}]`, nil
 	}
 	tmuxRead = func() (string, error) { return "zulu-seat@zulu\n", nil }
 
 	var out, errBuf bytes.Buffer
-	code := watchdogCommand{}.Run(context.Background(), nil, []string{"--check"}, &out, &errBuf)
+	code := watchdogCommand{}.Run(context.Background(), []string{"--check"}, &out, &errBuf)
 	if code != exitDead {
 		t.Fatalf("exit %d, want %d: a dead rig that is not last must still count (stderr %q)", code, exitDead, errBuf.String())
 	}
@@ -434,9 +465,8 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 func TestListingWorksWithoutRigTool(t *testing.T) {
 	home := isolate(t)
 	writeBrief(t, home, "alpha")
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
 	var out, errBuf bytes.Buffer
-	code := watchdogCommand{}.Run(context.Background(), nil, nil, &out, &errBuf)
+	code := watchdogCommand{}.Run(context.Background(), nil, &out, &errBuf)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0 (stderr %q)", code, errBuf.String())
 	}

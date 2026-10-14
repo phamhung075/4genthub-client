@@ -1,15 +1,13 @@
 package clientbridge
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
 
@@ -18,7 +16,7 @@ import (
 // The cloud already knows how to carry an agent-to-human message: the dashboard stores and toasts a
 // frame whose payload.entity is 'notification', and the server replays one from the
 // missed-notification store on reconnect. What did not exist is a producer. This file is it: the
-// bridge reads the OpenRig rows ADDRESSED TO A HUMAN and posts one notification frame per row.
+// bridge reads the rig orchestrator rows ADDRESSED TO A HUMAN and posts one notification frame per row.
 //
 // THE FRAME CONTRACT IS FIXED BY THE CONSUMER, NOT CHOSEN HERE (each line read, 2026-10-10):
 //   - POST /api/v2/broadcast/notify requires event_type, entity_type and entity_id, and takes the
@@ -57,7 +55,7 @@ const (
 	notifyStateLimit = 500
 )
 
-// HumanRow is one OpenRig queue row addressed to a human, reduced to what a notification needs.
+// HumanRow is one the rig orchestrator queue row addressed to a human, reduced to what a notification needs.
 type HumanRow struct {
 	ID       string
 	Rig      string
@@ -70,17 +68,6 @@ type HumanRow struct {
 // HumanDestination is the queue destination that addresses one rig's human.
 func HumanDestination(rigName string) string {
 	return humanDestinationPrefix + rigName
-}
-
-// ParseRigNames reads `rig ps --json`: the rigs this machine can see. Only the name is used, because
-// the human destination is `human@<name>`.
-func ParseRigNames(output string) ([]any, error) {
-	return parseItems(output, "rig ps")
-}
-
-// ParseHumanRows reads `rig queue list --destination human@<rig> --json`.
-func ParseHumanRows(output string) ([]any, error) {
-	return parseItems(output, "rig queue list")
 }
 
 // parseItems unwraps a JSON listing: a list, or an object carrying `items`. Both shapes are what the
@@ -190,61 +177,67 @@ func notifyKey(row HumanRow) string {
 	return row.Rig + "/" + row.ID
 }
 
-// readRigTool runs one `rig` subcommand through the clientcmd.Rig contract when the dispatcher resolved
-// the rig tool, and through the Runner when a caller supplied one instead (the tests, and any
-// environment where rig is reached another way) - the same two paths readRig and readEdges take.
-func (b *Bridge) readRigTool(rig *clientcmd.Rig, args ...string) (string, error) {
-	if rig != nil {
-		return rig.Run(context.Background(), args...)
+// humanRooms lists the rooms this machine's runtime hosts, sorted so a cycle's work is deterministic.
+func (b *Bridge) humanRooms() []string {
+	rooms, err := b.Rooms()
+	if err != nil {
+		b.note("notify-rigs", fmt.Sprintf("runtime unavailable: %v", err))
+		return nil
 	}
-	return b.Runner(context.Background(), append([]string{"rig"}, args...)...)
+	sort.Strings(rooms)
+	return rooms
 }
 
-// humanRigs lists the rig names this machine can see, sorted so a cycle's work is deterministic.
-func (b *Bridge) humanRigs(rig *clientcmd.Rig) []string {
-	output, err := b.readRigTool(rig, "ps", "--json")
+// humanRows reads the rows addressed to one room's human. The listing is the rail's active rows, so closed
+// rows are not notified: a row the human has already answered is not news.
+func (b *Bridge) humanRows(room string) []HumanRow {
+	destination := HumanDestination(room)
+	items, err := b.Queue(room)
 	if err != nil {
-		b.note("notify-rigs", fmt.Sprintf("rig unavailable: %v", err))
-		return nil
-	}
-	items, err := ParseRigNames(output)
-	if err != nil {
-		b.note("notify-rigs", "rig ps was not readable")
-		return nil
-	}
-	names := make([]string, 0, len(items))
-	for _, item := range items {
-		if name := str(dict(item)["rigName"]); name != "" {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names
-}
-
-// humanRows reads the rows addressed to one rig's human. The listing is the daemon's default view, so
-// closed rows are not notified: a row the human has already answered is not news.
-func (b *Bridge) humanRows(rig *clientcmd.Rig, rigName string) []HumanRow {
-	destination := HumanDestination(rigName)
-	output, err := b.readRigTool(rig, "queue", "list", "--destination", destination, "--json",
-		"--limit", strconv.Itoa(notifyRowsPerRig))
-	if err != nil {
-		b.note("notify-queue "+destination, fmt.Sprintf("rig unavailable: %v", err))
-		return nil
-	}
-	items, err := ParseHumanRows(output)
-	if err != nil {
-		b.note("notify-queue "+destination, "the queue listing was not readable")
+		b.note("notify-queue "+destination, fmt.Sprintf("runtime unavailable: %v", err))
 		return nil
 	}
 	rows := make([]HumanRow, 0, len(items))
 	for _, item := range items {
-		row, ok := HumanRowFrom(item, rigName)
+		row, ok := HumanRowFrom(item, room)
 		if ok {
 			rows = append(rows, row)
 		}
 	}
 	return rows
+}
+
+// runtimeRooms lists the rooms the runtime hosts.
+func runtimeRooms() ([]string, error) {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return nil, errRuntimeAbsent
+	}
+	return client.ListAllRooms()
+}
+
+// runtimeHumanQueue reads the active rows of one room's rail addressed to its human, in the item shape
+// HumanRowFrom reads.
+func runtimeHumanQueue(room string) ([]any, error) {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return nil, errRuntimeAbsent
+	}
+	destination, limit := HumanDestination(room), int64(notifyRowsPerRig)
+	rows, err := client.QueueList(room, clientruntime.QueueListFilter{
+		DestinationSession: &destination, ActiveOnly: true, Limit: &limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, map[string]any{
+			"qitemId": row.QitemID, "state": row.State, "summary": row.Summary, "body": row.Body,
+			"sourceSession": row.SourceSession, "destinationSession": row.DestinationSession,
+		})
+	}
+	return items, nil
 }
 
 // notifyHumans posts one frame for each human-addressed row that has not been posted yet.
@@ -255,16 +248,16 @@ func (b *Bridge) humanRows(rig *clientcmd.Rig, rigName string) []HumanRow {
 // failure or a 5xx is neither silently dropped nor counted as delivered, while a row the cloud would
 // refuse identically forever is not posted again on every cycle. The record is therefore "handled",
 // not strictly "delivered", and the note beside a terminal refusal carries the status and the answer.
-func (b *Bridge) notifyHumans(rig *clientcmd.Rig) {
+func (b *Bridge) notifyHumans() {
 	if b.Notify == nil {
 		return
 	}
 	posted, changed := 0, false
-	for _, rigName := range b.humanRigs(rig) {
+	for _, rigName := range b.humanRooms() {
 		if posted >= notifyPostsPerCycle {
 			break
 		}
-		for _, row := range b.humanRows(rig, rigName) {
+		for _, row := range b.humanRows(rigName) {
 			if posted >= notifyPostsPerCycle {
 				break
 			}

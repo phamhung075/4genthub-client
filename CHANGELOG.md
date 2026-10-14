@@ -8,6 +8,1576 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 - `skills/share/typesafe-ai/` (`SKILL.md`, `LICENSE`), copied unchanged from `git@github.com:typesafe-ai/skills.git` at `65a39f3` (v0.5.7). Every seat, whatever its LLM, receives it through the share tier like the other shared skills. It teaches the TypeSafe API: the three question types, the architectural patterns, and how to structure evaluations (Jev is a System One model).
 
+## 2026-10-14 — the two printed sites the gate called gaps are defects, and the text says so now
+
+### Changed
+- `internal/clientsync/switchverb.go` — the runtime-change notice printed the OpenRig CLI's own three-line
+  sequence as a procedure. Following it does not switch a runtime: its middle line is a MACHINE-WIDE
+  safeguard stop on this box (measured: rigd reaped with its children, for every rig) and its last line
+  cannot run at all (`--team DIR is required`). The notice now prints no verb from the lead's machine-wide
+  list and no OpenRig CLI verb anywhere: it says this client has no sequence that completes the switch,
+  names the two verbs it does own — `4genteam sync rig ROOM --update` writes the room's definition and each
+  seat's pinned snapshot; `4genteam seat reseat RIG --seat NAME` stops and restarts a seat so it loads the
+  configuration it now has — and states that neither is run for the reader and that whether a restart
+  carries a changed RUNTIME is not established. Neither printed command was run: both write (the second
+  restarts a live seat) and the lead's room-wide rule of 06:08Z forbids executing lifecycle or spawn verbs
+  as probes, so their shapes come from `--help` and from the source, and the limit is what the text prints.
+  `TestSwitchRuntimeChangePrintsNoMachineWideVerb` is the pin the incident earned: it fails on the text
+  this commit replaces, naming each machine-wide verb and what was measured about it. Both pins whose names
+  claimed "manual steps" moved with the text.
+- `internal/clientruntime/openrigdaemon.go` — the `@external` reply footer named `rig queue create`, which
+  fails here by name ("create is not a read this shim performs", exit 2). It now states the limit: the
+  destination is not a local session and this client's queue reads only. Its pin asserts the absence of the
+  removed verb instead of its presence.
+- Not touched: no exec path, no policy matcher, no `up`. The client still cannot switch a runtime in place;
+  that finding now lives in the printed text instead of in a procedure that takes the machine's supervisors
+  down.
+
+## 2026-10-14 — every printed rig reference names a command that exists on this box
+
+### Changed
+- `internal/clientlifecycle/lifecycle.go` — both "could not open the OpenRig UI" lines pointed at
+  `rig daemon status`, which is not a verb the installed client has. They name `4genteam doctor`: one
+  row per safeguard, and it exits 0 only when every row is running, so a bare exit code from it is a
+  snapshot rather than a property (the gate measured 0 and 3 within the same hour, a `bridge: silent`
+  row present in both), the client's own read of the local stack.
+- `internal/clientseat/reseat.go` — the session-name hint names `4genteam send SESSION MESSAGE`: the shape
+  its no-args refusal states (`SESSION and MESSAGE, or RIG SEAT and MESSAGE, are required`) and the usage
+  line `reseat.go:237` prints to stdout. The send help's node pointer names
+  `4genteam ps <RIG> --nodes --json` (run: exit 0, a `SESSION` column per seat), and the
+  rendered-unconfirmed footer names `4genteam capture <session>`.
+- `internal/clientruntime/openrigdaemon.go` — the `↩ Reply:` footer rendered `rig send`; it names
+  `4genteam send`, this client's own verb and transport.
+- `internal/clientwatch/commands.go` — the `inputs` and `input` notes said a line typed in a pane "is sent
+  with `rig send`". The pane has not exec'd `rig` since `grid.go`'s `sendLine` moved in process through
+  `clientruntime.RuntimeSendText`, so the note was stale: it now says the line goes through this client's
+  own transport.
+- Pins moved with the strings: `clientruntime/openrigdaemon_test.go` (both footers) and
+  `clientseat/seatargument_test.go`. The no-generation assertion in `openrigdaemon_test.go` now matches the
+  generation suffix marker `· gen ` instead of the bare word `gen`, which "4genteam" itself contains.
+- Kept with a named reason, in `SWEEP-printed-rig-strings-2026-10-14.md`: the `@external` reply's
+  `rig queue create` (this client's `queue` shim refuses writes by name, so no native writer exists to point
+  at), the `switch` runtime-change procedure and `sync bundle`'s `rig up <bundle> --target` (no native verb
+  consumes a rig.yaml or a `.rigbundle`; `4genteam up` takes `RIG --team DIR`), and the install-checker's
+  `rig daemon stop|start` (a different daemon from the one `4genteam stop`/`up` manage). Generated policy
+  matchers, exec-failure reports and read-shape diagnostics name data or a condition rather than an
+  instruction, and are untouched. No argv or exec site changed here.
+
+## 2026-10-14 — `continue` names the client's own read, not the tool the cutover removes
+
+### Changed
+- `internal/clientrestore/restore.go` — the closing `done` line told the operator to verify with
+  `rig ps --nodes --rig <rig>`, which is the tool this cutover takes off PATH, so an operator who followed it
+  would find the command missing. It names `4genteam ps <RIG> --nodes` — the client's own node table, read
+  through the runtime — which is the same read the migrated verbs use. The line and its pin in
+  `continue_test.go` moved together. Flagged as the gate's nit on `bb4f412`.
+
+## 2026-10-14 — `sync respawn` refuses its launch in words, and an undelivered brief fails the restore
+
+### Changed
+- `internal/clientsync/respawnverb.go` — the launch leg is off `rig` entirely: `runRigCapture`, `rigResult` and
+  `lastLine` are deleted and the `os/exec` import with them. The leg's semantics were `seat launch <session>
+  --fresh --stop --reason R` — one session, started fresh, the old occupant stopped first, an audit reason
+  recorded — and the native runtime has no equivalent: `StartRoom` takes a whole room from a spec and
+  `RestartSeat` ({room, seat}) carries NO reason field at all, so wiring it would drop the caller's `--reason`
+  while the verb reported a respawn. The ruling's own option is taken instead: the step is not taken and it is
+  spoken — the session that could not be launched is named, the exit is `ExitUnavailable`, nothing goes to
+  stdout, and `rig` is never consulted (R1/R4). Every other reading and refusal is unchanged and in place.
+  `--reason` is still parsed and validated, then set aside where the launch would have spent it. The refusal
+  names `4genteam room reseat ROOM SEAT` as the native door onto StopSeat+RestartSeat, because the ruling's
+  suggested `4genteam seat launch` is not a command this client has.
+- `internal/clientrestore/restore.go` — `brief` returns the seats its text did not reach, and `restore` answers
+  false when that list is non-empty, naming them. The send closure has returned an error since 4203d96, so each
+  failure was already logged — but the restore still answered true, which is the shape R3 forbids: a delivery
+  reported that never happened. The seats are up and the brief did not arrive, so `continue <rig>` now exits
+  `ExitRestoreFailed` naming the missed seats.
+- `internal/clientrestore/continue.go` — the `--all` summary is `rigs did not complete`, not `rigs are not up`:
+  a rig whose seats are up but whose brief did not arrive is in that list now, and the old wording would state a
+  fact about the room that is false.
+
+### Tests
+- `internal/clientsync/respawn_test.go` — the command-leg stub is gone; the suite plants a `rig` FIRST on PATH
+  that records having been run, so the assertion is stronger than the call list it replaces: nothing reaching
+  for the program anywhere on this path can hide, and the refusal test pins the session named plus the exit.
+- `internal/clientrestore/continue_test.go` — `TestAnUndeliveredBriefIsAFailedRestore` pins exit 1, the missed
+  seat named twice (the send failure and the brief that did not reach it) and the ABSENCE of `done`. Shown
+  failing against the swallowing version (exit 0), then restored byte-identically.
+
+## 2026-10-14 — the peak gate says when it did NOT run for a room it has no records of
+
+### Changed
+- `internal/clientlifecycle/lifecycle.go` — `PeakGate`'s third case (`!ok`: the client has NO RECORDS of this
+  room) still proceeds with `ExitOK`, because blocking a start on a room the client knows nothing about would be
+  the wrong call — but it no longer proceeds SILENTLY. It prints, once, that the room has no node records and
+  that the gate did NOT run for this start, naming the verb and the room. That line is the whole guard on this
+  fail-open case, and it lives in the gate so no verb reaching it — `up`, `compact`, or a restore — can forget
+  it. No caller printed the fact before this, so nothing is duplicated.
+
+### Tests
+- Added `TestPeakGateSaysWhenItDidNotRunForARoomItHasNoRecordsOf`, pinning both verbs that call the gate here
+  plus the unchanged `ExitOK`; removing the print makes it fail for each verb.
+- `TestTheGateProceedsWhenTheRoomHasNoRecords` ASSERTED THE SILENCE (`errOut.Len() != 0` was an error). The
+  assertion moved with the behavior — it now requires the line, with the start itself unchanged — because
+  otherwise the package cannot be green with the guard in place.
+
+## 2026-10-14 — the rig list is read from the daemon's own route, not from `rig ps`
+
+### Changed
+- `internal/clientruntime/seatactivity.go` — added `RigEntries(ctx, includeArchived)` over `GET /api/ps` (the
+  route the node read already resolves an id with) and the wide `RigEntry` row it decodes. It carries the
+  reading's three answers, so a caller can tell an answered list from NO RECORDS (this shell names no daemon)
+  and from a read that FAILED.
+- `internal/clientrestore/continue.go` — the no-argument listing prints the rig section from that route instead
+  of exec-ing `rig ps --include-archived`: name-sorted with the id breaking ties, `[archived]` marked because the
+  listing asked for archived rigs, capped at 30 rows as the shell's `head -30` did. A failed read says so; a
+  shell that names no daemon says that, rather than leaving the section empty under a heading that would then
+  read "no rigs here" (the line it replaces named the absent rig tool for the same reason).
+- `internal/clientbridge/notifications.go` — `humanRigs()` reads the same list (archived excluded, which is the
+  daemon's own default view) and deduplicates names, so one rig is not notified twice in a cycle. `ParseRigNames`
+  is deleted with its only caller.
+
+### Tests
+- `internal/clientrestore/continue_test.go` — the world serves `/api/ps` with the daemon's own row shape and its
+  archived-filtering default; the listing test is pinned to the new output, plus tests for a list that cannot be
+  read and for a shell that names no daemon. `internal/clientbridge/runloop_test.go` serves the route in the
+  fixture so every cycle walks a real one, and the bridge tests cover the unreadable-list note.
+
+## 2026-10-14 — capture reads a pane through the runtime, not through the OpenRig daemon
+
+### Changed
+- `internal/clientruntime/command.go` — `captureCommand` no longer dials the OpenRig daemon. It gated on
+  `OPENRIG_URL`/`OPENRIG_PORT`, POSTed `/api/transport/capture` and parsed the document it got back, so the verb
+  only worked where an OpenRig path existed — exactly what this cutover removes. It now calls
+  `Client.Capture` over the client's own transport (the runtime's terminal manager, the process that owns the tmux
+  server). Verbatim stdout and `--lines` are unchanged; `--json` prints this client's own capture answer (the seat
+  and its content) because there is no daemon body to pass through any more; a runtime that is absent or refuses
+  is a refusal in words with `ExitUnavailable` and nothing on stdout, and nothing falls back to the daemon.
+  The verb's summary and help text name the runtime instead of the daemon.
+
+### Tests
+- The five daemon-path capture tests are gone: a daemon stub would have gone on passing while testing a path the
+  verb no longer walks. Their replacements live in `internal/clientruntime/capture_test.go` and drive the runtime
+  socket: the request frame pinned whole (session plus the line window, and its absence), the pane verbatim,
+  `--json`'s document, a runtime that cannot be reached (named, `ExitUnavailable`, nothing on stdout), and the
+  runtime's own refusal. `TestCaptureCommandReadsASuccessWithoutAnOkField` was DELETED rather than converted: its
+  subject was a daemon body that omitted `ok`, a tolerance with no counterpart once the daemon path is gone.
+
+## 2026-10-14 — an older runtime is named as what it is, not shown as the verb's answer
+
+### Fixed
+- `internal/clientruntime/ipc.go` — `Client.Call` now reads a FRAMING failure apart from a verb's own refusal.
+  An installed runtime that predates a verb answers `{"ok":false,"error":"invalid request JSON: unknown variant
+  `QueueList`, expected one of …"}`, and shown as the verb's answer that read as something about the ROOM —
+  which it is not: nothing about the room was asked or answered. It becomes `*RuntimeTooOld`, carries
+  `ExitUnavailable`, and its message names the action, the runtime's socket, the runtime's own words and this
+  client's version. Every other `ok:false` passes through as `DaemonRefused`, untouched, because `unknown
+  qitem_id 'x'` is the runtime refusing WORK and reporting that as unimplemented would be a lie about versions.
+- The client matches serde's markers (`invalid request JSON`, `unknown variant`) rather than a marker of our
+  own, and the comment says why: the runtime this must survive is OLDER than this build, so a kind added to the
+  runtime now cannot be present in the answer that arrives. The markers are pinned by a test, so a wording drift
+  is visible instead of silent.
+
+### Tests
+- `TestAnOlderRuntimesFramingFailureIsNamedAsSuch` and `TestAVerbsOwnRefusalIsNotRewrittenAsAVersionMismatch`
+  (the two halves of the boundary, at the transport), plus `TestQueueListNamesAnOlderRuntimeThatCannotFrameTheRequest`,
+  which drives the verb the defect was measured on: exit 3, nothing on stdout, and the version boundary named.
+  `TestQueueListReportsTheRuntimesOwnRefusalBySocket` still passes unchanged, so the business refusal is
+  demonstrably not rewritten.
+
+## 2026-10-14 — a room read that failed holds the automatic resume, and is not reported as a stopped room
+
+### Fixed
+- `internal/clientlifecycle/supervisor.go` — the compaction supervisor's node seam carries the reading's three
+  answers (`Nodes func(rig string) ([]map[string]any, bool, error)`), and the AUTOMATIC resume refuses when
+  `err != nil`. It used to proceed: the unreadable reading was discarded at the wiring and arrived at the
+  off-peak gate as an empty fleet, `SeatsFromNodes(nil)` is empty, `Decide` refuses nothing at zero DeepSeek
+  seats, so the seat was told to resume with the peak gate never having seen a seat — fail-open on the one path
+  in that file that starts a seat, and against `lifecycle.go`'s own rule that an unreadable reading is never
+  read as this room is safe. A room ANSWERED WITH NO RECORDS still proceeds, said plainly in the log, because
+  there are no seats there to bill. The two are distinguishable now, which is the point of the seam.
+- `internal/clientrestore/watchdog.go` — `expectedSeats` returns the seam's error instead of counting it as
+  zero. Both callers then stated a fact about a room nobody had read: `--check` printed "daemon reports no
+  running seats (expected 0 …) — deliberate stop or already handled", and `--watch` counted the pair (0, 0) as
+  a MISS, twice, and restored. A failed read is now named in the log, is not a miss, is not a heartbeat, and
+  starts nothing — the same inaction the shell's zero produced, without the false sentence.
+- `internal/clientsync/switchverb.go` — the absent-seat note said the seat "is not in `rig ps`", naming a
+  command this verb no longer runs; it now names the reading itself (`the room's records`), and the assertion in
+  its test moved with it.
+
+### Tests
+- Added `TestAFailedRoomReadHoldsTheResume` (clientlifecycle), `TestAnUnreadableRoomIsNotReportedAsStopped` and
+  `TestWatchDoesNotCountAnUnreadableRoomAsAMiss` (clientrestore), and extended
+  `TestExpectedSeatsUsesTheNodeSeam` to pin a failed read as an error rather than as a zero. Each was shown
+  FAILING with its fix reverted — the resume text really goes out over a failed read, and the watchdog really
+  prints the stopped-room sentence — and passing with the fixes restored, files byte-identical afterwards.
+
+## 2026-10-14 — sync switch and sync respawn read a seat without rig
+
+### Changed
+- `internal/clientruntime` — `SeatNode(ctx, room, seat) (row map[string]any, found bool, err error)`: `RoomNodes`
+  narrowed to one seat, so a verb whose question is about a single seat asks the same question of the same
+  transports and hears the same three answers. `found == false` means the room's records do not list that seat
+  — including when they are empty, which for a question about ONE seat is the same answer — while a read that
+  FAILED is an error, so "I could not read" is never read as "no such seat".
+- `internal/clientsync/switchverb.go` — `switchCanonicalSession` reads the seat through that seam instead of
+  exec-ing `rig ps --json --nodes --rig ROOM`: a failed read is a refusal in words, and because the read is
+  scoped to the room it was asked about, the old `rigName == room` check is gone rather than restated. `rig`
+  absence is now detected where `rig` is still used — the `rig seat set-model|stop|launch` command legs — AND
+  THE VERB'S CONTRACT IS UNCHANGED: a machine without `rig` on PATH is a NOTE, and the recorded cloud change
+  still exits 0 with `applied=none`.
+- `internal/clientsync/respawnverb.go` — `seatNode` and `canonicalSession` read through the same seam;
+  `parseRigNodes` (which tolerated two shapes of the exec's stdout) and its `logicalSeat` helper are gone with
+  the exec. A read that fails is refused rather than read as a missing node.
+
+### Tests
+- Both verb suites stop faking the read through an exec stub and serve it over the daemon's own route
+  (`GET /api/ps`, then `GET /api/rigs/<rigId>/nodes`), so the verb's own test fails when the read breaks:
+  `TestSwitchModelPutsBodyKeepsRuntimeAndSetsModel` and `TestRespawnLaunchesOnlyWhenTheSeatReadsDead` were each
+  shown failing against a node route answering HTTP 500. Added `TestSwitchRefusesWhenTheNodeReadFails` and
+  `TestRespawnRefusesWhenTheNodeReadFails`, which pin the failed-read refusal rather than the absent-seat note.
+
+### Verified
+- `gofmt -l` clean; `go build ./...` and `go vet ./...` clean; `go test ./...` every package ok.
+
+## 2026-10-14 — the node reading becomes one seam, and the watchdog counts a room without rig
+
+### Changed
+- `internal/clientruntime` — ONE exported reading of a room's node records,
+  `RoomNodes(ctx, room) (nodes []map[string]any, ok bool, err error)`: the local runtime first, the OpenRig
+  daemon's node table second, rows in the CLI's own keys whichever answered. `ReadRigNodes` is now the
+  unexported `daemonNodes`, the daemon rung of that same read, so a verb cannot take a rung by accident. The
+  runtime rung also carries `lifecycleState` beside `sessionStatus` — the same fact under the key the
+  watchdog's expectation count reads — so a consumer never has to know which transport answered.
+- `internal/clientruntime`, `internal/clientlifecycle` — the seam's three answers are EXPLICIT, replacing a
+  reason string whose empty value meant success: `ok` with no error is a transport's answer (possibly an
+  empty table, a room with no seats), no `ok` and no error is NO RECORDS, and an error is a read that FAILED.
+  `rigNodes` is now a thin wrapper over it; `PeakGate` still refuses in words on a failed read and proceeds
+  silently on no records.
+- `internal/clientlifecycle` — the compact supervisor's `Nodes` callback keeps the upstream type, which has no
+  error channel, so a failed read and an empty room look the same to it. Neither starts seats, so neither is
+  safety-relevant there; the decision that must refuse is `PeakGate`'s, which does see the error.
+- `internal/clientrestore` — the watchdog's node seam reads the client's own transports instead of exec-ing
+  `rig ps --nodes --rig RIG --json`, and `expectedSeats` takes only the rig name. A failed read counts as zero
+  rows exactly as the shell's pipe left it; NO RECORDS is an empty table rather than a failure.
+
+### Tests
+- New: the seam's three answers, its transport order (runtime answers and the daemon is not asked; no runtime
+  falls through to the daemon; neither knowing the room is no records), plus both gate outcomes.
+- Replaced: `TestTheGateIsSkippedWhenTheRoomCannotBeRead` pinned the OLD contract — a reading that fails is not
+  a refusal — which is the contract this pass changed. It is now
+  `TestTheGateProceedsWhenTheRoomHasNoRecords` and `TestAFailedNodeReadRefusesAtTheGate`.
+
+### Verified
+- `go build ./...` and `go vet ./...` clean; `go test ./...` every package ok.
+
+## 2026-10-14 — the identity chain answers feedback, and a room's nodes are read without rig
+
+### Changed
+- `internal/clientfeedback/feedback.go` — the verb's `--room`/`--seat`/`--session` defaults come from
+  `clientruntime.ResolveIdentity` (the runtime socket, then a rig's OpenRig daemon, then this shell's seat
+  environment) instead of from an exec of `rig whoami --json`. The refusal no longer names a command that
+  cannot exist after the cutover. Commit `3840b8e`.
+- `internal/clientrestore/restore.go` — the restore brief is delivered by `clientruntime.DeliverToSession`,
+  which takes the session name AS GIVEN. The seam it replaces tried the runtime only behind a guard for the
+  Python-era `agenthub--<room>--<seat>` shape that this rig's sessions do not match, and swallowed the exec's
+  failure: a brief reported as delivered and dropped. Regression test on the REAL seam. Commit `4203d96`.
+- `internal/clientruntime/seatactivity.go` — exported `ReadRigNodes(ctx, rig)`: the daemon's node table over
+  `GET /api/ps` then `GET /api/rigs/<rigId>/nodes`, decoded in the CLI's own node keys with the seat half
+  derived from the logical id. `ReadSeatActivity` could not serve this — it answers one seat's activity word,
+  not a room's rows. The read is narrower than `rig ps --json --nodes` in exactly one key, `pid`, and says so
+  in its own doc because no consumer asks for it. Two of its three answers are told apart for the caller:
+  NO RECORDS (no daemon named, or a rig the daemon does not know) versus a FAILED read, which carries words.
+- `internal/clientlifecycle/lifecycle.go` — `rigNodes` reads the runtime first and then the daemon table;
+  `PeakGate` no longer resolves a rig tool, and a reading that FAILS is now a refusal in words
+  (`ExitUnavailable`) rather than `ExitOK`. Returning OK when the reading could not be taken is how a
+  peak-time resume could proceed with the gate never having decided. A room with no records still proceeds
+  silently, because there are no seats to bill.
+- `CHANGELOG.md`, `CHANGELOG/2026-10-14--guard-native-identity-and-delivery.md` — three statements claiming
+  `internal/clientsync/connectorverb.go` still execs `rig` are corrected. That file is 315 lines at `4203d96`
+  with no `exec`, no `LookPath`, no `runRig` and no `os/exec` import, and its own comment says THE CLI REACH
+  IS RETIRED; `fakeRig` stays because `cmd/seatcheck`'s tests still use it, not because a shape is owed.
+- `cmd/seatcheck` — the two seams named for the execs they replaced are renamed for what they do:
+  `seatIdentity` and `seatDelivery`.
+
+### Verified
+- `go build ./...` and `go vet ./...` clean; `go test ./...` every package ok.
+- The live daemon route was read once, read-only, to establish the row shape the seam decodes; the gated verbs
+  themselves were NOT run against the live rig, because every one of them mutates it. Detail and the
+  absence-versus-failure contract: `CHANGELOG/2026-10-14--identity-chain-and-node-read.md`.
+
+## 2026-10-14 — ps names the room it could not see
+
+### Fixed
+- `internal/clientps/ps.go` — a NAMED room that matched nothing while tmux sessions existed now says so on stderr
+  (`no seats for rig <room> on the server this process would use (N session(s) there, none named <room>-*)`) instead
+  of printing an empty list with nothing to read. An empty list and a blind verb were indistinguishable on stdout,
+  which is how F-A was reported: a live room whose inventory came back empty. Detail and the measurement of the still
+  owed state-root half: `CHANGELOG/2026-10-14--ps-names-the-room-it-could-not-see.md`.
+
+## 2026-10-14 — the runtime answers the session list, a transcript and a pane, and the last execs go
+
+### Added
+- `rust/agenthub-runtime/src/types.rs` — three IPC actions: `ListSessions { room }` (a room, or every room the
+  daemon hosts), `Transcript { session, lines }` and `Capture { session, lines }`, plus their answers
+  (`SessionEntry`, `SessionActivity`, `TranscriptAnswer`, `CaptureAnswer`). `SessionEntry`'s serde renames are the
+  CLI's OWN camelCase (`canonicalSessionName`, `sessionName`, `rigName`, `logicalId`, `sessionStatus`,
+  `agentActivity.state`, `transcriptPath`) **because the client's one session-list parser reads exactly those
+  keys** — a second vocabulary here would make every native session invisible to that parser while the runtime
+  looked healthy. `sessionStatus` is `running` or `stopped` and nothing else: the client reduces every status to
+  those two, so the reduction happens once, where the evidence is.
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — `hosted_rooms()` (the `rooms/` directories that carry a spec; a
+  spec-less directory is not a room), `list_sessions(room)` (a PROJECTION of `get_room_status`, so the list and the
+  status cannot drift), `resolve_seat(session)`, `read_transcript(session, lines)` and `capture_session(session,
+  lines)`, plus `canonical_session_name` (`<room>-<seat>@<room>`) and `logical_id` (`<room>.<seat>`) beside
+  `session_name`.
+- `internal/clientruntime/sessions.go` — `ListSessions`, `Transcript` and `Capture` over the runtime socket, using
+  the one `decodeAnswer` decoder, with the empty room sent as an explicit `null` (the frame is adjacently tagged,
+  so dropping the key would ask a different question).
+
+### Changed
+- `internal/clientsync/connectorverb.go` — the connector's two reaches are RETIRED, not wrapped: `rigSessionCandidates`
+  reads the runtime's session list and `rigTranscript` reads the runtime's `Transcript`. `parseRigPsSessions`,
+  `sessionMaps`, `sessionIdentifiers`, `sessionRigName`, `sessionState`, `sessionNameKeys`, `sessionStateKeys` and
+  `runRig` are DELETED: they existed to tolerate the CLI's loose output (six spellings of a name, three of a status),
+  and that input is a typed contract now. `sessionMember` becomes `memberOf(logicalID)`.
+- `internal/clientsync/rigd.go` — the same three reads re-pointed (`Sessions`, `Transcript`, `Capture`), and
+  `rigNodeCandidates` deleted; its `--nodes --all-rigs` scope is what the runtime's own session list answers, from
+  the daemon that owns the rooms.
+- `internal/clientsync/messagesverb.go` — the two sentences that still advertised `rig ps --nodes --rig R --json`
+  as the rig shape's source now name the runtime's room status, which is what `roomSeats` has read since M3. (The
+  gate at `b24acfc` deferred this text to the first commit that touches `internal/clientsync`.)
+- `rust/agenthub-runtime/src/ipc/mod.rs` — the three actions dispatched.
+- Every refusal from the new surface NAMES what it could not find: an unhosted room with the rooms it does host, an
+  unknown seat with the rooms it searched, a seat whose log does not exist with the path it looked for, and a pane
+  that is not up with the session name. `get_room_status`'s own sentence is a contract other readers pin, so it is
+  left alone; `list_sessions` names the room around it.
+
+### Verified
+- 65 crate tests green, six of them new: the wire keys and the nested activity word, the all-rooms enumeration
+  (plus "a spec-less directory is not a room" and "an unhosted room is refused by its name"), every served name
+  resolving, a bare seat key in two rooms REFUSED rather than guessed, the transcript's whole/tail read and its
+  refusal when the runner has written no log, and the line window on a JSONL file.
+- Go: `go vet ./...` clean, `go test ./...` green, `gofmt -l` empty on both touched packages. The new verbs join
+  the package's own undecodable-answer instrument (`undecodableCalls`), so a wrong-shape or truncated answer to
+  any of the three is refused with exit 3 rather than read as an empty session list or an empty transcript.
+- LIVE, a scratch runtime from this branch over its own socket and a scratch state dir: `ListSessions` served both
+  seats with the canonical name, the runtime's session name, the logical id, `sessionStatus` and a nested
+  `agentActivity`; with a REAL pane created in that runtime's own tmux root the seat read `sessionStatus: running`
+  and `agentActivity.state: working` (source `running`), and **`Capture` returned the pane's own text**; the seat
+  that published nothing read `unknown` with no source (never-evidence), and the seat with no pane read `stopped`.
+  Every refusal was observed on the wire: `no room named "ghost-room" in this daemon (it hosts live-room)`,
+  `no seat named "ghost@nowhere" in any room this daemon hosts (live-room)`, `no transcript file for
+  "live-room-dev-b@live-room" at <path>`, `no live pane named ...: this daemon has no running session ...` — and
+  `Transcript` answered by all four spellings of one seat's name.
+- The parity rule is measured, not described: the LIVE `ListSessions` bytes were decoded through the client's own
+  `clientruntime.SessionEntry` and fed to `candidatesFrom`, which produced the right candidates (canonical name
+  first, `live-room`/`dev-a`, `running`) — a throwaway test over the captured bytes, removed afterwards.
+- `rustfmt --check` hunk counts on the PRISTINE files: supervisor **20 → 20**, ipc **9 → 9**, types **2 → 3** —
+  every hunk is a pre-existing compact variant, the diff never touches a line this change adds, and the third hunk
+  in `types.rs` is the same pre-existing block split in two because correctly-formatted variants now sit between
+  its halves. The crate-wide fmt-red is pre-existing and untouched.
+
+### Not claimed
+- `rig transcript` and `rig capture` are NOT verbs the installed client has (`4genteam: unknown command
+  transcript`), so no CLI parity could be measured against them and none is claimed: what is measured is the file
+  the runner publishes and the pane the runtime owns.
+- The node table (`rig ps --nodes --json`, §65's `GetNodes`) is a different request and stays parked; the two
+  room-scoped reaches in `respawnverb.go` belong to another row and are untouched.
+- Nothing was pushed, and no live daemon or seat was restarted: the live arm ran a scratch runtime under `/tmp`
+  with its own state dir and its own tmux root.
+
+## 2026-10-14 — the runtime grows the activity producer the readers' seam re-points onto
+
+### Added
+- `rust/agenthub-runtime/src/types.rs` — `ActivityWord`, the daemon's own vocabulary reused word for word
+  (`working | needs_input | idle | unknown`, `seat-restart-in-place.ts:121`). `from_runner_state` maps the runner's
+  published states onto it (`idle` → idle, `needs_input` → needs_input, `retrying`/`blocked`/`working` → working,
+  every death and every unrecognized word → unknown), `as_str` and the serde spelling are pinned to the same four
+  strings, `from_str_loose` reads a word back, and `from_state_document` reads it off a seat's document. `SeatStatus`
+  carries `activity` beside `activity_source` (the runner's own word), so a reader sees the evidence instead of
+  trusting the derivation.
+- `rust/agenthub-runtime/src/runner/mod.rs` — `write_state` publishes `activity` alongside `state`, derived from the
+  same string in the same call, so the two cannot drift and a second vocabulary cannot appear.
+
+### Changed
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — `get_room_status` serves the seat's published word: `seat_facts`
+  parses it (never re-derives it), and a seat that published nothing, or published no word, is `unknown` — never
+  `idle`, because a document nobody could read must not authorise a reseat.
+
+### Verified
+- 59 crate tests green, including `the_status_serves_the_activity_word_the_seat_published` (a real `RoomSupervisor`
+  over a scratch room, one document per word — idle/needs_input/working/unknown — each asserted with its source word)
+  and four vocabulary tests (the four strings, the per-state mapping, the parse round-trip, the absent-word case).
+- LIVE, the patched binary's own `status` verb over a scratch room with one seat per word:
+
+  ```
+  a  state=stopped  activity=idle         activity_source=idle
+  b  state=stopped  activity=needs_input  activity_source=needs_input
+  c  state=stopped  activity=working      activity_source=retrying
+  d  state=stopped  activity=unknown      activity_source=agent_exited
+  ```
+
+  and, asked once before that, with no document published for the seats, the same verb reported `unknown` with the
+  source `agent_socket_closed` — the never-evidence rule holding on the wire, not only in a test. Note the lifecycle
+  column: these seats were `stopped` while their activity words were definite, which is the whole reason the two axes
+  are separate fields.
+- `rustfmt --check` hunk counts unchanged on every file touched (types 2→2, runner 34→34, supervisor 20→20); the
+  crate-wide fmt-red is pre-existing and untouched.
+
+### Not claimed
+- A strict same-seat round-trip against the daemon's `agentActivity.state` needs a seat that is BOTH in a native room
+  and registered with the OpenRig daemon, and that conjunction arrives with the cutover. Measured here is the
+  vocabulary (byte-identical spellings, pinned by test) and the daemon's live words for this rig tonight
+  (idle/running/unknown), which are exactly what this mapping produces from the corresponding runner states.
+
+## 2026-10-14 — the idle readers ask the daemon, not a program found on PATH
+
+### Changed
+- `internal/clientruntime/seatactivity.go` (new) — **one read for both readers**. `ReadSeatActivity` asks the rigs list
+  (`GET /api/ps`) for the rig's id and then that rig's node table (`GET /api/rigs/<rigId>/nodes`), and answers
+  `SeatActivity{Word, Present, Read, Why}`: the word when the report carries one, `Present=false` when the seat has no
+  activity field at all (an explicit diagnostic, not an empty word), and `Read=false` with a sentence naming what could
+  not be asked. The read goes over the client's OWN transport, so nothing resolves a program name any more.
+- `internal/clientseat/sync.go` — `seatActivity` calls it; the `exec.LookPath("rig")` + `rig ps --nodes --rig … --json`
+  shell-out is gone. On this box `rig` on PATH is the compat shim to `4genteam`, whose own `ps` carries `activity` (a
+  log mtime) and no `agentActivity` at all — so the word never arrived and the quiet gate could never open. Its
+  declaration now names the seam and the cutover re-point: when the runtime grows its own producer, the read's body
+  moves and the declaration is DELETED rather than annotated.
+- `internal/clientlifecycle/supervisor.go` — `rigIdleReason` calls the same read; a read that could not answer now
+  returns the read's own sentence instead of one of three locally worded ones, so both readers diagnose a failure the
+  same way and the wording cannot drift from the transport again. The four sentences `idleFromActivityWord` writes (an
+  unrecognized word, no activity field, an empty word) are reachable through it and now tested.
+- `internal/clientruntime/activity.go` — the taxonomy citation corrected (the daemon STORES three values,
+  `working | idle-at-prompt | unknown`, and derives `needs-input`; the old comment listed the human-facing four as
+  stored), and the alias rationale grounded in tonight's measurement: `idle` is what the served field carries and
+  `idle-at-prompt` is the daemon's own stored synonym, kept normalized so a served stored-form cannot silently refuse a
+  genuinely idle seat.
+
+### Verified
+- `TestReadSeatActivityAsksTheDaemonAndRefusesByDefault` (11 cases): only `idle` releases (`running`, `working`,
+  `needs_input`, `unknown`, the empty word, and a word nobody has seen all forbid), the stored synonym releases, a node
+  with no activity field is its own answer, and a table without this seat cannot answer; each case also pins the two
+  routes asked, so WHICH program answered is asserted rather than assumed.
+  `TestReadSeatActivityRefusesWhenNoDaemonIsNamed` and `TestReadSeatActivityRefusesARigTheListDoesNotCarry` pin the two
+  fail-closed paths, each naming the variable or the rig in its sentence.
+- **LIVE, both readers, this box's daemon at 127.0.0.1:7433** (QuietSeconds 0, so the stillness clause cannot mask the
+  activity clause):
+
+  ```
+  clientseat  architect  word="unknown"      read=true  quiet=false unrecognized=""
+  clientseat  lead       word="idle"         read=true  quiet=true  unrecognized=""
+  clientseat  fe-dev     word="unknown"      read=true  quiet=false unrecognized=""
+  clientseat  go-dev     word="running"      read=true  quiet=false unrecognized=""
+  clientseat  reviewer   word="running"      read=true  quiet=false unrecognized=""
+  supervisor  lead       idle=true  why=""    (architect, fe-dev, go-dev, reviewer: idle=false, why="")
+  ```
+
+  The quiet gate OPENS for the genuinely idle seat and refuses every other word, which is the defect this unit was
+  raised with ("the quiet gate cannot open today") measured closed on the running client.
+- `go test ./...` green, `go vet ./...` clean, `gofmt -l` empty on every file touched.
+
+### Not taken, named rather than dropped
+- `QuietWaiter`'s own sentence for a field-absent answer is still silent: `seatActivity` keeps the two-value seam, so
+  the waiter cannot name a cause the supervisor's half now names. Naming it there means widening
+  `QuietWaiter.Activity`'s type, which would churn ten test stubs in the same commit as the behaviour change.
+
+## 2026-10-14 — queue show and queue transitions refuse a document they cannot read
+
+### Changed
+- `internal/clientruntime/command.go` — **`queueReadOneRuntime` takes the same one decoder.** It decoded a single
+  ROW by hand, and `json.Unmarshal("null", &row)` SUCCEEDS into the zero row — so a runtime that answered a bare
+  `{"ok":true}` printed a line of dashes at exit 0: an impostor indistinguishable from a row whose fields are all
+  unset (`--json` printed `null`). The row is read through `decodeAnswer` FIRST, so a document nobody can read refuses
+  at the room contract's exit 3 instead of this site's `ExitRemote`, and the runtime's own bytes are printed only once
+  they have been read. Same class, one verb down from the `queue list` fix above; found by the reviewer's sweep at the
+  re-gate of 8cdbee4.
+
+### Verified
+- `TestQueueShowRefusesAnAnswerItCannotRead` (new): a bare ok envelope refuses with "carried no data" and a
+  wrong-shaped document refuses with "could not be read", both at exit 3, both asserted never to print a row; the
+  control — a real row document — still prints its own qitem id at exit 0.
+- `go test ./...` green, `go vet ./...` clean, `gofmt -l` empty on both files.
+
+## 2026-10-14 — the queue verb reads through the one decoder, so a bare ok envelope cannot print a queue
+
+### Changed
+- `internal/clientruntime/command.go` — **`queueListRuntime` stops decoding the runtime's answer by hand.** It did
+  `json.Marshal(resp.Data)` → `json.Unmarshal(raw, &rows)` → `if len(rows) == 0 { print "Measured 0 pending items" }`,
+  and `json.Marshal(nil)` is `null`: unmarshalling null into a nil slice SUCCEEDS, so a runtime that answered a bare
+  `{"ok":true}` printed "0 pending" at exit 0 — indistinguishable from a real empty queue. That is the defect
+  `decodeAnswer` was fixed for, re-introduced on the one verb an operator actually runs (`--json` printed `null` for
+  the same reason). The typed read is taken FIRST and its refusal is what the verb returns, so the same document now
+  reports the room contract's exit 3 on both paths; the runtime's own bytes are still printed for `--json`, but only
+  once they have been read.
+
+### Verified
+- `TestQueueListRefusesAnAnswerItCannotRead` (new): a bare ok envelope refuses with "carried no data" and a
+  wrong-shaped document refuses with "could not be read", both at exit 3 and both asserted NOT to print any queue
+  reading; the control — a real empty array — still prints "Measured 0 pending items" at exit 0.
+- On the wire, `queue list` against a fake runtime on `OPENRIG_RUNTIME_SOCKET`:
+  bare `{"ok":true}` → "the runtime's QueueList answer could not be read … carried no data at all", exit 3 (before:
+  "Measured 0 pending items", exit 0); wrong shape → refusal, exit 3 (before: exit 1, because this site returned
+  `ExitRemote` while the typed path returns the room contract's 3); real empty array → "Measured 0 pending items",
+  exit 0.
+- `go test ./...` green, `go vet` clean, `gofmt -l` empty on the two files touched.
+
+## 2026-10-14 — the daemon's refusal is a different fact from an answer nobody could read
+
+### Changed
+- `internal/clientruntime/ipc.go` — **two new errors where there was one bare one**, both raised at the seam that sees
+  the raw line:
+  - `DaemonRefused`: a frame arrived, parsed as an envelope, and said `ok=false`. The runtime ANSWERED and will not
+    serve this request — for a status read, a room it does not know. The wire carries no code (`IpcResponse` is
+    `{ok, error, data}`) and the daemon's sentence is carried VERBATIM as `Error()`, exactly as before.
+  - a frame that cannot be parsed is now an `*UnreadableAnswer`, like a `data` document whose shape is wrong. Both are
+    answers this client cannot read; both already left with the room contract's exit 3; now they are the same TYPE.
+- `internal/clientlifecycle/lifecycle.go` — **`seatStartPlan` sends the definition only for `*DaemonRefused`**, and
+  refuses on every other error. The first version of this split asked whether the error was an `*UnreadableAnswer` and
+  sent the definition otherwise — which still read a TRUNCATED FRAME as an unknown room, because that failure happens
+  in `Call`'s envelope guard, before any verb's decode. Measured on the wire against a fake runtime: the fixed-but-
+  incomplete split still put `StartRoom` on the wire; it does not now.
+
+### Verified, on the wire rather than in the abstract
+`up room-a --team <dir>` against a fake runtime on `OPENRIG_RUNTIME_SOCKET`, its request log read afterwards (no
+daemon spawned, checked):
+
+- answer truncated mid-document → `GetRoomStatus` only, **no `StartRoom`**, exit 3, message "the runtime's
+  GetRoomStatus answer could not be read … decode error: unexpected end of JSON input".
+- `data` an object where an array belongs → same: **no `StartRoom`**, exit 3, "… cannot unmarshal object into Go
+  value of type []clientruntime.SeatStatus".
+- the daemon's own refusal (`ok=false`, the sentence a real daemon gives for a room whose spec is not there) →
+  `StartRoom` IS sent, which is U1 and must stay that way.
+
+Unit arms: `TestADaemonRefusalIsTypedApartFromAnUnreadableAnswer` (the pair, at the wire seam, with the daemon's
+sentence asserted verbatim), `TestSeatStartPlan` (now 7 cases: the unreadable answer refuses beside the refusal that
+sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailureRefusesInsteadOfStartingTheRoom`.
+`go test ./...` green, `go vet ./...` clean, `gofmt -l` empty on every file touched.
+
+## 2026-10-14 — an unreadable answer refuses, and a bare ok envelope is not an empty list
+
+### Changed
+- `internal/clientruntime/ipc.go` — **`decodeAnswer` refuses an answer that carries no data.** `json.Unmarshal("null",
+  &rows)` succeeds into a nil slice, so `{"ok":true}` was read as a successful empty list: `queue list` printed
+  "0 pending" at exit 0 against a runtime that had said nothing about the queue, which is the same lie as printing
+  blanks. The refusal is also a **type** now (`UnreadableAnswer`, wrapping the coded error so `CodeOf` still yields the
+  room contract's exit 3) rather than only a code, because every daemon failure shares that code and one caller must
+  tell them apart.
+- `internal/clientlifecycle/lifecycle.go` — **`seatStartPlan` stops collapsing "the daemon does not know the room"
+  with "nobody could read the answer".** `err != nil || len(reported) == 0` sent the whole definition for either, so
+  every unreadable status produced a `StartRoom` against a room that may have been running perfectly well — the blind
+  start check-then-start exists to prevent. Only the first may send the definition (U1: it is then the only source of
+  the room's seats); an unreadable status refuses before any `StartRoom` on the wire.
+
+### Verified
+- `internal/clientruntime` — `TestAnAnswerWithNoDataRefusesWhileAnEmptyArrayStillDecodes` fails against the previous
+  decoder (a data-less answer decoded as an empty list at exit 0) and passes after, with the control beside it: a real
+  empty array still reads as zero rows. `TestUndecodableAnswersAreRefused`,
+  `TestAWrongShapeRefusalNamesTheAnswerThatCouldNotBeRead` and `TestTheZeroValueIsNeverAWrongAnswer` stay green.
+- `internal/clientlifecycle` — `TestAnUnreadableStatusRefusesInsteadOfStartingTheRoomFromTheDefinition` pins the
+  refusal and its exit code, and `TestAnOrdinaryStatusErrorStillStartsFromTheDefinition` pins the other half so the
+  split is not over-tightened into "any error refuses"; `TestSeatStartPlan`'s six cases are unchanged.
+- `go test ./...` green across the tree, `go vet` clean.
+
+### Open, named rather than implied — superseded the same day
+- There is no `up`-over-a-socket integration test in the tree, so the wire-level half of the acceptance — a fake
+  runtime answering an undecodable `GetRoomStatus`, with **no `StartRoom` in its request log** — was covered at the
+  decode and plan levels only. Measured afterwards, that gap was not academic: this commit's split still sent
+  `StartRoom` for a truncated frame, and the section above records the fix and the wire evidence.
+
+## 2026-10-14 — the quiet gate releases on one word, and the rule lives in one place
+
+### Changed
+- `internal/clientruntime/activity.go` — **the allow-set that decides whether an activity word may release a wait
+  whose failure destroys a turn.** The waiter compared against a word it expected rather than against the answer it
+  needed: `!= "running"` accepted `working`, `needs_input` and every word the daemon adds later, so the stillness
+  clause decided by itself and a reseat could proceed past a seat that was mid-turn. The set is grounded rather than
+  chosen: the daemon's own taxonomy carries working | idle | needs-input | unknown and aliases its stored
+  `idle-at-prompt` to `idle`, which is the word that reaches this client in `agentActivity.state`. Stillness may
+  delay a destroyer; only `idle` releases one.
+- `internal/clientseat/sync.go`, `internal/clientlifecycle/supervisor.go` — the waiter and the supervisor's `rigIdle`
+  both call that one predicate, so a vocabulary change is decided once instead of being found twice, and a missing or
+  non-string `state` reads as the empty word — refusal, not release.
+- `internal/clientlifecycle/supervisor.go` — **the false is reported where it is ACTED ON.** `rigIdle` keeps its bool,
+  and `rigIdleReason` now carries the sentence behind it; the hard-limit branch — which interrupts and returns EVERY
+  pass, so the quiet-triggered compact below it never fires — says why nothing was compacted, rate-limited with the
+  interrupt it already logs. On this path a dropped word is not a lost detail: without it "the seat is working" and
+  "nothing ever answered" print the same way, as nothing, and a supervisor that never compacts looks exactly like a
+  supervisor with nothing to do. A deliberate refusal (a busy seat) still says nothing.
+
+### Verified
+- `internal/clientseat` — `TestWaitUntilQuietDoesNotProceedOnAWordThatIsNotIdle` FAILS against the previous
+  predicate (`needs_input released the wait: stillness was allowed to satisfy a destroyer`) and passes after; the two
+  unreadable-reading arms and the `idle` arm are green beside it. The stored form's arm
+  (`TestWaitUntilQuietProceedsOnTheStoredFormOfIdle`) is red against the first version of this change, where the set
+  held `idle` alone and refused `idle-at-prompt` in silence.
+- `internal/clientruntime` — the set is driven with `idle`, `working`, `needs_input`, `unknown`, `running`, the empty
+  word, `idle-at-prompt` and a word nobody defines; `TestTheRefusalNamesTheWordItDidNotRecognize` pins that an
+  unrecognized refusal CARRIES its word while a recognized one refuses quietly, and `TestTheQuietSetNamesExactlyOneWord`
+  is the test a future widening of the set meets.
+- `go vet` clean; `internal/clientruntime`, `internal/clientseat` and `internal/clientlifecycle` all green; whole tree
+  builds.
+
+### Open, named rather than implied
+- **The read is still the half that is missing, and it is now measured rather than inferred.** The readers exec
+  `rig ps --nodes --json` and read `node["agentActivity"]["state"]`, but that field is NOT in what the shim answers on
+  this box: the same command returns `activity: "<1m ago"` — a relative time, the client's own heuristic — and no
+  `agentActivity` key at all. So both readers have been reading a field that never arrives: `seatActivity` returns
+  `("", true)` and the allow-set refuses the empty word forever, which is precisely the "quiet gate cannot open
+  today" half of this row, and why a genuinely idle seat and a dead gate have been indistinguishable in silence.
+  The missing read is the daemon's: `agentActivity` is attached to node inventory at graph-payload time
+  (`rigs.js:326`, exposed at `rigs.js:353`), so the client needs a daemon call for it — `GET /api/rigs/<id>/graph`
+  with the id resolved from `/api/rigs` by name — and then one home for read and predicate, which is the second half
+  of this row and the seam the runtime-vocabulary unit later re-points.
+
+## 2026-10-14 — the grid's input loop delivers a typed line in process, and reads the name from the record
+
+### Changed
+- `internal/clientwatch/grid.go` — **the input loop's `rig send` exec is gone.** It ran `rig send <composed name>`:
+  after this client's rename `rig` resolves to this same binary, so the grid started a copy of itself and showed the
+  caller a subprocess refusal, and `fmt.Sprintf("%s-%s@%s", rig, seat, rig)` INVENTED the session name from a
+  convention instead of reading it from the seat's record — the defect the SEAT shape's send path records as fixed.
+  The line is now delivered through the send verb's own primitives (`ResolveSeatAddress`, then `RuntimeSendText` or
+  `OpenRigSend` according to the transport the record names), with `SendOptions.Sender` preserving what the exec used
+  to inherit from `OPENRIG_SESSION_NAME`. `sendLine` is a package var, so the tests drive the loop with no daemon.
+
+### Verified
+- `internal/clientwatch` — `TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop` now asserts the invariant rather than
+  the exec: **zero** `rig` processes, exactly the one line delivered, and `/hide` not sent. Green.
+- THE DECOY ARM, which is the criterion's hole closed by measurement: with `/tmp/go-decoy/rig` first on PATH and the
+  REAL `sendLine` (no seam replaced anywhere), one line typed into the loop produced an EMPTY decoy log and the
+  native refusal `failed: no record of room1/alpha: the room's runtime has no room "room1", and the daemon at
+  http://127.0.0.1:7433 does not list that seat; no name was composed - a seat's session name is read from the
+  record`. Before the conversion the same arm logged `DECOY rig INVOKED with: send room1-alpha@room1 hello seat`.
+- `go build ./...`, `go vet`, and `go test` for clientwatch, clientruntime, clientseat and clientps: all green. NOT
+  touched: `gofmt -l` names `internal/clientwatch/render_test.go` at this pin, pre-existing and not this unit's file.
+
+## 2026-10-14 — the window gate's minors: the pane-gone refusal says what happened, and the heading it replaced is back
+
+### Fixed
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — **the pane-gone refusal no longer names the window as if it were an
+  elapsed time.** It read `its pane is gone within 60s`, which reads as though the pane survived the window and then
+  went; the window is the BOUND the wait was judged against, not the observation. It now reads `its pane is gone and
+  no ready frame ever arrived: waited up to {}`, and the arm that owns this branch
+  (`a_dead_non_omp_seat_is_refused_by_its_real_cause`) asserts both halves — the new sentence present, the old phrase
+  absent — so the next edit cannot slide back. The old wording read worst in the non-omp case, where the bound it
+  printed was the 1500 ms grace period: `gone within 1500ms`.
+- `CHANGELOG.md` — **the `be18ee5` entry had replaced its predecessor's heading**, so the `8915126` unit's
+  `### Changed`/`### Verified` nested under the window entry and its title survived nowhere. Restored verbatim:
+  `## 2026-10-14 — the readiness verdict and its message: a restart cannot inherit the previous generation's green, a
+  verdict near the window reaches the client, and the proof travels with the state`. Two entries for one date are
+  normal in this file.
+
+### Verified
+- `cargo +stable test` in `rust/agenthub-runtime` → **54 passed / 0 failed**, the target arm red before the message
+  change (its failure output carried the old wording) and green after.
+- NOT changed, and refused rather than fixed: the gate's third minor (a stale death record merely *touched* after a
+  launch ends the wait as "died before it reported readiness"). An mtime cannot tell a rewrite from a touch, so the
+  cause is as accurate as that predicate can be; it fails safe (never a false green). Distinguishing them needs
+  content-based generation marking, which is a design change and not a wording one.
+
+## 2026-10-14 — the readiness window now covers a first launch, and a dead seat is reported where it dies
+
+### Changed
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — **`SEAT_READY_WINDOW_SECS` 20 → 60, and the two clauses that
+  pay for it.** The window has to cover the FIRST-EVER launch of an omp seat in a fresh cache, which builds the
+  agent's model cache: measured by the reviewer, the seat was still coming up at 20.18 s, `up` refused, and the
+  retry handshook in 8.90 s. Widening alone would have been wrong, so:
+  - a **death this generation recorded** (`fresh_death_state`: the seat's own file, written after the launch,
+    publishing `agent_socket_closed`/`agent_stdio_eof`/`agent_exited`) now ends the wait **where it is written**
+    instead of at the deadline — a pane that outlives its agent is exactly the case liveness cannot see;
+  - the deadline refusal is **`readiness_refusal`**, which says which world the seat is in: a stale record from
+    an earlier generation is named as such, instead of printing `(no <path>)` at a reader who can see that file.
+  `DEATH_STATES` is shared by the readiness check and the fast-fail, so the two cannot drift apart.
+- `internal/clientruntime/ipc.go` — `seatStartDeadline` 30 → **90 s**: it must outlast the runtime's window, and
+  the test that pins that relation now names 60 s.
+- `internal/clientruntime/deadline_test.go` — the runtime window named at 60 s; the comment's path corrected to
+  `rust/agenthub-runtime/...`; and `RoomStartWindow` explicitly documented as NOT this window (it is the poll
+  after `StartRoom` returns; that both were 20 s was a coincidence).
+- `internal/clientlifecycle/lifecycle.go` — `RoomStartWindow` carries the same warning, and `up` now says
+  `starting the room's seats and waiting for them to prove themselves ...` before going quiet, so a first `up`
+  on a new box does not read as a hang while the longer window runs.
+
+### Verified
+- `cargo +stable test` in `rust/agenthub-runtime` → **54 passed / 0 failed**, including
+  `a_death_recorded_by_this_generation_is_reported_where_it_is_written` (four arms: no file, an inherited death,
+  a fresh death, a fresh live state) and `the_deadline_refusal_names_the_document_it_is_missing` (the absent
+  world, the stale world naming the record it ignored, and the fresh world).
+- `go build ./...`, `go vet ./...`, `gofmt -l` on the touched packages clean; `go test ./... -count=1` →
+  **24 packages ok / 0 failing**, with `TestTheSeatStartDeadlineOutlastsTheRuntimesReadyWindow` PASS by name.
+- LIVE, off-peak (gate read OFF-PEAK 00:37Z), scratch `HOME`/`TMUX_TMPDIR`/state dirs, the frozen pair's own
+  binaries (`/tmp/go-window/measure.sh`):
+  - **A, first-ever launch in a fresh HOME and a fresh seat dir**: rc=0 in **2.13 s**, the state file written
+    +2.08 s after the launch, and the new wait notice printed. The window change did not cost the fast path.
+  - **B, a death this generation recorded, staged 4 s into the wait**: rc=3 in **4.38 s**, `died before it
+    reported readiness: its own record says agent_socket_closed, written after this launch` — against **20.14 s**
+    for the same fixture on the 20 s build. **A dead seat is reported five times faster than before this unit,
+    not slower**, which is what widening alone would have broken.
+  - **C, a stale death record an hour old**: rc=3 in 30.30 s, refused by the pane-gone clause (the record was
+    never accepted as a handshake). The runner tears a non-handshaking pane down before the window ends, so the
+    stale-record WORDING is pinned by the rust test rather than by a live arm.
+  - Honest limit: my fresh-cache launches handshook in 2.13–4.77 s and built a 4096-byte `models.db`, so they do
+    not reproduce the reviewer's 20.18 s cold start. That number is what justifies the window; mine neither
+    reproduces nor contradicts it, and 20.18 s is inside 60 s by construction.
+
+## 2026-10-14 — the readiness verdict and its message: a restart cannot inherit the previous generation's green, a verdict near the window reaches the client, and the proof travels with the state
+
+### Changed
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — **the omp readiness proof is a HANDSHAKE, not an artifact.**
+  `start_seat` stamped nothing and broke on `path.exists()`, so a restart in the same state dir returned
+  running in 0.03 s on the PREVIOUS generation's `agent_socket_closed` record — the runner and the daemon both
+  write a death record into that same path on teardown, and `room stop`'s own message invites starting the room
+  again in the same directory. `launched_at` is now taken BEFORE the launch, and the loop breaks only on
+  `readiness_written_by(path, launched_at)`: the file must exist, be NEWER than the launch, and not be a death
+  record. A restart therefore waits for its own handshake (or refuses) exactly as a cold start does; deleting
+  the file was never a fix, because a still-live writer re-creates it.
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — **the status carries the proof.** `get_room_status` derived
+  `running` from LIVENESS, so a seat whose `up` had just refused still read `running` from the verb the
+  operator checks next: a pane whose agent died stays alive. For a runtime that publishes readiness the state
+  now comes from the seat's own document — no readiness document at all is `Starting`, a live document is
+  `Running`, a death state with the pane still alive is `Dead`. The `detail` field names the evidence in every
+  one of those cases, including the agent's own handshake, instead of leaving `running` to be read as more
+  than it is.
+- `internal/clientruntime/ipc.go` — **the severed bridge.** The client gave a seat-starting verb 10 s while the
+  runtime gives the seat 20 s, so a verdict landing between the two could never arrive: measured, a cold start
+  read `read error: i/o timeout` at 10.15 s while the runtime was still legitimately waiting. `callDeadline`
+  (10 s) is now separate from `seatStartDeadline` (30 s), and `StartRoom`/`RestartSeat` use the longer one.
+- `internal/clientruntime/types.go`, `internal/clientlifecycle/lifecycle.go` — `SeatStatus` decodes `detail`
+  (a pointer: the runtime omits the key when it has nothing to claim) and `up` prints it beside the state, so
+  the operator sees which proof the verdict rests on rather than a bare state name.
+
+### Verified
+- `cargo +stable test` in `rust/agenthub-runtime` → **51 passed / 0 failed**, including
+  `readiness_needs_a_file_from_this_generation_and_not_a_death` (missing file, inherited death record, another
+  death state, a live state older than the launch, and a live state written after it — each arm one fact) and
+  `an_omp_seat_reports_the_proof_its_state_rests_on` (Starting with no document, Running with one, Dead when
+  the pane outlived its agent).
+- `go build ./...`, `go vet`, `gofmt -l` clean; `go test ./... -count=1` → 24 packages ok / 0 failing, with
+  `TestTheSeatStartDeadlineOutlastsTheRuntimesReadyWindow` pinning that the client's deadline stays longer than
+  the runtime's documented window.
+- LIVE, with the branch-built runtime on a scratch `HOME`/`TMUX_TMPDIR` and the dashed room `leg-standin`:
+  `up leg-standin --room-only` printed
+  `leg-standin/solo: running (pane alive after 1500ms; this runtime publishes no readiness channel, so a live
+  but unconfigured agent is indistinguishable from a working one)` — the verdict carrying its proof, which is
+  the honest shape for a runtime that publishes nothing.
+- LIVE, the same scratch room: `send leg-cat-solo@leg-cat "<text>" --json` answered the runtime's own
+  `{"delivered":"agenthub--leg-cat--solo"}` — the canonical name resolved through the room's record and
+  delivered, where the pre-change runtime refused it with `can't find pane`.
+- NOT re-run live: the omp arm's restart-in-the-same-state-dir falsification, which needs a real omp seat and
+  therefore a DeepSeek model at peak (the off-peak gate refuses it, and bypassing a spend guard is not mine to
+  do). The predicate is unit-pinned and the architect's own harness (`/tmp/arch-leg2/run4.sh`) re-runs it
+  off-peak against a build of this branch.
+
+## 2026-10-14 — the seat guard's identity and delivery are native, and the site inventory is not disposed: four declared sites plus three seams the assignment key never listed
+
+### Changed
+- `cmd/seatcheck`: `rigWhoami` no longer execs `rig whoami --json` and `rigSend` no longer execs
+  `rig send -- TARGET TEXT`. The identity comes from the client's own resolver, now ONE exported function
+  (`internal/clientruntime.ResolveIdentity`, whose chain the `whoami` verb also uses): the runtime socket
+  first, a rig's OpenRig daemon second, the seat's own environment last — so the guard answers on a machine
+  with no daemon at all. The delivery goes through `internal/clientruntime.DeliverToSession`, the same
+  runtime-first / daemon-fallback chain the `send` verb runs, with no daemon-only switch set — exactly the
+  shape `rig send SESSION TEXT` had.
+- The guard's failure shape is ONE: every non-zero the delivery answers is mapped to `exitDeliveryFailed` (5)
+  by `runSend`, so a policy result (2/3/4) is never readable as a delivery failure and a transport's own code
+  never leaks as the guard's exit. The `delivery failed` line no longer names `rig send`.
+- `internal/clientruntime`: the whoami chain moved out of `whoamiCommand.Run` into `ResolveIdentity`, so the
+  verb PRINTS an answer and the guard REASONS about the same one; a document the daemon answered with is still
+  carried whole (the CLI prints it unmodified). `whoami` asks the runtime for this seat's NATIVE session name
+  (`agenthub--<room>--<seat>`) when the environment names the halves and no session, rather than a bare empty
+  session.
+- `internal/clientseat` + `internal/clientruntime`: the `send RIG SEAT MESSAGE` shape no longer RENDERS a
+  session name from the room and seat it was handed — `agenthub--RIG--SEAT`, a name no seat on this rig
+  carries, which the local runtime therefore refused while a healthy daemon was never asked. The name is now
+  READ, by the new `internal/clientruntime.ResolveSeatAddress`, from the record that owns the pane: the room's
+  runtime record first (`GetRoomStatus(room)` under the native socket's room scope), the OpenRig daemon's seat
+  records second (`/api/ps` maps the rig NAME the caller typed to the rigId the records use,
+  `/api/rigs/<id>/nodes` lists the seat with its session name as a field). Neither door closing composes one:
+  a seat absent from both records is refused with both doors named and exit 3. The record that answers also
+  decides the transport, so the pane that is named is the pane that is written to. A daemon-only switch
+  (`--verify`, `--force`, `--wait-for-idle`, `--dangerously-interact`) resolves through the daemon alone
+  (`ResolveDaemonSeatAddress`), so a healthy runtime is not disturbed for a handshake it can never run, and its
+  refusal still names the switch that forced the transport.
+- `internal/clientseat` + `internal/clientruntime`: the two-positional SESSION shape now TRANSLATES the
+  canonical address instead of handing it to a transport that cannot address it. F-B's reproduction, verbatim:
+  `send leg-solo-solo@leg-solo "..."` was refused by the runtime (`tmux paste-buffer failed: can't find pane`)
+  while `send agenthub--leg-solo--solo "..."` delivered, because nothing mapped one string to the other.
+  `CanonicalRigSeat` splits `<room>-<seat>@<room>` - the room is the part after the LAST `@`, so a dashed room
+  name splits correctly - the record that owns the pane resolves the pair, and the record's own transport
+  carries the send. The address the envelope PRINTS to a recipient is therefore an address `send` accepts,
+  inside the same round trip; that inconsistency was one message deep, not only between help text and runtime.
+  A native `agenthub--<room>--<seat>` name carries no `@` and is passed through untouched; a pair no record
+  lists keeps the caller's own string, and the transport's refusal for it is the answer.
+- `seatAddressFromRuntime` reads the room the CALLER named before the ambient `AGENTHUB_ROOM`: a seat shell
+  always carries the room it sits in, so an env-first read answered for the wrong room the moment a seat
+  addressed another one.
+- `send --help` now says both things the verb does: a canonical name is translated through the seat's record,
+  and the seat shape reads the seat's session name from that record rather than composing `agenthub--RIG--SEAT`.
+
+### Verified
+- `go build ./...`, `go vet ./...`, `go test ./... -count=1` → 24 packages ok.
+- The new `cmd/seatcheck` tests fail on HEAD's `main.go` for the plainest reason — it execs `rig`: run against
+  a pristine HEAD tree with the SAME test file, six tests fail (`parse rig whoami: unexpected end of JSON
+  input`, `rigSend = 0 with no transport`, …). The instrument is a fake `rig` first on PATH that records its
+  own execution, and its record not existing.
+- The other nine sites of the eleven-site inventory are disposed in
+  `CHANGELOG/2026-10-14--guard-native-identity-and-delivery.md`: five were already converted or deleted by
+  earlier commits, and four (`rigIdle`, `seatActivity`, `respawn`'s node read, and `clientcmd.RequireRig`'s
+  shared platform matrix) need the seat's decision — three of them on ONE missing capability, a native
+  per-seat agent-activity read that the runtime does not expose.
+- `go build ./...`, `go vet ./internal/clientruntime ./internal/clientseat`, `gofmt -l` clean, and
+  `go test ./... -count=1` → 24 packages ok, 0 failing.
+- The seat-shape tests now pin the RECORD rather than a convention: the fake daemon answers `/api/ps` and
+  `/api/rigs/<id>/nodes`, and the assertion is the name that record carries (`lab-dev@lab`, three requests:
+  rig list, seat record, send). They fail on the pre-change code, which never asked those two routes and
+  asserted `agenthub--lab--dev` — the composed name. `TestSendRigSeatShapeNamesTheDaemonWhenASwitchForcedIt`
+  is unchanged and still passes, which is what keeps the gate's refusal pinned through the resolver split.
+- End to end on this rig, with the branch-built binary against the live daemon: `send 4genthub-min lead
+  "<text>"` printed `Sent to 4genthub-min-lead@4genthub-min` (the daemon record's own name, exit 0) and the
+  target pane then carried `From owner session: <text>`. Before this change the same shape composed
+  `agenthub--4genthub-min--lead` and the local runtime refused it.
+- `TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough` runs F-B's two commands against a
+  fake runtime: the canonical one asks the room's record once and sends to the name that record holds, never
+  handing the canonical string to the runtime; the native one sends verbatim and asks no record at all.
+  `TestCanonicalRigSeatSplitsTheDocumentedFormAndNothingElse` pins the split, including this rig's dashed name.
+  Two session-shape tests that counted requests were updated to the new first request (the record), not
+  re-pinned: their subjects - the runtime is preferred over the daemon, the flags reach the daemon - are
+  unchanged and still asserted.
+- Live, on this rig, branch-built binary: `send 4genthub-min-lead@4genthub-min "<text>"` printed
+  `Sent to 4genthub-min-lead@4genthub-min` (exit 0, one busy-pane advisory), the text arrived in that pane, and
+  the envelope's own reply hint named that same canonical address - the string the transport hands every
+  recipient is the one `send` now accepts.
+
+### The value that was invisible, and the install still owed
+
+- The seat send's dead fallback is FIXED by this lineage rather than repaired: `sendCommand.Run`'s own
+  `RIG SEAT MESSAGE` shape used to fall back to `exec.LookPath("rig")` + `exec.Command(path, "send", ...)`, and on
+  this machine `rig` is a symlink to this client - so the "fallback" re-entered the same verb, whose three-positional
+  entry refused the two-argument OpenRig form. The reader got a failure report about a command nobody had asked for,
+  which is why seat-to-seat send looked dead on the installed binary AND on a tip build. `d777b52` deleted the
+  fallback (the send goes to `clientruntime.SendTextToSeat`) and pinned the deletion AS AN ABSENCE:
+  `TestTheRigSeatMessageShapeNeverFallsBackToShellingOutToRig` empties PATH, so the test fails if any shell-out
+  returns. Nobody had connected that fix to the architect's separate diagnosis until tonight.
+- The install is still owed, and deliberately not done from this tree: the binary everyone runs is
+  `/home/daihu/.local/bin/4genteam` version 0.1.0, mtime 2026-10-13 22:39, which PREDATES `d777b52` and this
+  snapshot - so the room's documented verb keeps failing on the installed binary while a tip build passes. Rebuilding
+  and reinstalling it is a gated, reversible step after the reviewer's verdict on this pin; overwriting the
+  operator's binary from ungated tree bytes is not this unit's call.
+- The count, in the terms the reviewer will gate: the fragment's table keys eleven sites in `wt/r7-shim`, and against
+  this pin it dispositions seven as converted or deleted (the seatcheck pair included) and FOUR as not converted,
+  each with its reason - `clientseat/sync.go` seatActivity and `clientlifecycle/supervisor.go` rigIdle, both blocked on
+  the same missing native per-seat agent-activity read; `clientsync/respawnverb.go` runRigCapture, two thirds
+  convertible; and `clientcmd/command.go` RequireRig, the shared platform matrix rather than a site fix. TWO further
+  seams the assignment key never listed at all, both of which take their program from an ARGUMENT LIST rather than a
+  literal, which is why no grep for `exec.Command("rig"` can see them: `internal/clientsync/bundleverb.go:42-48`
+  (`bundleRunRig`, argv built as `rig bundle create …` at :192)
+  and `internal/clientsync/switchverb.go:53-58` (`switchRunRig`, called as `rig ps --json --nodes --rig ROOM` at :350).
+  CORRECTION (2026-10-14, a later pass): this paragraph used to add a THIRD site, `internal/clientsync/connectorverb.go:355`
+  (`exec.CommandContext(ctx, "rig", args...)`). That site does not exist, and the file's own bytes say so: at 4203d96
+  `internal/clientsync/connectorverb.go` is 315 lines with no `exec`, no `LookPath`, no `runRig`, no `"rig"` program and no
+  `os/exec` import (`wc -l` = 315; a grep for `exec.`, `LookPath` and `os/exec` returns nothing), and the comment at :193
+  reads THE CLI REACH IS RETIRED. The removal predates this note. The two seams above are the accurate remainder, and the
+  count is one smaller than this paragraph claimed.
+  So the inventory is NOT disposed - seven converted or deleted, four declared with a reason, three seams the key never
+  listed - and no count is claimed here: the reviewer emits the site list at this pin, built from the seams and who
+  supplies their argv.
+
+## 2026-10-14 — a daemon-only switch decides the send's transport, and the refusal names the party that stopped it
+
+### Fixed
+- `send RIG SEAT MESSAGE` — the client's own shape — dropped EVERY switch it accepted: it called
+  `SendTextToSeat` directly and never consulted the daemon-only list, so `--wait-for-idle 5` typed into a busy
+  seat without waiting, and `--verify` reported nothing where reporting is its whole purpose. Found by the U3
+  gate at `c55fa87` (REQUEST CHANGES, falsified with the wire frame at exit 0). The shape now routes any switch
+  its own seat send cannot carry — `--verify`, `--force`, `--wait-for-idle`, `--dangerously-interact`, `--raw`,
+  `--json` — through the same daemon path the SESSION shape uses, addressed to `agenthub--RIG--SEAT`, so the
+  switch decides the transport instead of riding along. `--raw` also drops the shape's own `From NAME:` prefix,
+  because raw means the text exactly. Measured against a recording daemon and a live runtime socket: every
+  switch reaches the daemon with the right payload field (`waitForIdleMs=5000`, `verify=true`,
+  `dangerouslyInteract`+`reason`, the exact text) while the runtime socket is not written to at all, and the
+  no-switch line still goes to the runtime and never asks the daemon.
+- The refusal for a daemon-only switch with a HEALTHY runtime and a dead daemon no longer opens with "no runtime
+  is answering at <socket>" — false, and aimed at the transport that DID answer. `DaemonSwitchMissing` names the
+  flag and the daemon; `FallbackMissing` keeps its sentence for the case where the runtime really did not
+  answer. Measured: `rc=3`, "`--verify` needs the OpenRig daemon, and the OpenRig fallback at
+  http://127.0.0.1:1 is not available either; nothing was sent".
+
+### Added
+- `internal/clientruntime/sendseam.go`: `SeatSessionName` (the `agenthub--<room>--<seat>` name both transports
+  address, derived rather than looked up, so a verb holding a RIG and a SEAT needs no status round trip) and
+  `DaemonSwitchMissing` (that one refusal sentence).
+- Three tests in `internal/clientseat/send_transport_test.go` that FAIL on the pre-change tree and pass after it —
+  the gate's own wire observation, reproduced as an assertion rather than answered by argument.
+
+## 2026-10-14 — the shim's verbs resolve the RUNTIME socket first, and the seat's own environment is the last identity
+
+### Changed
+- `whoami`, `queue` and `send` resolve their transport through ONE seam, `internal/clientruntime/transport.go`
+  (`ResolveTransport`): a runtime that answers on `DefaultSocketPath()` carries the request, the OpenRig HTTP
+  path is asked only when no runtime answers, and with neither the refusal NAMES THE RUNTIME
+  (`FallbackMissing`) instead of the OpenRig daemon. The old order resolved from the seat environment, so a
+  shell carrying `OPENRIG_SESSION_NAME` went straight to HTTP. Measured on this machine with
+  `OPENRIG_URL=http://127.0.0.1:1` and the runtime up: `whoami --json` exited 3 and `queue list` exited 3,
+  both answering "the OpenRig daemon at http://127.0.0.1:1 is not answering". After the change `whoami --json`
+  exits 0 with the seat identity and `queue list` reaches the runtime, whose own answer is what the caller
+  reads. `internal/clientruntime/queue.go` and `ipc.go` are untouched: no wire method was missing.
+- `whoami` RECOVERS an identity instead of reporting one transport's mood: the runtime is asked first, a
+  runtime that cannot place this seat falls through to the daemon, and with no daemon at all the seat's own
+  environment IS the document (`resolved_by: environment`) — `AGENTHUB_ROOM`/`AGENTHUB_SEAT` when a native seat
+  states both, otherwise `<seat>@<rig>` from `OPENRIG_SESSION_NAME`. Booting the runtime is no longer a side
+  effect of asking who we are (`EnsureDaemon` left this verb). One rendering (`printWhoami`) prints both
+  sources, so the runtime path and the environment path cannot drift apart.
+- `queue` reads the runtime's rail — `QueueList`, and `QueueShow` for both `show` and `transitions`, whose
+  note-carrying log rides the row — with the room taken from the seat environment and the destination
+  defaulting to this seat's native session name. The daemon's `/api/queue/*` path is kept for a machine with no
+  runtime, and a daemon that ANSWERED keeps its own words and exit code; only a daemon that could not be
+  reached is reported as the missing RUNTIME.
+- `send <session> <text>` goes through the runtime socket in the SAME From/To/Sent envelope the daemon path
+  sends, so the pane text a receiver reads does not depend on the transport. The switches only the daemon can
+  honour (`--verify`, `--force`, `--wait-for-idle`, `--dangerously-interact`) still route to the daemon even
+  when a runtime answers, because reporting `--verify` over a transport with no verification handshake would
+  be a check that never ran.
+
+### Verified
+- The U3 acceptance instrument, run from the seat shell (the full before/after output, the build and the test
+  results, are in `CHANGELOG/2026-10-14--shim-runtime-first.md`):
+  `OPENRIG_URL=http://127.0.0.1:1 4genteam whoami --json` → exit 0 with the seat identity;
+  `OPENRIG_URL=http://127.0.0.1:1 4genteam queue list` → the runtime's own answer, never the removed sentence.
+- `go test ./internal/clientruntime/ ./internal/clientseat/ -count=1` → ok; `go build ./...`, `go vet` and
+  `gofmt -l` clean. Eight new tests were run against the pre-change verb files (swapped in from `HEAD`) and
+  fail there, then pass with the change: `TestQueueListPrefersTheRuntimeEvenWhenADaemonIsUp`,
+  `TestQueueListNamesTheRuntimeWhenNothingAnswersEither`, `TestQueueListReportsTheRuntimesOwnRefusalBySocket`,
+  `TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoDaemonAtAll`,
+  `TestWhoamiPrefersTheRuntimesIdentityOverTheDaemon`, `TestSendPrefersTheRuntimeSocket`,
+  `TestSendJsonPrintsTheRuntimesOwnAnswer`, `TestSendNamesTheRuntimeWhenNoTransportAnswers`.
+- The daemon-path tests in both packages now PIN the runtime away (`noRuntimeSocket`), because the seam asks
+  the runtime first and a unit test must not be answered by whatever runtime the developer's shell has.
+
+## 2026-10-13 — `up` reads the room before it starts it, and the client gains a room-scoped verb group
+
+### Added
+- `4genteam room status|stop|reseat|compact` (`internal/clientroom/room.go`): the room-scoped frame over the runtime's IPC.
+  Every sub-verb prints the pair it ran against (`room: <room>@<state-dir> socket: <socket>`), because neither is resolved
+  implicitly. `stop` is `StopRoom` alone — no tmux, no rigd, no bridge, no `~/.openrig` — and leaves the room's directory in
+  place so the room can be started again. `reseat` is `StopSeat` then `RestartSeat`, in that order. `compact` asks the
+  runtime once per RUNNING seat and refuses a stopped one by name rather than reporting a compact that did not happen; a
+  runtime refusal is repeated in the runtime's own words. Both refusals exit 2.
+- The room contract's exit codes in `internal/clientcmd`: `ExitPartialStart` (2) for "the daemon started but a seat did
+  not", `ExitRoomRefused` (3) for a usage error or a room the daemon does not know. They share `ExitUsage`'s and
+  `ExitUnavailable`'s values deliberately, and are named so no room verb borrows a name that means something else.
+
+### Changed
+- `up` is room-scoped: `upCommand.NeedsRig` is false, so the dispatcher hands it a nil rig — the room is the positional and
+  its seats come from the LOCAL team definition, so starting them needs nothing resolved from OpenRig. The two rig reaches
+  that remain take nil (`openUIImpl` now resolves the tool itself, as the peak gate's nil branch already did).
+- `up` PRINTS the state dir and the socket before it touches the room, and CHECKS BEFORE IT STARTS: the definition is sent
+  whole only when the daemon does not know the room, or when every seat it reports is stopped — nothing running, so nothing
+  can be cycled — and otherwise only the seats that are not running are started, one `RestartSeat` each. The stake is the
+  runtime's own semantics: `StartRoom` kills and re-creates a session it finds running, so a blind start would cycle live
+  agents and move every `started_at` on a second `up`.
+- `up`'s usage and unknown-room failures exit 3, not the CLI-wide `ExitUsage` (2), because 2 is a PARTIAL START for that verb.
+
+### Verified
+- `TestSeatStartPlan` pins the check-then-start decision; three existing tests moved to the new codes; `gofmt` clean,
+  `go build ./...` and `go vet` exit 0, `go test ./internal/clientlifecycle/ -count=1` → ok.
+- Forced end-to-end through the REAL binary against a stub daemon that speaks the client's own line envelope
+  (`OPENRIG_RUNTIME_SOCKET` points at it, so nothing live is touched): a second `up` sends NO start request at all; one
+  stopped seat gets exactly one `RestartSeat` and its running siblings get none; a seat that never returns exits 2 with the
+  seat named; a room the daemon does not know gets `StartRoom` with the whole definition, exit 0 or 3 on the daemon's
+  answer; usage is 3. The room verbs' own forcing runs (including `compact` sending `ForceCompact` for exactly the running
+  seats and refusing the stopped one) are in `CHANGELOG/2026-10-13--native-client-room-up.md`.
+
+## 2026-10-13 — the machine-wide session fallback is deleted, so no verb shells out to choose a prompt
+
+### Changed
+- `sync messages` and `sync connector` no longer resolve a session from `rig ps --json` when none was named. That path was
+  an exec of the CLI this cutover removes, so it could not survive it, and the convenience it existed for is what `--rig`
+  already answers on the delivery path. Both verbs now REFUSE, and the message is the contract: `sync messages` names
+  `--rig <room>` (every running seat of that room) and `--session <name>` (one session); `sync connector` names
+  `--session <name>` (required). The refusal is produced without running anything.
+- Deleted with the fallback: `firstRigSession`, `candidateNames`, and the messages verb's candidate listing. What remains
+  of the candidate machinery serves `rigSeatFor`'s seat lookup - a DECLARED reach rather than a converted one (the parked
+  session-list action, DEPLOY-READY section 65) - and the definition and its consumer both say so.
+
+### Verified
+- RED first, from the empty PATH: with no `rig` on PATH the old code answered `rig ps --json failed: exec: "rig":
+  executable file not found in $PATH` with exit 3 (messages) and exit 1 (connector). The new tests
+  (`TestMessagesVerbRequiresAFlagAndSaysSoWithoutShellingOut`, `TestConnectorVerbRequiresASessionWithoutShellingOut`) fail
+  on the pre-change source exactly that way and pass after it: `ExitUsage`, both flags named, nothing typed, no ACK spent,
+  no socket opened. Proven by reverting only the two source files to `2812989`.
+- `TestMessagesVerbUsesTheOnlySessionTheRigReports` is deleted with the behaviour it pinned, and `fakeRig` - the stub
+  binary no remaining test needs - with it. `go build ./...`, `go vet ./internal/clientsync/` and the clientsync suite
+  are green; `gofmt -l` is empty.
+
+## 2026-10-13 — the skip rule normalises the state word, so one padded reading cannot empty a pass
+
+### Changed
+- `seatSessionsFrom` compared `status.State != "running"` exactly, while the sibling consumer of the same word
+  (`clientlifecycle/lifecycle.go:468`) trims and folds it. An exact match turns a padded or differently-cased state into
+  "not running" for EVERY seat at once, so the pass would deliver nothing and report nothing - a silent empty pass
+  instead of a failure. It now compares `strings.EqualFold(strings.TrimSpace(status.State), "running")`: one rule for
+  one word, on the production site that already states the word.
+
+### Verified
+- RED first: the pure skip-rule test gained a seat whose state reads `  Running `, and it failed on the seat list
+  missing that seat while the three death states were still skipped. With the normalisation it passes;
+  `go build ./...`, `go vet ./internal/clientsync/` and the clientsync suite are green. The expectation message was
+  corrected as well - it still said "the two with a live prompt" from before the third seat existed.
+
+## 2026-10-13 — the second activity reader now fails closed, so an unknown reading keeps waiting
+
+### Changed
+- `QuietWaiter`'s activity seam carries TWO answers instead of one: the word the seat is doing, and whether the read
+  happened at all. `seatActivity` answers `("", false)` when there is no `rig` on PATH, the call fails, the node table
+  will not parse, or the table does not list the seat; it answers `(state, true)` when it did read a node, including a
+  node that carries no word.
+- `quietOnce` is the single place the comparison is written, and both halves of the double reading go through it. It
+  needs a POSITIVE answer - a read that happened, a word, and not `running` - so an unreadable activity no longer
+  presents as the same empty string that would pass `!= "running"`. Before this, an unknown reading released the wait
+  onto the stillness clause alone (the seat's own session mtime), and a reseat could proceed past a seat that was
+  actually mid-turn.
+- The declaration now states the direction the code implements - THIS ONE FAILS CLOSED, the same direction `rigIdle`
+  declares - and names the consequence rather than leaving it to be discovered: after the cutover, with no CLI to
+  read, every call answers false, so a reseat waits out its deadline and then does NOT proceed. That indefinite wait
+  is why the native activity read is the cutover PRECONDITION rather than a nicety, and it is what makes the two
+  declared exceptions consistent instead of opposite.
+
+### Verified
+- The change's licence was that NO test pinned the failing-open reading, so the direction is now pinned by two tests
+  that fail on the OLD behaviour. Reverting `quietOnce` to `activity != "running"` - what the code did before this
+  commit - fails exactly those two, `...DoesNotProceedOnAnActivityItCouldNotRead` and
+  `...DoesNotProceedOnAWordlessReading`, while the three older wait tests keep passing: neither unfalsifiable nor
+  over-tightened. One further test holds the other side, so a positive non-running word (`needs_input`) still counts
+  as quiet when the session has been still.
+- `go build ./...`, `go vet ./internal/clientseat/` and `go test ./internal/clientseat/` are green.
+
+## 2026-10-13 — the delivery goes to the daemon, and the envelope keeps the human's name
+
+### Changed
+- `sync messages` delivers through the OpenRig daemon (`clientruntime.OpenRigSend`, the route `rig send` itself takes)
+  instead of exec'ing `rig send`. The envelope is rendered by the client's own body renderer, so a delivered message
+  reaches a pane in exactly the wrapper a human's own send produces — and there is no child process left to outrun or
+  to fail for a reason of its own. `humanSenderEnv` is DELETED with the exec, because the environment stamping it did
+  exists to make a child process say the right thing.
+- One addition to `clientruntime.SendOptions`: `Sender`. `OpenRigSend` writes the envelope AS `openRigSession()`, which
+  is right for a caller in a seat shell and wrong for this one: the deliverer runs outside any seat shell and the text
+  is the human's, so the envelope must say `human@kernel`. The exec got that by stamping `OPENRIG_SESSION_NAME` onto
+  the child; the option gets it without a child. Blank keeps the old meaning, so `rig send` itself is unchanged.
+- A delivery the daemon refuses is reported in the daemon's own words — `Detail`, else `Error`, else `Warning`, else
+  the HTTP status — rather than flattened into a bare code.
+
+### Verified
+- `TestMessagesVerbDeliversThroughTheDaemonWithTheCLIEnvelope` runs the REAL delivery (the fixture's substitute is
+  taken back) against a stub daemon, with PATH emptied and a decoy in `OPENRIG_SESSION_NAME`. It asserts the route, the
+  recipient session, the message body, `From: human@kernel`, and the decoy's ABSENCE. RED-then-GREEN: dropping the
+  explicit sender fails it with the envelope the deliverer's own seat would have written,
+  `From: 4genthub-min-go-dev@4genthub-min`; restored, green.
+- The live leg is blocked on the READ's commodity question — the native room store holds no row for a seat the OpenRig
+  daemon started, so `GetRoomStatus` refuses with `cannot read room spec` — and not on this change. The stub daemon
+  proves the request the verb makes, not the pane it reaches; the test file says so in its own header.
+- `go build ./...`, `go vet ./internal/clientsync/ ./internal/clientruntime/` and `go test ./...` are green: 23
+  packages ok. No exec and no `runRig` remains in messagesverb.go.
+
+## 2026-10-13 — the message pass reads its seats from the runtime, and the read is proven unable to fall back
+
+### Changed
+- `sync messages --rig R` asks the runtime which seats the room has (`GetRoomStatus`) instead of parsing the node table
+  from `rig ps --nodes --rig R --json`. `rigNode` and `rigSeats` are DELETED rather than kept beside the new call. The
+  skip rule they carried survives as `seatSessionsFrom`, a pure function, and it now speaks the runtime's whole
+  vocabulary: `agent_socket_closed`, `agent_stdio_eof` and `agent_exited` join `stopped`, where the node table offered
+  one `sessionStatus` field and could only ever say `running` or not.
+- The fixture moved with the seam. The tests that need a room's seats answer `roomSeats` (the new package variable) in
+  the order the pass should take them, instead of writing a stub `rig` into PATH. `fakeRig` stays behind, but NOT for the
+  reason this entry first gave: it is kept because `cmd/seatcheck`'s own tests still use it (`exec_test.go`,
+  `main_test.go:553`), not because a shape is unconverted. CORRECTION (2026-10-14, a later pass): the shape it was said to
+  await — a single-session resolution reading `rig ps --json` in `connectorverb.go` — does not exist; that file is 315
+  lines at 4203d96 with no exec, no `LookPath` and no `os/exec` import, and its comment at :193 says THE CLI REACH IS
+  RETIRED. Nothing needed deleting, and no conversion is owed there.
+
+### Verified
+- The tests can now fail in the direction that matters. RED-then-GREEN: with PATH emptied, putting `runRig` back into
+  `messagesPass` fails all three rig-shape tests with `exec: "rig": executable file not found in $PATH`; the reverted
+  tree is green. The OLD fixture could not fail that way — it installed a stub `rig`, and on this machine the live
+  `rig` would have answered a reversion, so a pass that had silently gone back to the node table would have delivered
+  through the real rig and the suite would have said nothing. `fakeRoom` empties PATH for exactly that reason.
+- `go build ./...`, `go vet ./internal/clientsync/` and `go test ./internal/clientsync/` are green; the 14 message-verb
+  tests pass, including `TestSeatSessionsFromSkipsEverySeatWithoutALivePrompt`, which holds the skip rule against the
+  runtime's death states. `runRig` no longer appears anywhere in the file. The verb's delivery site (`rig send`, the
+  second half of this unit) is still there and is next.
+
+## 2026-10-13 — the relaunch goes to the runtime, and both activity readers are declared
+
+### Changed
+- `relaunch` asks the runtime to start the seat again (`RestartSeat` = `stop_seat` then `start_seat` from the room's own
+  spec) instead of `rig launch <rigId> <rig.seat>`. FOUR pieces of the old code are DELETED rather than kept around the
+  new call: the client's own `tmux kill-session` and its 4s sleep (the runtime's restart stops the session itself, so the
+  client was doing the runtime's job), and `rigID` (a `rig ps --json` call that existed only to find the id argument)
+  with `sessionComesUp` (a three-minute tmux poll), neither of which had another caller. The "did not respond in time"
+  tolerance goes with the CLI that produced it: it existed because the CLI gave up after 5s while the launch landed
+  anyway, and the code then inferred the outcome from a session appearing — a socket call's reply IS the outcome, so a
+  failure is now the runtime's own reason.
+- Two seams, variables for the repo's own reason: `restartSeat` (the test asserts which room and seat are asked for, and
+  that no shell-out hides behind it) and `deliverSeatSkills`, which stands for a function that writes into the REAL
+  account's seat store — a test running the real one would write into the owner's tree.
+
+### Declared, not changed
+- `seatActivity` is the SECOND reader of `agentActivity` (`rigIdle` is the first) and is declared in the same words:
+  same producer-absent gap, same retirement (the native activity read, which is the cutover precondition), and the
+  comment says to DELETE it then rather than annotate it. It also records the direction of failure, which is the
+  OPPOSITE of `rigIdle`'s: `QuietWaiter` asks `!= "running"`, and every failure path here answers `""` — so an unreadable
+  activity reads as NOT RUNNING and the wait falls through to its stillness clause alone. This one FAILS OPEN, and the
+  comment says so instead of leaving it to be discovered.
+
+### Verified
+- `TestRelaunchAsksTheRuntimeForTheSeatAndNeverShellsOut` empties PATH, so a returned shell-out cannot find its tool and
+  the test goes red; `TestRelaunchDeliversSkillsBeforeItStartsTheSeat` fails if the seat is started without them; and
+  `TestRelaunchReportsTheRuntimesRefusal` requires the runtime's reason to survive into the error.
+- gofmt clean, `go build ./...` exit 0, the relaunch tests BY NAME all PASS (with the pre-existing
+  `TestRelaunchQuietRestartsOnlyTheSeatsThatChangedAndAreQuiet` untouched), `./internal/clientseat/` ok, module 23 ok.
+
+## 2026-10-13 — the supervisor's sends go to the runtime, and rigIdle is declared rather than converted
+
+`clientlifecycle` sent every message by shelling out: `rigSay` ran `rig send <session> <text> --wait-for-idle 120
+[--raw]`, and `rigIdle` read agentActivity by running `rig ps --nodes`. The send is converted; the read is not, and now
+says why.
+
+### Changed
+- `rigSay` types through `runtimeSendText` — the seam `rigAbort` already uses, now this package's only send. The
+  runtime's send has no envelope, so the CALLER writes it: a plain message is prefixed `From owner session: `,
+  reproducing what the CLI added (`clientseat`'s send verb uses the same default sender), and a raw message travels bare
+  so `/compact` does not arrive as prose.
+- THE WAIT IS REMOVED AND DECLARED, with every caller that loses it enumerated. The shell-out's `--wait-for-idle 120` ran
+  in a process the old code STARTED AND RELEASED, so its outcome was never observed — the pretence of a guarantee. Both
+  idle readings on this machine are the same `rig ps --nodes` shell-out this unit removes (`rigIdle`, and
+  `QuietWaiter`'s `seatActivity`), so honouring the wait would re-add the dependency being cut. `/compact` is gated by
+  `s.Idle` at its own call site; the resume is sent at a turn boundary, where typed text is the next prompt; and the
+  notice and the warning are latched once by `state.told`/`state.warned` and read when the seat next looks at its pane.
+
+### Declared, not changed
+- `rigIdle` remains the one reader of the rig tool in this package, and now says so where it is: the answer is not on the
+  runtime's surface yet (the producer-absent/undetermined tri-state the U2 finding records), the supervisor's `Nodes`
+  seam takes the same reading, and every failure path returns false — an unreadable activity reads as "not idle", so a
+  compaction that cannot prove idleness WAITS rather than racing a working turn.
+
+### Verified
+- `TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare` asserts the EXACT session name and the EXACT envelope text,
+  so it fails if the envelope disappears or changes; `TestRigSayNeverShellsOutToTheRigTool` empties PATH and fails if a
+  rig-tool dependency returns. PROVEN, not asserted: re-adding `exec.LookPath("rig")` to `rigSay` turned it red with
+  "rigSay did not reach the runtime with no `rig` on PATH", and the mutation was reverted (0 `LookPath` in `rigSay`,
+  the declared one still in `rigIdle`).
+- gofmt clean, `go build ./...` exit 0, the three send tests by name PASS, package ok, module 23 ok / 0 failed.
+
+## 2026-10-13 — the runtime socket gets one override, read at the one resolution point
+
+A client built from a branch has to reach a daemon built from the SAME branch while the owner's daemon keeps serving the
+default path; without a knob there is no way to test the cutover before it happens on the owner's machine.
+
+### Added
+- `OPENRIG_RUNTIME_SOCKET` (`clientruntime.RuntimeSocketEnv`), read FIRST by `DefaultSocketPath()` — the ONE resolution
+  point `NewClient("")` reaches. A set override REPLACES the derivation rather than joining it, so one socket is named
+  by exactly ONE input and the client and the daemon it starts agree on the path. A blank value counts as unset, the
+  rule this client's other environment variables already use. The NAME IS A CONTRACT and is pinned by a test, because
+  an owner's harness and a branch client meet on exactly this string.
+- A machine that never sets the override resolves byte-for-byte as before, for both clauses of the derivation.
+
+### Verified
+- Unit legs in `internal/clientruntime/ipc_test.go`: unset → the derivation, unchanged (HOME and XDG_RUNTIME_DIR);
+  set → the explicit path through both `DefaultSocketPath` and `NewClient("")`; both inputs present → ONE socket, the
+  override, with the derivation NOT consulted; blank → the derivation.
+- Precedence, pinned and PROVEN falsifiable: an explicit path beats the variable, and the variable beats the HOME
+  default (`TestExplicitPathBeatsTheOverride`). Mutating `NewClient` so the variable wins over the explicit path makes
+  the test red with "an explicit path lost to the variable"; the mutation was reverted, and the test is green again.
+  The failure mode it guards is not the knob working nowhere but the knob working EVERYWHERE, because one resolution
+  point means every caller inherits the variable.
+- LIVE, the branch client and the installed runtime, a SCRUBBED HOME, nothing else in the environment. SET:
+  `agenthub-runtime --socket <explicit>/rt.sock daemon` ran, the socket was PRESENT where the override named, the
+  HOME-derived path was ABSENT (never both), and no other socket existed under the scrubbed HOME. UNSET: the
+  HOME-derived `<HOME>/.config/4genthub/run/runtime.sock` was PRESENT.
+- Every daemon those legs started was killed with them, and the owner's runtime processes were not touched.
+
+## 2026-10-13 — the abort keystroke goes to the runtime, with the bare text asserted
+
+`clientlifecycle.rigAbort` shelled out to `rig send <session> /abort --raw`. It now types the bare `/abort` through
+`clientruntime.SendText` — no `From`/`To` envelope, because a sender prefix arrives as a MESSAGE where the runner needs
+a keystroke.
+
+### Changed
+- `internal/clientlifecycle/supervisor.go`: `rigAbort` sends through `runtimeSendText`, a package-level seam (the
+  repo's rule: seams are variables, not interfaces added for testing). The old start-and-release dance is
+  UNNECESSARY rather than dropped: the runtime's send has no idle wait to escape, so it was the CLI's, not the call's.
+- The discarded error is DELIBERATELY discarded, and the comment says so: the caller is aborting a turn that is
+  already running, so a refusal has nothing useful to do here, and the supervisor's next step is its own
+  interrupt/escalation ladder rather than a retry of this keystroke. The old code discarded it too. The alternative —
+  a supervisor log line — needs a logger seam this function does not have, and that seam is the change to make if the
+  refusal ever needs to be visible.
+
+### Verified
+- `internal/clientlifecycle/supervisor_test.go`: `TestRigAbortSendsTheBareKeystrokeWithNoEnvelope` asserts the EXACT
+  session name (`rig-seat@rig`) and the EXACT barrier text (`/abort`), so it FAILS IF AN ENVELOPE APPEARS instead of
+  recording today's behaviour. RUN BY NAME → PASS.
+- That file's diff is +25/−0 — all additions. A test-file change with ZERO deletions of lines its author did not write
+  is the property that makes a write-tool accident visible, and it is the check to ask for rather than a promise.
+- `gofmt -l internal/clientlifecycle/` clean; `go build ./...` exit 0; `go test ./internal/clientlifecycle/` ok with
+  its pre-existing tests intact; `go test ./...` 23 packages ok, 0 failed.
+
+## 2026-10-13 — the two room readers stop sharing a name that hides opposite contracts
+
+`clientseat`'s room reader and `clientlifecycle`'s room reader were both called `rigNodes` and take the SAME runtime
+call with OPPOSITE failure contracts: one returns an error naming the rig, the other treats an unreadable read as
+empty. Nothing but a commit message guarded the difference, and later readers do not read those.
+
+### Changed
+- `internal/clientseat/reseat.go`: the reader is `roomNodes` (reached through `reseatDeps.nodes`, so the rename is
+  contained to this file and its test). Behavior is unchanged.
+- Both definitions now carry a cross-reference to the other, naming the opposite contract. Whichever name a reader
+  arrives from, the other is one grep away and deliberately different.
+
+### Verified
+- `gofmt -l internal/clientseat/` clean; `go build ./...` exit 0; `go test ./internal/clientseat/` ok; the renamed
+  `TestRoomNodesNeverShellsOutToRig` RUN BY NAME → PASS; `go test ./...` 23 packages ok, 0 failed.
+
+## 2026-10-13 — reseat reads the room from the local runtime instead of shelling out to `rig`
+
+`clientseat.rigNodes` was `rig ps --nodes --rig RIG --json` through `exec.LookPath("rig")` +
+`exec.Command`. It is now `clientruntime.GetRoomStatus` on the local runtime socket — the same reading
+`clientlifecycle`'s `rigNodes` takes.
+
+### Changed
+- `internal/clientseat/reseat.go`: `rigNodes` reads the room from the runtime and emits the SAME record shape.
+  This is a REPOINT rather than a rewrite, and the shape is the reason: `logicalId` is what `reseatSeats`
+  matches a named seat on, and `runtime`/`model` are what the peak gate reads — so NOTHING DOWNSTREAM LEARNS A
+  NEW VOCABULARY. A native call that changed the record shape would be a different change with a different risk.
+- `internal/clientseat/reseat.go`: `encoding/json` and `os/exec` became unused and were removed with the exec.
+- The exec was also a self-call after this client's own rename (`rig` resolves to `4genteam`), the same class
+  as the seat send in the entry below.
+
+### Two behaviours over one call — deliberate, and NOT to be "unified"
+`clientseat.rigNodes` returns an ERROR NAMING THE RIG when the read fails, while `clientlifecycle`'s `rigNodes`
+treats the SAME runtime call as an empty reading (and an unreadable reading must never be read as "this room is
+safe", which is why that one fails closed into a refusal elsewhere). Both are right for their consumer: `reseat`
+is a command that has to say WHY it will not restart a seat, and it cannot do that with an empty list. A later
+reader who does not know this is TWO BEHAVIOURS OVER ONE CALL will unify them and silently break reseat's
+refusal.
+
+### Verified
+- `gofmt -l internal/clientseat/` clean; `go build ./...` exit 0; `go test ./internal/clientseat/` ok;
+  `go test ./...` 23 packages ok, 0 failed.
+- `reseat_test.go:TestRigNodesNeverShellsOutToRig`, RUN BY NAME → PASS. It empties `PATH`, so the assertion is
+  about the ABSENCE of the exec rather than about a message: with the exec in place the function answers
+  `"rig is not on PATH"` (an `exec.LookPath` failure), and without it the only possible failure comes from the
+  runtime. A test that merely passes today records a property; this one fails if the exec comes back.
+- NOT in this change: `rigSay`/`rigAbort` (the next sites) MUST keep `--raw` — no From/To/Sent envelope —
+  because `/abort` depends on the LITERAL keystroke text reaching the pane; that must be pinned by a test that
+  FAILS if an envelope is added, not by one that passes today.
+
+## 2026-10-13 — the seat send goes to the runtime instead of shelling out to `rig`
+
+`sendCommand.Run`'s own `RIG SEAT MESSAGE` shape tried the native runtime send and then, on failure, fell
+back to `exec.LookPath("rig")` + `exec.Command(path, "send", <session>, <text>)`. On this machine `rig` is a
+symlink to THIS client, so the "fallback" was a self-call: the two-argument OpenRig form went back into the
+same verb, whose three-positional entry then refused it, and the reader got a failure report about a command
+nobody had asked for. The route is the FALLBACK — which is why the same failure appeared both on the
+installed binary and on a tip build; the tip build had no arity bug of its own, it delegated.
+
+### Changed
+- `internal/clientseat/reseat.go`: the seat send goes to the local runtime (`clientruntime.SendTextToSeat`),
+  and a refusal is reported as the runtime's own reason, naming the target it could not reach. The
+  `exec.LookPath("rig")` / `exec.Command` fallback is DELETED rather than repaired: after this client's rename
+  that name resolves to this binary.
+- `internal/clientseat/reseat.go`: the verb's help claimed the shape "sends MESSAGE to the seat with
+  `rig send`"; it now says the send goes through the local runtime and does not shell out to `rig`, with the
+  reason.
+
+### Verified
+- `gofmt -l internal/clientseat/` clean; `go build ./...` exit 0; `go test ./internal/clientseat/` ok;
+  `go test ./...` 23 packages ok, 0 failed — so the two-argument daemon path, `--verify`, `--wait-for-idle`,
+  `--json` and the refused-flag list are untouched.
+- The deletion is pinned as an ABSENCE, not as a message, by
+  `send_test.go:TestTheRigSeatMessageShapeNeverFallsBackToShellingOutToRig`, RUN BY NAME → PASS. It empties
+  `PATH`: with the fallback present the verb answers `"rig is not on PATH"` (the `exec.LookPath` failure), and
+  without it the only possible failure is the runtime's, which must name the target. A deletion nobody can
+  observe is a deletion nobody can defend; this makes the missing call fail a test.
+
+## 2026-10-13 — an omitted permission policy takes the default, and a blank one is refused by name
+
+`SeatSpec.permission_policy` was `#[serde(default)] String`, so an ABSENT key arrived as `""` — and the
+blank-refusal in `approval_mode` then swallowed the omitted case too: a seat that said nothing about its
+policy was refused, and the documented unattended default was unreachable. The client already sends the pair
+distinctly (`clientruntime.SeatSpec.PermissionPolicy` is a pointer for exactly this reason); the runtime's own
+type could not represent the difference, so the distinction died at the deserialization layer.
+
+### Fixed
+- `rust/agenthub-runtime/src/types.rs`: `SeatSpec.permission_policy` is `Option<String>`. serde gives `None`
+  for an absent key and `Some("")` for a present blank one, so the two stop collapsing.
+- `rust/agenthub-runtime/src/runner/mod.rs`: `approval_mode` takes `Option<&str>` — `None` returns `"yolo"`,
+  the documented unattended default; `Some("")` is still refused BY NAME, with the message that names the way
+  out. `child_argv` passes `seat.permission_policy.as_deref()`.
+
+### Verified
+- `cargo test` in `rust/agenthub-runtime`: 35 passed, 0 failed, 0 ignored.
+- The new `runner::tests::an_absent_policy_and_a_blank_one_deserialize_differently` was RUN BY NAME
+  (`cargo test deserialize_differently -- --nocapture` → 1 passed, 34 filtered), so the both-cases assertion
+  is proven rather than inferred: a JSON seat with no `permission_policy` key deserializes to `None` and
+  launches `yolo`, while a seat with `"permission_policy": ""` deserializes to `Some("")` and is refused with
+  the `empty` message. `runner::tests::every_documented_policy_maps_and_an_unknown_one_is_refused` now asserts
+  the omitted case too.
+- TOOLCHAIN — a reproducibility constraint, not a local quirk: this machine's rustup has NO default toolchain
+  (`rustup toolchain list` returns none although the directory exists), so the run went through
+  `/home/daihu/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo` with `RUSTUP_TOOLCHAIN=stable`
+  set. A fresh box with no toolchain installed cannot run these tests at all.
+- `cargo fmt --check` reports ONE pre-existing diff, in `src/context/mod.rs` (a leading blank line). It is NOT
+  drift from this change and it is deliberately left alone: reformatting an unrelated file is how a fix
+  acquires a second, unreviewable subject.
+- The INSTALLED `agenthub-runtime` binary is unchanged, so live launch behaviour is unchanged until it is
+  rebuilt and reinstalled. That is a change to the owner's box — the ENDPOINT of this cutover rather than a
+  step inside it — and it does not block acceptance: a runtime built from the pinned commit launches side by
+  side via `--state-dir` and `--socket` without touching the installed one, which is exactly how the native
+  `up` acceptance already ran. The harness needs a build of the pinned commit, never the installed binary.
+- Repo and path, so nothing has to guess which checkout: this is the SAME repository as the native `up` commit
+  `354831d` — `agenthub_client` (remote `git@github.com:phamhung075/4genthub-client.git`, main checkout
+  `/home/daihu/__projects__/4genthub/agenthub_client`), branch `4genthub-min/u2-native-runner` in the linked
+  worktree `/home/daihu/.openrig/agenthub-seats/4genthub-min/wt/u2-native-runner`, with the crate at
+  `rust/agenthub-runtime/` inside it. `354831d` is NOT an ancestor of that repo's `HEAD`, so a reviewer builds
+  from the hash explicitly.
+- The reviewer's B1p check goes green by ITS OWN re-run of the two tests above, not by this note.
+
+## 2026-10-13 — `up` starts a room from the local team definition, and `--room-only` says what it excludes
+
+`up` restored rooms through OpenRig (`rig up RIG --existing`) and started the runtime daemon with no state
+dir at all: `clientruntime.EnsureDaemon` spawns `agenthub-runtime --socket PATH daemon` and drops both
+streams, so the daemon landed on this machine's default state tree and a start that failed had nothing to
+read. A room that did not already exist could not be started by that path either: `StartRoomByName` sends
+only `{room, cwd}` and the runtime cannot invent seats.
+
+### Added
+- `internal/clientteam/roomspec.go`: `LoadRoomSpec(teamDir)` reads `<teamDir>/team.json` into a
+  `clientruntime.RoomSpec` — `room.slug` to the room, seats to `[]SeatSpec`, `links` to `[]SeatLink`,
+  `seat_overlays` to the overlays — beside `loadTeam`, because team.json has ONE reader. An unreadable
+  directory, a room with no slug, or a seat with no key is a usage error NAMING the directory.
+- `up RIG --team DIR [--state-dir DIR] [--room-only]`. `--team` is required and has no default, and the room
+  name must equal the definition's `room.slug` — the rule clientpolicy applies to its own `--rig`.
+  `--state-dir` resolves through `clientenv.ResolveStateRoot`. `--room-only` runs the room and stops: it
+  starts the daemon, starts the room from the definition, prints one line per seat, and EXCLUDES rigd, the
+  bridge, the watch view, the UI and herdr, whose failures are not this verb's verdict. The help carries the
+  acceptance invocation so a reader re-reads the signature instead of remembering it.
+- `internal/clientruntime/ipc.go`: `(*Client).Reachable()`, the reading `EnsureDaemon` now polls, named once
+  so a caller that starts the daemon itself — with its own state dir and log file — asks the same question.
+
+### Fixed
+- `up`'s daemon step passes an ABSOLUTE `--state-dir` and sends the daemon's own output to
+  `<stateDir>/daemon.log`, which is what lets a partial room name its log; the daemon is `detach`ed so it
+  outlives the verb.
+- `up`'s room step is `StartRoom(LoadRoomSpec(teamDir))`, a `GetRoomStatus` poll to a window held in a
+  variable, then one line per seat: exit `0` every seat running, `2` the arguments or the definition wrong,
+  `3` a seat not running with the seats and the daemon log path named — this repo's own `ExitUsage` and
+  `ExitUnavailable`, not new numbers.
+- `SeatSpec.PermissionPolicy` is a pointer. An OMITTED key means the documented unattended default and a
+  present-but-empty one is refused by name, and a plain string with `omitempty` cannot say both on the wire:
+  one of the two collapses into the other. `definedField` reads it for that reason (`optionalField` folds an
+  empty string into "absent", which is right for `model` and wrong here). The runtime's own `Option<String>`
+  is the other half of the same row.
+
+### Verified
+- `go vet ./internal/...` exits 0; `go test ./...` 23 packages ok, 0 failed; `gofmt -l` clean on every file
+  this change touches.
+- Live acceptance, scrubbed `HOME`, zero cloud environment, no `XDG_RUNTIME_DIR`:
+  `up u1demo --team DIR --state-dir DIR --room-only` printed `u1demo/solo: running` and exited 0. The tree it
+  wrote (`rooms/u1demo/spec.json`, `seats/`, `logs/`, `audit/`, `daemon.log`) is ALL under the `--state-dir`
+  it was given — the runtime materialised the spec from the bytes the client sent, which `StartRoomByName`
+  could not have done — and the per-process instrument is the daemon's own argv,
+  `agenthub-runtime --state-dir … --socket …/run/runtime.sock daemon`, under the scrubbed HOME. The `2` path
+  (`up other-room` against that definition) exits before the daemon is reached.
+- Declared limit: the live `3` partial verdict was NOT reproduced. Three seat shapes — runtime
+  `no-such-runtime`, cwd `/definitely/not/here`, and a non-omp seat — were each reported `running`, so a
+  started seat may never be reported not-running and the path is unforceable until the runtime stops
+  over-reporting readiness. The `3` verdict's evidence is the seam test and the code path, not a live run.
+- The full `up` was NOT run here: `recordRig` writes the SHARED rigd.json and `startRigd` starts this
+  machine's rigd, which is the owner's live state — the second reason `--room-only` exists.
+
+## 2026-10-13 — the connector speaks TLS, and a test that dials proves it
+
+`DialConnector` never installed TLS: for an `https` base URL it mapped the scheme to `wss`, appended `:443`,
+dialled a plain TCP socket and wrote the HTTP/1.1 upgrade onto it. The TLS terminator answered its own
+`400 The plain HTTP request was sent to HTTPS port`, so the handshake never reached the application, no
+session was ever registered, and `GET /api/v2/sessions` served `{"sessions": []}` for a machine whose rigd
+had been retrying for two days (`rigd.log`'s first line and its last are the same refusal, 5155 lines
+apart). It survived its gate because no test dialled: every rigd case replaces the `dialConnector` seam, and
+this file's tests are frame- and redaction-level by their own stated rule.
+
+### Fixed
+- `internal/clientsync/connector.go`: `DialConnector` wraps a `wss` socket in `crypto/tls` with the dialled
+  host as `ServerName` and ordinary certificate verification. `connectorTLS` is the seam a test replaces to
+  trust its own listener; there is no insecure mode and nothing sets `InsecureSkipVerify`. The handshake
+  runs under the deadline the dial already set, and a `ws://` base URL keeps the plaintext path unchanged.
+  The socket then needs a token carrying `sessions:write`: the server applies no scope default, so a token
+  minted without scopes is refused at the next step.
+
+### Tests
+- `internal/clientsync/connector_test.go`: `TestDialConnectorSpeaksTLSOverARealListener` stands up a real
+  `httptest.NewTLSServer` whose handler answers the upgrade by hand, so the client's `Sec-WebSocket-Accept`
+  check can only pass for a request that arrived inside the tunnel, and a plaintext dial cannot reach the
+  handler at all. It fails before the fix and passes after it.
+  `TestDialConnectorLeavesPlaintextAlone` is the control that `ws://` still dials plaintext.
+
+### Verified
+- `go test ./internal/clientsync/... -run 'TestDialConnectorSpeaksTLSOverARealListener|TestDialConnectorLeavesPlaintextAlone' -v`
+  exits 1 before the change and 0 after; `go build ./...` and `go vet ./internal/clientsync/...` exit 0;
+  the whole module `go test ./...` exits 0 with no failing package.
+- Credential-free, read-only probe against the deployed route: plaintext to `api.4genthub.com:443` answers
+  nginx's `400 … The plain HTTP request was sent to HTTPS port`, while TLS to `/ws/connector` answers the
+  application's own `400 Expected WebSocket upgrade` (`ws_mount.go:918`) - the transport the fixed client
+  now uses reaches the application rather than the terminator.
+
+## 2026-10-13 — `rig queue` answers from the daemon, `rig capture` exists, and a queue note is readable
+
+Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps`; the daemon's own
+`commands.captureExamples` advertises `rig capture`. Both are fixed here on top of the verdict changes.
+
+### Fixed
+- **`rig queue` answered a false empty.** Measured before: `rig queue --json` → `[]`, exit 0, and the bare
+  form printed "No pending items in local queue." while this rig's OpenRig queue held the rows the lead had
+  routed. On a rig whose durable work *is* the queue, a false empty is worse than an error: a seat trusts it
+  and believes it owes nothing. The verb now reads the daemon (`GET /api/queue/list` with
+  `destinationSession` of this seat's session, `activeOnly=1`, `compact=1`) and renders one line per row. An
+  empty document is reported only as a **measurement of a named session against a named daemon**
+  (`Measured 0 pending items for <session> on the OpenRig daemon at <url>.`); with no daemon configured it
+  says nothing was measured and exits 3 (`set OPENRIG_URL or OPENRIG_PORT`); a daemon refusal is reported
+  with its status and reason, never flattened to `[]`.
+- **The list's own parameter was dropped.** The route reads `destinationSession`; `--destination` now
+  reaches it, so `rig queue --destination 4genthub-min-reviewer@4genthub-min` answers with that seat's rows
+  (live). Same class as the defect, in the same verb, found by reading the route rather than the output.
+- **A queue write is refused by name, in both its spellings.** `queue update <id> --note ...`,
+  `queue update <id> --state done`, `claim`, `block` and the rest are writes this shim does not perform:
+  exit 2, nothing sent, stderr naming the write and pointing at the OpenRig CLI — the subcommand is judged
+  **before** the flag parser runs, so the flag spelling is not answered with a complaint about the write's
+  own argument. (Only an undeclared flag on a *read*, e.g. `queue list --nope`, is answered by the parser.)
+  Measured before: a write reported success while its note was unreadable anywhere the caller could look.
+- **`capture` reported a successful read as a failure when the body omitted `ok`.** The transport's status
+  is the refusal channel (any non-2xx is an error before the body is read) and the daemon's success shape is
+  `{ok, sessionName, content, lines}` — but a 200 body without an `ok` field was read as a refusal and
+  printed the raw payload to stderr with exit 1. An absent `ok` is now a success; only an explicit
+  `ok:false` is a refusal. (Found by the reviewer's request-capture stub, which names the pane `text` and
+  omits `ok`; the daemon's own keys were re-measured live to confirm the strict half still bites.)
+- **`send` dropped `deliveryId`.** The route reads it (`transport.js:76`) and the OpenRig CLI always sends
+  one (`send.ts:475`, `deliveryId: randomUUID()`); the daemon uses it as this delivery's outbox id
+  (`session-transport.js:1143`) and refuses a reuse that names other content instead of re-delivering it
+  (`:1160`). The shim now sends a fresh v4 identity per invocation — never a constant, which would make a
+  deliberately repeated message a replay of the first.
+
+### Added
+- **`rig capture <session> [--lines <n>] [--json]`** (`internal/clientruntime`): the verb the daemon's own
+  `whoami` advertises, through `POST /api/transport/capture` on the same route the R7 receiver-side proof
+  used. The pane goes out verbatim, no heading added.
+- **`rig queue show <qitemId>`** and **`rig queue transitions <qitemId>`**: a note the queue accepts does not
+  ride the row — `update --note` writes it into the row's transition log, and the row document carries no
+  note field at all (`transitionNote`, `humanDetail` and `resolution` are null on every row read, including
+  the ones with notes). `transitions` reads the log, which is where the note actually is.
+
+### Changed
+- One parser for the verb surface this row touches: `queue` and `capture` take their options before, between
+  or after the positionals through `clientruntime.SplitFlags`, the helper the verdict commit added for
+  `send` (an undeclared flag stops the verb rather than becoming a positional). The private
+  `reorderFlags` helper is gone. `whoami` keeps its own flag set: it takes no positionals.
+
+### Tests
+- `internal/clientruntime/openrigdaemon_test.go`: the queue list asks for THIS seat's `destinationSession`
+  with `activeOnly=1`/`compact=1` and prints every row the daemon returned; an empty document is a named
+  measurement; a daemonless shell gets the refusal, not an empty list; a daemon failure is surfaced;
+  `transitions` prints the note the row does not carry; `show` names the row's state and blocker; the write
+  shapes (`update <id> --note`, `update <id>`, `claim <id>`) exit 2 with **zero requests**; `--json` prints
+  the daemon's own document; `capture` prints the pane and takes `--lines` on either side of the session;
+  `OpenRigSend` names the delivery with a fresh v4 id on every invocation.
+
+### Verified (live, 4genthub-min rig, binary built from this commit at `/tmp/r7-verdict/4genteam`)
+- `4genteam queue --json` → 4 rows, including three **this seat did not create** (U2 `…86cab906`, U1+U0
+  `…da1e5cce`, and the blocked owner-action row `…416a3da42a595995`); `4genteam queue` → the same rows, one
+  tab-separated line each.
+- `4genteam queue --destination 4genthub-min-reviewer@4genthub-min` → that seat's two rows (the delta gate
+  and U3). `queue show qitem-20261013193957-ee8cadf348fe93c9` → `done`, `closed: handed_off_to ->
+  4genthub-min-reviewer@4genthub-min`, `tsUpdated: 2026-10-13T20:00:30.422Z`. `queue transitions` on the same
+  row → my own custody note (`custody-verified: …`) and the delivery note, both readable.
+- `4genteam queue update <id> --note "…"` → exit 2, `unknown flag --note for this verb; nothing was read`,
+  and the row's `tsUpdated` unchanged (nothing written); `queue claim <id>` → exit 2, `"claim" is not a read
+  this shim performs … Nothing was read or written.`
+- `env -u OPENRIG_URL -u OPENRIG_PORT 4genteam queue` → exit 3, `no OpenRig daemon is configured in this
+  environment (set OPENRIG_URL or OPENRIG_PORT); nothing was measured`.
+- `4genteam capture 4genthub-min-reviewer@4genthub-min --lines 4` → the pane; two sessions → usage, exit 2;
+  `--nope` → exit 2 naming the flag; daemonless → exit 3.
+- `go build ./...`, `go vet ./...`, `go test ./...` exit 0 (23 packages ok); `gofmt -l` clean on both
+  changed packages. A live `send --raw` through the binary returned `Sent to …` plus the advisory, and
+  recorded its sender-side outbox row.
+
+### Named, not silently fixed
+- **`queue list --json` prints `[]` for an empty queue.** That is the daemon's own document, printed
+  verbatim — the same rule the rest of this shim follows for `--json` — and the *human* form is the one that
+  carries the named measurement (`Measured 0 pending items for <session> on the OpenRig daemon at <url>.`).
+  It is only a true empty because the request reached a named daemon: a shell that names none exits 3 and
+  prints no list at all. Named here because `[]` is the exact string this row exists to banish from the
+  surface a seat reads.
+- **A `--raw` send is not a wrapped delivery, so a receiver cannot count it as one.** `--raw` (and
+  `--dangerously-interact`, which implies it) sends the text exactly, with no `From:`/`To:`/`Sent:`
+  envelope — the CLI's own semantics (`send.ts:474-475`: `raw = opts.raw || opts.dangerouslyInteract`, then
+  `outboundText = raw ? payload : wrapSendBody(...)`, and the envelope marker is omitted). The outbox row
+  still holds the text and the daemon still reports the delivery, but **consumption on the raw path is
+  unconfirmed**: a receiving harness that counts only enveloped sends sees a bare tag, and the shim's own
+  `--verify` note says the same in the CLI's words. Recorded rather than changed; `--raw` means exactly this.
+- **`deliveryId`'s effect, precisely.** With the typing guard off the id is inert: the outbox store mints
+  its own row id (`outbox-<stamp>-<hash>`, measured live on this daemon), and the emitted send is unchanged.
+  The id matters on the guarded path (the idempotency check at `session-transport.js:1160`) and for
+  cross-host relay naming (`:2373`). The shim matches the CLI's request; no behaviour change was observed on
+  an unguarded daemon, and none is claimed.
+- **The CLI's own `queue update --note` read path is not fixed here.** The note is written to the transition
+  log while the row it prints carries no note (the lead measured this through the CLI, not the shim). This
+  shim now reads the log — the surface where the note is — and refuses writes it cannot perform; the
+  daemon/CLI row read is a separate change for whoever owns that surface.
+
+## 2026-10-13 — the R7 shim's `send` flags, and the daemon's advisory the shim was dropping
+
+The two majors from `GATE-08c41a5-r7-shim-2026-10-13.md` (verdict: approve with changes), plus the
+minors in the same files. Stacked on `08c41a5` on branch `4genthub-min/r7-shim`.
+
+### Fixed
+- **M1 — the CLI's documented `send` flags were parsed as message text.** `internal/clientseat`: the verb used Go's `flag` package, which stops at the first positional, so the exact form the daemon's own `whoami` prints as `commands.sendExamples` — `rig send <session> 'message' --verify` — read as rig=`<session>`, seat=`"message"`, message=`--verify` and delivered **nothing to the named seat**; `--verify` in front was rejected outright (`flag provided but not defined`). Every documented option is now parsed **wherever it sits on the line** (`internal/clientruntime/flags.go`, `SplitFlags`): an undeclared flag is an error and an error stops the send (`nothing was sent`), never a positional. Implemented because this shim has a daemon: `--verify`, `--force`, `--wait-for-idle <s>`, `--raw`, `--dangerously-interact` (implies `--raw`, carries `--reason`), `--json`, and `--from` (for this shim's own native `RIG SEAT MESSAGE` shape). **Refused, because they address a surface this local shim does not have**: `--to`, `--pod`, `--rig` (fan-out), `--host` (remote), `--context` (pack resolves) — exit 2, nothing sent, each naming why. The invariant: no invocation may deliver to a destination other than the named seat, and no flag may silently change what is delivered.
+- **M2 — the daemon's `warning` was discarded.** `internal/clientruntime/openrigdaemon.go` + `internal/clientseat`: the success payload carries `warning` and the shim printed a bare `Sent to X`. As of OPR.0.4.3.28 the readiness guard sends-with-advisory (only `needs_input` hard-refuses), so that warning is the **only** signal a seat gets that its message went into a pane that was not reading. It is now surfaced the way the CLI does — `Advisory: <warning>` on human output — and `--json` prints the daemon's answer verbatim, so the field rides both. A `retained` outcome is reported as the CLI reports it (`Retained, not delivered to <session>. <warning>`), never as a delivery.
+
+### Changed
+- `whoami --json` asks the daemon for `compact=1` by default and prints the CLI's **identity-recovery allowlist** (`projectCompactWhoami`: `resolvedBy`, `identity`'s eight fields, `peers`' three, `peersNote`, `edges`, `transcript`'s `path`/`tailCommand`); `--full` (and the CLI's `--verbose`) skips both and prints the daemon's bytes as they arrived. The previous behaviour printed the full document always and re-indented it.
+- A refused daemon call on these verbs now exits **1** (the CLI's code for a 4xx; `whoami` previously answered the platform-matrix 3 — for both 404 and 500). Exit 3 stays for a shell that names no daemon and for a daemon that is not answering.
+- The envelope renders the sender label **exactly as it arrived** (only the blank *test* is trimmed) and the occupant generation by **presence**, truncated to eight characters — both the CLI's own conditions (`m3`, `m4`).
+
+### Tests
+- `internal/clientruntime/openrigdaemon_test.go`: `SplitFlags` takes an option before, between and after the positionals, honours `--name=value` and `--`, refuses an undeclared flag, a value where none is taken and a missing value; the optioned body carries `verify`/`force`/`waitForIdleMs` under the route's own names, `--raw` sends the text exactly, `--dangerously-interact` carries its reason; the envelope's padded label and 3-character generation; `whoami` asks for `compact=1` and its projection drops `contextUsage`/`commands`/`attachmentType`/a peer's `label`, while `--full` prints the daemon's bytes; a 404 exits 1.
+- `internal/clientseat/send_test.go`: the daemon's own trailing `--verify` form and its leading form both deliver to the named seat with the flag carried, never in the text; the advisory reaches stdout; `--to` is refused with nothing sent; an unknown flag is refused; `--verify` prints the daemon's verdict plus the named un-run probe; a `retained` outcome is not a delivery; `--wait-for-idle 30` becomes 30000 ms and `0` is a caller error; `--json` prints the daemon's answer verbatim.
+
+### Verified (live, 4genthub-min rig, binary built from this commit at `/tmp/r7-verdict/4genteam`)
+- The daemon's own printed example, `4genteam send 4genthub-min-reviewer@4genthub-min "<text>" --verify` → exit 0, `Sent to …`, `Advisory: target pane appears mid-task; sent anyway (busy is advisory, not a block).`, `Verified: no`, `Delivery: rendered-unconfirmed (landed; pane re-render not confirmed - confirm with: rig capture …)`, and the Note below. The receiver's pane (captured through the daemon) shows the envelope and the text: `To:`, `Sent: 10-13 19:56Z · gen 17ec5cb7`, the probe line.
+- `--raw --json` → the daemon's answer verbatim on stdout, exit 0. `--wait-for-idle 5` against a busy pane → the daemon's own `HTTP 409 Target was still busy (bash) when the 5000ms wait ended (10 observations). No text was sent.`, exit 1. `--to a@r,b@r` → exit 2, `--to is a fan-out to several sessions; this shim sends to one; nothing was sent`; `--nope` → exit 2; `--wait-for-idle 0` → exit 2.
+- `go build ./...`, `go vet ./...`, `go test ./...` exit 0 (23 packages ok); `gofmt -l` clean on both changed packages.
+
+### Named, not silently fixed
+- **m5 (the `Sent:` stamp) is counter-evidenced, not changed.** The verdict read the stamp as coming from the daemon's transport time; both of the CLI's `wrapSendBody` call sites (`send.ts:471`, `:851`) pass `stampISO: new Date().toISOString()` — the sender's own clock, which is what the shim already did. No daemon-supplied stamp exists on this path.
+- The `· gen <first8>` suffix is the shim's **addition**: no CLI send path passes `meta.genUuid`, so the CLI's own envelope has no gen line. Kept (the gate accepted the envelope, and the daemon sets the occupant generation this shell carries), with the renderer now matching the CLI's condition.
+- `--verify` reports the **daemon's** verification (`outcome`/`verified`; `delivered` means the text and the Enter landed and the post-send capture re-confirmed the snippet) and prints the CLI's own line for an effect check that **could not run**, naming the reason: the CLI's client-side staged-residual probe plus its one guarded Enter is not implemented here, so nothing presses Enter into a peer's pane uninvited and no verdict claims more than was measured.
+- The compact projection's field SET is the CLI's; its key ORDER is Go's (sorted), not the CLI's insertion order.
+
+## 2026-10-13 — `rig send` and `rig whoami` work on a rig the OpenRig daemon hosts
+
+### Fixed
+- `rig send <session> <text>`: `internal/clientseat` accepted only `RIG SEAT MESSAGE`, so R7's drop-in promise (`NEXT-GEN2.md` §1.5 — "existing seat prompts and skills work without modification") failed at the first call. Measured on the live 4genthub-min rig: `rig send 4genthub-min-architect@4genthub-min "..."` → `4genteam send: RIG, SEAT and MESSAGE are required`, exit 2; the verb's own fallback shells `rig send <rig>-<seat>@<rig> <text>` (two arguments) through the binary that IS the shim, so it re-entered the same refusal. Two arguments are now that shape: the message goes to the OpenRig daemon's `POST /api/transport/send`, wrapped in the OpenRig CLI's own `From:`/`To:`/`Sent:` envelope and attributed to `OPENRIG_SESSION_NAME` through `X-OpenRig-Session`. The three-argument shape is unchanged.
+- `rig whoami`: the verb asked only the native runtime, whose room store (`~/.config/4genthub/rooms`) holds no row for a seat the OpenRig daemon started, and answered `seat identity could not be resolved from active rooms` (exit 3) on this rig. A shell that names a daemon (`OPENRIG_URL`, else `OPENRIG_PORT`) now asks it — `GET /api/whoami?sessionName=<OPENRIG_SESSION_NAME>` — and prints its document: `--json` prints the daemon's own bytes, the shape the OpenRig CLI returns. A shell naming no daemon keeps the native path unchanged.
+
+### Added
+- `internal/clientruntime/openrigdaemon.go` — `OpenRigSendMessage` plus the pieces both verbs share: the envelope renderer, the base URL (`OPENRIG_URL`, else the loopback address at `OPENRIG_PORT`), the optional `$OPENRIG_HOME/terminal-token` bearer (omitted when absent, as the CLI does), and the identity renderer.
+- The client's own fifth safeguard is unblocked by the same fix: `sync messages`' deliverer shells `rig send <session> <text>` (`internal/clientsync/messagesverb.go`) and was refused by that arity bug.
+
+### Tests
+- `internal/clientruntime/openrigdaemon_test.go`: the daemon is asked for the environment's session and receives the sender header; `--json` prints the daemon's document; a 404 becomes exit 3 naming the daemon's reason; the envelope is pinned byte for byte (stamp, `· gen <first8>`, the `@external` reply spelling, the `<unknown sender>` label); base-URL and token precedence.
+- `internal/clientseat/send_test.go`: two arguments post the envelope to `/api/transport/send` and name the session on stdout; the daemon's refusal exits non-zero; one argument is still a caller error and never reaches the daemon.
+
+### Verified
+- Live 4genthub-min rig, before (installed shim): `rig whoami --json` → exit 3, `seat identity could not be resolved from active rooms`; `rig send 4genthub-min-fe-dev@4genthub-min "probe"` → exit 2, `RIG, SEAT and MESSAGE are required`. After, built from this commit: `rig whoami --json` → exit 0 with the daemon's document (identity, four peers, transcript path); `rig send 4genthub-min-reviewer@4genthub-min "..."` → exit 0, `Sent to 4genthub-min-reviewer@4genthub-min`, and the receiver's own pane shows the envelope (`From: 4genthub-min-go-dev@4genthub-min`, `To: 4genthub-min-reviewer@4genthub-min`, `Sent: 10-13 18:56Z · gen 17ec5cb7`, `---`, text, `---`, `↩ Reply: rig send 4genthub-min-go-dev@4genthub-min "..."`).
+- `go build ./...`, `go vet ./...`, `go test ./...` exit 0 with every package ok; `gofmt -l .` reports only the two pre-existing files (`internal/clientoutbox/commands.go`, `internal/clientwatch/render_test.go`).
+- `internal/clientruntime/command.go` was run through `gofmt` while the branch was added, which normalizes the file's pre-existing drift (`shimCommand`/`queueCommand` method declarations); the other two drifted files are untouched.
+
 ## 2026-10-13 — `4genteam ps`, and the runtime-switch skills name the right `rig`
 
 ### Added

@@ -151,7 +151,7 @@ func TestInstallConvergesOnTheTree(t *testing.T) {
 	}
 }
 
-// Declaring is what makes OpenRig project a skill, so the id must land BOTH in the resource pool and in
+// Declaring is what makes the rig orchestrator project a skill, so the id must land BOTH in the resource pool and in
 // the profiles that select resources - and the spec's own content must survive untouched.
 func TestDeclareAddsTheResourceAndTheProfileUse(t *testing.T) {
 	path := writeSpec(t, developerSpec)

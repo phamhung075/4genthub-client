@@ -60,8 +60,8 @@ var canonicalPaths = map[string]string{
 }
 
 var pluginPaths = map[string]string{
-	"beta-skill":  "packages/daemon/assets/plugins/openrig-core/skills/beta-skill",
-	"gamma-skill": "packages/daemon/assets/plugins/openrig-core/skills/gamma-skill",
+	"beta-skill":  "packages/daemon/assets/plugins/core/skills/beta-skill",
+	"gamma-skill": "packages/daemon/assets/plugins/core/skills/gamma-skill",
 }
 
 // writeLibrary is the inventory GENERATOR's output: the three-skill library committed, with

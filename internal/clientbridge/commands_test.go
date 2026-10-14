@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,34 +48,26 @@ func TestInstallServiceNamesTheClientsOwnEnvFile(t *testing.T) {
 // (commands.go, secretscan.KnownValuesFromEnv) and handed to the bridge, so a test that injects the map
 // into its own NewBridge proves only that redaction USES a map. If the call site ever passed nil, such
 // a test would stay green while the report printed a secret - which is the failure mode this test
-// exists to make impossible. A stub `rig` on PATH quotes a value the environment declares; nothing else
-// is stubbed, so the path exercised is the one an operator runs (`bridge once --print`).
+// exists to make impossible. A fake runtime on the socket quotes a value the environment declares;
+// nothing else is stubbed, so the path exercised is the one an operator runs (`bridge once --print`).
 func TestBridgeOncePrintRedactsThroughTheEnvironment(t *testing.T) {
 	const value = "env-secret-value-0123456789"
-	dir := t.TempDir()
-	nodes := `[{"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp","sessionStatus":"running",` +
-		`"latestError":"the token is ` + value + ` - rotate it"}]`
-	nodesFile := filepath.Join(dir, "nodes.json")
-	if err := os.WriteFile(nodesFile, []byte(nodes), 0o644); err != nil {
-		t.Fatalf("writing the nodes fixture: %v", err)
-	}
-	// A `rig` that answers every read with those nodes. cat of a file rather than a quoted heredoc, so
-	// no shell quoting stands between the fixture and the assertion.
-	script := "#!/bin/sh\ncat '" + nodesFile + "'\n"
-	stub := filepath.Join(dir, "rig")
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
-		t.Fatalf("writing the stub rig: %v", err)
-	}
+	fakeRuntimeSocket(t, func(line string) string {
+		if strings.Contains(line, `"GetRoomLinks"`) {
+			return `{"ok":true,"data":[]}` + "\n"
+		}
+		return `{"ok":true,"data":[{"canonicalSessionName":"room-a-seat-a@room-a","sessionName":"agenthub--room-a--seat-a",` +
+			`"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp","sessionStatus":"running",` +
+			`"agentActivity":{"state":"working"},"detail":"the token is ` + value + ` - rotate it"}]}` + "\n"
+	})
 
 	// The environment is the input under test: a name the scanner looks for (TOKEN) with a long enough
 	// value, and a home so the seat store resolves.
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("DEMO_TOKEN", value)
 
 	var out, errOut bytes.Buffer
-	code := (bridgeCommand{}).Run(context.Background(), nil,
-		[]string{"once", "--print", "--machine-id", "test-machine"}, &out, &errOut)
+	code := (bridgeCommand{}).Run(context.Background(), []string{"once", "--print", "--machine-id", "test-machine"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("bridge once --print exited %d (stderr %q)", code, errOut.String())
 	}
@@ -102,7 +93,7 @@ func TestBridgeOncePrintRedactsThroughTheEnvironment(t *testing.T) {
 func TestBridgeSubVerbsAnswerHelp(t *testing.T) {
 	for _, args := range [][]string{{"run", "--help"}, {"once", "-h"}} {
 		var out, errOut bytes.Buffer
-		code := (bridgeCommand{}).Run(context.Background(), nil, args, &out, &errOut)
+		code := (bridgeCommand{}).Run(context.Background(), args, &out, &errOut)
 		if code != clientcmd.ExitOK {
 			t.Errorf("bridge %v exited %d, want %d (stderr %q)", args, code, clientcmd.ExitOK, errOut.String())
 		}
@@ -118,7 +109,7 @@ func TestBridgeSubVerbsAnswerHelp(t *testing.T) {
 // WITHOUT --help the unit is still what prints: the gate moved, it was not removed.
 func TestBridgeInstallServiceAnswersHelpNotTheUnit(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := (bridgeCommand{}).Run(context.Background(), nil, []string{"install-service", "--help"}, &out, &errOut)
+	code := (bridgeCommand{}).Run(context.Background(), []string{"install-service", "--help"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("install-service --help exited %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut.String())
 	}
@@ -131,7 +122,7 @@ func TestBridgeInstallServiceAnswersHelpNotTheUnit(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	if code := (bridgeCommand{}).Run(context.Background(), nil, []string{"install-service"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (bridgeCommand{}).Run(context.Background(), []string{"install-service"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("install-service exited %d (stderr %q)", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "[Unit]") {
@@ -140,7 +131,7 @@ func TestBridgeInstallServiceAnswersHelpNotTheUnit(t *testing.T) {
 }
 
 // test_the_path_defaults_do_not_follow_home pins the Python test of that name: the pins dir and the
-// state path resolve from the ACCOUNT home, so a decoy $HOME - what OpenRig gives a seat - does not move
+// state path resolve from the ACCOUNT home, so a decoy $HOME - what the rig orchestrator gives a seat - does not move
 // either of them.
 func TestThePathDefaultsDoNotFollowHome(t *testing.T) {
 	decoy := t.TempDir()
@@ -154,14 +145,14 @@ func TestThePathDefaultsDoNotFollowHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("defaultPinsDir: %v", err)
 	}
-	if want := filepath.Join(home, ".openrig", "agenthub-seats"); pins != want {
+	if want := filepath.Join(home, ".config", "4genthub", "seats"); pins != want {
 		t.Errorf("pins dir followed $HOME: %q, want %q", pins, want)
 	}
 	state, err := DefaultStatePath()
 	if err != nil {
 		t.Fatalf("DefaultStatePath: %v", err)
 	}
-	if want := filepath.Join(home, ".openrig", "bridge-sync.json"); state != want {
+	if want := filepath.Join(home, ".config", "4genthub", "bridge-sync.json"); state != want {
 		t.Errorf("state path followed $HOME: %q, want %q", state, want)
 	}
 	if strings.HasPrefix(pins, decoy) || strings.HasPrefix(state, decoy) {

@@ -13,8 +13,7 @@ import (
 // deadDeepSeekNode is room1.alpha's record when its agent has died AND it runs a DeepSeek model: the one
 // record where a respawn would start DeepSeek work, which at peak is what the gate refuses.
 const deadDeepSeekNode = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1",` +
-	`"model":"deepseek/deepseek-flash","sessionStatus":"running",` +
-	`"agentActivity":{"state":"unknown","reason":"no_runtime_hook"}}`
+	`"model":"deepseek/deepseek-flash","sessionStatus":"agent_exited"}`
 
 // respawnGateEnv pins the clock and leaves the setting unset, with the machine's holiday file kept out.
 func respawnGateEnv(t *testing.T, pin string) {
@@ -24,14 +23,12 @@ func respawnGateEnv(t *testing.T, pin string) {
 	t.Setenv(clientoffpeak.ModeEnv, "")
 }
 
-// TestRespawnRefusesADeadDeepSeekSeatAtPeak: this verb exists to LAUNCH a fresh occupant, so the same rule
-// as `up` applies to the seat's own record - and the refusal must land before the dead-reading wait, or a
-// caller who asked to wait --after-seconds would sit through it and then be refused anyway.
+// TestRespawnRefusesADeadDeepSeekSeatAtPeak: this verb decides on a LAUNCH, so the same rule as `up` applies
+// to the seat's own record - and the refusal must land before the dead-reading wait, or a caller who asked to
+// wait --after-seconds would sit through it and then be refused anyway.
 func TestRespawnRefusesADeepSeekSeatAtPeakBeforeAnyWait(t *testing.T) {
-	stub := &rigStub{
-		answers: []string{"[" + deadDeepSeekNode + "]"},
-		launch:  rigResult{stdout: "fresh occupant started\n"},
-	}
+	rigRan := poisonRig(t)
+	stub := &rigStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
 	stubRig(t, stub)
 	respawnGateEnv(t, "2026-10-09 02:00")
 
@@ -53,14 +50,20 @@ func TestRespawnRefusesADeepSeekSeatAtPeakBeforeAnyWait(t *testing.T) {
 			t.Errorf("the refusal does not name %q:\n%s", want, stderr.String())
 		}
 	}
-	if got := launched(stub); got != nil {
-		t.Errorf("it launched anyway: %v", got)
+	if got := stub.reads; got != 1 {
+		t.Errorf("took %d readings, want 1: the gate refuses before the dead reading is waited out", got)
+	}
+	if rigRan() {
+		t.Error("it ran `rig` anyway")
 	}
 }
 
-// TestRespawnLaunchesADeepSeekSeatWhenTheCheckIsOff is the control: off-peak, or with the check turned off
-// by the flag or the setting, the same dead seat is respawned.
-func TestRespawnLaunchesADeepSeekSeatWhenTheCheckIsOff(t *testing.T) {
+// TestRespawnPassesADeepSeekSeatThroughTheGateWhenTheCheckIsOff is the control: off-peak, or with the check
+// turned off by the flag or the setting, the gate does NOT refuse - the verb reaches its last step, which in
+// this build is the launch refusal (the native runtime has no launch verb). The distinction this pins is
+// WHICH refusal is spoken: the launch one, never the peak one, or an operator would chase a billing window
+// for a step nothing can take.
+func TestRespawnPassesADeepSeekSeatThroughTheGateWhenTheCheckIsOff(t *testing.T) {
 	cases := []struct {
 		name    string
 		pin     string
@@ -73,10 +76,8 @@ func TestRespawnLaunchesADeepSeekSeatWhenTheCheckIsOff(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			stub := &rigStub{
-				answers: []string{"[" + deadDeepSeekNode + "]"},
-				launch:  rigResult{stdout: "fresh occupant started\n"},
-			}
+			rigRan := poisonRig(t)
+			stub := &rigStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
 			stubRig(t, stub)
 			t.Setenv(clientoffpeak.HolidaysEnv, "")
 			t.Setenv(clientoffpeak.PinEnv, c.pin)
@@ -85,37 +86,49 @@ func TestRespawnLaunchesADeepSeekSeatWhenTheCheckIsOff(t *testing.T) {
 			args := append([]string{"room1", "alpha", "--after-seconds", "0"}, c.extra...)
 			var stdout, stderr bytes.Buffer
 			code := RunRespawnVerb(context.Background(), args, &stdout, &stderr)
-			if code != clientcmd.ExitOK {
-				t.Fatalf("exit %d, want 0 (stderr %q)", code, stderr.String())
+			if code != clientcmd.ExitUnavailable {
+				t.Fatalf("exit %d, want %d: the seat passed the gate, so the launch leg is the answer "+
+					"(stderr %q)", code, clientcmd.ExitUnavailable, stderr.String())
 			}
-			if got := launched(stub); got == nil {
-				t.Error("the seat was not respawned")
+			if !strings.Contains(stderr.String(), "the native runtime has no launch verb") {
+				t.Errorf("the verb did not reach the launch leg:\n%s", stderr.String())
+			}
+			if strings.Contains(stderr.String(), "PEAK:") {
+				t.Errorf("the gate refused a seat it was told to let through:\n%s", stderr.String())
+			}
+			if rigRan() {
+				t.Error("it ran `rig`")
 			}
 		})
 	}
 }
 
-// TestRespawnStillRespawnsALocalSeatAtPeak: the gate is about DeepSeek models only. A room on a local
-// runtime is respawned at any hour, which is what keeps this verb usable outside the peak windows.
-func TestRespawnStillRespawnsALocalSeatAtPeak(t *testing.T) {
+// TestRespawnPassesALocalSeatThroughTheGateAtPeak: the gate is about DeepSeek models only, so a room on a
+// local runtime reaches the launch leg at any hour - which is what keeps this verb's gate honest outside the
+// peak windows.
+func TestRespawnPassesALocalSeatThroughTheGateAtPeak(t *testing.T) {
 	localNode := `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1",` +
-		`"model":"claude-code/sonnet","sessionStatus":"running",` +
-		`"agentActivity":{"state":"unknown","reason":"no_runtime_hook"}}`
-	stub := &rigStub{
-		answers: []string{"[" + localNode + "]"},
-		launch:  rigResult{stdout: "fresh occupant started\n"},
-	}
+		`"model":"claude-code/sonnet","sessionStatus":"agent_exited"}`
+	rigRan := poisonRig(t)
+	stub := &rigStub{answers: []string{"[" + localNode + "]"}}
 	stubRig(t, stub)
 	respawnGateEnv(t, "2026-10-09 02:00")
 
 	var stdout, stderr bytes.Buffer
 	code := RunRespawnVerb(context.Background(),
 		[]string{"room1", "alpha", "--after-seconds", "0"}, &stdout, &stderr)
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want 0 (stderr %q)", code, stderr.String())
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit %d, want %d: a local seat passes the gate and meets the launch refusal "+
+			"(stderr %q)", code, clientcmd.ExitUnavailable, stderr.String())
 	}
-	if got := launched(stub); got == nil {
-		t.Error("a local seat was refused at peak")
+	if !strings.Contains(stderr.String(), "the native runtime has no launch verb") {
+		t.Errorf("the verb did not reach the launch leg:\n%s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "PEAK:") {
+		t.Errorf("a local seat was refused at peak:\n%s", stderr.String())
+	}
+	if rigRan() {
+		t.Error("it ran `rig`")
 	}
 }
 
@@ -123,6 +136,7 @@ func TestRespawnStillRespawnsALocalSeatAtPeak(t *testing.T) {
 // argument it does not know, so the name this package used to invent is a caller error rather than a
 // silent no-op.
 func TestRespawnRefusesAFlagItDoesNotTake(t *testing.T) {
+	rigRan := poisonRig(t)
 	stub := &rigStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
 	stubRig(t, stub)
 
@@ -134,8 +148,8 @@ func TestRespawnRefusesAFlagItDoesNotTake(t *testing.T) {
 	if !strings.Contains(stderr.String(), "--any-time") {
 		t.Errorf("the refusal did not name the argument: %q", stderr.String())
 	}
-	if got := launched(stub); got != nil {
-		t.Errorf("it launched anyway: %v", got)
+	if rigRan() {
+		t.Error("it ran `rig` anyway")
 	}
 }
 

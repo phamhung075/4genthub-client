@@ -31,20 +31,16 @@ type bridgeCommand struct{}
 func (bridgeCommand) Name() string    { return "bridge" }
 func (bridgeCommand) Summary() string { return "report this machine and its rigs to the cloud" }
 
-// NeedsRig is true because run and once read `rig ps`; install-service ignores the tool
-// it is handed, which is cheaper than a second verb.
-func (bridgeCommand) NeedsRig() bool { return true }
-
-func (c bridgeCommand) Run(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (c bridgeCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		bridgeUsage(stderr)
 		return clientcmd.ExitUsage
 	}
 	switch args[0] {
 	case "run":
-		return bridgeRun(ctx, rig, args[1:], stdout, stderr, false)
+		return bridgeRun(ctx, args[1:], stdout, stderr, false)
 	case "once":
-		return bridgeOnce(ctx, rig, args[1:], stdout, stderr)
+		return bridgeOnce(ctx, args[1:], stdout, stderr)
 	case "install-service":
 		// Help comes BEFORE the answer: this sub-verb's answer is the systemd unit, so without this the
 		// one argument that asks what a verb is printed the unit instead - and a sweep that asked only
@@ -117,7 +113,7 @@ func HostMachineID() string {
 	return SanitizeMachineID(host)
 }
 
-func bridgeRun(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer, onceOnly bool) int {
+func bridgeRun(ctx context.Context, args []string, stdout, stderr io.Writer, onceOnly bool) int {
 	if clientcmd.HelpRequested(args) {
 		bridgeUsage(stdout)
 		return clientcmd.ExitOK
@@ -163,13 +159,13 @@ func bridgeRun(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, s
 	bridge := NewBridge(id, time.Duration(interval*float64(time.Second)), send, notify,
 		secretscan.KnownValuesFromEnv(os.Environ()), pins, state, noteTo(stderr))
 	_, _ = fmt.Fprintf(stderr, "4genteam bridge: reporting as %s\n", id)
-	return bridge.Run(ctx, rig, onceOnly || switches["once"])
+	return bridge.Run(ctx, onceOnly || switches["once"])
 }
 
 // bridgeOnce reports a single cycle. --print builds the payload and dumps it WITHOUT sending, which is
 // the instrument the parity test uses against the Python bridge: the dump carries local_record, the
 // report does not, and the difference is exactly the four-versus-five fields.
-func bridgeOnce(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func bridgeOnce(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		bridgeUsage(stdout)
 		return clientcmd.ExitOK
@@ -198,7 +194,7 @@ func bridgeOnce(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, 
 	if switches["print"] {
 		bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), nil, nil,
 			known, pins, state, noteTo(stderr))
-		payload := bridge.BuildPayload(rig)
+		payload := bridge.BuildPayload()
 		payload.LocalRecord = bridge.LocalRecord(payload.Seats)
 		encoded, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
@@ -220,7 +216,7 @@ func bridgeOnce(ctx context.Context, rig *clientcmd.Rig, args []string, stdout, 
 	}
 	bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), send, notify,
 		known, pins, state, noteTo(stderr))
-	return bridge.Run(ctx, rig, true)
+	return bridge.Run(ctx, true)
 }
 
 // bridgeInstallService prints the systemd unit. The Python unit named a Python interpreter and a
@@ -242,7 +238,7 @@ func bridgeInstallService(stdout, stderr io.Writer) int {
 		return clientcmd.ExitRemote
 	}
 	_, _ = fmt.Fprintf(stdout, `[Unit]
-Description=4genthub OpenRig status bridge
+Description=4genthub the rig orchestrator status bridge
 After=network-online.target
 
 [Service]

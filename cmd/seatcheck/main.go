@@ -14,13 +14,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/commpolicy"
 )
 
@@ -90,13 +90,13 @@ var (
 	// pinsDir returns the pinned seats directory.
 	pinsDir = defaultPins
 	// identify returns who the calling seat is.
-	identify = rigWhoami
+	identify = seatIdentity
 	// deliver sends text to the session named target and returns the exit code.
-	deliver = rigSend
+	deliver = seatDelivery
 )
 
 // installedPinsDir is the pins directory baked in at BUILD time by whoever built this binary:
-// scripts/openrig_seat_sync.py install-checker passes its --out store here with
+// the retired Python seat_sync script install-checker passes its --out store here with
 // `-ldflags -X main.installedPinsDir=<store>`. The seat cannot choose it - this command has no
 // flag and reads no environment variable at all, so what the guard reads and audits is decided
 // before it runs rather than by the process it constrains. Empty means the binary was built
@@ -105,7 +105,7 @@ var (
 var installedPinsDir = ""
 
 // defaultPins is where the pinned seat directories live: the CLIENT's own store, through the one
-// implementation that clientenv owns - the account home's .openrig/agenthub-seats, never $HOME, so the
+// implementation that clientenv owns - the account home's .config/4genthub/seats, never $HOME, so the
 // guard and the client cannot disagree about where a policy was installed. This used to be a second copy
 // of that resolution inside the same module, which is the kind of duplication that let a week-stale
 // binary pass as current.
@@ -231,8 +231,8 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 		return exitDenied
 	}
 
-	// rig send resolves only full session names (<pod>-<member>@<rig>), which the roster of
-	// rig whoami carries. The decision line above is on disk; a delivery that cannot start or
+	// A delivery addresses a full session name (<pod>-<member>@<rig>), which is what the identity document's
+	// roster carries. The decision line above is on disk; a delivery that cannot start or
 	// fails is recorded after it.
 	code := deliverTo(who, recipient, session, strings.Join(words, " "), stdout, stderr)
 	record.Outcome = commpolicy.OutcomeDelivered
@@ -322,7 +322,7 @@ func deliverTo(who identity, to, session, text string, stdout, stderr io.Writer)
 		}
 	}
 	if code := deliver(session, text, stdout, stderr); code != 0 {
-		fmt.Fprintf(stderr, "seatcheck send: delivery failed (rig send exit %d)\n", code)
+		fmt.Fprintf(stderr, "seatcheck send: delivery failed (exit %d)\n", code)
 		return code
 	}
 	return 0
@@ -341,38 +341,31 @@ type identity struct {
 	Peers       map[string][]string
 }
 
-// rigWhoami reads the calling seat's identity from `rig whoami --json`.
-func rigWhoami() (identity, error) {
-	out, err := exec.Command("rig", "whoami", "--json").Output()
+// seatIdentity reads the calling seat's identity from the CLIENT's own resolver — the runtime socket first,
+// the seat's own environment last. The environment rung is what makes this guard answer when no runtime is
+// up: a seat states AGENTHUB_ROOM/AGENTHUB_SEAT, and that needs no process to be running.
+func seatIdentity() (identity, error) {
+	resolved, err := clientruntime.ResolveIdentity("")
 	if err != nil {
-		return identity{}, fmt.Errorf("rig whoami: %w", err)
+		return identity{}, err
 	}
-	return parseWhoami(out)
+	return identityFromDocument(&resolved)
 }
 
-func parseWhoami(data []byte) (identity, error) {
-	var who struct {
-		Identity struct {
-			RigName  string `json:"rigName"`
-			MemberID string `json:"memberId"`
-		} `json:"identity"`
-		Peers []struct {
-			LogicalID   string `json:"logicalId"`
-			SessionName string `json:"sessionName"`
-		} `json:"peers"`
-	}
-	if err := json.Unmarshal(data, &who); err != nil {
-		return identity{}, fmt.Errorf("parse rig whoami: %w", err)
-	}
-	rig, member := who.Identity.RigName, who.Identity.MemberID
+// identityFromDocument maps the client's identity document to the guard's own view of it: the rig, this
+// seat's member name, and the rig's other members keyed by member name, each carrying the full session names a
+// delivery needs. A logical id is `<pod>.<member>` and the pod is NOT always the rig name, so the member is
+// the part after the FIRST dot. This is the mapping that used to run over the JSON `rig whoami` printed, now
+// applied to the value the resolver returns — the document is the client's, the roster rule is still the
+// guard's.
+func identityFromDocument(who *clientruntime.WhoamiResponse) (identity, error) {
+	rig, member := who.Identity.RigName, who.Identity.MemberId
 	if rig == "" || member == "" {
-		return identity{}, errors.New("rig whoami returned no rig or member")
+		return identity{}, errors.New("the identity document named no rig or member")
 	}
-	// A logical id is <pod>.<member>; the member is the part after the first dot (the pod is
-	// not always the rig name).
 	peers := make(map[string][]string, len(who.Peers))
 	for _, p := range who.Peers {
-		_, name, ok := strings.Cut(p.LogicalID, ".")
+		_, name, ok := strings.Cut(p.LogicalId, ".")
 		if !ok || name == "" || p.SessionName == "" {
 			continue
 		}
@@ -410,23 +403,16 @@ func appendAudit(path string, record commpolicy.AuditRecord) (err error) {
 	return f.Sync()
 }
 
-// rigSend delivers text to the session target with `rig send`. The `--` ends option parsing,
-// so a message such as "--rig=x" is text, never an option that widens the recipients, and
-// stdin is detached so rig cannot read the text from the seat's input. Its exit code is
-// returned unchanged; runSend maps any failure to its own code.
-func rigSend(target, text string, stdout, stderr io.Writer) int {
-	cmd := exec.Command("rig", "send", "--", target, text)
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode()
-		}
-		fmt.Fprintf(stderr, "seatcheck send: deliver: %v\n", err)
-		return 1
-	}
-	return 0
+// seatDelivery delivers text to the session target through the CLIENT's own one-session delivery
+// (clientruntime.DeliverToSession), over the runtime socket.
+//
+// The exec is DELETED rather than repointed, and so is its second failure shape. `rig send -- TARGET TEXT`
+// existed because the rig CLI was the only party that could reach a session; after this client's rename
+// `~/.local/bin/rig` is a symlink to THIS client, so the fallback had become a self-call whose exit code said
+// only that a shell had failed. What the caller has to learn is one thing — delivered or not — so every
+// non-zero the delivery can answer is mapped to exitDeliveryFailed by runSend.
+func seatDelivery(target, text string, stdout, stderr io.Writer) int {
+	return clientruntime.DeliverToSession(target, text, stdout, stderr)
 }
 
 // auditScanUsage is what `seatcheck audit-scan` prints, on the same rule as sendUsage.

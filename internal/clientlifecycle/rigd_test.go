@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -349,17 +350,23 @@ func TestUpRefusesWhenACredentialIsMissingWithoutPrintingItsValue(t *testing.T) 
 	t.Setenv("AGENTHUB_TOKEN", "super-secret-token-value")
 
 	var ran []string
-	ensureDaemon = func(*clientcmd.Rig, io.Writer) error { ran = append(ran, "ensureDaemon"); return nil }
-	ensureRig = func(*clientcmd.Rig, string, io.Writer) { ran = append(ran, "ensureRig") }
+	ensureDaemon = func(string, io.Writer) (string, error) {
+		ran = append(ran, "ensureDaemon")
+		return "/tmp/daemon.log", nil
+	}
+	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		ran = append(ran, "ensureRig")
+		return clientcmd.ExitOK
+	}
 	ensureForcecompact = func(io.Writer) { ran = append(ran, "ensureForcecompact") }
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
-	openUI = func(*clientcmd.Rig, io.Writer) { ran = append(ran, "ui") }
+	openUI = func(io.Writer) { ran = append(ran, "ui") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"demo"}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"demo", "--team", writeRoomDefinition(t, "demo")}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("up returned %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}
@@ -384,8 +391,14 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
 
 	var ran []string
-	ensureDaemon = func(*clientcmd.Rig, io.Writer) error { ran = append(ran, "ensureDaemon"); return nil }
-	ensureRig = func(*clientcmd.Rig, string, io.Writer) { ran = append(ran, "ensureRig") }
+	ensureDaemon = func(string, io.Writer) (string, error) {
+		ran = append(ran, "ensureDaemon")
+		return "/tmp/daemon.log", nil
+	}
+	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		ran = append(ran, "ensureRig")
+		return clientcmd.ExitOK
+	}
 	ensureForcecompact = func(io.Writer) {}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
@@ -397,11 +410,11 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 		}, false
 	}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
-	openUI = func(*clientcmd.Rig, io.Writer) { ran = append(ran, "ui") }
+	openUI = func(io.Writer) { ran = append(ran, "ui") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"demo"}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"demo", "--team", writeRoomDefinition(t, "demo")}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("up returned %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}

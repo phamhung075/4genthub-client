@@ -64,12 +64,11 @@ func TestLimitRefusesATypoAndNamesIt(t *testing.T) {
 
 // A machine with no resolvable home REFUSES the state root instead of answering a path relative to the
 // working directory: a relative root would make the state tree a function of where the client was run
-// from, which is the dependency the mission forbids. The refusal names BOTH escapes.
+// from, which is the dependency the mission forbids. The refusal names the flag.
 func TestAnUnresolvableHomeRefusesTheStateRoot(t *testing.T) {
 	restore := realHome
 	realHome = func() (string, error) { return "", errors.New("no home") }
 	defer func() { realHome = restore }()
-	t.Setenv(StateRootEnv, "")
 
 	if root := DefaultStateRoot(); root != "" {
 		t.Errorf("DefaultStateRoot = %q, want empty: a relative path is never returned", root)
@@ -81,37 +80,32 @@ func TestAnUnresolvableHomeRefusesTheStateRoot(t *testing.T) {
 	if code := clientcmd.CodeOf(err, clientcmd.ExitRemote); code != clientcmd.ExitUsage {
 		t.Errorf("the refusal exits %d, want %d", code, clientcmd.ExitUsage)
 	}
-	for _, want := range []string{"--state-root", StateRootEnv} {
+	for _, want := range []string{"--state-root"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not name %s: %v", want, err)
 		}
 	}
 }
 
-// The flag and the variable are checked BEFORE the machine's own default, so a named root is used even
-// where the home cannot be resolved.
-func TestTheStateRootPrefersTheFlagThenTheEnvironment(t *testing.T) {
+// The flag is checked BEFORE the machine's own default, so a named root is used even where the home
+// cannot be resolved.
+func TestTheStateRootPrefersTheFlag(t *testing.T) {
 	restore := realHome
 	realHome = func() (string, error) { return "", errors.New("no home") }
 	defer func() { realHome = restore }()
-	t.Setenv(StateRootEnv, "/from/environment")
 
 	if root, err := ResolveStateRoot("/from/flag"); err != nil || root != "/from/flag" {
 		t.Errorf("with the flag set: %q, %v; want /from/flag", root, err)
 	}
-	if root, err := ResolveStateRoot(""); err != nil || root != "/from/environment" {
-		t.Errorf("with only the variable set: %q, %v; want /from/environment", root, err)
-	}
 }
 
-// The machine default is still the third clause, and it is the real home's tree - never a relative path.
+// The machine default is the second clause, and it is the real home's tree - never a relative path.
 func TestAResolvableHomeGivesTheMachineDefault(t *testing.T) {
 	restore := realHome
 	realHome = func() (string, error) { return "/home/someone", nil }
 	defer func() { realHome = restore }()
-	t.Setenv(StateRootEnv, "")
 
-	if root, err := ResolveStateRoot(""); err != nil || root != "/home/someone/.openrig/state/omp" {
+	if root, err := ResolveStateRoot(""); err != nil || root != "/home/someone/.config/4genthub" {
 		t.Errorf("ResolveStateRoot = %q, %v; want the machine default", root, err)
 	}
 }
@@ -141,7 +135,7 @@ func TestAResolvableHomeGivesTheSeatStore(t *testing.T) {
 	realHome = func() (string, error) { return "/home/someone", nil }
 	defer func() { realHome = restore }()
 
-	if store, err := ResolveSeatStore(""); err != nil || store != "/home/someone/.openrig/agenthub-seats" {
+	if store, err := ResolveSeatStore(""); err != nil || store != "/home/someone/.config/4genthub/seats" {
 		t.Errorf("ResolveSeatStore = %q, %v; want the machine default", store, err)
 	}
 }

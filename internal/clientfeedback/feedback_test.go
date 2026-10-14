@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,10 +16,9 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-// runFeedback drives the verb the dispatcher drives: rig is nil because NeedsRig is false, which is
-// also the path a test that wants the REAL lazy resolution takes.
+// runFeedback drives the verb the dispatcher drives: no rig is involved.
 func runFeedback(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	return feedbackCommand{}.Run(ctx, nil, args, stdout, stderr)
+	return feedbackCommand{}.Run(ctx, args, stdout, stderr)
 }
 
 // feedbackServer is a routed stand-in for the server: it records the one request it is asked to
@@ -86,23 +84,25 @@ func feedbackEnv(t *testing.T, serverURL, token string) {
 	t.Setenv("AGENTHUB_TOKEN", token)
 }
 
-// stubRig writes a `rig` that answers `whoami --json` with identity and nothing else, and returns its
-// path. It is a script on disk rather than a substituted function so the verb's REAL resolution path
-// (clientcmd.RequireRig -> exec.LookPath) runs.
-func stubRig(t *testing.T, whoamiJSON string) string {
+// nativeChain isolates the identity chain from the machine the tests run on: no runtime socket answers, no
+// rig daemon is named, and no seat is stated. A test that wants an identity must then state one with
+// seatEnv, and a test that wants the refusal gets it on every machine - the isolation the deleted rig stub
+// used to give the PATH.
+func nativeChain(t *testing.T) {
 	t.Helper()
-	dir := t.TempDir()
-	script := "#!/bin/sh\nif [ \"$1\" = \"whoami\" ]; then printf '%s' '" + whoamiJSON + "'; exit 0; fi\nexit 1\n"
-	path := filepath.Join(dir, "rig")
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	t.Setenv("AGENTHUB_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
+	t.Setenv("RIGGED_SESSION_NAME", "")
+	t.Setenv("AGENTHUB_SESSION_NAME", "")
+	t.Setenv("AGENTHUB_ROOM", "")
+	t.Setenv("AGENTHUB_SEAT", "")
 }
 
-func withRigOnPath(t *testing.T, rig string) {
+// seatEnv states this shell's seat the way a native seat states it: the two halves by name. The chain
+// renders that pair to SeatSessionName, which is the session name a test can therefore assert.
+func seatEnv(t *testing.T, room, seat string) {
 	t.Helper()
-	t.Setenv("PATH", filepath.Dir(rig)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("AGENTHUB_ROOM", room)
+	t.Setenv("AGENTHUB_SEAT", seat)
 }
 
 // The ported Python door test: help is help, and it names the verb.
@@ -268,12 +268,14 @@ func TestFeedbackURLDefaultAndOverride(t *testing.T) {
 	}
 }
 
-// Identity defaults come from `rig whoami --json`, and a flag that IS given wins over the rig's own
-// reading for that field only.
-func TestFeedbackIdentityDefaultsComeFromRig(t *testing.T) {
+// Identity defaults come from the client's own identity chain - here its last link, this shell's seat
+// environment - and a flag that IS given wins over that reading for that field only. This is the test that
+// replaced the exec of `rig whoami --json`.
+func TestFeedbackIdentityDefaultsComeFromTheSeatEnvironment(t *testing.T) {
 	server := newFeedbackServer(t)
 	feedbackEnv(t, server.URL, "tok")
-	withRigOnPath(t, stubRig(t, `{"identity":{"rigName":"dev","memberId":"alpha","sessionName":"dev-alpha@dev"}}`))
+	nativeChain(t)
+	seatEnv(t, "dev", "alpha")
 
 	var stdout, stderr bytes.Buffer
 	code := runFeedback(context.Background(), []string{"--layer", "runtime", "--text", "t", "--seat", "beta"}, &stdout, &stderr)
@@ -281,7 +283,7 @@ func TestFeedbackIdentityDefaultsComeFromRig(t *testing.T) {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr.String())
 	}
 	_, _, _, _, body := server.seen()
-	want := map[string]any{"room": "dev", "seat": "beta", "session": "dev-alpha@dev"}
+	want := map[string]any{"room": "dev", "seat": "beta", "session": "agenthub--dev--alpha"}
 	for key, value := range want {
 		if body[key] != value {
 			t.Errorf("body[%q] = %v, want %v (body %v)", key, body[key], value, body)
@@ -289,29 +291,12 @@ func TestFeedbackIdentityDefaultsComeFromRig(t *testing.T) {
 	}
 }
 
-// The identical path with a rig the dispatcher already resolved: a nil rig is resolved lazily, a
-// handed one is used directly.
-func TestFeedbackUsesTheRigItWasHanded(t *testing.T) {
-	server := newFeedbackServer(t)
-	feedbackEnv(t, server.URL, "tok")
-	rig := stubRig(t, `{"identity":{"rigName":"dev","memberId":"alpha","sessionName":"s"}}`)
-
-	var stdout, stderr bytes.Buffer
-	code := feedbackCommand{}.Run(context.Background(), &clientcmd.Rig{Program: rig},
-		[]string{"--layer", "runtime", "--text", "t"}, &stdout, &stderr)
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr.String())
-	}
-	if _, _, _, _, body := server.seen(); body["room"] != "dev" || body["seat"] != "alpha" {
-		t.Errorf("the handed rig's identity was not used: body = %v", body)
-	}
-}
-
-// No rig at all, and an identity still missing: the script's own refusal, at usage, before any dial.
+// Nothing in the chain answers - no runtime, no daemon, no seat environment - and an identity is still
+// missing: the script's own refusal, at usage, before any dial.
 func TestFeedbackIdentityUnavailableIsUsageAndNeverDials(t *testing.T) {
 	server := newFeedbackServer(t)
 	feedbackEnv(t, server.URL, "tok")
-	t.Setenv("PATH", t.TempDir())
+	nativeChain(t)
 
 	var stdout, stderr bytes.Buffer
 	code := runFeedback(context.Background(), []string{"--layer", "runtime", "--text", "t"}, &stdout, &stderr)
@@ -419,8 +404,5 @@ func TestCommandsRegistersTheFeedbackVerb(t *testing.T) {
 	}
 	if command.Summary() == "" {
 		t.Error("Summary() is empty")
-	}
-	if command.NeedsRig() {
-		t.Error("NeedsRig() is true: the verb resolves rig lazily so a fully-specified call needs none")
 	}
 }

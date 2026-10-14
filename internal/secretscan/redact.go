@@ -1,6 +1,6 @@
 // Redaction is the second half of this package: Contains DETECTS credential-shaped text, Redact
 // REPLACES it, and both share the labelled pattern layer below so the two can never disagree about
-// what a secret looks like. It is the Go home of what scripts/openrig_scrub.py does today, which is
+// what a secret looks like. It is the Go home of what the retired Python scrub script does today, which is
 // why the labels, the marker spelling and the limits are pinned here as a CONTRACT: the Python
 // scrubber emits the same markers, and its own docstring says it mirrors the server-side scanner and
 // shares testdata/scan_cases.json.

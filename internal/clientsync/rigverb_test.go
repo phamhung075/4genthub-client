@@ -29,7 +29,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
-	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
 	"github.com/phamhung075/4genthub-client/internal/clientskills"
 )
@@ -222,9 +221,6 @@ func rigVerbTest(t *testing.T) *rigVerbFixture {
 	rigRequireChecker = func(string, io.Writer) error { return nil }
 	rigLaunchStateRoot = func(string) string { return "" }
 	rigPolicyTable = func(string) (map[string]string, bool) { return nil, false }
-	// The state root comes from the shared resolver, so the scratch tree is named the way a user names
-	// one: $OPENRIG_STATE_ROOT. That is the clause rig used to ignore.
-	t.Setenv(clientenv.StateRootEnv, f.ompRoot)
 	rigEnvSource = func() (string, error) { return f.keyFile, nil }
 	return f
 }
@@ -233,6 +229,10 @@ func (f *rigVerbFixture) run(args ...string) (int, string, string) {
 	f.t.Helper()
 	f.stdout.Reset()
 	f.stderr.Reset()
+	// The scratch tree is named the way a user names one: --state-root, unless the test names its own.
+	if !rigHasArg(args, "--state-root") {
+		args = append(args[:len(args):len(args)], "--state-root", f.ompRoot)
+	}
 	code := RunRigVerb(context.Background(), args, f.stdout, f.stderr)
 	return code, f.stdout.String(), f.stderr.String()
 }
@@ -1507,27 +1507,6 @@ func TestRigInstallsUnderTheStateRootItIsGiven(t *testing.T) {
 	}
 	if !strings.Contains(stderr, installed) {
 		t.Errorf("stderr = %q, want the install path", stderr)
-	}
-	rigNotExist(t, filepath.Join(f.ompAgentDir("main", "seat1", "room1"), ".mcp.json"))
-}
-
-// test_rig_installs_under_the_state_root_the_variable_names: $OPENRIG_STATE_ROOT is the second clause of
-// the one resolver, so a room installs under it with no flag. The old rig ignored the variable and wrote
-// the machine's tree while every refusal told the user to set exactly that variable.
-func TestRigInstallsUnderTheStateRootTheVariableNames(t *testing.T) {
-	f := rigVerbTest(t)
-	f.ompRig(true, true, false, true)
-	chosen := filepath.Join(t.TempDir(), "chosen")
-	t.Setenv(clientenv.StateRootEnv, chosen)
-
-	code, _, stderr := f.run("room1", "--out", f.out)
-
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit = %d, want 0\nstderr: %s", code, stderr)
-	}
-	installed := filepath.Join(chosen, rigSessionName("main", "seat1", "room1"), "agent", ".mcp.json")
-	if info, err := os.Stat(installed); err != nil || !info.Mode().IsRegular() {
-		t.Errorf("nothing installed under the variable's root: %v", err)
 	}
 	rigNotExist(t, filepath.Join(f.ompAgentDir("main", "seat1", "room1"), ".mcp.json"))
 }

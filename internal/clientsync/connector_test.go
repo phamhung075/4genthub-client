@@ -7,7 +7,16 @@
 package clientsync
 
 import (
+	"context"
+	"crypto/sha1"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -136,4 +145,110 @@ func TestMessageEventCarriesTheServersShape(t *testing.T) {
 func asString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// THE TRANSPORT PROOF THE GATE COULD NOT MAKE. DialConnector wrote its upgrade request in PLAINTEXT to
+// port 443, so the TLS terminator answered `400 The plain HTTP request was sent to HTTPS port` and no
+// rig ever registered a session - while the slice that built it had passed its gate, because every case
+// in this file replaced the dialConnector seam and nothing ever dialled. These two cases dial.
+//
+// The TLS case is the acceptance. Its listener demands TLS, so a plaintext client cannot reach the
+// handler at all, and the Sec-WebSocket-Accept the client validates is computed from the key it sent
+// inside the tunnel: a handshake this test accepts is a request that arrived over TLS. The plain case is
+// the control - a ws:// base URL keeps the transport it always had.
+func TestDialConnectorSpeaksTLSOverARealListener(t *testing.T) {
+	listener := newUpgradeListener(t, true)
+	pool := x509.NewCertPool()
+	pool.AddCert(listener.Certificate())
+	original := connectorTLS
+	t.Cleanup(func() { connectorTLS = original })
+	connectorTLS = func(host string) *tls.Config { return &tls.Config{ServerName: host, RootCAs: pool} }
+
+	conn, err := DialConnector(context.Background(), listener.URL, "test-token")
+	if err != nil {
+		t.Fatalf("DialConnector to a real TLS listener: %v", err)
+	}
+	defer conn.conn.Close()
+
+	request, tlsSeen := listener.arrived()
+	if request == nil {
+		t.Fatal("the upgrade handler was never reached")
+	}
+	if !tlsSeen {
+		t.Fatal("the upgrade request arrived OUTSIDE TLS: the listener saw a plain socket")
+	}
+	if !strings.EqualFold(request.Header.Get("Upgrade"), "websocket") || request.Header.Get("Sec-WebSocket-Key") == "" {
+		t.Fatalf("the handler was reached without a websocket upgrade: %v", request.Header)
+	}
+}
+
+func TestDialConnectorLeavesPlaintextAlone(t *testing.T) {
+	listener := newUpgradeListener(t, false)
+
+	conn, err := DialConnector(context.Background(), "http://"+listener.Listener.Addr().String(), "test-token")
+	if err != nil {
+		t.Fatalf("DialConnector to a plain listener: %v", err)
+	}
+	defer conn.conn.Close()
+
+	request, tlsSeen := listener.arrived()
+	if request == nil || tlsSeen {
+		t.Fatalf("a ws:// URL must stay plaintext: reached=%v tlsSeen=%v", request != nil, tlsSeen)
+	}
+}
+
+// upgradeListener answers one websocket upgrade by hand over whatever transport it was built on, and
+// records what reached the handler. Nothing here is a fake socket: the TLS case really is a
+// tls.Listener, which is the only shape a plaintext dial can fail.
+type upgradeListener struct {
+	*httptest.Server
+
+	mu      sync.Mutex
+	request *http.Request
+	tlsSeen bool
+}
+
+func newUpgradeListener(t *testing.T, withTLS bool) *upgradeListener {
+	t.Helper()
+	listener := &upgradeListener{}
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		listener.mu.Lock()
+		listener.request, listener.tlsSeen = r, r.TLS != nil
+		listener.mu.Unlock()
+
+		key := r.Header.Get("Sec-WebSocket-Key")
+		if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") || key == "" {
+			http.Error(w, "Expected WebSocket upgrade", http.StatusBadRequest)
+			return
+		}
+		conn, buf, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		// The 101 is the server's half of the handshake the client checks: the same hash of the key the
+		// client sent, with the same GUID, so the client only accepts a response to a request it sent.
+		sum := sha1.Sum([]byte(key + wsGUID))
+		accept := base64.StdEncoding.EncodeToString(sum[:])
+		fmt.Fprintf(buf, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", accept)
+		if err := buf.Flush(); err != nil {
+			t.Errorf("flush the 101: %v", err)
+		}
+		// Returning without closing the hijacked socket is what keeps it open for the client, which is
+		// what a real server does until the session ends.
+		_ = conn
+	}
+	if withTLS {
+		listener.Server = httptest.NewTLSServer(http.HandlerFunc(handler))
+	} else {
+		listener.Server = httptest.NewServer(http.HandlerFunc(handler))
+	}
+	t.Cleanup(listener.Close)
+	return listener
+}
+
+func (l *upgradeListener) arrived() (*http.Request, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.request, l.tlsSeen
 }

@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -108,6 +109,12 @@ var dialConnector = func(ctx context.Context, baseURL, token string) (ConnectorS
 	return DialConnector(ctx, baseURL, token)
 }
 
+// connectorTLS is the TLS seam for a wss:// dial: production verifies the peer against the system roots
+// and the host name it dialled, and a test replaces this to trust the certificate its own listener
+// presents. There is no insecure mode - nothing here, and nothing in production, sets
+// InsecureSkipVerify.
+var connectorTLS = func(host string) *tls.Config { return &tls.Config{ServerName: host} }
+
 // opcodes this client writes and reads. Continuations are accepted on read (a server is free to
 // fragment) but never produced on write: every frame this client sends is one small JSON object.
 const (
@@ -161,6 +168,20 @@ func DialConnector(ctx context.Context, baseURL, token string) (*connectorConn, 
 		_ = conn.SetDeadline(deadline)
 	} else {
 		_ = conn.SetDeadline(time.Now().Add(connectorTimeout))
+	}
+
+	// A wss:// base URL means the upgrade goes INSIDE TLS. Writing it onto the raw TCP socket - which is
+	// what this dial did - put plaintext on a TLS port, so every handshake ended at the terminator's own
+	// refusal (`400 The plain HTTP request was sent to HTTPS port`) instead of at the application, and no
+	// session was ever registered. The deadline above covers the handshake as well as the request, and a
+	// ws:// base URL keeps the plaintext path unchanged.
+	if u.Scheme == "wss" {
+		tlsConn := tls.Client(conn, connectorTLS(u.Hostname()))
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("cannot complete TLS with %s: %w", host, err)
+		}
+		conn = tlsConn
 	}
 
 	keyBytes := make([]byte, 16)

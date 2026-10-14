@@ -32,7 +32,7 @@ func sessionNames() []string {
 	return names
 }
 
-// rigSessions is the sessions that belong to one rig. OpenRig names a seat's session
+// rigSessions is the sessions that belong to one rig. the rig orchestrator names a seat's session
 // `<rig>-<seat>@<rig>`, and the shell matched both ends of that shape; a name that has the rig's name in
 // the middle is another rig's seat and is not counted, which is the bug a plain substring match would
 // introduce.

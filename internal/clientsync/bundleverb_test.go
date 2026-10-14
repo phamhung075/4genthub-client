@@ -1,13 +1,19 @@
 package clientsync
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
@@ -31,7 +37,7 @@ const bundleRigYAML = "version: \"0.2\"\n" +
 // rather than the environment; the Python tests monkeypatch DEFAULT_OUT for the same reason.
 func bundleStoreHome(t *testing.T) string {
 	t.Helper()
-	store := filepath.Join(t.TempDir(), ".openrig", "agenthub-seats")
+	store := filepath.Join(t.TempDir(), ".config", "4genthub", "seats")
 	original := seatStore
 	seatStore = func(string) (string, error) { return store, nil }
 	t.Cleanup(func() { seatStore = original })
@@ -80,20 +86,6 @@ func bundleWritePin(t *testing.T, store, hash string) {
 	}
 }
 
-// bundleStubRig records every argv and answers with the caller's function, so a test asserts the exact
-// command and drives the failure branches without a rig.
-func bundleStubRig(t *testing.T, respond func([]string) error) *[][]string {
-	t.Helper()
-	calls := &[][]string{}
-	original := bundleRunRig
-	bundleRunRig = func(argv []string) error {
-		*calls = append(*calls, append([]string(nil), argv...))
-		return respond(argv)
-	}
-	t.Cleanup(func() { bundleRunRig = original })
-	return calls
-}
-
 func bundleRun(t *testing.T, rigYAML, rigRoot, outDir string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
@@ -136,16 +128,10 @@ func bundleFixture(t *testing.T, policy map[string]any) (rigYAML, rigRoot, outDi
 	return rigYAML, rigRoot, outDir
 }
 
-// test_bundle_uses_pinned_hash_and_argument_list: the pinned hash is what names the file and what rides
-// in the notes, and the argv is exactly the one the Python builds.
-func TestBundleUsesPinnedHashAndArgumentList(t *testing.T) {
-	store := bundleStoreHome(t)
-	bundleWritePin(t, store, bundleHashLong)
-	scratch := t.TempDir()
-	rigYAML := filepath.Join(scratch, "rig.yaml")
-	rigRoot := filepath.Join(scratch, "rig-root")
-	outDir := filepath.Join(scratch, "bundles")
-	calls := bundleStubRig(t, func([]string) error { return nil })
+// test_bundle_uses_pinned_hash: the pinned hash names the file and rides in the notes, and the archive
+// carries the rig spec and the agent directory under a manifest that hashes each file.
+func TestBundleUsesPinnedHashAndPacksTheRigRoot(t *testing.T) {
+	rigYAML, rigRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
 
 	code, out, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
 
@@ -163,26 +149,90 @@ func TestBundleUsesPinnedHashAndArgumentList(t *testing.T) {
 	if got := strings.TrimSpace(out); got != bundlePath {
 		t.Errorf("stdout = %q, want %q", got, bundlePath)
 	}
-	want := []string{
-		"rig", "bundle", "create", rigYAML,
-		"--rig-root", rigRoot,
-		"-o", bundlePath,
-		"--name", "room1-seat1",
-		"--bundle-version", "1.0.0",
-		"--notes", "resolved_sha256=" + bundleHashLong + " source=4genteam",
+
+	files := bundleRead(t, bundlePath)
+	var manifest bundleManifest
+	if err := json.Unmarshal(files[bundleManifestName], &manifest); err != nil {
+		t.Fatalf("manifest: %v", err)
 	}
-	got := *calls
-	if len(got) != 1 || strings.Join(got[0], "\x00") != strings.Join(want, "\x00") {
-		t.Errorf("rig was called with %v, want exactly %v", got, want)
+	if manifest.Name != "room1-seat1" || manifest.Version != "1.0.0" ||
+		manifest.Notes != "resolved_sha256="+bundleHashLong+" source=4genteam" {
+		t.Errorf("manifest = %+v", manifest)
+	}
+	if string(files["rig.yaml"]) != bundleRigYAML {
+		t.Errorf("rig.yaml was not carried")
+	}
+	for _, want := range []string{"agents/seat1/agent.yaml", "agents/seat1/policy.json"} {
+		if _, ok := files[want]; !ok {
+			t.Errorf("the archive lacks %s: %v", want, manifest.Files)
+		}
+	}
+	for _, file := range manifest.Files {
+		sum := sha256.Sum256(files[file.Path])
+		if file.SHA256 != hex.EncodeToString(sum[:]) || file.Size != int64(len(files[file.Path])) {
+			t.Errorf("manifest entry %s does not match its contents", file.Path)
+		}
+	}
+}
+
+// The same inputs always make the same bytes, so a bundle's hash is a fact about its contents.
+func TestBundleIsDeterministic(t *testing.T) {
+	rigYAML, rigRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
+	read := func() []byte {
+		if code, _, errOut := bundleRun(t, rigYAML, rigRoot, outDir); code != clientcmd.ExitOK {
+			t.Fatalf("exit %d: %s", code, errOut)
+		}
+		raw, err := os.ReadFile(filepath.Join(outDir, "room1-seat1-"+bundleHashLong[:8]+".rigbundle"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	first := read()
+	if err := os.Chtimes(filepath.Join(rigRoot, "agents", "seat1", "agent.yaml"), time.Now(), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, read()) {
+		t.Error("a changed mtime changed the bundle")
+	}
+}
+
+// bundleRead unpacks an archive into a path-to-content map.
+func bundleRead(t *testing.T, path string) map[string][]byte {
+	t.Helper()
+	handle, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	gz, err := gzip.NewReader(handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := tar.NewReader(gz)
+	files := map[string][]byte{}
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			return files
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[header.Name] = content
 	}
 }
 
 // test_bundle_without_lock_exits_2: no pin at all is a usage error naming the pull that would create one.
 func TestBundleWithoutLockExitsTwo(t *testing.T) {
 	bundleStoreHome(t)
-	calls := bundleStubRig(t, func([]string) error { return nil })
+	outDir := t.TempDir()
 
-	code, out, errOut := bundleRun(t, "/nonexistent/rig.yaml", "/nonexistent/rig-root", t.TempDir())
+	code, out, errOut := bundleRun(t, "/nonexistent/rig.yaml", "/nonexistent/rig-root", outDir)
 
 	if code != clientcmd.ExitUsage {
 		t.Errorf("exit %d, want %d", code, clientcmd.ExitUsage)
@@ -193,8 +243,8 @@ func TestBundleWithoutLockExitsTwo(t *testing.T) {
 	if !strings.Contains(errOut, "no pinned snapshot") {
 		t.Errorf("stderr = %q, want it to name the missing pin", errOut)
 	}
-	if len(*calls) != 0 {
-		t.Errorf("rig was called anyway: %v", *calls)
+	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
+		t.Errorf("a bundle was written without a pin: %v", entries)
 	}
 }
 
@@ -202,7 +252,6 @@ func TestBundleWithoutLockExitsTwo(t *testing.T) {
 // and the WARNING on stderr says what the bundle does not contain.
 func TestBundleWarnsWhenTheRigRootCarriesNoPin(t *testing.T) {
 	rigYAML, rigRoot, outDir := bundleFixture(t, nil)
-	bundleStubRig(t, func([]string) error { return nil })
 
 	code, out, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
 
@@ -228,7 +277,6 @@ func TestBundleWarnsWhenTheRigRootCarriesNoPin(t *testing.T) {
 // carry one policy, and the seat that lost is named.
 func TestBundleWarnsWhenThePinBelongsToAnotherSeat(t *testing.T) {
 	rigYAML, rigRoot, outDir := bundleFixture(t, map[string]any{"Seat": "someone-else", "Links": []any{}})
-	bundleStubRig(t, func([]string) error { return nil })
 
 	code, _, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
 
@@ -246,7 +294,6 @@ func TestBundleWarnsWhenThePinBelongsToAnotherSeat(t *testing.T) {
 // test_bundle_says_nothing_when_the_pin_is_this_seats: no noise when the rig root carries this seat.
 func TestBundleSaysNothingWhenThePinIsThisSeats(t *testing.T) {
 	rigYAML, rigRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
-	bundleStubRig(t, func([]string) error { return nil })
 
 	code, out, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
 
@@ -265,30 +312,11 @@ func TestBundleSaysNothingWhenThePinIsThisSeats(t *testing.T) {
 	}
 }
 
-// A missing rig is a remote failure, not a usage error, and it names what is missing.
-func TestBundleMissingRigExitsOne(t *testing.T) {
-	rigYAML, rigRoot, outDir := bundleFixture(t, nil)
-	bundleStubRig(t, func([]string) error { return errBundleRigNotFound })
+// An unreadable rig spec is a remote failure that names what could not be read, and leaves no bundle behind.
+func TestBundleUnreadableRigSpecExitsOne(t *testing.T) {
+	_, rigRoot, outDir := bundleFixture(t, nil)
 
-	code, out, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
-
-	if code != clientcmd.ExitRemote {
-		t.Errorf("exit %d, want %d", code, clientcmd.ExitRemote)
-	}
-	if out != "" {
-		t.Errorf("stdout = %q, want nothing", out)
-	}
-	if !strings.Contains(errOut, "`rig` executable not found on PATH") {
-		t.Errorf("stderr = %q, want it to name the missing binary", errOut)
-	}
-}
-
-// A non-zero `rig bundle create` is a remote failure carrying the code it failed with.
-func TestBundleCreateFailureExitsOne(t *testing.T) {
-	rigYAML, rigRoot, outDir := bundleFixture(t, nil)
-	bundleStubRig(t, func([]string) error { return exitCodeError(7) })
-
-	code, out, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
+	code, out, errOut := bundleRun(t, filepath.Join(t.TempDir(), "missing.yaml"), rigRoot, outDir)
 
 	if code != clientcmd.ExitRemote {
 		t.Errorf("exit %d, want %d", code, clientcmd.ExitRemote)
@@ -296,7 +324,10 @@ func TestBundleCreateFailureExitsOne(t *testing.T) {
 	if out != "" {
 		t.Errorf("stdout = %q, want nothing", out)
 	}
-	if !strings.Contains(errOut, "rig bundle create failed with exit code 7") {
-		t.Errorf("stderr = %q, want the failing code", errOut)
+	if !strings.Contains(errOut, "cannot read the rig spec") {
+		t.Errorf("stderr = %q, want it to name the unreadable spec", errOut)
+	}
+	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
+		t.Errorf("a failed build left %v behind", entries)
 	}
 }

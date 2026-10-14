@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 const (
@@ -22,51 +22,50 @@ const (
 	// defaultRespawnAfterSeconds is that deadline: a just-launched seat reads EXACTLY like a dead one
 	// until its runtime hook attaches, so a single reading is not evidence of anything.
 	defaultRespawnAfterSeconds = 30.0
-	// defaultRespawnReason is the audit reason recorded on the seat.fresh_launched event.
+	// defaultRespawnReason is what `--reason` defaults to: the audit reason the LAUNCH would record on the
+	// seat.fresh_launched event. NOTHING RECORDS IT IN THIS BUILD - the launch has no native verb and this
+	// verb refuses in words rather than falling back to `rig` - so the value is still parsed and validated
+	// (a caller's command line does not change the day the runtime grows the verb) and then set aside at the
+	// one place the launch would have spent it.
 	defaultRespawnReason = "agent died outside `rig seat stop` (respawn)"
 )
 
 const respawnUsage = `usage: 4genteam sync respawn ROOM SEAT [--after-seconds SECONDS] [--reason TEXT] ` + clientoffpeak.ModeFlagUsage + `
 
 Respawn a seat whose agent died outside ` + "`rig seat stop`" + `. The seat must READ dead for
---after-seconds (default 30s) before anything is launched, because a seat that has just started reads
+--after-seconds (default 30s) before the launch leg is reached, because a seat that has just started reads
 the same way until its runtime hook attaches.
 
-A respawn LAUNCHES a fresh occupant, so the DeepSeek peak gate applies here: with ` + clientoffpeak.ModeEnv + `
+A respawn is a LAUNCH, so the DeepSeek peak gate applies here: with ` + clientoffpeak.ModeEnv + `
 on (the default) a seat whose model is deepseek/ is not launched at peak, and the refusal names when
 off-peak resumes. ` + clientoffpeak.FlagAllowPeak + ` skips the check for this run.
+
+THE LAUNCH IS NOT AVAILABLE IN THIS BUILD, SO THIS VERB CANNOT FINISH: the native runtime has no verb that
+starts one session fresh, stops it first and records an audit reason, and this verb never falls back to ` + "`rig`" + `.
+A seat that holds the dead reading is refused in words - exit 3 (` + "`ExitUnavailable`" + `), the session named,
+nothing on stdout - rather than started.
+
+RECORDED AS THE C3 FOLLOW-UP ` + "`sync respawn has no launch`" + `, so it is visible here and not only in a commit:
+the readings, the peak gate and the dead-reading wait are all intact and unchanged, and this verb completes
+the moment the runtime gains a launch verb that carries a reason. Until then ` + "`4genteam room reseat ROOM SEAT`" + `
+is the native door onto the same stop-then-start path - the room's own spec, no ` + "`--fresh`" + `, no ` + "`--reason`" + `.
 `
 
-// rigResult is one `rig` invocation for its output. A non-zero exit is NOT thrown away: `rig seat
-// launch` can start the occupant and still exit non-zero, so the caller decides on the seat's state
-// rather than on the code.
-type rigResult struct {
-	stdout string
-	stderr string
-	err    error
-}
-
-// runRigCapture is where THIS file starts `rig`, beside the package's runRig (connectorverb.go), and
-// deliberately not the same seam: the package one returns stdout only and folds a non-zero exit into
-// its error message, and that is not enough here. `rig seat launch` can start the occupant and still
-// exit non-zero, so respawn decides on the seat's own state afterwards and needs the raw stderr (its
-// last line is what an operator is shown) with the exit beside it. A var so a test drives the verb
-// without a rig.
-var runRigCapture = func(args ...string) rigResult {
-	path, err := exec.LookPath("rig")
-	if err != nil {
-		return rigResult{err: errors.New("`rig` executable not found on PATH")}
-	}
-	cmd := exec.Command(path, args...)
-	var stdout, stderr strings.Builder
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err = cmd.Run()
-	return rigResult{stdout: stdout.String(), stderr: stderr.String(), err: err}
-}
-
 // RunRespawnVerb is `sync respawn`: the deliberate primitive for a seat whose agent died outside
-// OpenRig's own stop, since OpenRig has no automatic trigger for that.
-func RunRespawnVerb(_ context.Context, args []string, stdout, stderr io.Writer) int {
+// the runtime's own stop.
+//
+// IT IS ALSO THE ONE THING THIS VERB CANNOT FINISH. Every reading and every refusal it has always made is
+// still here - the seat's own record, the peak gate, the dead reading held for --after-seconds - and the
+// LAUNCH at the end of them has no native verb to call, so that leg speaks its refusal instead of running
+// `rig` (C3 §4). The decision is unchanged; the step it decided to take is named as unavailable.
+//
+// THE DEBT IS RECORDED, NOT IMPLIED (C3 follow-up `sync respawn has no launch`): in this build the verb can
+// never complete a respawn. That is R1's own price - a launch that did not happen is never ExitOK - and it is
+// paid knowingly rather than by wiring RestartSeat into a leg that would then drop the caller's --reason,
+// which is the silent skip R1 exists to forbid. The capability returns with a runtime launch verb that takes
+// a reason; until then --reason is parsed, validated and set aside at the refusal, and the refusal names the
+// native door onto the same path.
+func RunRespawnVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {
 			_, _ = io.WriteString(stdout, respawnUsage)
@@ -74,12 +73,18 @@ func RunRespawnVerb(_ context.Context, args []string, stdout, stderr io.Writer) 
 		}
 	}
 	allowPeak, rest := clientoffpeak.ModeFromFlags(args)
-	room, seat, after, reason, err := parseRespawnArgs(rest)
+	// THE REASON IS PARSED AND THEN SET ASIDE, named here rather than hidden in a signature: the one thing
+	// that would spend it is the launch, and that leg refuses without a launch verb (see respawn below). The
+	// flag keeps needing a value - a caller's command line does not have to change the day the runtime grows
+	// the verb, and nothing about it was silently accepted as done.
+	room, seat, after, _, err := parseRespawnArgs(rest)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	return respawn(room, seat, after, reason, allowPeak, stdout, stderr)
+	// respawn takes no stdout writer: its last step can only refuse, and a refusal is spoken on stderr, so
+	// there is no longer a way for this verb to print a launch report on stdout.
+	return respawn(ctx, room, seat, after, allowPeak, stderr)
 }
 
 func parseRespawnArgs(args []string) (room, seat string, after float64, reason string, err error) {
@@ -127,7 +132,7 @@ func parseRespawnArgs(args []string) (room, seat string, after float64, reason s
 	return positionals[0], positionals[1], after, reason, nil
 }
 
-func respawn(room, seat string, after float64, reason string, allowPeak bool, stdout, stderr io.Writer) int {
+func respawn(ctx context.Context, room, seat string, after float64, allowPeak bool, stderr io.Writer) int {
 	room, err := ValidateName("room", room)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
@@ -140,18 +145,23 @@ func respawn(room, seat string, after float64, reason string, allowPeak bool, st
 	}
 	deadline := time.Now().Add(time.Duration(after * float64(time.Second)))
 	for {
-		node, err := seatNode(room, seat)
+		node, err := seatNode(ctx, room, seat)
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 			return clientcmd.ExitRemote
 		}
 		if node == nil {
-			fmt.Fprintf(stderr, "4genteam sync respawn: OpenRig lists no node %s.%s\n", room, seat)
+			fmt.Fprintf(stderr, "4genteam sync respawn: the runtime lists no seat %s.%s\n", room, seat)
 			return clientcmd.ExitUsage
 		}
-		// THE PEAK GATE, on the seat this verb is about to LAUNCH, and before the dead-reading wait: a
-		// respawn is a start, so at peak a DeepSeek seat is not launched by default, and a refusal must not
-		// make the caller wait --after-seconds first. The seat's own record carries its model.
+		// THE PEAK GATE, on the seat this verb decides about, and before the dead-reading wait: a respawn is
+		// a start, so at peak a DeepSeek seat is not started by default, and a refusal must not make the
+		// caller wait --after-seconds first. The seat's own record carries its model.
+		//
+		// IT STAYS AHEAD OF THE LAUNCH REFUSAL below even though this build cannot launch, because the
+		// decision is this verb's own and the seat's model is what it turns on: a caller who asked to respawn
+		// a DeepSeek seat gets the billing answer first, and only a seat that passes the gate reaches the
+		// step that has no verb. Both refuse; neither is swallowed.
 		proceed, message, err := clientoffpeak.Check(allowPeak, []map[string]any{node}, os.Getenv)
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
@@ -163,9 +173,9 @@ func respawn(room, seat string, after float64, reason string, allowPeak bool, st
 		}
 		if !agentIsGone(node) {
 			fmt.Fprintf(stderr,
-				"4genteam sync respawn: %s.%s is not in the dead-agent state (sessionStatus=%s, "+
-					"agentActivity=%s); refusing to respawn\n",
-				room, seat, jsonText(node["sessionStatus"]), jsonText(node["agentActivity"]))
+				"4genteam sync respawn: %s.%s is not in a dead-agent state (sessionStatus=%s); "+
+					"refusing to respawn\n",
+				room, seat, jsonText(node["sessionStatus"]))
 			return clientcmd.ExitUsage
 		}
 		if !time.Now().Before(deadline) {
@@ -173,7 +183,7 @@ func respawn(room, seat string, after float64, reason string, allowPeak bool, st
 		}
 		time.Sleep(time.Duration(respawnPollSeconds * float64(time.Second)))
 	}
-	session, err := canonicalSession(room, seat)
+	session, err := canonicalSession(ctx, room, seat)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 		return clientcmd.ExitRemote
@@ -181,127 +191,67 @@ func respawn(room, seat string, after float64, reason string, allowPeak bool, st
 	if session == "" {
 		session = room + "." + seat
 	}
-	result := runRigCapture("seat", "launch", session, "--fresh", "--stop", "--reason", reason)
-	if result.err != nil {
-		message := lastLine(result.stderr)
-		if message == "" {
-			message = lastLine(result.stdout)
-		}
-		if message == "" {
-			message = result.err.Error()
-		}
-		// The launch may have started the occupant and still exited non-zero, so the seat's state
-		// decides - an automated caller must not read a successful respawn as a failure.
-		node, err := seatNode(room, seat)
-		if err != nil {
-			node = nil
-		}
-		if agentIsGone(node) {
-			fmt.Fprintf(stderr, "4genteam sync respawn: rig seat launch reported: %s\n", message)
-			return clientcmd.ExitRemote
-		}
-		fmt.Fprintf(stderr, "respawned %s.%s; rig seat launch warned: %s\n", room, seat, message)
-		return clientcmd.ExitOK
-	}
-	if text := strings.TrimSpace(result.stdout); text != "" {
-		fmt.Fprintln(stdout, text)
-	}
-	return clientcmd.ExitOK
+	// THE LAUNCH IS REFUSED IN WORDS, NOT SUBSTITUTED (C3 §4; R1/R4). What this leg IS: `seat launch
+	// <session> --fresh --stop --reason R` - ONE SESSION, started FRESH, with the old occupant stopped first
+	// and an audit reason recorded. What the native runtime has is StartRoom (a whole room, from a spec) and
+	// RestartSeat ({room, seat} -> stop_seat, then start_seat from the room's own spec) and nothing that
+	// starts one session - and RestartSeat carries NO REASON AT ALL, so wiring it would drop the operator's
+	// reason on the floor while this verb reported a respawn: the silent skip R1 exists to forbid. The step
+	// is therefore not taken and it says so, naming the session it could not start; `rig` is not consulted
+	// anywhere on this path (R4), and the exit is non-zero so no caller reads a refusal as a respawn (R1).
+	fmt.Fprintf(stderr, "4genteam sync respawn: cannot launch %s — the native runtime has no launch verb for "+
+		"this, and `rig` is never run in its place, so this build cannot respawn the seat at all; start it "+
+		"with `4genteam room reseat %s %s` (native, from the room's spec: no --fresh, no --reason) or retry "+
+		"after the runtime gains a launch verb that carries a reason.\n", session, room, seat)
+	return clientcmd.ExitUnavailable
 }
 
-// seatNode is the `rig ps` node for room.seat, or nil when OpenRig does not list it.
-func seatNode(room, seat string) (map[string]any, error) {
-	result := runRigCapture("ps", "--json", "--nodes", "--rig", room)
-	if result.err != nil && strings.TrimSpace(result.stdout) == "" {
-		return nil, fmt.Errorf("rig ps failed: %w", result.err)
-	}
-	nodes, err := parseRigNodes(result.stdout)
+// seatNode is the ONE seat's record for room.seat, or nil when the room's records do not list it.
+//
+// The read is the client's own node read (clientruntime.SeatNode) rather than a `rig ps` exec, which is
+// what makes its three answers distinguishable here: a room that does not list the seat is nil (nothing to
+// act on), and a read that could not be made is the error - an unreadable record is NOT the answer "no
+// such seat", and `respawn` must refuse on it rather than decide for a seat it could not read.
+func seatNode(ctx context.Context, room, seat string) (map[string]any, error) {
+	node, found, err := clientruntime.SeatNode(room, seat)
 	if err != nil {
-		return nil, fmt.Errorf("rig ps returned invalid JSON: %w", err)
-	}
-	for _, node := range nodes {
-		if logicalSeat(node) == seat {
-			return node, nil
-		}
-	}
-	return nil, nil
-}
-
-// parseRigNodes reads both shapes `rig ps` has been seen to answer: a bare list, and an object whose
-// `items` is the list.
-func parseRigNodes(text string) ([]map[string]any, error) {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return nil, nil
-	}
-	var list []map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &list); err == nil {
-		return list, nil
-	}
-	var envelope struct {
-		Items []map[string]any `json:"items"`
-	}
-	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
 		return nil, err
 	}
-	return envelope.Items, nil
-}
-
-// logicalSeat is the seat part of a node's logical id: `room.seat` keeps everything after the first
-// dot, so a seat whose own name carries one is still compared whole.
-func logicalSeat(node map[string]any) string {
-	logical, _ := node["logicalId"].(string)
-	parts := strings.SplitN(logical, ".", 2)
-	if len(parts) != 2 {
-		return ""
+	if !found {
+		return nil, nil
 	}
-	return parts[1]
+	return node, nil
 }
 
-// agentIsGone is the reading a dead agent leaves: the session is up, the runtime hook is not.
+// agentIsGone is the reading a dead agent leaves: the runtime's own death states, the ones its supervisor
+// restarts a seat from. A seat that is running or stopped is not one.
 func agentIsGone(node map[string]any) bool {
 	if node == nil {
 		return true
 	}
 	status, _ := node["sessionStatus"].(string)
-	if status == "stopped" || status == "exited" {
-		return false
+	switch status {
+	case "agent_socket_closed", "agent_stdio_eof", "agent_exited":
+		return true
 	}
-	activity, _ := node["agentActivity"].(map[string]any)
-	state, _ := activity["state"].(string)
-	reason, _ := activity["reason"].(string)
-	return state == "unknown" && reason == "no_runtime_hook"
+	return false
 }
 
-// canonicalSession is the live canonical session name of a seat, or "" when OpenRig lacks it.
-func canonicalSession(room, seat string) (string, error) {
-	result := runRigCapture("ps", "--json", "--nodes", "--rig", room)
-	if result.err != nil && strings.TrimSpace(result.stdout) == "" {
-		return "", fmt.Errorf("rig ps failed: %w", result.err)
-	}
-	nodes, err := parseRigNodes(result.stdout)
+// canonicalSession is the live canonical session name of a seat, or "" when the room's records do not list
+// it. It reads through the same clientruntime.SeatNode the seat's own record comes from - the ONE seat read
+// this verb takes twice - so an unreadable record is the error it already wraps rather than an empty name
+// that the refusal below would print as a composed room.seat: an operator told to start the seat by hand
+// must be told the session that exists, not one this verb invented.
+func canonicalSession(ctx context.Context, room, seat string) (string, error) {
+	node, found, err := clientruntime.SeatNode(room, seat)
 	if err != nil {
-		return "", fmt.Errorf("rig ps returned invalid JSON: %w", err)
+		return "", err
 	}
-	for _, node := range nodes {
-		name, _ := node["canonicalSessionName"].(string)
-		named, _ := node["rigName"].(string)
-		if named == "" {
-			named = room
-		}
-		if name != "" && named == room && logicalSeat(node) == seat {
-			return name, nil
-		}
+	if !found {
+		return "", nil
 	}
-	return "", nil
-}
-
-func lastLine(text string) string {
-	lines := strings.Split(strings.TrimSpace(text), "\n")
-	if len(lines) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(lines[len(lines)-1])
+	name, _ := node["canonicalSessionName"].(string)
+	return name, nil
 }
 
 // jsonText renders a node field for the refusal, so an operator sees exactly what the reading was.

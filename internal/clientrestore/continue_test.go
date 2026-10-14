@@ -1,9 +1,13 @@
 package clientrestore
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +16,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 )
 
@@ -33,15 +38,97 @@ func plainNodes() string {
 		`"model":"anthropic/claude-sonnet-4-5","sessionStatus":"stopped"}]`
 }
 
-// world is one test's machine: a stub `rig` on the path the client resolves, a tmux read it controls, a
+// seatStatuses is the runtime's GetRoomStatus answer for one room, built from the world's node rows: the seat
+// half of the logical id, the canonical session name, the model and the state, in the keys the runtime sends.
+func seatStatuses(nodes, room string) []map[string]any {
+	var rows []map[string]any
+	_ = json.Unmarshal([]byte(nodes), &rows)
+	statuses := []map[string]any{}
+	for _, row := range rows {
+		if name, _ := row["rigName"].(string); name != room {
+			continue
+		}
+		logical, _ := row["logicalId"].(string)
+		statuses = append(statuses, map[string]any{
+			"room": room, "seat": strings.TrimPrefix(logical, room+"."), "session_name": row["canonicalSessionName"],
+			"runtime": "omp", "model": row["model"], "state": row["sessionStatus"],
+		})
+	}
+	return statuses
+}
+
+// roomsOf is the rooms the world's node rows name, in first-seen order.
+func roomsOf(nodes string) []string {
+	var rows []map[string]any
+	_ = json.Unmarshal([]byte(nodes), &rows)
+	rooms := []string{}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		if name, _ := row["rigName"].(string); name != "" && !seen[name] {
+			seen[name] = true
+			rooms = append(rooms, name)
+		}
+	}
+	return rooms
+}
+
+// serveRuntime answers the runtime socket for the world: ListAllRooms with the rooms the nodes name and
+// GetRoomStatus with that room's seats. The unix socket is the transport the reads really use, so a stub beside
+// the seam could not let this suite pass while the real read was broken. The path is a short temp dir: a unix
+// socket path is capped near 108 bytes.
+func serveRuntime(t *testing.T, answer func(action string, payload json.RawMessage) string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "crst")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s.sock")
+	listener, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen on %s: %v", sock, err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				line, err := bufio.NewReader(conn).ReadBytes('\n')
+				if err != nil {
+					return // the reachability probe: dialled and closed with no line
+				}
+				var frame struct {
+					Action  string          `json:"action"`
+					Payload json.RawMessage `json:"payload"`
+				}
+				_ = json.Unmarshal(line, &frame)
+				_, _ = io.WriteString(conn, answer(frame.Action, frame.Payload))
+			}(conn)
+		}
+	}()
+	t.Setenv("AGENTHUB_RUNTIME_SOCKET", sock)
+}
+
+// runtimeData wraps a document in the runtime's ok answer.
+func runtimeData(v any) string {
+	raw, _ := json.Marshal(map[string]any{"ok": true, "data": v})
+	return string(raw) + "\n"
+}
+
+// world is one test's machine: stubbed runtime steps, a tmux read it controls, a
 // home under the test's temp dir, and the records of what happened.
 type world struct {
 	t     *testing.T
 	home  string
-	stub  string
 	sends []string
 	walls []string
 	tmux  func() []string
+	// listFails makes the runtime refuse the room list: the read that failed.
+	listFails bool
 }
 
 // newWorld wires every seam and returns the machine. tmux answers the session names it is given - a
@@ -51,7 +138,7 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	w := &world{t: t, tmux: tmux}
 	w.home = t.TempDir()
 	for _, dir := range []string{"briefs", "logs", "state"} {
-		if err := os.MkdirAll(filepath.Join(w.home, ".openrig", dir), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(w.home, ".config", "4genthub", dir), 0o755); err != nil {
 			t.Fatalf("preparing %s: %v", dir, err)
 		}
 	}
@@ -61,18 +148,23 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	now = func() time.Time { return time.Date(2026, 10, 10, 15, 0, 0, 0, time.UTC) }
 	t.Cleanup(func() { realHome, tmuxRead, now = previousHome, previousTmux, previousNow })
 
-	// The stub IS the daemon: the client reaches rig only through Rig.Run, which resolves the tool
-	// through clientcmd.LookPath, so pointing that at a script is pointing the whole client at a fake.
-	w.stub = filepath.Join(t.TempDir(), "rig")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote(filepath.Join(w.home, "calls")) + "\n" +
-		"if [ \"$1\" = ps ]; then printf '%s' " + shellQuote(nodes) + "; fi\n" +
-		"exit 0\n"
-	if err := os.WriteFile(w.stub, []byte(script), 0o755); err != nil {
-		t.Fatalf("writing the stub rig: %v", err)
-	}
-	previousLookPath := clientcmd.LookPath
-	clientcmd.LookPath = func(string) (string, error) { return w.stub, nil }
-	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
+	// THE RUNTIME THE READS TALK TO: the room list and each room's seats, over the runtime's own socket.
+	serveRuntime(t, func(action string, payload json.RawMessage) string {
+		switch action {
+		case "ListAllRooms":
+			if w.listFails {
+				return `{"ok":false,"error":"the room table is not here"}` + "\n"
+			}
+			return runtimeData(roomsOf(nodes))
+		case "GetRoomStatus":
+			var asked struct {
+				Room string `json:"room"`
+			}
+			_ = json.Unmarshal(payload, &asked)
+			return runtimeData(seatStatuses(nodes, asked.Room))
+		}
+		return `{"ok":false,"error":"unexpected action ` + action + `"}` + "\n"
+	})
 
 	// The watch wall is skipped unless a test asks for it: herdr is not on this machine, which is the
 	// case the shell logged as a skip rather than a failure.
@@ -80,10 +172,12 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	execLookPath = func(string) (string, error) { return "", errors.New("not found") }
 	t.Cleanup(func() { execLookPath, execSelfPath, execCommand = previousLook, previousSelf, previousCommand })
 
-	// The two steps that reach past the daemon are stubbed for the whole world, and put back at its end,
+	// The two steps that reach past the runtime are stubbed for the whole world, and put back at its end,
 	// so a suite that runs after this one is never handed a stubbed restorer.
 	previousSteps := restoreSteps
 	restoreSteps = func(r *restorer) {
+		r.ensureDaemon = func(context.Context) error { w.record("daemon up"); return nil }
+		r.revive = func(_ context.Context, room string) error { w.record("up " + room + " --existing"); return nil }
 		r.send = func(_ context.Context, session, text string) error {
 			w.sends = append(w.sends, session+"\t"+text)
 			return nil
@@ -97,7 +191,17 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	return w
 }
 
-// calls is every `rig` invocation the stub recorded, in order.
+// record notes one runtime step the restorer took, in order.
+func (w *world) record(call string) {
+	handle, err := os.OpenFile(filepath.Join(w.home, "calls"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		w.t.Fatalf("recording %q: %v", call, err)
+	}
+	defer handle.Close()
+	_, _ = handle.WriteString(call + "\n")
+}
+
+// calls is every runtime step the restorer took, in order.
 func (w *world) calls() []string {
 	raw, err := os.ReadFile(filepath.Join(w.home, "calls"))
 	if err != nil {
@@ -115,7 +219,7 @@ func (w *world) calls() []string {
 // brief writes a brief file the way the owner does.
 func (w *world) brief(name, body string) string {
 	w.t.Helper()
-	path := filepath.Join(w.home, ".openrig", "briefs", name)
+	path := filepath.Join(w.home, ".config", "4genthub", "briefs", name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		w.t.Fatalf("brief dir: %v", err)
 	}
@@ -127,7 +231,7 @@ func (w *world) brief(name, body string) string {
 
 // log is what the verb wrote to its own log file - the record a reader would find after the fact.
 func (w *world) log() string {
-	raw, _ := os.ReadFile(filepath.Join(w.home, ".openrig", "logs", continueLogName))
+	raw, _ := os.ReadFile(filepath.Join(w.home, ".config", "4genthub", "logs", continueLogName))
 	return string(raw)
 }
 
@@ -140,7 +244,7 @@ func (w *world) run(args ...string) (int, string, string) {
 		args = args[1:]
 	}
 	var out, errOut bytes.Buffer
-	code := (continueCommand{}).Run(context.Background(), nil, args, &out, &errOut)
+	code := (continueCommand{}).Run(context.Background(), args, &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 
@@ -179,11 +283,43 @@ func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
 		"rig-a: briefed alpha",
 		"rig-a: briefed beta",
 		"rig-a: watch wall opened",
-		"rig-a: done — verify with: rig ps --nodes --rig rig-a",
+		"rig-a: done — verify with: 4genteam ps rig-a --nodes",
 	} {
 		if !strings.Contains(w.log(), line) {
 			t.Errorf("the log is missing %q:\n%s", line, w.log())
 		}
+	}
+}
+
+// TestAnUndeliveredBriefIsAFailedRestore: the seats are up but the brief the caller asked for did not arrive,
+// and that is not a success and must not be reported as one. The restore answers false - which is what the
+// restorer's own doc promises ("a brief the caller asked for is not there to send") - the seats that were
+// missed are named, and the verb leaves non-zero. Before this, each seat was logged as failed and the verb
+// still ended saying done, which is the shape R3 forbids: a delivery reported that never happened.
+func TestAnUndeliveredBriefIsAFailedRestore(t *testing.T) {
+	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	brief := w.brief("rig-a.txt", "Take the next board row.\n")
+
+	previousSteps := restoreSteps
+	restoreSteps = func(r *restorer) {
+		r.ensureDaemon = func(context.Context) error { w.record("daemon up"); return nil }
+		r.revive = func(_ context.Context, room string) error { w.record("up " + room + " --existing"); return nil }
+		r.send = func(context.Context, string, string) error { return errors.New("no transport answered") }
+		r.wall = func(string) (bool, string) { return true, "" }
+	}
+	t.Cleanup(func() { restoreSteps = previousSteps })
+
+	code, _, _ := w.run("continue", "rig-a", brief)
+	if code != ExitRestoreFailed {
+		t.Fatalf("exit = %d, want %d: a brief that did not arrive is not a completed restore", code, ExitRestoreFailed)
+	}
+	for _, line := range []string{"rig-a: send failed for alpha", "rig-a: brief did not reach alpha"} {
+		if !strings.Contains(w.log(), line) {
+			t.Errorf("the log is missing %q:\n%s", line, w.log())
+		}
+	}
+	if strings.Contains(w.log(), "rig-a: done") {
+		t.Errorf("an undelivered brief was reported as done:\n%s", w.log())
 	}
 }
 
@@ -349,7 +485,7 @@ func TestAnAlreadyLiveRigIsNotGated(t *testing.T) {
 	}
 }
 
-// TestTheDefaultBriefIsTheRigsOwnFile: no second argument means <home>/.openrig/briefs/<rig>.txt, which is
+// TestTheDefaultBriefIsTheRigsOwnFile: no second argument means <home>/.config/4genthub/briefs/<rig>.txt, which is
 // the path the help, the listing and this default must agree on.
 func TestTheDefaultBriefIsTheRigsOwnFile(t *testing.T) {
 	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
@@ -409,7 +545,7 @@ func TestAllReportsARigItCouldNotBringUp(t *testing.T) {
 	if !strings.Contains(w.log(), "rig-b: no seats up, aborting for this rig") {
 		t.Errorf("the log does not say rig-b could not be brought up:\n%s", w.log())
 	}
-	if !strings.Contains(w.log(), "--all: 1 of 2 rigs are not up: rig-b") {
+	if !strings.Contains(w.log(), "--all: 1 of 2 rigs did not complete: rig-b") {
 		t.Errorf("the summary does not name rig-b:\n%s", w.log())
 	}
 	if !strings.Contains(w.log(), "rig-a: already live, skipping restore") {
@@ -437,7 +573,7 @@ func TestAllCountsARefusedRig(t *testing.T) {
 	if code != ExitRestoreFailed {
 		t.Fatalf("exit = %d, want %d", code, ExitRestoreFailed)
 	}
-	if !strings.Contains(w.log(), "--all: 2 of 2 rigs are not up: rig-a, rig-b") {
+	if !strings.Contains(w.log(), "--all: 2 of 2 rigs did not complete: rig-a, rig-b") {
 		t.Errorf("the summary does not name both refused rigs:\n%s", w.log())
 	}
 	for _, call := range w.calls() {
@@ -504,6 +640,13 @@ func TestTheWallIsSkippedWithoutATerminalHost(t *testing.T) {
 // sub-verb are one verb here.
 func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 	var started []string
+	home := t.TempDir()
+	previousHome := realHome
+	realHome = func() (string, error) { return home, nil }
+	t.Cleanup(func() { realHome = previousHome })
+	if err := os.MkdirAll(clientenv.StateSubdir(home, "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	previousLook, previousSelf, previousCommand := execLookPath, execSelfPath, execCommand
 	execLookPath = func(string) (string, error) { return "/stub/herdr", nil }
 	execSelfPath = func() (string, error) { return "/stub/4genteam", nil }
@@ -522,53 +665,86 @@ func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 	}
 }
 
-// TestTheListingNeedsNoRigTool: the briefs on disk are the one thing a reader wants on a machine that has
-// no daemon, which is why this verb resolves the rig tool itself instead of asking the dispatcher to.
+// TestTheListingNeedsNoRigTool: the room lines come from the runtime and the briefs from the disk. The
+// output is pinned whole, surroundings included, so the section's shape cannot drift; the rooms are served
+// out of order, so name order and each room's one-word state (running, partial, stopped) are asserted.
 func TestTheListingNeedsNoRigTool(t *testing.T) {
-	w := newWorld(t, staticSessions(), plainNodes())
+	nodes := `[` +
+		`{"logicalId":"rig-b.one","canonicalSessionName":"rig-b-one@rig-b","rigName":"rig-b","model":"m","sessionStatus":"running"},` +
+		`{"logicalId":"rig-b.two","canonicalSessionName":"rig-b-two@rig-b","rigName":"rig-b","model":"m","sessionStatus":"stopped"},` +
+		`{"logicalId":"rig-a.dev","canonicalSessionName":"rig-a-dev@rig-a","rigName":"rig-a","model":"m","sessionStatus":"running"},` +
+		`{"logicalId":"rig-z.dev","canonicalSessionName":"rig-z-dev@rig-z","rigName":"rig-z","model":"m","sessionStatus":"stopped"}]`
+	w := newWorld(t, staticSessions(), nodes)
 	w.brief("rig-a.txt", "Text\n")
-	previousLookPath := clientcmd.LookPath
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
-	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
 
 	code, out, _ := w.run("continue")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
-	for _, want := range []string{"Rigs that can be continued:", "rig is not on PATH", "briefs on disk:", "  rig-a", continueListingUsage} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the listing is missing %q:\n%s", want, out)
-		}
+	want := "Rigs that can be continued:\n" +
+		"  rig-a  running\n" +
+		"  rig-b  partial\n" +
+		"  rig-z  stopped\n" +
+		"\n" +
+		"briefs on disk:\n" +
+		"  rig-a\n" +
+		"\n" +
+		continueListingUsage + "\n"
+	if out != want {
+		t.Errorf("the listing printed:\n%s\nwant:\n%s", out, want)
 	}
 	// The usage line is printed once: the shell's own, not continueUsage behind a "Usage: " prefix, which
 	// already carries one of its own.
 	if strings.Contains(out, "Usage: usage:") {
 		t.Errorf("the listing repeats the prefix:\n%s", out)
 	}
+	if calls := w.calls(); len(calls) != 0 {
+		t.Errorf("the listing ran rig: %v", calls)
+	}
 }
 
-// TestTheRestoreFormsRefuseWithNoRigTool: the forms that need the daemon give the same one message every
-// other verb gives, rather than a nil-pointer panic or a half-restore. `continue <rig>` needs the rig tool
-// for the restore; `--all` needs it only once there IS a brief to continue - with none, there is nothing to
-// do and nothing to refuse, which is what the shell answered too.
-func TestTheRestoreFormsRefuseWithNoRigTool(t *testing.T) {
+// TestTheListingSaysSoWhenTheRoomListCannotBeRead: the room section is a runtime read, so THAT is what can
+// fail - and it fails in its own one line while the briefs below it still print and the run still ends 0.
+func TestTheListingSaysSoWhenTheRoomListCannotBeRead(t *testing.T) {
 	w := newWorld(t, staticSessions(), plainNodes())
-	previousLookPath := clientcmd.LookPath
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
-	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
-
-	if code, _, _ := w.run("continue", "--all"); code != clientcmd.ExitOK {
-		t.Errorf("--all with no briefs: exit = %d, want 0: there is nothing to do, so nothing to refuse", code)
-	}
 	w.brief("rig-a.txt", "Text\n")
-	for _, args := range [][]string{{"continue", "rig-a", "--no-brief"}, {"continue", "--all"}} {
-		code, _, errOut := w.run(args...)
-		if code != clientcmd.ExitUnavailable {
-			t.Errorf("%v: exit = %d, want %d", args, code, clientcmd.ExitUnavailable)
+	w.listFails = true
+
+	code, out, _ := w.run("continue")
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit = %d, want 0: the briefs are still listed", code)
+	}
+	for _, want := range []string{
+		"Rigs that can be continued:",
+		"  (the room list could not be read from the runtime: ",
+		"the room table is not here",
+		"briefs on disk:",
+		"  rig-a\n",
+		continueListingUsage,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the listing is missing %q:\n%s", want, out)
 		}
-		if !strings.Contains(errOut, "rig is not on PATH") {
-			t.Errorf("%v: stderr = %q, want the platform matrix's reason", args, errOut)
-		}
+	}
+	if strings.Contains(out, "  rig-a  ") {
+		t.Errorf("a read that failed printed a room line:\n%s", out)
+	}
+}
+
+// TestTheListingSaysWhenNoRuntimeAnswers: with no runtime there is no room list to read, and that is not a
+// failure of the verb - the exit stays 0 and the briefs below print as usual. The line is printed rather than
+// the section left empty, because an empty section reads as "no rooms here".
+func TestTheListingSaysWhenNoRuntimeAnswers(t *testing.T) {
+	w := newWorld(t, staticSessions(), plainNodes())
+	w.brief("rig-a.txt", "Text\n")
+	t.Setenv("AGENTHUB_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
+
+	code, out, _ := w.run("continue")
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if !strings.Contains(out, "  (the room list could not be read from the runtime: ") || !strings.Contains(out, "  rig-a\n") {
+		t.Errorf("the listing printed:\n%s", out)
 	}
 }
 
@@ -625,5 +801,35 @@ func TestTheLogLineKeepsTheShellsShape(t *testing.T) {
 	first := strings.SplitN(w.log(), "\n", 2)[0]
 	if !strings.HasPrefix(first, "2026-10-10T15:00:00+00:00 ") {
 		t.Errorf("log line = %q, want the pinned RFC3339 stamp first", first)
+	}
+}
+
+// TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt drives the REAL delivery seam rather than the
+// stubbed one, because this is the seam whose native branch was unreachable: it looked for the Python-era
+// agenthub--<room>--<seat> session shape, which the sessions this rig actually has do not match, then
+// exec'd `rig send` and SWALLOWED its failure - so a brief for 4genthub-min-reviewer@4genthub-min was
+// reported as briefed and dropped. The seal is the pair of facts below: the delivery is refused for the
+// real session shape, and the refusal says what could not deliver it.
+func TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt(t *testing.T) {
+	home := t.TempDir()
+	previousHome := realHome
+	realHome = func() (string, error) { return home, nil }
+	t.Cleanup(func() { realHome = previousHome })
+
+	// No transport at all: no runtime socket, no seat environment.
+	for _, name := range []string{"AGENTHUB_ROOM", "AGENTHUB_SEAT", "AGENTHUB_SESSION_NAME"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("AGENTHUB_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
+
+	var out bytes.Buffer
+	r, err := newRestorer(&teeLog{out: &out})
+	if err != nil {
+		t.Fatalf("newRestorer: %v", err)
+	}
+	if err := r.send(context.Background(), "4genthub-min-reviewer@4genthub-min", "Your seat: reviewer. hello"); err == nil {
+		t.Fatal("a brief no transport delivered was reported as delivered")
+	} else if !strings.Contains(err.Error(), "no runtime is answering") {
+		t.Errorf("the refusal does not name the transport that did not answer: %v", err)
 	}
 }

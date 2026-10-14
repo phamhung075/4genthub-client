@@ -10,7 +10,7 @@ import (
 )
 
 // everyBoundary is the schedule's edge set, with the answer the SHELL gate this package replaces printed
-// for each instant. MEASURED 2026-10-10 by running ~/.openrig/bin/deepseek-offpeak.sh with OFFPEAK_UTC
+// for each instant. MEASURED 2026-10-10 by running the shell off-peak gate with OFFPEAK_UTC
 // pinned to that instant and reading its own --json line and human line; `holiday` marks the one row that
 // also had a holiday file. The port is only right if it prints the SAME BYTES, so both forms are asserted
 // verbatim rather than compared field by field: a field test would pass while the gate's output drifted.

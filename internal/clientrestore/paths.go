@@ -4,8 +4,7 @@
 //   - `continue` restores a rig from its latest snapshot and briefs its seats.
 //   - `watchdog` notices when a rig's tmux seats have vanished and runs that same restore.
 //
-// PORTED FROM ~/.openrig/bin/rig-continue.sh and ~/.openrig/bin/rig-watchdog.sh, which stay where they
-// are and which remain the owner's own copies. The shell pair had the watchdog invoke the continue SCRIPT
+// PORTED FROM the rig-continue.sh and rig-watchdog.sh shell pair. The shell pair had the watchdog invoke the continue SCRIPT
 // as a subprocess; here it calls the same function, so "the watchdog restores it" and "a resume restores
 // it" can never drift apart.
 //
@@ -24,30 +23,29 @@ package clientrestore
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// openRigDir is the ONE place the shell's three directories are derived, under the REAL home
-// (clientenv.RealHome): OpenRig launches a seat with HOME pointed at the seat's own state directory, so
+// stateSubdir is the ONE place the three directories are derived, under the REAL home
+// (clientenv.RealHome): a seat is launched with HOME pointed at the seat's own state directory, so
 // resolving these from $HOME would make a machine-level path depend on which seat happens to run the
-// client. The client cannot import main, and clientenv is where that rule already lives.
-func openRigDir(name string) (string, error) {
+// client.
+func stateSubdir(name string) (string, error) {
 	home, err := realHome()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".openrig", name), nil
+	return clientenv.StateSubdir(home, name), nil
 }
 
-// briefDir, logDir and stateDir are the shell's ~/.openrig/{briefs,logs,state}. They are functions
+// briefDir, logDir and stateDir are ~/.config/4genthub/{briefs,logs,state}. They are functions
 // rather than package variables because the home can fail to resolve, and a relative path here would
 // make the briefs a function of the working directory.
-func briefDir() (string, error) { return openRigDir("briefs") }
-func logDir() (string, error)   { return openRigDir("logs") }
-func stateDir() (string, error) { return openRigDir("state") }
+func briefDir() (string, error) { return stateSubdir("briefs") }
+func logDir() (string, error)   { return stateSubdir("logs") }
+func stateDir() (string, error) { return stateSubdir("state") }
 
 // The seams this package's tests replace - package-level variables rather than an interface added for
 // testing, which is the repo's rule.

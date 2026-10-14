@@ -403,8 +403,8 @@ func setInventoryGeneratedFrom(t *testing.T, libraryRoot, revision string) {
 	if err := json.Unmarshal(raw, &inventory); err != nil {
 		t.Fatalf("decode inventory: %v", err)
 	}
-	inventory["generated_from"] = "/fixture/openrig @ HEAD " + revision +
-		", re-verified 2026-10-10 (skills/_canonical + packages/daemon/assets/plugins/openrig-core/skills)"
+	inventory["generated_from"] = "/fixture/library @ HEAD " + revision +
+		", re-verified 2026-10-10 (skills/_canonical + packages/daemon/assets/plugins/core/skills)"
 	encoded, err := json.Marshal(inventory)
 	if err != nil {
 		t.Fatalf("encode inventory: %v", err)

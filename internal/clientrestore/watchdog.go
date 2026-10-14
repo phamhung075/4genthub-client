@@ -15,6 +15,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -24,7 +25,7 @@ import (
 // here rather than borrowed, the same rule ExitRestoreFailed and ExitStartFailed follow.
 const exitDead = 2
 
-// watchdogServerIDName is the shell's `$HOME/.openrig/state/rig-watchdog.server-id`: the tmux server's
+// watchdogServerIDName is the shell's `~/.config/4genthub/state/rig-watchdog.server-id`: the tmux server's
 // pid + start time, so a changed server leaves a timestamped transition in the log instead of being
 // inferred after the fact. A reused pid cannot masquerade as the same server because start_time differs.
 const watchdogServerIDName = "rig-watchdog.server-id"
@@ -66,10 +67,25 @@ var (
 		}
 		return "none"
 	}
-	// watchdogNodesJSON is the ONE rig read in this verb: the documented JSON the shell piped through
-	// python3 (`rig ps --nodes --rig RIG --json`). It is a seam so a test counts seats with no rig.
-	watchdogNodesJSON = func(rig *clientcmd.Rig, rigName string) (string, error) {
-		return rig.Run(context.Background(), "ps", "--nodes", "--rig", rigName, "--json")
+	// watchdogNodesJSON is the ONE node read in this verb: a room's node records in the CLI's own JSON keys,
+	// read over the runtime socket (clientruntime.RoomNodes) instead of by exec-ing `rig ps --nodes --rig RIG --json`.
+	// It is a seam so a test counts seats with no runtime. A read that FAILED comes back as an error rather than as an
+	// empty table: the caller counts zero either way, but only one of those is a fact about the room.
+	watchdogNodesJSON = func(rigName string) (string, error) {
+		nodes, ok, err := clientruntime.RoomNodes(rigName)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			// NO RECORDS: this shell knows no such room, so there are no seats to expect. It is counted as
+			// zero rows rather than as an error, because "no room here" is not "the read failed".
+			nodes = []map[string]any{}
+		}
+		raw, err := json.Marshal(nodes)
+		if err != nil {
+			return "", err
+		}
+		return string(raw), nil
 	}
 	// watchSleep is the loop's `sleep "$interval"`, a seam so a test drives polls instead of waiting.
 	watchSleep = time.Sleep
@@ -87,13 +103,7 @@ func (watchdogCommand) Summary() string {
 	return "when a rig's seats vanish, put it back with the same restore continue uses"
 }
 
-// NeedsRig is false and the verb resolves the rig tool itself, because TWO of its forms do not need it:
-// --self-test exercises the decision rule on fixtures, and the usage listing prints the briefs on disk -
-// and a machine that has no rig tool is exactly where a reader wants to know which rigs have briefs. The
-// forms that read the daemon refuse through the same one-message matrix every other verb uses.
-func (watchdogCommand) NeedsRig() bool { return false }
-
-func (watchdogCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (watchdogCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, watchdogUsage,
 			"Watches a rig's tmux sessions - the ground truth for \"is it up\"; the daemon's cached node\n"+
@@ -150,13 +160,17 @@ func liveSeats(rigName string) int {
 	return len(rigSessions(rigName, sessionNames()))
 }
 
-// expectedSeats is the shell's expected_seats(): the rig's running seats as the daemon reports them. The
-// shell piped the JSON through python3; the parsing half is countRunningSeats and this half just runs the
-// command. The command's own exit status is deliberately ignored, exactly as the shell's pipe left it: a
-// `rig ps` that printed rows and then failed still had those rows counted.
-func expectedSeats(rig *clientcmd.Rig, rigName string) int {
-	out, _ := watchdogNodesJSON(rig, rigName)
-	return countRunningSeats(out)
+// expectedSeats is the shell's expected_seats(): the rig's running seats as the client's own reading reports
+// them. The shell piped JSON through python3 and could not tell a read that FAILED from a room with no seats;
+// the client can, so the error travels to the caller instead of being counted as zero. A zero from a failed
+// read is not a reading of the room - it is the sentence "the daemon expects no running seats" said about a
+// room nobody read, which is the one sentence the caller must not print.
+func expectedSeats(rigName string) (int, error) {
+	out, err := watchdogNodesJSON(rigName)
+	if err != nil {
+		return 0, err
+	}
+	return countRunningSeats(out), nil
 }
 
 // countRunningSeats is the shell's one-liner python: rows whose lifecycleState is "running". Unreadable or
@@ -213,7 +227,6 @@ func noteServerIdentity(log *teeLog) {
 // watcher is one rig's report-and-watch: the shell's check_rig() and watch_rig() with the seam fields a
 // test needs. Its action IS the restorer's, bound here so the two verbs restore identically.
 type watcher struct {
-	rig       *clientcmd.Rig
 	log       *teeLog
 	allowPeak bool
 	stderr    io.Writer
@@ -225,13 +238,12 @@ type watcher struct {
 }
 
 // newWatcher binds the restorer whose work this watcher drives.
-func newWatcher(rig *clientcmd.Rig, restore *restorer, log *teeLog, allowPeak bool, stderr io.Writer) *watcher {
+func newWatcher(restore *restorer, log *teeLog, allowPeak bool, stderr io.Writer) *watcher {
 	path := ""
 	if dir, err := logDir(); err == nil {
 		path = filepath.Join(dir, watchdogLogName)
 	}
 	return &watcher{
-		rig:       rig,
 		log:       log,
 		allowPeak: allowPeak,
 		stderr:    stderr,
@@ -246,7 +258,14 @@ func newWatcher(rig *clientcmd.Rig, restore *restorer, log *teeLog, allowPeak bo
 // (action == "restore") and only then.
 func (w *watcher) check(rigName, action string) int {
 	noteServerIdentity(w.log)
-	exp := expectedSeats(w.rig, rigName)
+	exp, err := expectedSeats(rigName)
+	if err != nil {
+		// No verdict from a reading that failed. Both of the sentences below are facts about the room - "no
+		// running seats" and "DEAD" - and this pass has no fact about the room to state, so it says so and
+		// touches nothing: inaction, which is what counting the failed read as zero produced as well.
+		w.log.printf("%s: the room's node records could not be read; no action (%v)", rigName, err)
+		return clientcmd.ExitOK
+	}
 	live := liveSeats(rigName)
 	switch verdict(exp, live) {
 	case verdictStopped:
@@ -287,25 +306,31 @@ func (w *watcher) watch(rigName string, interval time.Duration, beat int) {
 	misses, polls := 0, 0
 	for watchPollLimit == 0 || polls < watchPollLimit {
 		noteServerIdentity(w.log)
-		exp := expectedSeats(w.rig, rigName)
-		live := liveSeats(rigName)
-		if verdict(exp, live) == verdictDead {
-			misses++
-			w.log.printf("%s: MISS %d/2 (daemon expects %d, tmux has 0)", rigName, misses, exp)
-			if misses >= 2 {
-				w.check(rigName, "restore")
+		exp, err := expectedSeats(rigName)
+		if err != nil {
+			// A reading that FAILED is not a MISS. This counter is for seats that vanished, and treating the
+			// unreadable as zero would count a room nobody read as gone - twice - and then restore it.
+			w.log.printf("%s: the room's node records could not be read; not counted as a miss (%v)", rigName, err)
+		} else {
+			live := liveSeats(rigName)
+			if verdict(exp, live) == verdictDead {
+				misses++
+				w.log.printf("%s: MISS %d/2 (daemon expects %d, tmux has 0)", rigName, misses, exp)
+				if misses >= 2 {
+					w.check(rigName, "restore")
+					misses = 0
+				}
+			} else {
+				if misses > 0 {
+					w.log.printf("%s: live again before acting (live=%d); counter reset", rigName, live)
+				}
 				misses = 0
 			}
-		} else {
-			if misses > 0 {
-				w.log.printf("%s: live again before acting (live=%d); counter reset", rigName, live)
+			if beat > 0 && polls%beat == 0 {
+				w.log.printf("%s: heartbeat — alive, daemon expects %d, tmux has %d, no misses", rigName, exp, live)
 			}
-			misses = 0
 		}
 		polls++
-		if beat > 0 && polls%beat == 0 {
-			w.log.printf("%s: heartbeat — alive, daemon expects %d, tmux has %d, no misses", rigName, exp, live)
-		}
 		// Every poll beats, not only every `beat` polls: a stopped watchdog and a quiet rig must not
 		// look the same, and the operator's log line above is not a heartbeat file. A failed write is
 		// reported through the same log rather than swallowed, one line per poll that failed.
@@ -364,28 +389,22 @@ func watchdogListing(stdout, stderr io.Writer) int {
 	return clientcmd.ExitOK
 }
 
-// openWatchdog is the shared head of every daemon-reading form: the log (which also resolves the home),
-// the rig tool, and the restorer both the report and the watch will use. It is one message and
-// ExitUnavailable when the home or the rig tool is missing, the same rule the rest of this package follows.
-func openWatchdog(stdout, stderr io.Writer) (*teeLog, *clientcmd.Rig, *restorer, int) {
+// openWatchdog is the shared head of every daemon-reading form: the log (which also resolves the home)
+// and the restorer both the report and the watch will use. It is one message and
+// ExitUnavailable when the home is missing, the same rule the rest of this package follows.
+func openWatchdog(stdout, stderr io.Writer) (*teeLog, *restorer, int) {
 	log, err := openLog(watchdogLogName, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
-		return nil, nil, nil, clientcmd.ExitUnavailable
+		return nil, nil, clientcmd.ExitUnavailable
 	}
-	rig, err := clientcmd.RequireRig()
+	restore, err := newRestorer(log)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
 		log.close()
-		return nil, nil, nil, clientcmd.ExitUnavailable
+		return nil, nil, clientcmd.ExitUnavailable
 	}
-	restore, err := newRestorer(rig, log)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
-		log.close()
-		return nil, nil, nil, clientcmd.ExitUnavailable
-	}
-	return log, rig, restore, clientcmd.ExitOK
+	return log, restore, clientcmd.ExitOK
 }
 
 // watchdogCheck is the shell's --check: one report pass over every rig that has a brief, changing nothing.
@@ -401,12 +420,12 @@ func watchdogCheck(allowPeak bool, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
-	log, rig, restore, code := openWatchdog(stdout, stderr)
+	log, restore, code := openWatchdog(stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
 	defer log.close()
-	w := newWatcher(rig, restore, log, allowPeak, stderr)
+	w := newWatcher(restore, log, allowPeak, stderr)
 	dead := false
 	for _, brief := range briefsOnDisk(dir) {
 		if w.check(strings.TrimSuffix(filepath.Base(brief), ".txt"), "report") == exitDead {
@@ -441,12 +460,12 @@ func watchdogOne(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 			return clientcmd.ExitUsage
 		}
 	}
-	log, rig, restore, code := openWatchdog(stdout, stderr)
+	log, restore, code := openWatchdog(stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
 	defer log.close()
-	w := newWatcher(rig, restore, log, allowPeak, stderr)
+	w := newWatcher(restore, log, allowPeak, stderr)
 	if !watching {
 		return w.check(rigName, "report")
 	}
@@ -476,12 +495,12 @@ func watchdogAll(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
-	log, rig, restore, code := openWatchdog(stdout, stderr)
+	log, restore, code := openWatchdog(stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
 	defer log.close()
-	w := newWatcher(rig, restore, log, allowPeak, stderr)
+	w := newWatcher(restore, log, allowPeak, stderr)
 	names := make([]string, 0)
 	for _, brief := range briefsOnDisk(dir) {
 		names = append(names, strings.TrimSuffix(filepath.Base(brief), ".txt"))

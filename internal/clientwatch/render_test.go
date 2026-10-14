@@ -362,7 +362,7 @@ func workingDirKey() string {
 func (f *fakeExec) seatsFromTmux(rig string, seats []string) {
 	names := []string{}
 	for _, seat := range seats {
-		names = append(names, rig+"-"+seat+"@"+rig)
+		names = append(names, "agenthub--"+rig+"--"+seat)
 	}
 	f.on("tmux list-sessions -F #{session_name}", strings.Join(names, "\n"))
 }
@@ -421,4 +421,3 @@ func TestAgyTranscriptEventsAndTokens(t *testing.T) {
 		t.Errorf("input render mismatch: %v", renderedInput)
 	}
 }
-
