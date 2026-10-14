@@ -40,10 +40,15 @@ A respawn is a LAUNCH, so the DeepSeek peak gate applies here: with ` + clientof
 on (the default) a seat whose model is deepseek/ is not launched at peak, and the refusal names when
 off-peak resumes. ` + clientoffpeak.FlagAllowPeak + ` skips the check for this run.
 
-THE LAUNCH IS NOT AVAILABLE IN THIS BUILD: the native runtime has no verb that starts one session fresh,
-stops it first and records an audit reason, and this verb never falls back to ` + "`rig`" + `. A seat that
-holds the dead reading is refused in words (exit 1) rather than started, and the refusal names the session
-it could not launch.
+THE LAUNCH IS NOT AVAILABLE IN THIS BUILD, SO THIS VERB CANNOT FINISH: the native runtime has no verb that
+starts one session fresh, stops it first and records an audit reason, and this verb never falls back to ` + "`rig`" + `.
+A seat that holds the dead reading is refused in words - exit 3 (` + "`ExitUnavailable`" + `), the session named,
+nothing on stdout - rather than started.
+
+RECORDED AS THE C3 FOLLOW-UP ` + "`sync respawn has no launch`" + `, so it is visible here and not only in a commit:
+the readings, the peak gate and the dead-reading wait are all intact and unchanged, and this verb completes
+the moment the runtime gains a launch verb that carries a reason. Until then ` + "`4genteam room reseat ROOM SEAT`" + `
+is the native door onto the same stop-then-start path - the room's own spec, no ` + "`--fresh`" + `, no ` + "`--reason`" + `.
 `
 
 // RunRespawnVerb is `sync respawn`: the deliberate primitive for a seat whose agent died outside
@@ -53,6 +58,13 @@ it could not launch.
 // still here - the seat's own record, the peak gate, the dead reading held for --after-seconds - and the
 // LAUNCH at the end of them has no native verb to call, so that leg speaks its refusal instead of running
 // `rig` (C3 §4). The decision is unchanged; the step it decided to take is named as unavailable.
+//
+// THE DEBT IS RECORDED, NOT IMPLIED (C3 follow-up `sync respawn has no launch`): in this build the verb can
+// never complete a respawn. That is R1's own price - a launch that did not happen is never ExitOK - and it is
+// paid knowingly rather than by wiring RestartSeat into a leg that would then drop the caller's --reason,
+// which is the silent skip R1 exists to forbid. The capability returns with a runtime launch verb that takes
+// a reason; until then --reason is parsed, validated and set aside at the refusal, and the refusal names the
+// native door onto the same path.
 func RunRespawnVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {
@@ -188,9 +200,9 @@ func respawn(ctx context.Context, room, seat string, after float64, allowPeak bo
 	// is therefore not taken and it says so, naming the session it could not start; `rig` is not consulted
 	// anywhere on this path (R4), and the exit is non-zero so no caller reads a refusal as a respawn (R1).
 	fmt.Fprintf(stderr, "4genteam sync respawn: cannot launch %s — the native runtime has no launch verb for "+
-		"this, and `rig` is never run in its place; start the seat with `4genteam room reseat %s %s` (native, "+
-		"from the room's spec: no --fresh, no --reason) or retry after the runtime gains a launch verb.\n",
-		session, room, seat)
+		"this, and `rig` is never run in its place, so this build cannot respawn the seat at all; start it "+
+		"with `4genteam room reseat %s %s` (native, from the room's spec: no --fresh, no --reason) or retry "+
+		"after the runtime gains a launch verb that carries a reason.\n", session, room, seat)
 	return clientcmd.ExitUnavailable
 }
 
