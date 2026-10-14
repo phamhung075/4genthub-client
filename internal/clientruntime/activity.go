@@ -32,13 +32,14 @@ var knownActivityWords = map[string]bool{
 // WHICH FORM THIS CONSUMES, named because the alias is exactly where a gate goes silent: activity-taxonomy.js stores
 // `idle-at-prompt` and aliases it to `idle` before the human-facing surface reads it (the bridge maps stored -> served
 // at activity-taxonomy.js:48-50), so the SERVED form is `idle` and the STORED form is not the string the set is
-// written in. MEASURED on the served field tonight: `idle` arrives and `idle-at-prompt` does not - the alias is the
-// daemon's own synonym, kept here so a daemon that ever serves the stored word cannot turn a genuinely idle seat into
-// a silent refusal. Trusting that mapping to stay put would make a one-member set refuse the stored form - and that
-// refusal is SILENT: an idle seat would read exactly like a dead gate, no quiet, forever, nothing said, which is the
-// failure this row lived with for the other reason (the read supplying no word at all). So this client normalizes the
-// alias itself, deliberately, and its test asserts the alias RELEASES; a synonym left neither normalized nor
-// refused-on-purpose is how a gate never opens.
+// written in. MEASURED, BOTH HALVES, on this box tonight: the served node-table field carries `idle`/`running` and
+// never the alias, AND the stored form does travel here - the queue ledger's own liveness oracle published
+// `idle-at-prompt` for a seat at 01:41:47Z. So the normalization is load-bearing for a surface that already exists
+// rather than a defence against some future daemon version, and a one-member set that trusted the mapping to stay put
+// would refuse that stored word - and that refusal is SILENT: an idle seat would read exactly like a dead gate, no
+// quiet, forever, nothing said, which is the failure this row lived with for the other reason (the read supplying no
+// word at all). So this client normalizes the alias itself, deliberately, and its test asserts the alias RELEASES; a
+// synonym left neither normalized nor refused-on-purpose is how a gate never opens.
 func normalizeActivityWord(word string) string {
 	if word == "idle-at-prompt" {
 		return "idle"

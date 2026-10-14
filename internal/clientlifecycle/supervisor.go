@@ -381,6 +381,16 @@ func idleFromActivityWord(word string, present bool) (idle bool, why string) {
 	if !present {
 		return false, "the node table carries no agentActivity for this seat, so nothing can say whether it is idle"
 	}
+	// UNKNOWN IS NAMED, because silence here is indistinguishable from a busy seat: `unknown` is a word this client
+	// RECOGNIZES, so the branch above does not catch it, and it is the daemon's own never-evidence value - a report
+	// that cannot tell. Measured on the live rig: architect and fe-dev both answer `unknown` and both used to give an
+	// empty why, so two of five seats read exactly like a seat that is mid-turn when the truth was that the daemon
+	// could not say. The definite words stay silent on purpose: `running`/`working`/`needs_input` are ANSWERS ("not
+	// idle"), and a sentence is owed for a mystery, not for an answer.
+	if word == "unknown" {
+		return false, "the activity word for this seat is unknown, which the daemon's own taxonomy defines as not " +
+			"evidence - a report that cannot tell is not a seat that is at its prompt"
+	}
 	if word == "" {
 		return false, "the activity read answered, and the word it carried was empty"
 	}

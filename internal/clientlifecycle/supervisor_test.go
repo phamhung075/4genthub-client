@@ -183,9 +183,15 @@ func TestAWorkingSeatOfAnotherRuntimePastTheWarnLimitWaitsThenIsInterruptedAtThe
 	}
 }
 
-// THE PURE HALF: what the read's word means, and what a caller can SAY about it. A recognized word is a deliberate
-// answer - the seat is busy - and has no sentence; a word nobody knows, an absent field, and an empty word are the
-// three ways a gate goes silent, and each says which one it was.
+// THE PURE HALF: what the read's word means, and what a caller can SAY about it. A DEFINITE answer - `working`,
+// `needs_input`, `running` - is silent, because a sentence is owed for a mystery and not for an answer. FOUR ways a
+// gate goes silent, and each says which one it was: a word nobody knows, `unknown`, an absent field, and an answer
+// that carried no word at all.
+//
+// `unknown` was the one that slipped through unnamed, and it is worth saying why: it is a RECOGNIZED word, so the
+// unrecognized-word branch did not catch it, and it returned an empty why while the daemon's own taxonomy defines it
+// as NOT EVIDENCE - a report that cannot tell. Measured on the live rig: architect and fe-dev both answer `unknown`,
+// so two of five seats read exactly like a busy seat when the truth was that the daemon could not say.
 func TestIdleFromActivityWordNamesWhatItCouldNotRead(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -198,6 +204,7 @@ func TestIdleFromActivityWordNamesWhatItCouldNotRead(t *testing.T) {
 		{"the stored form releases too", "idle-at-prompt", true, true, ""},
 		{"a busy seat is deliberate and silent", "working", true, false, ""},
 		{"needs_input is busy too", "needs_input", true, false, ""},
+		{"unknown is the daemon saying it cannot tell", "unknown", true, false, "not evidence"},
 		{"a word nobody knows is named", "drifting", true, false, "drifting"},
 		{"no agentActivity field at all", "", false, false, "no agentActivity"},
 		{"a field that carried no word", "", true, false, "was empty"},
