@@ -99,6 +99,66 @@ func TestQueueListRefusesAnAnswerItCannotRead(t *testing.T) {
 	}
 }
 
+// AND THE SAME LIE ONE VERB DOWN. queue show / queue transitions decode a ROW, and json.Unmarshal("null", &row)
+// SUCCEEDS into the zero row, so a runtime that answered a bare ok envelope printed a line of dashes at exit 0 - an
+// impostor indistinguishable from a row whose fields are all unset - and --json printed null. The control is the row
+// that really is there: a real document still prints its own qitem id.
+func TestQueueShowRefusesAnAnswerItCannotRead(t *testing.T) {
+	t.Setenv(agentHubRoomEnv, "room-a")
+	t.Setenv(agentHubSeatEnv, "seat-1")
+
+	for _, tc := range []struct {
+		name      string
+		response  string
+		wantCode  int
+		wantOut   string
+		wantInErr string
+	}{
+		{
+			name:      "a bare ok envelope carries no row",
+			response:  `{"ok":true}` + "\n",
+			wantCode:  clientcmd.ExitRoomRefused,
+			wantInErr: "carried no data",
+		},
+		{
+			name:      "a document of the wrong shape",
+			response:  okDataResponse(`["not the object this verb reads"]`),
+			wantCode:  clientcmd.ExitRoomRefused,
+			wantInErr: "could not be read",
+		},
+		{
+			name:     "a real row is a real reading",
+			response: okDataResponse(queueTestRowJSON),
+			wantCode: clientcmd.ExitOK,
+			wantOut:  "q-item-7",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, requests := captureQueueRequest(t, tc.response)
+			t.Setenv(RuntimeSocketEnv, client.SocketPath)
+
+			var stdout, stderr bytes.Buffer
+			code := queueReadOneRuntime("show", "q-item-7", false, &stdout, &stderr)
+
+			_ = requestLine(t, requests)
+			if code != tc.wantCode {
+				t.Fatalf("exit = %d, want %d (stdout %q, stderr %q)",
+					code, tc.wantCode, stdout.String(), stderr.String())
+			}
+			if tc.wantOut != "" && !strings.Contains(stdout.String(), tc.wantOut) {
+				t.Errorf("stdout = %q, want it to contain %q", stdout.String(), tc.wantOut)
+			}
+			if tc.wantInErr != "" && !strings.Contains(stderr.String(), tc.wantInErr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tc.wantInErr)
+			}
+			// THE IMPOSTOR ITSELF: a refusal may never print a row.
+			if tc.wantCode != clientcmd.ExitOK && strings.Contains(stdout.String(), "\t") {
+				t.Fatalf("a refusal printed a row: %q", stdout.String())
+			}
+		})
+	}
+}
+
 // captureQueueRequest answers exactly one call: it accepts one connection, reads the request line the client
 // writes, hands that line to the test, and replies with the canned response (which must end in a newline).
 //

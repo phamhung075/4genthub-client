@@ -446,20 +446,20 @@ func queueReadOneRuntime(sub, qitemID string, asJSON bool, stdout, stderr io.Wri
 		fmt.Fprintf(stderr, "4genteam queue: the runtime at %s refused it: %v\n", DefaultSocketPath(), err)
 		return clientcmd.CodeOf(err, clientcmd.ExitRemote)
 	}
+	// THE ONE DECODER, for the same reason queueListRuntime takes it: json.Marshal(nil) is `null`, and
+	// json.Unmarshal("null", &row) SUCCEEDS into the zero row - so a bare ok envelope used to print a row of dashes at
+	// exit 0, an impostor indistinguishable from a row whose fields are all unset, and --json printed null. The row is
+	// read FIRST, so a document nobody can read refuses at the room contract's exit 3 rather than at this site's
+	// ExitRemote, and the runtime's own bytes are printed only once they have been read.
+	var row QueueRow
+	if err := decodeAnswer("QueueShow", resp.Data, &row); err != nil {
+		fmt.Fprintf(stderr, "4genteam queue: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitRoomRefused)
+	}
 	if asJSON {
 		_, _ = stdout.Write(runtimeJSONDocument(resp.Data))
 		_, _ = stdout.Write([]byte("\n"))
 		return clientcmd.ExitOK
-	}
-	raw, err := json.Marshal(resp.Data)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam queue: could not read the runtime's row document: %v\n", err)
-		return clientcmd.ExitRemote
-	}
-	var row QueueRow
-	if err := json.Unmarshal(raw, &row); err != nil {
-		fmt.Fprintf(stderr, "4genteam queue: could not read the runtime's row document: %v\n", err)
-		return clientcmd.ExitRemote
 	}
 	if sub == "show" {
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", orDash(row.QitemID), orDash(row.State), orDash(row.SourceSession), row.Summary)

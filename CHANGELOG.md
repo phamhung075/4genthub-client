@@ -3,6 +3,23 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — queue show and queue transitions refuse a document they cannot read
+
+### Changed
+- `internal/clientruntime/command.go` — **`queueReadOneRuntime` takes the same one decoder.** It decoded a single
+  ROW by hand, and `json.Unmarshal("null", &row)` SUCCEEDS into the zero row — so a runtime that answered a bare
+  `{"ok":true}` printed a line of dashes at exit 0: an impostor indistinguishable from a row whose fields are all
+  unset (`--json` printed `null`). The row is read through `decodeAnswer` FIRST, so a document nobody can read refuses
+  at the room contract's exit 3 instead of this site's `ExitRemote`, and the runtime's own bytes are printed only once
+  they have been read. Same class, one verb down from the `queue list` fix above; found by the reviewer's sweep at the
+  re-gate of 8cdbee4.
+
+### Verified
+- `TestQueueShowRefusesAnAnswerItCannotRead` (new): a bare ok envelope refuses with "carried no data" and a
+  wrong-shaped document refuses with "could not be read", both at exit 3, both asserted never to print a row; the
+  control — a real row document — still prints its own qitem id at exit 0.
+- `go test ./...` green, `go vet ./...` clean, `gofmt -l` empty on both files.
+
 ## 2026-10-14 — the queue verb reads through the one decoder, so a bare ok envelope cannot print a queue
 
 ### Changed
