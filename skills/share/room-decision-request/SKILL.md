@@ -105,6 +105,18 @@ When Jev AI auto-selects (confidence $\ge 0.8$) or the owner validates their cho
    ```
 4. Your blocked task row is automatically unblocked and ready to resume.
 
+## The Decision Ladder: Seat, Lead, Owner
+
+Most questions never need the owner. Ask the lowest tier that can decide, and escalate exactly one level only when it cannot.
+
+1. **Seat**: before sending anything to the lead, ask Jev. `POST /api/v2/openrig/decisions/evaluate` with `tier: "seat"`, a `category`, `summary`, `detail` and the same `questions` array as above (mark your recommended option). If the response says `decided: true`, apply `answers` and keep working. Nobody is told.
+2. **Lead**: if the response says `escalate_to: "lead"`, send the question to the lead with the `recommended` option, so the answer is one word. The lead repeats the call with `tier: "lead"`.
+3. **Owner**: if the lead's response says `escalate_to: "owner"`, create the owner request in the steps above. Ask the owner only for a very important decision.
+
+The threshold is `JEV_DECISION_THRESHOLD` (default 0.8) at every tier. Every step is appended to the decision log with its tier, category, confidence and outcome.
+
+**Category** is a free token (`a-z`, `0-9`, `_`, `-`) that names what the question is about; leave it out for `general`. Some categories reach the owner whatever Jev's confidence, because confidence measures how concentrated an answer is, not whether the action is safe. The built-in set is `credentials` and `spend`. A project adds its own with `DECISION_OWNER_ONLY_CATEGORIES` (comma-separated), for example `omp_cap,deploy-prod`. Name your question's category after the case, and never pick `general` to avoid the owner.
+
 ## Verification Checklist
 
 - [ ] Brief is self-contained with context and tradeoffs.
