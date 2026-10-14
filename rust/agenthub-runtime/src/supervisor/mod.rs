@@ -375,7 +375,7 @@ impl RoomSupervisor {
         // runtimes keep their own command until their native rpc paths exist.
         let runtime = AgentRuntime::from_str_loose(&seat.runtime);
         let cmd = match &runtime {
-            AgentRuntime::Omp => {
+            AgentRuntime::Omp | AgentRuntime::ClaudeCode => {
                 let self_exe = std::env::current_exe()
                     .map_err(|e| format!("cannot resolve this binary's path: {e}"))?;
                 format!(
@@ -386,7 +386,6 @@ impl RoomSupervisor {
                     seat.seat_key
                 )
             }
-            AgentRuntime::ClaudeCode => "claude --dangerously-skip-permissions".to_string(),
             AgentRuntime::Agy => "agy".to_string(),
             AgentRuntime::Codex => "codex".to_string(),
             AgentRuntime::Custom(c) => c.clone(),
@@ -420,16 +419,17 @@ impl RoomSupervisor {
         // (`runner::state_file_path`), which its runner publishes only after the agent answered the transport
         // handshake; the other runtimes have no runner and prove less - their signal is the session still
         // existing after a grace period, which is stated here rather than passed off as handshake proof.
-        let (signal, window) = match &runtime {
-            AgentRuntime::Omp => (
+        let (signal, window) = if runtime.has_runner() {
+            (
                 Some(crate::runner::state_file_path(
                     &self.base_state_dir,
                     room,
                     &seat.seat_key,
                 )),
                 Duration::from_secs(SEAT_READY_WINDOW_SECS),
-            ),
-            _ => (None, Duration::from_millis(NON_OMP_READY_GRACE_MS)),
+            )
+        } else {
+            (None, Duration::from_millis(NON_OMP_READY_GRACE_MS))
         };
         // Which proof this seat can give decides what the status may CLAIM. An omp seat proves itself with its
         // state file, which its runner publishes only once the agent answered the transport handshake, so RUNNING
@@ -642,10 +642,8 @@ impl RoomSupervisor {
             // status` then read `running` is the disagreement the lead measured. LIVENESS ALONE IS NOT
             // "RUNNING" where the runtime publishes a readiness document - a pane whose agent died stays alive,
             // and its own file names the death.
-            let publishes_readiness = matches!(
-                AgentRuntime::from_str_loose(&seat.runtime),
-                AgentRuntime::Omp
-            );
+            let seat_runtime = AgentRuntime::from_str_loose(&seat.runtime);
+            let publishes_readiness = seat_runtime.has_runner();
             let died = facts.published_state.as_deref().is_some_and(|s| {
                 matches!(
                     s,
@@ -670,6 +668,11 @@ impl RoomSupervisor {
             // requirement: the client's own output must show which of the two evidences produced the verdict -
             // the agent's own handshake, or a pane that outlived a grace.
             let evidence = match state {
+                SeatLifecycleState::Running if seat_runtime == AgentRuntime::ClaudeCode => Some(
+                    "the seat's own state file; claude-code announces nothing before its first turn, so this \
+                     proves the runner and the agent's pipe are up, not that the model answered"
+                        .to_string(),
+                ),
                 SeatLifecycleState::Running if publishes_readiness => Some(
                     "the seat's own state file, published after its agent answered the transport handshake"
                         .to_string(),

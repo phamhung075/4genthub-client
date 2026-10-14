@@ -54,6 +54,12 @@ impl AgentRuntime {
         }
     }
 
+    /// Whether the seat's pane runs this binary's runner, which owns the agent's channel and publishes the
+    /// seat's state file. The other runtimes run their own command in the pane and publish nothing.
+    pub fn has_runner(&self) -> bool {
+        matches!(self, AgentRuntime::Omp | AgentRuntime::ClaudeCode)
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             AgentRuntime::Omp => "omp",

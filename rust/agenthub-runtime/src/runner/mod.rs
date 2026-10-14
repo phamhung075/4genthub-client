@@ -20,6 +20,8 @@
 //!   seat's mailbox socket instead of stealing a descriptor with `pidfd_getfd`, which needed
 //!   `CAP_SYS_PTRACE` and is retired with this module.
 
+mod claude;
+
 use crate::types::{AgentRuntime, RoomSpec, SeatSpec};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -108,11 +110,47 @@ fn child_argv(runtime: &AgentRuntime, seat_dir: &Path, seat: &SeatSpec) -> Resul
             }
             Ok(argv)
         }
+        AgentRuntime::ClaudeCode => {
+            let mut argv: Vec<String> = [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--permission-mode",
+            ]
+            .map(String::from)
+            .to_vec();
+            // The same two postures as omp's: unattended, or the default mode, whose approvals a headless
+            // session cannot answer and so denies.
+            argv.push(
+                match approval_mode(seat.permission_policy.as_deref())? {
+                    "yolo" => "bypassPermissions",
+                    _ => "default",
+                }
+                .to_string(),
+            );
+            if let Some(model) = seat.model.as_deref().filter(|m| !m.trim().is_empty()) {
+                argv.push("--model".to_string());
+                argv.push(model.to_string());
+            }
+            Ok(argv)
+        }
         other => Err(format!(
-            "runner has no native rpc path for runtime '{}'; seat '{}' needs one of: omp",
+            "runner has no native rpc path for runtime '{}'; seat '{}' needs one of: omp, claude-code",
             other.as_str(),
             seat.seat_key
         )),
+    }
+}
+
+/// The executable a runtime is launched as: the seat's runtime name is not always the program's.
+fn child_program(runtime: &AgentRuntime, seat: &SeatSpec) -> String {
+    match runtime {
+        AgentRuntime::ClaudeCode => "claude".to_string(),
+        _ => seat.runtime.clone(),
     }
 }
 
@@ -165,7 +203,8 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
 
     // The supervisor already put AGENTHUB_* and PI_CODING_AGENT_DIR into this process's environment when
     // it launched the pane, so the child inherits the seat's identity rather than a second copy of it.
-    let mut launch = Command::new(&seat.runtime);
+    let program = child_program(&runtime, &seat);
+    let mut launch = Command::new(&program);
     launch
         .args(&argv)
         .current_dir(&cwd)
@@ -177,12 +216,12 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     crate::scrub_env(&mut launch);
     let mut child = launch
         .spawn()
-        .map_err(|e| format!("cannot spawn '{}': {e}", seat.runtime))?;
+        .map_err(|e| format!("cannot spawn '{program}': {e}"))?;
     info!(
         "runner for {}/{} spawned {} {:?} (pid {:?})",
         target.room,
         target.seat,
-        seat.runtime,
+        program,
         argv,
         child.id()
     );
@@ -199,10 +238,33 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     // One writer owns the child's stdin; everything else posts frames to it over this channel.
     let (to_child, from_threads) = mpsc::channel::<String>();
     let writer_state_path = state_file_path(state_dir, &target.room, &target.seat);
+    // The agent's dialect. omp is the runner's own protocol and passes through; Claude Code is translated
+    // both ways (`claude.rs`), and `reader_tx` carries the frames only the translator can answer with.
+    let bridge: Option<Arc<claude::Bridge>> =
+        matches!(runtime, AgentRuntime::ClaudeCode).then(|| Arc::new(claude::Bridge::default()));
+    let (reader_tx, reader_rx) = mpsc::channel::<String>();
+    let writer_bridge = bridge.clone();
+    let writer_reader_tx = reader_tx.clone();
     let writer = thread::spawn(move || {
         let mut stdin = child_stdin;
         let state_path = writer_state_path;
         for frame in from_threads {
+            let frame = match &writer_bridge {
+                None => frame,
+                Some(bridge) => {
+                    let outbound = match serde_json::from_str::<serde_json::Value>(frame.trim()) {
+                        Ok(value) => bridge.from_runner(&value),
+                        Err(_) => continue,
+                    };
+                    for reply in outbound.to_reader {
+                        let _ = writer_reader_tx.send(reply.to_string());
+                    }
+                    outbound.to_agent.iter().map(|f| format!("{f}\n")).collect::<String>()
+                }
+            };
+            if frame.is_empty() {
+                continue;
+            }
             if let Err(e) = stdin.write_all(frame.as_bytes()).and_then(|_| stdin.flush()) {
                 // The child's end of the channel is gone. That is a fact the runner must *publish*: a
                 // sealed pipe is not the same event as the child exiting, and a daemon that only sees its
@@ -240,7 +302,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
         let to_child_reader = to_child.clone();
         let state_path = state_path.clone();
         thread::spawn(move || {
-            let reader = BufReader::new(child_stdout);
+            let lines = agent_lines(child_stdout, bridge, reader_tx, reader_rx);
             let mut announced_ready = false;
             let mut turn_active = false;
             // Whether the agent itself has a retry in flight (`auto_retry_start` seen, no `auto_retry_end`
@@ -250,7 +312,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
             // while the agent is still retrying never stacks ours onto it.
             let mut agent_retrying = false;
             let mut attempts: u32 = 0;
-            for line in reader.lines() {
+            for line in lines {
                 let line = match line {
                     Ok(l) => l,
                     Err(e) => {
@@ -476,6 +538,46 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
             Err(e)
         }
     }
+}
+
+/// Ends the translated line stream. It is not JSON, so a frame can never be mistaken for it.
+const AGENT_EOF: &str = "\u{0}eof";
+
+/// The lines the runner's reader consumes. omp's stdout is already the runner's protocol. Claude Code's is
+/// translated frame by frame, merged with the answers the writer side produces, and announced `ready` the
+/// moment it is spawned (see `claude.rs` for why there is nothing earlier to wait for).
+fn agent_lines(
+    stdout: std::process::ChildStdout,
+    bridge: Option<Arc<claude::Bridge>>,
+    reader_tx: Sender<String>,
+    reader_rx: mpsc::Receiver<String>,
+) -> Box<dyn Iterator<Item = std::io::Result<String>> + Send> {
+    let Some(bridge) = bridge else {
+        return Box::new(BufReader::new(stdout).lines());
+    };
+    let _ = reader_tx.send(serde_json::json!({"type": "ready"}).to_string());
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            match serde_json::from_str::<serde_json::Value>(line.trim()) {
+                Ok(record) => {
+                    for frame in bridge.from_agent(&record) {
+                        let _ = reader_tx.send(frame.to_string());
+                    }
+                }
+                // Not a frame: the child is writing something human-readable; the reader mirrors it.
+                Err(_) => {
+                    let _ = reader_tx.send(line);
+                }
+            }
+        }
+        let _ = reader_tx.send(AGENT_EOF.to_string());
+    });
+    Box::new(std::iter::from_fn(move || match reader_rx.recv() {
+        Ok(line) if line == AGENT_EOF => None,
+        Ok(line) => Some(Ok(line)),
+        Err(_) => None,
+    }))
 }
 
 /// Serve the daemon's mailbox: a frame arrives, it is relayed to the child, and a frame that carried a
@@ -1288,6 +1390,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn claude_argv_is_the_streaming_channel_with_the_seats_posture_and_model() {
+        let mut seat = SeatSpec {
+            seat_key: "architect".into(),
+            seat_type: "architect".into(),
+            runtime: "claude-code".into(),
+            model: Some("opus".into()),
+            permission_policy: None,
+            cwd: None,
+            agent_dir: None,
+            env: Default::default(),
+        };
+        let argv = child_argv(&AgentRuntime::ClaudeCode, Path::new("/state/s"), &seat).expect("argv");
+        assert_eq!(
+            argv,
+            vec![
+                "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                "--include-partial-messages", "--permission-mode", "bypassPermissions", "--model", "opus",
+            ]
+        );
+        seat.permission_policy = Some("locked".into());
+        seat.model = None;
+        let argv = child_argv(&AgentRuntime::ClaudeCode, Path::new("/state/s"), &seat).expect("argv");
+        assert_eq!(argv.last().map(String::as_str), Some("default"));
+        assert_eq!(child_program(&AgentRuntime::ClaudeCode, &seat), "claude");
+    }
+
     /// The gate finding, as a table: the documented vocabulary (`docs/AGENT-SETUP.md:389`), the value the
     /// client materialises (`internal/clientsync/rigverb.go:62`), the unspecified case, and a word the repo
     /// does not define. The unattended posture must be what an unspecified policy yields, because that is
@@ -1353,7 +1482,7 @@ mod tests {
         let seat = SeatSpec {
             seat_key: "dev".into(),
             seat_type: "developer".into(),
-            runtime: "claude-code".into(),
+            runtime: "agy".into(),
             model: None,
             permission_policy: None,
             cwd: None,
@@ -1361,12 +1490,12 @@ mod tests {
             env: Default::default(),
         };
         let err = child_argv(
-            &AgentRuntime::from_str_loose("claude-code"),
+            &AgentRuntime::from_str_loose("agy"),
             Path::new("/state"),
             &seat,
         )
         .unwrap_err();
-        assert!(err.contains("claude-code"), "{err}");
+        assert!(err.contains("agy"), "{err}");
         assert!(err.contains("omp"), "{err}");
     }
 
