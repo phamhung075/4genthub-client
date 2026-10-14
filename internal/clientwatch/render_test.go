@@ -35,7 +35,7 @@ func TestAToolCallShowsItsNameAndTheMainArgument(t *testing.T) {
 	if len(rendered) != 1 {
 		t.Fatalf("got %d lines, want 1: %v", len(rendered), rendered)
 	}
-	if !strings.Contains(rendered[0], "→ bash") || !strings.Contains(rendered[0], "git status") {
+	if !strings.Contains(rendered[0], "❯ bash") || !strings.Contains(rendered[0], "git status") {
 		t.Errorf("line %q lacks the tool name or its command", rendered[0])
 	}
 	for _, noise := range []string{"command=", "+cwd"} {
@@ -51,7 +51,7 @@ func TestACallsStatedPurposeHeadsItAndTheArgumentFollows(t *testing.T) {
 		t.Fatalf("got %d entries, want 1: %v", len(rendered), rendered)
 	}
 	head, body, found := strings.Cut(rendered[0], "\n")
-	if !found || !strings.Contains(head, "→ bash") || !strings.Contains(head, "Checking the tree") || !strings.Contains(body, "git status") {
+	if !found || !strings.Contains(head, "❯ bash") || !strings.Contains(head, "Checking the tree") || !strings.Contains(body, "git status") {
 		t.Errorf("purpose not on the head line, argument not below it: %q", rendered[0])
 	}
 	if strings.Contains(rendered[0], "i=") {
@@ -62,10 +62,10 @@ func TestACallsStatedPurposeHeadsItAndTheArgumentFollows(t *testing.T) {
 func TestAnMCPDeviceCallNamesTheToolAndShowsItsArguments(t *testing.T) {
 	write := events(toolCall("write", map[string]any{"i": "Opening a task", "path": "xd://mcp__agenthub_http_manage_task", "content": `{"action":"list"}`}), 200, false, 25)
 	read := events(toolCall("read", map[string]any{"path": "xd://mcp__agenthub_http_manage_task"}), 200, false, 25)
-	if len(write) != 1 || !strings.Contains(write[0], "→ mcp agenthub_http_manage_task") || !strings.Contains(write[0], `{"action":"list"}`) {
+	if len(write) != 1 || !strings.Contains(write[0], "⬡ mcp agenthub_http_manage_task") || !strings.Contains(write[0], `{"action":"list"}`) {
 		t.Errorf("a write to a device is not shown as the MCP call: %v", write)
 	}
-	if len(read) != 1 || !strings.Contains(read[0], "→ mcp agenthub_http_manage_task") {
+	if len(read) != 1 || !strings.Contains(read[0], "⬡ mcp agenthub_http_manage_task") {
 		t.Errorf("a read of a device is not shown as the MCP tool: %v", read)
 	}
 }
@@ -484,5 +484,19 @@ func TestAgyTranscriptEventsAndTokens(t *testing.T) {
 	renderedInput := events(inputJSON, 200, true, 25)
 	if len(renderedInput) != 1 || !strings.Contains(renderedInput[0], "hello agy agent") {
 		t.Errorf("input render mismatch: %v", renderedInput)
+	}
+}
+
+func TestEachKindOfToolHasItsOwnGlyph(t *testing.T) {
+	seen := map[string]string{}
+	for tool, glyph := range map[string]string{"read": "◉", "grep": "⌕", "edit": "✎", "bash": "❯", "web_search": "⌁", "task": "⇉", "unknown_tool": "→"} {
+		rendered := events(toolCall(tool, map[string]any{"command": "x"}), 200, false, 25)
+		if len(rendered) != 1 || !strings.Contains(rendered[0], glyph+" "+tool) {
+			t.Errorf("%s: want glyph %s, got %v", tool, glyph, rendered)
+		}
+		seen[glyph] = tool
+	}
+	if len(seen) != 7 {
+		t.Errorf("glyphs are not distinct per kind: %v", seen)
 	}
 }

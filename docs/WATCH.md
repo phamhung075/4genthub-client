@@ -43,8 +43,8 @@ does not scroll out of view.
 
 | Mark | Meaning |
 |---|---|
-| `→ <tool> <intent>` | a tool call; the dim italic intent is the purpose the seat stated, and the main argument (command, path, prompt) follows on the lines below, with no `key=` |
-| `→ mcp <server_tool>` | a call to an MCP tool, made as a read or write on its `xd://mcp__<server>_<tool>` device; the body is the request |
+| `<glyph> <tool> <intent>` | a tool call, its glyph and colour set by the kind of work: `◉` read (blue), `⌕` search (cyan), `✎` write or edit (yellow), `❯` shell (green), `⌁` web (blue), `⇉` delegate or todo (violet), `?` ask (orange), `→` anything else (white); the dim italic intent is the purpose the seat stated, and the main argument (command, path, prompt) follows on the lines below, with no `key=` |
+| `⬡ mcp <server_tool>` | a call to an MCP tool, made as a read or write on its `xd://mcp__<server>_<tool>` device; the body is the request |
 | `← <tool> text` | the result, dim, headed by the tool that answered |
 | `✗ <tool> text` | an error result, red |
 | an orange `HOOK <name>` block | a reminder or notice the runtime injected into the seat (the `<system-reminder>` tags are removed; three lines at most) |

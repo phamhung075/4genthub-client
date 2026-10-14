@@ -26,12 +26,34 @@ const (
 // seatColors cycle per seat, in the Python's order.
 var seatColors = []int{203, 114, 221, 75, 213, 87, 215, 183, 120, 229}
 
-// toolColors maps a tool name to its colour: reads blue, writes yellow, shell green, MCP magenta,
-// anything else white.
-var toolColors = map[string]int{
-	"read": 117, "grep": 117, "find": 117, "ls": 117, "search": 117,
-	"write": 221, "edit": 221, "ast_edit": 221,
-	"bash": 120, "eval": 120,
+// toolStyle is how a tool call looks: a glyph and a colour per kind of work, so a feed is read by shape.
+type toolStyle struct {
+	glyph  string
+	colour int
+}
+
+var (
+	readStyle     = toolStyle{"◉", 117}
+	searchStyle   = toolStyle{"⌕", 81}
+	writeStyle    = toolStyle{"✎", 221}
+	shellStyle    = toolStyle{"❯", 120}
+	webStyle      = toolStyle{"⌁", 75}
+	delegateStyle = toolStyle{"⇉", 183}
+	askStyle      = toolStyle{"?", 215}
+	mcpStyle      = toolStyle{"⬡", mcpColor}
+	otherStyle    = toolStyle{"→", defaultToolColor}
+)
+
+// toolStyles maps a tool name to its style: reads blue, searches cyan, writes yellow, shell green,
+// web and delegation their own, MCP magenta, anything else white.
+var toolStyles = map[string]toolStyle{
+	"read": readStyle, "ls": readStyle,
+	"grep": searchStyle, "find": searchStyle, "glob": searchStyle, "search": searchStyle, "ast_grep": searchStyle,
+	"write": writeStyle, "edit": writeStyle, "ast_edit": writeStyle,
+	"bash": shellStyle, "eval": shellStyle,
+	"web_search": webStyle, "fetch": webStyle, "browser": webStyle,
+	"task": delegateStyle, "todo_write": delegateStyle,
+	"ask": askStyle,
 }
 
 func fg(code int) string { return fmt.Sprintf("\033[38;5;%dm", code) }
@@ -687,16 +709,16 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 				name = text
 			}
 		}
-		colour := defaultToolColor
+		style := otherStyle
 		if strings.HasPrefix(name, "mcp__") {
-			colour = mcpColor
-		} else if mapped, known := toolColors[name]; known {
-			colour = mapped
+			style = mcpStyle
+		} else if mapped, known := toolStyles[name]; known {
+			style = mapped
 		}
 		arguments, _ := part.get("arguments")
 		label, body := name, callBody(arguments)
 		if device, isDevice := mcpDevice(name, arguments); isDevice {
-			label, colour = "mcp "+device, mcpColor
+			label, style = "mcp "+device, mcpStyle
 			body = ""
 			if name == "write" {
 				if object, ok := arguments.(*orderedJSONObject); ok {
@@ -706,7 +728,7 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 				}
 			}
 		}
-		head := fmt.Sprintf("%s%s→ %s%s", bold, fg(colour), label, reset)
+		head := fmt.Sprintf("%s%s%s %s%s", bold, fg(style.colour), style.glyph, label, reset)
 		intent := callIntent(arguments)
 		switch {
 		case intent == "":
