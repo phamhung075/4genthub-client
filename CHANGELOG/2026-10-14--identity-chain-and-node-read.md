@@ -25,8 +25,11 @@ suite stubs it, which is exactly why the defect survived there.
 
 `ReadSeatActivity` could not serve the gate and the `ps`-shaped callers: it answers ONE seat's activity word
 (`SeatActivity{Word, Present, Read, Why}`), while they need the room's NODE ROWS. The route existed unexported
-beside it — `GET /api/ps` to resolve the rig id, then `GET /api/rigs/<rigId>/nodes` — and it is now an
-exported read, `clientruntime.ReadRigNodes(ctx, rig) ([]map[string]any, string)`.
+beside it — `GET /api/ps` to resolve the rig id, then `GET /api/rigs/<rigId>/nodes` — and there is now ONE
+exported reading of a room's node records, `clientruntime.RoomNodes(ctx, room) (nodes []map[string]any, ok
+bool, err error)`: the runtime first, that daemon route second. A later landing (see the root changelog entry
+for 2026-10-14, "the node reading becomes one seam") folded the watchdog and the compact supervisor onto it and
+made the daemon route its unexported `daemonNodes`, so no verb can take a rung by accident.
 
 - **Rows are decoded in the CLI's own keys**, which is what every consumer of `rig ps --nodes --json` already
   parses: `logicalId`, `canonicalSessionName`, `rigName`, `runtime`, `sessionStatus`, `startupStatus`,
@@ -36,9 +39,11 @@ exported read, `clientruntime.ReadRigNodes(ctx, rig) ([]map[string]any, string)`
   (`clientoffpeak.SeatsFromNodes`), and the restore, switch and reseat paths read the keys above. A consumer
   that ever needs `pid` has to grow this read deliberately; a test pins its absence so the gap is visible.
 - **NO RECORDS and a FAILED READ are different answers**, because a caller that must refuse needs to know
-  which one it has. `(nil, "")` is no records — this shell names no OpenRig daemon, or the daemon answered
-  that it knows no rig by that name. `(nil, "…")` is a read that was attempted and failed, and the sentence
-  names the path and the HTTP status.
+  which one it has. The seam carried a reason string at first, in which no records and success were both the
+  empty string; the later landing replaced it with an explicit `ok` plus an `error`, so a caller reads three
+  distinct answers instead of inferring one from a string that is empty in two of them. NO RECORDS is `!ok`
+  with no error — this shell names no OpenRig daemon, or the daemon answered that it knows no rig by that
+  name. A failed read is an error whose sentence names the path and the HTTP status.
 
 ## The gate's contract change
 

@@ -100,8 +100,11 @@ func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *
 	supervisor.Interrupt = tmuxInterrupt
 	// The gate's reading is the room's node records, the ONE reading this package already takes for its
 	// other gate (rigNodes), reached here without resolving a rig tool: the reading is the client's own.
+	// The callback's type is the supervisor's and carries no error channel, so a read that FAILED and a room
+	// with no records are the same thing to it - no nodes. Neither starts seats, so neither is safety-relevant
+	// here; the peaked decision that must refuse is PeakGate's above, which does see the error.
 	supervisor.Nodes = func(rig string) []map[string]any {
-		nodes, _ := rigNodes(rig)
+		nodes, _, _ := rigNodes(rig)
 		return nodes
 	}
 	supervisor.Getenv = os.Getenv

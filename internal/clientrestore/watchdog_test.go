@@ -38,7 +38,7 @@ func isolate(t *testing.T) string {
 	realHome = func() (string, error) { return home, nil }
 	tmuxRead = func() (string, error) { return "", nil }
 	tmuxServerIdentity = func() string { return "1 2" }
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) { return "[]", nil }
+	watchdogNodesJSON = func(string) (string, error) { return "[]", nil }
 	watchSleep = func(time.Duration) {}
 	watchPollLimit = 0
 	t.Cleanup(func() {
@@ -72,7 +72,7 @@ func drivePolls(states []string) {
 		}
 		return "", nil
 	}
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) {
+	watchdogNodesJSON = func(string) (string, error) {
 		idx++
 		if idx >= len(states) {
 			idx = len(states) - 1
@@ -157,18 +157,17 @@ func TestCountRunningSeats(t *testing.T) {
 	}
 }
 
-// TestExpectedSeatsUsesTheRigSeam: the count flows through the rig-JSON seam, and a malformed answer is 0.
-func TestExpectedSeatsUsesTheRigSeam(t *testing.T) {
+// TestExpectedSeatsUsesTheNodeSeam: the count flows through the node seam, and a malformed answer is 0.
+func TestExpectedSeatsUsesTheNodeSeam(t *testing.T) {
 	isolate(t)
-	rig := &clientcmd.Rig{Program: "rig"}
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) {
+	watchdogNodesJSON = func(string) (string, error) {
 		return `[{"lifecycleState":"running"},{"lifecycleState":"stopped"}]`, nil
 	}
-	if got := expectedSeats(rig, "demo"); got != 1 {
+	if got := expectedSeats("demo"); got != 1 {
 		t.Errorf("expectedSeats = %d, want 1", got)
 	}
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) { return "garbage", nil }
-	if got := expectedSeats(rig, "demo"); got != 0 {
+	watchdogNodesJSON = func(string) (string, error) { return "garbage", nil }
+	if got := expectedSeats("demo"); got != 0 {
 		t.Errorf("expectedSeats on malformed input = %d, want 0", got)
 	}
 }
@@ -413,7 +412,7 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 	clientcmd.LookPath = func(string) (string, error) { return "/stub/rig", nil }
 	// The daemon expects a running seat in both, and tmux has one for zulu only: alpha is dead, and it is
 	// the FIRST rig in the pass, which is the position the shell's last-status exit code got wrong.
-	watchdogNodesJSON = func(*clientcmd.Rig, string) (string, error) {
+	watchdogNodesJSON = func(string) (string, error) {
 		return `[{"lifecycleState":"running"}]`, nil
 	}
 	tmuxRead = func() (string, error) { return "zulu-seat@zulu\n", nil }

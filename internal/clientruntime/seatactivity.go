@@ -3,6 +3,7 @@ package clientruntime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -98,7 +99,7 @@ func ReadSeatActivity(ctx context.Context, rig, seat string) SeatActivity {
 	return SeatActivity{Read: false, Why: "the activity read answered no record for " + rig + "/" + seat}
 }
 
-// ReadRigNodes reads one rig's NODE ROWS over the daemon the client already talks to: GET /api/ps to resolve
+// daemonNodes reads one rig's NODE ROWS over the daemon the client already talks to: GET /api/ps to resolve
 // the rig's id, then GET /api/rigs/<rigId>/nodes - the route the activity read above uses - decoded into the
 // CLI's own node shape, which is what every caller of this read already parses
 // (`rig ps --nodes --json`).
@@ -109,25 +110,16 @@ func ReadSeatActivity(ctx context.Context, rig, seat string) SeatActivity {
 // canonicalSessionName, sessionStatus and model. If pid ever gains a consumer, that is a NEW DECISION to grow
 // this read deliberately rather than a gap to discover at a call site.
 //
-// The three answers are told apart by the pair, because a caller that must refuse needs to know which one it
-// has:
-//
-//   - rows != nil: the daemon answered with this rig's node table, which may be empty (a rig with no seats).
-//   - rows == nil && why == "": NO RECORDS, which is not a failure - either this shell names no OpenRig
-//     daemon at all, or the daemon answered that it knows no rig by that name. A caller for which "no
-//     records" means "nothing to decide" proceeds; one for which it means "I cannot see the room I was asked
-//     about" refuses on its own judgement, which is why this read does not decide that for it.
-//   - rows == nil && why != "": the read was ATTEMPTED and failed - nothing answered, or the answer was not
-//     the table. A caller that needs the reading must refuse in these words rather than proceed as if the
-//     room had no seats.
-func ReadRigNodes(ctx context.Context, rig string) ([]map[string]any, string) {
+// It is unexported and it is not the seam: RoomNodes below is, and it is what every verb calls. This is the
+// daemon RUNG of that read, kept separate because it is the one that speaks a route of its own.
+func daemonNodes(ctx context.Context, rig string) ([]map[string]any, bool, error) {
 	if !openRigDaemonConfigured() {
-		return nil, ""
+		return nil, false, nil
 	}
 
 	var listed []openRigRigRow
 	if why := openRigGetJSON(ctx, "node", "/api/ps", &listed); why != "" {
-		return nil, why
+		return nil, false, errors.New(why)
 	}
 	rigID := ""
 	for _, row := range listed {
@@ -137,12 +129,12 @@ func ReadRigNodes(ctx context.Context, rig string) ([]map[string]any, string) {
 		}
 	}
 	if rigID == "" {
-		return nil, ""
+		return nil, false, nil
 	}
 
 	var rows []map[string]any
 	if why := openRigGetJSON(ctx, "node", "/api/rigs/"+rigID+"/nodes", &rows); why != "" {
-		return nil, why
+		return nil, false, errors.New(why)
 	}
 	if rows == nil {
 		rows = []map[string]any{}
@@ -158,7 +150,49 @@ func ReadRigNodes(ctx context.Context, rig string) ([]map[string]any, string) {
 			}
 		}
 	}
-	return rows, ""
+	return rows, true, nil
+}
+
+// RoomNodes is the ONE reading of a room's node records, over the client's OWN transports, runtime first: a
+// room the local runtime hosts answers GetRoomStatus, and a rig the OpenRig daemon hosts answers daemonNodes
+// above. The rows are in the CLI's own node keys whichever transport answered, so a caller parses one shape
+// and does not care which one carried it.
+//
+// It exists so that order has ONE home: `up`, `compact`, the restore gate and the watchdog all need the same
+// reading, and a second copy of "runtime first, then the daemon" per verb is how two verbs come to disagree
+// about the same room.
+//
+// THE THREE ANSWERS ARE EXPLICIT, because a caller that must refuse needs to know which one it has and
+// because an empty string standing for success is exactly the ambiguity this pass exists to remove:
+//
+//   - ok && err == nil: a transport ANSWERED. nodes may be an empty table, which is a room with no seats.
+//   - !ok && err == nil: NO RECORDS. Either this shell names no OpenRig daemon at all or this runtime hosts
+//     nothing, or the daemon answered that it knows no rig by that name - the same absence, not a failure.
+//     A caller for which it means "nothing to decide" proceeds; one for which it means "I cannot see the room
+//     I was asked about" refuses on its own judgement, which is why this read does not decide that for it.
+//   - err != nil: the read was ATTEMPTED and FAILED - nothing answered, or the answer was not the table. A
+//     caller that needs the reading refuses in these words rather than proceeding as if the room had no
+//     seats.
+func RoomNodes(ctx context.Context, room string) ([]map[string]any, bool, error) {
+	if seats, err := NewClient("").GetRoomStatus(room); err == nil && len(seats) > 0 {
+		nodes := make([]map[string]any, 0, len(seats))
+		for _, seat := range seats {
+			nodes = append(nodes, map[string]any{
+				"rigName":       room,
+				"logicalId":     fmt.Sprintf("%s.%s", room, seat.Seat),
+				"seat":          seat.Seat,
+				"runtime":       seat.Runtime,
+				"sessionStatus": seat.State,
+				// lifecycleState carries the SAME fact as sessionStatus, under the key the watchdog's
+				// expectation count reads: a consumer must not have to know which transport answered.
+				"lifecycleState": seat.State,
+				"model":          seat.Model,
+				"pid":            seat.Pid,
+			})
+		}
+		return nodes, true, nil
+	}
+	return daemonNodes(ctx, room)
 }
 
 // openRigRigID resolves a rig's name to the id the node route is keyed on, over GET /api/ps.

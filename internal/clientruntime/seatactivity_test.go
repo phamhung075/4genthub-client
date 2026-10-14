@@ -43,11 +43,11 @@ func nodeWithoutActivity(logicalID, canonical string) string {
 
 func nodesTable(rows ...string) string { return "[" + strings.Join(rows, ",") + "]" }
 
-// TestReadRigNodesReadsTheDaemonTableInTheCLIsShape is the acceptance of the node seam: the rows come from
+// TestTheDaemonNodeReadAnswersInTheCLIsShape is the acceptance of the daemon rung: the rows come from
 // the daemon's own table, they carry the keys every consumer of `rig ps --nodes --json` already parses, the
 // seat half is derived from the logical id because the daemon does not send it, and pid is absent - the one
 // key this read is deliberately narrower in, so a consumer that ever needs it has to ask for it by name.
-func TestReadRigNodesReadsTheDaemonTableInTheCLIsShape(t *testing.T) {
+func TestTheDaemonNodeReadAnswersInTheCLIsShape(t *testing.T) {
 	const rig = "rigx"
 	rows := nodesTable(
 		`{"logicalId":"rigx.lead","canonicalSessionName":"rigx-lead@rigx","rigName":"rigx",`+
@@ -59,9 +59,12 @@ func TestReadRigNodesReadsTheDaemonTableInTheCLIsShape(t *testing.T) {
 	t.Setenv(openRigURLEnv, srv.URL)
 	t.Setenv(openRigPortEnv, "")
 
-	got, why := ReadRigNodes(context.Background(), rig)
-	if why != "" {
-		t.Fatalf("the read refused a served table: %q", why)
+	got, ok, err := daemonNodes(context.Background(), rig)
+	if err != nil {
+		t.Fatalf("the read refused a served table: %v", err)
+	}
+	if !ok {
+		t.Fatal("a served table came back as no records")
 	}
 	if len(got) != 2 {
 		t.Fatalf("rows = %d, want 2 (%v)", len(got), got)
@@ -84,17 +87,19 @@ func TestReadRigNodesReadsTheDaemonTableInTheCLIsShape(t *testing.T) {
 	}
 }
 
-// TestReadRigNodesTellsNoRecordsFromAFailedRead: a caller must be able to refuse on a failed read without
-// refusing a room that simply has no records yet, so the two must not collapse into one answer.
-func TestReadRigNodesTellsNoRecordsFromAFailedRead(t *testing.T) {
+// TestTheNodeReadTellsNoRecordsFromAFailedRead: a caller must be able to refuse on a failed read without
+// refusing a room that simply has no records yet, so the two must not collapse into one answer. The
+// distinction is carried by ok and err rather than by an empty reason string, because a caller that reads
+// "nothing said" as success is the exact hole this pass closes.
+func TestTheNodeReadTellsNoRecordsFromAFailedRead(t *testing.T) {
 	t.Run("a rig the daemon does not know is no records, not a failure", func(t *testing.T) {
 		srv, _ := fakeActivityDaemon(t, "RID-1", "otherrig", nodesTable())
 		t.Setenv(openRigURLEnv, srv.URL)
 		t.Setenv(openRigPortEnv, "")
 
-		got, why := ReadRigNodes(context.Background(), "rigx")
-		if got != nil || why != "" {
-			t.Errorf("ReadRigNodes = (%v, %q), want (nil, \"\")", got, why)
+		got, ok, err := daemonNodes(context.Background(), "rigx")
+		if got != nil || ok || err != nil {
+			t.Errorf("daemonNodes = (%v, %v, %v), want (nil, false, nil)", got, ok, err)
 		}
 	})
 
@@ -102,9 +107,9 @@ func TestReadRigNodesTellsNoRecordsFromAFailedRead(t *testing.T) {
 		t.Setenv(openRigURLEnv, "")
 		t.Setenv(openRigPortEnv, "")
 
-		got, why := ReadRigNodes(context.Background(), "rigx")
-		if got != nil || why != "" {
-			t.Errorf("ReadRigNodes = (%v, %q), want (nil, \"\")", got, why)
+		got, ok, err := daemonNodes(context.Background(), "rigx")
+		if got != nil || ok || err != nil {
+			t.Errorf("daemonNodes = (%v, %v, %v), want (nil, false, nil)", got, ok, err)
 		}
 	})
 
@@ -117,12 +122,99 @@ func TestReadRigNodesTellsNoRecordsFromAFailedRead(t *testing.T) {
 		t.Setenv(openRigURLEnv, srv.URL)
 		t.Setenv(openRigPortEnv, "")
 
-		got, why := ReadRigNodes(context.Background(), "rigx")
-		if got != nil {
-			t.Errorf("a failed read answered with rows: %v", got)
+		got, ok, err := daemonNodes(context.Background(), "rigx")
+		if got != nil || ok {
+			t.Errorf("a failed read answered with rows: (%v, %v)", got, ok)
 		}
-		if !strings.Contains(why, "the node read asked /api/ps") || !strings.Contains(why, "HTTP 500") {
-			t.Errorf("the failure does not say which read failed and with what: %q", why)
+		if err == nil {
+			t.Fatal("a read that could not answer returned no error: an unreadable reading is not 'this room has no seats'")
+		}
+		if !strings.Contains(err.Error(), "the node read asked /api/ps") || !strings.Contains(err.Error(), "HTTP 500") {
+			t.Errorf("the failure does not say which read failed and with what: %v", err)
+		}
+	})
+}
+
+// TestRoomNodesPrefersTheRuntimeThenTheDaemon is the acceptance of the ONE seam: the runtime answers first
+// when it hosts the room, the daemon answers when it does not, and neither being there is no records rather
+// than a failure. It also pins the keys the runtime rung adds, which the daemon's table does not carry:
+// sessionStatus alongside lifecycleState (the SAME fact under both keys, so a consumer never has to know
+// which transport answered), pid, and the seat half derived from the logical id.
+func TestRoomNodesPrefersTheRuntimeThenTheDaemon(t *testing.T) {
+	t.Run("a runtime that hosts the room answers, and the daemon is not asked", func(t *testing.T) {
+		hermeticSeat(t)
+		sock, requests := fakeRuntime(t, func(line string) string {
+			if !strings.Contains(line, "GetRoomStatus") {
+				t.Errorf("the runtime was asked something else: %s", line)
+			}
+			return okDataResponse(`[{"room":"room-a","seat":"seat-1","session_name":"room-a-seat-1@room-a",` +
+				`"runtime":"omp","model":"deepseek/deepseek-flash","pid":4242,"state":"running"}]`)
+		})
+		t.Setenv(RuntimeSocketEnv, sock)
+		// A daemon that would fail the read, so a fallback past the runtime cannot pass by accident.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		t.Cleanup(srv.Close)
+		t.Setenv(openRigURLEnv, srv.URL)
+
+		nodes, ok, err := RoomNodes(context.Background(), "room-a")
+		if err != nil || !ok {
+			t.Fatalf("RoomNodes = (%v, %v, %v), want the runtime's rows", nodes, ok, err)
+		}
+		if len(nodes) != 1 {
+			t.Fatalf("rows = %d, want 1 (%v)", len(nodes), nodes)
+		}
+		row := nodes[0]
+		for key, want := range map[string]any{
+			"rigName": "room-a", "logicalId": "room-a.seat-1", "seat": "seat-1", "runtime": "omp",
+			"sessionStatus": "running", "lifecycleState": "running",
+		} {
+			if row[key] != want {
+				t.Errorf("row[%q] = %v, want %v", key, row[key], want)
+			}
+		}
+		if model, ok := row["model"].(*string); !ok || model == nil || *model != "deepseek/deepseek-flash" {
+			t.Errorf("row[model] = %v, want the seat's model", row["model"])
+		}
+		if pid, ok := row["pid"].(*uint32); !ok || pid == nil || *pid != 4242 {
+			t.Errorf("row[pid] = %v, want the runtime's pid - the runtime rung CAN carry it, unlike the daemon's", row["pid"])
+		}
+		select {
+		case line := <-requests:
+			if !strings.Contains(line, "GetRoomStatus") {
+				t.Errorf("the first runtime frame was %q, want the room status call", line)
+			}
+		default:
+			t.Error("the runtime was never asked: the rows came from somewhere else")
+		}
+	})
+
+	t.Run("with no runtime, the daemon's table answers", func(t *testing.T) {
+		hermeticSeat(t)
+		noRuntimeSocket(t)
+		const rig = "rigx"
+		srv, _ := fakeActivityDaemon(t, "RID-1", rig, nodesTable(
+			`{"logicalId":"rigx.lead","canonicalSessionName":"rigx-lead@rigx","rigName":"rigx",`+
+				`"runtime":"omp","sessionStatus":"running","lifecycleState":"running","model":"deepseek/deepseek-flash"}`))
+		t.Setenv(openRigURLEnv, srv.URL)
+
+		nodes, ok, err := RoomNodes(context.Background(), rig)
+		if err != nil || !ok || len(nodes) != 1 {
+			t.Fatalf("RoomNodes = (%v, %v, %v), want the daemon's one row", nodes, ok, err)
+		}
+		if nodes[0]["seat"] != "lead" {
+			t.Errorf("row[seat] = %v, want the seat derived from the logical id", nodes[0]["seat"])
+		}
+	})
+
+	t.Run("neither transport knowing the room is no records, not a failure", func(t *testing.T) {
+		hermeticSeat(t)
+		noRuntimeSocket(t)
+
+		nodes, ok, err := RoomNodes(context.Background(), "room-a")
+		if nodes != nil || ok || err != nil {
+			t.Errorf("RoomNodes = (%v, %v, %v), want (nil, false, nil)", nodes, ok, err)
 		}
 	})
 }

@@ -3,6 +3,7 @@ package clientlifecycle
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -76,7 +77,7 @@ func stubWholeUp(t *testing.T) *[]string {
 func TestUpRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
+	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -125,7 +126,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			restoreAll(t)
 			ran := stubWholeUp(t)
-			rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
+			rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 			t.Setenv(clientoffpeak.HolidaysEnv, "")
 			t.Setenv(clientoffpeak.PinEnv, c.pin)
 			t.Setenv(clientoffpeak.ModeEnv, c.modeEnv)
@@ -152,7 +153,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 // but a seat did not (design §2.5) - so the two numbers must not mean the same thing.
 func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 	restoreAll(t)
-	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
+	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	for _, args := range [][]string{
@@ -176,7 +177,7 @@ func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 func TestUpTakesTheOneFlagTwice(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
+	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -200,7 +201,7 @@ func TestCompactRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 		return diedChild{}, nil
 	}
 	SupervisorStartGrace = time.Millisecond
-	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
+	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -243,7 +244,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 			rowsFor = func(string) []clientservices.Health {
 				return []clientservices.Health{{Rig: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}
 			}
-			rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
+			rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 			gateEnv(t, c.pin)
 
 			args := append([]string{"room-alpha"}, c.extra...)
@@ -259,22 +260,51 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 	}
 }
 
-// TestTheGateIsSkippedWhenTheRoomCannotBeRead: a reading that fails is not a refusal. The verbs each say
-// what is wrong in their own words - guessing "peak" from a missing reading would block a room the client
-// knows nothing about.
-func TestTheGateIsSkippedWhenTheRoomCannotBeRead(t *testing.T) {
+// TestTheGateProceedsWhenTheRoomHasNoRecords: NO RECORDS is not a refusal. There are no seats to bill, which
+// is the shape of a room being started for the first time on a machine that has no OpenRig daemon at all, so
+// the verb goes on to restore it and its own errors, if any, are the ones reported.
+func TestTheGateProceedsWhenTheRoomHasNoRecords(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, string) { return nil, "" }
+	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want 0: an unreadable room must not be refused (stderr %q)", code, errOut.String())
+		t.Fatalf("exit %d, want 0: a room with no records has nothing to bill (stderr %q)", code, errOut.String())
 	}
 	if !strings.Contains(strings.Join(*ran, ","), "ensureRig") {
-		t.Error("an unreadable room must still be restored, so its own error can be reported")
+		t.Error("a room with no records must still be restored, so its own error can be reported")
+	}
+	if errOut.Len() != 0 {
+		t.Errorf("nothing is printed for no records - it is the normal case, not a diagnostic: %q", errOut.String())
+	}
+}
+
+// TestAFailedNodeReadRefusesAtTheGate is the contract this pass changed: returning OK when the reading could
+// not be taken is how a peak-time resume proceeded with the gate never having decided. A FAILED read now
+// refuses in words, and the verb does not go on to start anything.
+func TestAFailedNodeReadRefusesAtTheGate(t *testing.T) {
+	restoreAll(t)
+	ran := stubWholeUp(t)
+	rigNodes = func(string) ([]map[string]any, bool, error) {
+		return nil, false, errors.New("the node read asked /api/ps and got HTTP 500")
+	}
+	gateEnv(t, "2026-10-09 02:00")
+
+	var out, errOut bytes.Buffer
+	code := (upCommand{}).Run(context.Background(), &clientcmd.Rig{}, []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit %d, want %d: a reading that failed must refuse (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
+	}
+	for _, want := range []string{"could not be read", "HTTP 500"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("the refusal does not carry %q: %q", want, errOut.String())
+		}
+	}
+	if strings.Contains(strings.Join(*ran, ","), "ensureRig") {
+		t.Error("the resume ran although the gate could not decide")
 	}
 }
 
@@ -283,7 +313,7 @@ func TestTheGateIsSkippedWhenTheRoomCannotBeRead(t *testing.T) {
 func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 	restoreAll(t)
 	stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, string) { return deepSeekRoomNode(), "" }
+	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "whenever")
 
 	var out, errOut bytes.Buffer

@@ -369,9 +369,9 @@ func TestDoctorIsReadOnly(t *testing.T) {
 		did = append(did, "signal "+pattern)
 		return true
 	}
-	rigNodes = func(string) ([]map[string]any, string) {
+	rigNodes = func(string) ([]map[string]any, bool, error) {
 		did = append(did, "read nodes")
-		return nil, ""
+		return nil, false, nil
 	}
 
 	if code, _, _ := doctor(t, "demo"); code != clientcmd.ExitOK {

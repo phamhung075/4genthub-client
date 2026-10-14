@@ -581,39 +581,22 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 }
 
 // rigNodes is the ONE reading of a rig's node records here, so the gate and the restore cannot decide
-// from different things. A read that fails, or answers something that is not a list, gives NO nodes: the
-// caller's next step fails loudly on its own, and an unreadable reading must never be read as "this room
-// is safe".
+// from different things. A read that FAILS gives NO nodes and an error: the caller refuses in those words,
+// and an unreadable reading is never read as "this room is safe".
 //
 // The clientseat package reads the SAME runtime call as roomNodes, with the OPPOSITE contract: there a failed read is
 // an ERROR naming the rig, because `reseat` has to say why it will not restart a seat. The names differ on purpose -
 // two same-named functions with opposite contracts is a trap whose only guard would be a commit message.
-// The reading itself, over the client's OWN transports: the runtime first (a natively hosted room), then
-// the OpenRig daemon's node table (a rig the daemon hosts). It used to fall back to exec-ing
-// `rig ps --nodes --json`, which is the dependency this cutover removes.
 //
-// The second return is the read's reason, and the PAIR is what a caller decides on: rows with no reason
-// are what a transport answered - possibly an empty table, which is a room with no seats - while a reason
-// means nothing could be read at all. An unreadable reading is never read as "this room is safe".
-var rigNodes = func(name string) ([]map[string]any, string) {
-	client := clientruntime.NewClient("")
-	seats, err := client.GetRoomStatus(name)
-	if err == nil && len(seats) > 0 {
-		var nodes []map[string]any
-		for _, seat := range seats {
-			nodes = append(nodes, map[string]any{
-				"rigName":       name,
-				"logicalId":     fmt.Sprintf("%s.%s", name, seat.Seat),
-				"seat":          seat.Seat,
-				"runtime":       seat.Runtime,
-				"sessionStatus": seat.State,
-				"model":         seat.Model,
-				"pid":           seat.Pid,
-			})
-		}
-		return nodes, ""
-	}
-	return clientruntime.ReadRigNodes(context.Background(), name)
+// The reading itself is clientruntime.RoomNodes: the runtime first, then the OpenRig daemon's node table, in
+// one home so the gate here and the watchdog in clientrestore cannot disagree about the same room. It used to
+// fall back to exec-ing `rig ps --nodes --json`, which is the dependency this cutover removes.
+//
+// The three answers are the seam's own, explicit rather than a sentinel: ok with no error is a transport's
+// answer (possibly an empty table - a room with no seats), no ok and no error is NO RECORDS - this shell's
+// transports know no such room, so there is nothing to decide - and an error is a read that FAILED.
+var rigNodes = func(name string) ([]map[string]any, bool, error) {
+	return clientruntime.RoomNodes(context.Background(), name)
 }
 
 // PeakGate is the DeepSeek peak gate for every verb in the client that starts or resumes a room's seats
@@ -633,11 +616,14 @@ var rigNodes = func(name string) ([]map[string]any, string) {
 // being started for the first time on a machine that has no OpenRig daemon at all - and nothing is printed
 // for it, because that is the normal case rather than a diagnostic.
 func PeakGate(name, verb string, allowPeak bool, stderr io.Writer) int {
-	nodes, why := rigNodes(name)
-	if nodes == nil && why != "" {
+	nodes, ok, err := rigNodes(name)
+	if err != nil {
 		fmt.Fprintf(stderr, "4genteam %s: the room's node records could not be read, so the peak gate cannot "+
-			"say whether starting this room bills at peak: %s\n", verb, why)
+			"say whether starting this room bills at peak: %v\n", verb, err)
 		return clientcmd.ExitUnavailable
+	}
+	if !ok {
+		return clientcmd.ExitOK
 	}
 	proceed, message, err := clientoffpeak.Check(allowPeak, nodes, os.Getenv)
 	if err != nil {

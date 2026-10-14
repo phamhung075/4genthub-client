@@ -15,6 +15,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -66,10 +67,26 @@ var (
 		}
 		return "none"
 	}
-	// watchdogNodesJSON is the ONE rig read in this verb: the documented JSON the shell piped through
-	// python3 (`rig ps --nodes --rig RIG --json`). It is a seam so a test counts seats with no rig.
-	watchdogNodesJSON = func(rig *clientcmd.Rig, rigName string) (string, error) {
-		return rig.Run(context.Background(), "ps", "--nodes", "--rig", rigName, "--json")
+	// watchdogNodesJSON is the ONE node read in this verb: a room's node records in the CLI's own JSON keys,
+	// read over the client's own transports (clientruntime.RoomNodes - the runtime first, then the OpenRig
+	// daemon's node table) instead of by exec-ing `rig ps --nodes --rig RIG --json`. It is a seam so a test
+	// counts seats with no rig and no daemon. A read that FAILED comes back as an error rather than as an
+	// empty table: the caller counts zero either way, but only one of those is a fact about the room.
+	watchdogNodesJSON = func(rigName string) (string, error) {
+		nodes, ok, err := clientruntime.RoomNodes(context.Background(), rigName)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			// NO RECORDS: this shell knows no such room, so there are no seats to expect. It is counted as
+			// zero rows rather than as an error, because "no room here" is not "the read failed".
+			nodes = []map[string]any{}
+		}
+		raw, err := json.Marshal(nodes)
+		if err != nil {
+			return "", err
+		}
+		return string(raw), nil
 	}
 	// watchSleep is the loop's `sleep "$interval"`, a seam so a test drives polls instead of waiting.
 	watchSleep = time.Sleep
@@ -150,12 +167,12 @@ func liveSeats(rigName string) int {
 	return len(rigSessions(rigName, sessionNames()))
 }
 
-// expectedSeats is the shell's expected_seats(): the rig's running seats as the daemon reports them. The
-// shell piped the JSON through python3; the parsing half is countRunningSeats and this half just runs the
-// command. The command's own exit status is deliberately ignored, exactly as the shell's pipe left it: a
-// `rig ps` that printed rows and then failed still had those rows counted.
-func expectedSeats(rig *clientcmd.Rig, rigName string) int {
-	out, _ := watchdogNodesJSON(rig, rigName)
+// expectedSeats is the shell's expected_seats(): the rig's running seats as the client's own reading reports
+// them. The shell piped JSON through python3; the parsing half is countRunningSeats and this half takes the
+// reading. A read that failed is counted as zero, exactly as the shell's pipe left it - an unreadable
+// expectation is not evidence that seats are up.
+func expectedSeats(rigName string) int {
+	out, _ := watchdogNodesJSON(rigName)
 	return countRunningSeats(out)
 }
 
@@ -246,7 +263,7 @@ func newWatcher(rig *clientcmd.Rig, restore *restorer, log *teeLog, allowPeak bo
 // (action == "restore") and only then.
 func (w *watcher) check(rigName, action string) int {
 	noteServerIdentity(w.log)
-	exp := expectedSeats(w.rig, rigName)
+	exp := expectedSeats(rigName)
 	live := liveSeats(rigName)
 	switch verdict(exp, live) {
 	case verdictStopped:
@@ -287,7 +304,7 @@ func (w *watcher) watch(rigName string, interval time.Duration, beat int) {
 	misses, polls := 0, 0
 	for watchPollLimit == 0 || polls < watchPollLimit {
 		noteServerIdentity(w.log)
-		exp := expectedSeats(w.rig, rigName)
+		exp := expectedSeats(rigName)
 		live := liveSeats(rigName)
 		if verdict(exp, live) == verdictDead {
 			misses++

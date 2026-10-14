@@ -3,6 +3,37 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the node reading becomes one seam, and the watchdog counts a room without rig
+
+### Changed
+- `internal/clientruntime` — ONE exported reading of a room's node records,
+  `RoomNodes(ctx, room) (nodes []map[string]any, ok bool, err error)`: the local runtime first, the OpenRig
+  daemon's node table second, rows in the CLI's own keys whichever answered. `ReadRigNodes` is now the
+  unexported `daemonNodes`, the daemon rung of that same read, so a verb cannot take a rung by accident. The
+  runtime rung also carries `lifecycleState` beside `sessionStatus` — the same fact under the key the
+  watchdog's expectation count reads — so a consumer never has to know which transport answered.
+- `internal/clientruntime`, `internal/clientlifecycle` — the seam's three answers are EXPLICIT, replacing a
+  reason string whose empty value meant success: `ok` with no error is a transport's answer (possibly an
+  empty table, a room with no seats), no `ok` and no error is NO RECORDS, and an error is a read that FAILED.
+  `rigNodes` is now a thin wrapper over it; `PeakGate` still refuses in words on a failed read and proceeds
+  silently on no records.
+- `internal/clientlifecycle` — the compact supervisor's `Nodes` callback keeps the upstream type, which has no
+  error channel, so a failed read and an empty room look the same to it. Neither starts seats, so neither is
+  safety-relevant there; the decision that must refuse is `PeakGate`'s, which does see the error.
+- `internal/clientrestore` — the watchdog's node seam reads the client's own transports instead of exec-ing
+  `rig ps --nodes --rig RIG --json`, and `expectedSeats` takes only the rig name. A failed read counts as zero
+  rows exactly as the shell's pipe left it; NO RECORDS is an empty table rather than a failure.
+
+### Tests
+- New: the seam's three answers, its transport order (runtime answers and the daemon is not asked; no runtime
+  falls through to the daemon; neither knowing the room is no records), plus both gate outcomes.
+- Replaced: `TestTheGateIsSkippedWhenTheRoomCannotBeRead` pinned the OLD contract — a reading that fails is not
+  a refusal — which is the contract this pass changed. It is now
+  `TestTheGateProceedsWhenTheRoomHasNoRecords` and `TestAFailedNodeReadRefusesAtTheGate`.
+
+### Verified
+- `go build ./...` and `go vet ./...` clean; `go test ./...` every package ok.
+
 ## 2026-10-14 — the identity chain answers feedback, and a room's nodes are read without rig
 
 ### Changed

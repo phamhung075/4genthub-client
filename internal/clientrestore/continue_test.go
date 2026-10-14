@@ -80,7 +80,7 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 
 	// THE DAEMON THE NODE READ TALKS TO. The world's node JSON is served over the daemon's OWN route (GET
 	// /api/ps, then GET /api/rigs/<id>/nodes), because the gate and the restore now read through
-	// clientruntime.ReadRigNodes rather than through a `rig ps` exec: a stub beside the seam would let this
+	// clientruntime.RoomNodes rather than through a `rig ps` exec: a stub beside the seam would let this
 	// suite pass while the real read was broken. The rig names come from the nodes the test handed in.
 	daemon := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
 		switch {
