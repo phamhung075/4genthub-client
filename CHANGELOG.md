@@ -3,6 +3,14 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — `rig-shim` removed; `compact` names the runtime's own verb
+
+### Removed
+- `4genteam rig-shim` (it symlinked `~/.local/bin/rig` to the client, a compatibility layer for the retired OpenRig `rig` CLI). Test: `clientruntime.TestNoCompatibilityShimVerbIsRegistered`.
+
+### Changed
+- `4genteam compact RIG` with no rigd running now also names `4genteam room compact RIG`, which force-compacts the room's seats through the runtime. Test: `clientlifecycle.TestCompactSpawnsNothingAndRefusesWithoutTheAuthority`.
+
 ## 2026-10-14 — watch, feed, grid and input resolve native rooms
 
 ### Fixed

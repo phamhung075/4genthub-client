@@ -740,7 +740,7 @@ func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 	// WITH NO AUTHORITY THERE IS NO SUPERVISOR, and saying so is this verb's whole job now: it is exactly
 	// the silence the owner's incident was made of.
 	if rigdRunning() == 0 {
-		fmt.Fprintf(stderr, "4genteam compact: rigd is not running, and the compaction supervisor is rigd's child now - start it with `4genteam up %s`.\n", name)
+		fmt.Fprintf(stderr, "4genteam compact: rigd is not running, and the compaction supervisor is rigd's child now - start it with `4genteam up %s`, or compact the room's seats through the runtime with `4genteam room compact %s`.\n", name, name)
 		return clientcmd.ExitUnavailable
 	}
 	rows := clientservices.NotRunning(rowsFor(name))

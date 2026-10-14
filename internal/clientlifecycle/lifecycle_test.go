@@ -351,6 +351,9 @@ func TestCompactSpawnsNothingAndRefusesWithoutTheAuthority(t *testing.T) {
 	if !strings.Contains(errOut.String(), "rigd is not running") || !strings.Contains(errOut.String(), "4genteam up some-rig") {
 		t.Errorf("the refusal did not name rigd and the repair verb: %q", errOut.String())
 	}
+	if !strings.Contains(errOut.String(), "4genteam room compact some-rig") {
+		t.Errorf("the refusal did not name the runtime's own compact verb: %q", errOut.String())
+	}
 }
 
 // TestCompactReportsTheRowWhenTheAuthorityRuns is the control: with rigd alive, `compact` is a read that

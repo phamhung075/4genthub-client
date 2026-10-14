@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -19,7 +18,6 @@ func Commands() []clientcmd.Command {
 	return []clientcmd.Command{
 		whoamiCommand{},
 		captureCommand{},
-		shimCommand{},
 	}
 }
 
@@ -104,45 +102,6 @@ func printWhoami(stdout, stderr io.Writer, resp *WhoamiResponse, asJSON bool) in
 	fmt.Fprintf(stdout, "Role:    %s\n", resp.Identity.Role)
 	fmt.Fprintf(stdout, "Runtime: %s\n", resp.Identity.Runtime)
 	fmt.Fprintf(stdout, "Session: %s\n", resp.Identity.SessionName)
-	return clientcmd.ExitOK
-}
-
-type shimCommand struct{}
-
-func (shimCommand) Name() string { return "rig-shim" }
-func (shimCommand) Summary() string {
-	return "install ~/.local/bin/rig compatibility symlink to 4genteam"
-}
-
-func (shimCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
-	if clientcmd.HelpRequested(args) {
-		fmt.Fprintln(stdout, "usage: 4genteam rig-shim\n\nInstalls ~/.local/bin/rig -> ~/.local/bin/4genteam compatibility symlink.")
-		return clientcmd.ExitOK
-	}
-	home := os.Getenv("HOME")
-	if home == "" {
-		fmt.Fprintln(stderr, "HOME not set")
-		return clientcmd.ExitUnavailable
-	}
-
-	localBin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(localBin, 0o755); err != nil {
-		fmt.Fprintf(stderr, "failed to create %s: %v\n", localBin, err)
-		return clientcmd.ExitUnavailable
-	}
-
-	target := filepath.Join(localBin, "4genteam")
-	linkPath := filepath.Join(localBin, "rig")
-
-	// Remove existing rig if it's a symlink or old binary
-	_ = os.Remove(linkPath)
-
-	if err := os.Symlink(target, linkPath); err != nil {
-		fmt.Fprintf(stderr, "failed to symlink %s -> %s: %v\n", linkPath, target, err)
-		return clientcmd.ExitUnavailable
-	}
-
-	fmt.Fprintf(stdout, "Installed rig compatibility shim: %s -> %s\n", linkPath, target)
 	return clientcmd.ExitOK
 }
 
