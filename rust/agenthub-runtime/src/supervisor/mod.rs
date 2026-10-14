@@ -30,6 +30,11 @@ const SEAT_READY_WINDOW_SECS: u64 = 60;
 /// a grace period, not a handshake. Short, because it proves nothing about the agent inside the pane.
 const NON_OMP_READY_GRACE_MS: u64 = 1500;
 
+/// What `Capture` takes when the caller names no line count: the same 200 the client's own rigd uses for a
+/// session whose transcript is empty (`clientsync.captureLines`). Named here rather than defaulted at the
+/// call site so the two sides cannot disagree about how much of a pane a fallback read returns.
+const DEFAULT_CAPTURE_LINES: usize = 200;
+
 /// The states a seat's own record publishes when its agent is gone rather than answering. Shared by the
 /// readiness check (which must not accept one as a handshake) and by `fresh_death_state` (which reports one
 /// immediately, so a longer window cannot delay the news that a seat is dead).
@@ -251,6 +256,21 @@ impl RoomSupervisor {
     /// Derive standard session name: agenthub--<room>--<seat>
     pub fn session_name(room: &str, seat: &str) -> String {
         format!("agenthub--{room}--{seat}")
+    }
+
+    /// The CANONICAL session name of a native seat: `<room>-<seat>@<room>`.
+    ///
+    /// The room IS the rig here - `room_dir`, the socket's own rooms and whoami's `rigName` all say so -
+    /// which is the same rule the client's `SeatSessionName` doc states from the other side. It is the name
+    /// a person passes to `--session`, so it is the first identifier the session list serves.
+    pub fn canonical_session_name(room: &str, seat: &str) -> String {
+        format!("{room}-{seat}@{room}")
+    }
+
+    /// The seat's logical id: `<room>.<seat>`. The client takes the member after the FIRST dot as the seat
+    /// key, so the dot has to be there - a bare seat key names no member to that reader.
+    pub fn logical_id(room: &str, seat: &str) -> String {
+        format!("{room}.{seat}")
     }
 
     /// Start a room with its seats.
@@ -683,6 +703,190 @@ impl RoomSupervisor {
         Ok(statuses)
     }
 
+    /// Every room this daemon hosts: the subdirectories of `rooms/` that carry a spec.
+    ///
+    /// A directory without one is not a room - it is a half-created or hand-made directory - and listing it
+    /// would turn every caller of the session list into a refusal about somebody else's junk.
+    pub fn hosted_rooms(&self) -> Vec<String> {
+        let rooms_dir = self.base_state_dir.join("rooms");
+        let mut rooms = Vec::new();
+        if let Ok(entries) = fs::read_dir(&rooms_dir) {
+            for entry in entries.flatten() {
+                if entry.path().join("spec.json").is_file() {
+                    rooms.push(entry.file_name().to_string_lossy().to_string());
+                }
+            }
+        }
+        rooms.sort();
+        rooms
+    }
+
+    /// The session list: one entry per seat of `room`, or of every room this daemon hosts when `room` is
+    /// `None`.
+    ///
+    /// IT PROJECTS `get_room_status` rather than reading the seat facts again, for the reason the activity
+    /// producer exists: two readers of one fact must be one derivation, or they drift while both look
+    /// right. Every field here is copied from the status or reduced by the single rule the client already
+    /// applies (`running` iff running), so there is no second place for a seat's liveness to be decided.
+    pub fn list_sessions(&self, room: Option<&str>) -> Result<Vec<SessionEntry>, String> {
+        let rooms = match room {
+            Some(named) => vec![named.to_string()],
+            None => self.hosted_rooms(),
+        };
+        let mut out = Vec::new();
+        for name in rooms {
+            // EVERY REFUSAL FROM THIS SURFACE NAMES ITS ROOM. `get_room_status`'s own sentence is a contract
+            // other readers already pin ("cannot read room spec: ..."), so it stays as it is - but a caller of
+            // the SESSION LIST that named a room this daemon does not host has to be told which room it was,
+            // or the answer is unusable to the operator who typed it.
+            if !self.room_dir(&name).join("spec.json").is_file() {
+                return Err(format!(
+                    "no room named {name:?} in this daemon (it hosts {})",
+                    if self.hosted_rooms().is_empty() {
+                        "no rooms".to_string()
+                    } else {
+                        self.hosted_rooms().join(", ")
+                    }
+                ));
+            }
+            let statuses = self
+                .get_room_status(&name)
+                .map_err(|e| format!("room {name:?}: {e}"))?;
+            for status in statuses {
+                out.push(SessionEntry {
+                    canonical_session_name: Self::canonical_session_name(&name, &status.seat),
+                    session_name: status.session_name.clone(),
+                    rig_name: name.clone(),
+                    logical_id: Self::logical_id(&name, &status.seat),
+                    session_status: match status.state {
+                        SeatLifecycleState::Running => "running".to_string(),
+                        _ => "stopped".to_string(),
+                    },
+                    agent_activity: SessionActivity {
+                        state: status.activity.as_str().to_string(),
+                        source: status.activity_source.clone(),
+                    },
+                    runtime: status.runtime.clone(),
+                    model: status.model.clone(),
+                    transcript_path: status.transcript_path.clone(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Resolve a session name to the room and seat it names, accepting EVERY name the session list serves:
+    /// the canonical `<room>-<seat>@<room>`, the runtime's `agenthub--<room>--<seat>`, the `<room>.<seat>`
+    /// logical id, and a bare seat key.
+    ///
+    /// A bare key that names seats in more than one room is refused BY NAME rather than resolved to
+    /// whichever room happened to be read first: the caller asked for one seat, and guessing which one
+    /// would answer a different question than the one asked.
+    pub fn resolve_seat(&self, session: &str) -> Result<(String, String), String> {
+        let query = session.trim();
+        if query.is_empty() {
+            return Err("no session name was given".to_string());
+        }
+        let rooms = self.hosted_rooms();
+        let mut hits: Vec<(String, String)> = Vec::new();
+        for room in &rooms {
+            let spec_file = self.room_dir(room).join("spec.json");
+            let content = fs::read_to_string(&spec_file)
+                .map_err(|e| format!("cannot read room spec for {room}: {e}"))?;
+            let spec: RoomSpec = serde_json::from_str(&content)
+                .map_err(|e| format!("parse spec for {room}: {e}"))?;
+            for seat in spec.seats {
+                let names = [
+                    Self::canonical_session_name(room, &seat.seat_key),
+                    Self::session_name(room, &seat.seat_key),
+                    Self::logical_id(room, &seat.seat_key),
+                    seat.seat_key.clone(),
+                ];
+                if names.iter().any(|name| name == query) {
+                    hits.push((room.clone(), seat.seat_key));
+                }
+            }
+        }
+        match hits.len() {
+            0 => Err(format!(
+                "no seat named {query:?} in any room this daemon hosts ({})",
+                if rooms.is_empty() {
+                    "it hosts no rooms".to_string()
+                } else {
+                    rooms.join(", ")
+                }
+            )),
+            1 => Ok(hits.remove(0)),
+            _ => Err(format!(
+                "{query:?} names a seat in more than one room ({}); use a name that carries its room",
+                hits.iter()
+                    .map(|(room, seat)| format!("{room}/{seat}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+        }
+    }
+
+    /// A seat's transcript: the file its runner publishes, read whole or as its newest `lines` lines.
+    ///
+    /// IT REFUSES BY NAME rather than answering with an empty string. A seat whose runner has not created
+    /// its log yet is a DIFFERENT fact from a seat whose log is empty, and a caller that cannot tell them
+    /// apart uploads "no transcript" as "nothing happened".
+    pub fn read_transcript(
+        &self,
+        session: &str,
+        lines: Option<usize>,
+    ) -> Result<TranscriptAnswer, String> {
+        let (room, seat) = self.resolve_seat(session)?;
+        let canonical = Self::canonical_session_name(&room, &seat);
+        let path = self
+            .room_dir(&room)
+            .join("logs")
+            .join(format!("{seat}.jsonl"));
+        if !path.is_file() {
+            return Err(format!(
+                "no transcript file for {canonical:?} at {}",
+                path.display()
+            ));
+        }
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read transcript {}: {e}", path.display()))?;
+        let content = match lines {
+            Some(n) => tail_lines(&content, n),
+            None => content,
+        };
+        Ok(TranscriptAnswer {
+            session: canonical,
+            path: path.to_string_lossy().to_string(),
+            content,
+        })
+    }
+
+    /// A seat's pane, captured through the same `TerminalManager` every other tmux call in this crate uses.
+    ///
+    /// A pane that is not up is refused by name BEFORE tmux is asked, so the caller is told the seat has no
+    /// live pane - which is the fact - rather than tmux's own message about a session it cannot find.
+    pub fn capture_session(
+        &self,
+        session: &str,
+        lines: Option<usize>,
+    ) -> Result<CaptureAnswer, String> {
+        let (room, seat) = self.resolve_seat(session)?;
+        let canonical = Self::canonical_session_name(&room, &seat);
+        let vm_session = Self::session_name(&room, &seat);
+        if !TerminalManager::is_session_alive(&vm_session) {
+            return Err(format!(
+                "no live pane named {canonical:?}: this daemon has no running session {vm_session:?}"
+            ));
+        }
+        let content =
+            TerminalManager::capture_pane(&vm_session, lines.unwrap_or(DEFAULT_CAPTURE_LINES))?;
+        Ok(CaptureAnswer {
+            session: canonical,
+            content,
+        })
+    }
+
     /// Everything one seat's status row is built from, read once: whether its session is up, the runner's
     /// own last published word and freshness stamp, and the active rail rows addressed to it.
     ///
@@ -952,6 +1156,21 @@ impl RoomSupervisor {
     }
 }
 
+/// The newest `lines` lines of `text`, terminators kept, or all of it when it has fewer. A trailing newline
+/// is not an extra line, and each returned line keeps its own terminator so a reader that appends does not
+/// glue two lines together. A JSONL transcript is a file of lines, so this is a LINE window and not a byte
+/// window: a reader that counted bytes would split a record.
+fn tail_lines(text: &str, lines: usize) -> String {
+    if lines == 0 {
+        return String::new();
+    }
+    let all: Vec<&str> = text.split_inclusive('\n').collect();
+    if all.len() <= lines {
+        return text.to_string();
+    }
+    all[all.len() - lines..].concat()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1164,6 +1383,263 @@ mod tests {
                 "the source word travels beside the word, so a reader sees the evidence"
             );
         }
+    }
+
+    /// THE SESSION LIST IS THE CLIENT'S SHAPE, not the runtime's own. Every key the client's one parser
+    /// reads (`clientsync.parseRigPsSessions`) is present and spelled as the CLI spells it - an entry that
+    /// parser cannot read is a session the cloud never sees while the runtime still looks healthy.
+    #[tokio::test]
+    async fn the_session_list_serves_the_keys_the_clients_parser_reads() {
+        let state_dir = scratch("session-list");
+        let room = "list-room";
+        let seat = seat_key("list");
+        write_spec(&state_dir, room, &seat);
+        write_state_file(&state_dir, room, &seat, "idle", "2026-10-14T01:00:00.000Z");
+        let supervisor = supervisor_at(&state_dir);
+
+        let entries = supervisor.list_sessions(Some(room)).expect("list");
+        assert_eq!(entries.len(), 1, "one entry per seat of the room");
+        let entry = &entries[0];
+
+        assert_eq!(
+            entry.canonical_session_name,
+            RoomSupervisor::canonical_session_name(room, &seat)
+        );
+        assert_eq!(
+            entry.session_name,
+            RoomSupervisor::session_name(room, &seat)
+        );
+        assert_eq!(
+            entry.rig_name, room,
+            "the room IS the rig for a native room"
+        );
+        assert_eq!(
+            entry.logical_id,
+            format!("{room}.{seat}"),
+            "the client takes the member after the FIRST dot, so the dot has to be there"
+        );
+        assert_eq!(
+            entry.agent_activity.state, "idle",
+            "the word the seat published"
+        );
+        assert_eq!(
+            entry.agent_activity.source.as_deref(),
+            Some("idle"),
+            "and the word it was derived from, so a reader sees the evidence"
+        );
+        assert_eq!(
+            entry.session_status, "stopped",
+            "this test creates no pane, and the reduction the client applies is the one served"
+        );
+
+        // THE CONTRACT IS THE WIRE SPELLING, not the struct's field names: renaming a Rust field while its
+        // serde rename holds is correct, and renaming the rename is the defect this test exists for.
+        let encoded = serde_json::to_value(entry).expect("encode");
+        for key in [
+            "canonicalSessionName",
+            "sessionName",
+            "rigName",
+            "logicalId",
+            "sessionStatus",
+            "agentActivity",
+        ] {
+            assert!(
+                encoded.get(key).is_some(),
+                "the wire must carry {key}: {encoded}"
+            );
+        }
+        assert!(
+            encoded["agentActivity"].get("state").is_some(),
+            "the activity nests under agentActivity.state, where the node parser looks: {encoded}"
+        );
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    /// AN EMPTY ROOM MEANS EVERY ROOM THIS DAEMON HOSTS, and a room it does not host is refused by name.
+    /// The two are different answers; an empty list for an unknown room would erase the difference.
+    #[tokio::test]
+    async fn the_session_list_covers_every_hosted_room_and_refuses_one_it_does_not_host() {
+        let state_dir = scratch("session-rooms");
+        let room_a = "rooms-a";
+        let room_b = "rooms-b";
+        write_spec(&state_dir, room_a, &seat_key("a"));
+        write_spec(&state_dir, room_b, &seat_key("b"));
+        let supervisor = supervisor_at(&state_dir);
+
+        let all = supervisor.list_sessions(None).expect("every hosted room");
+        assert_eq!(all.len(), 2, "one entry per hosted seat: {all:?}");
+        assert!(
+            all.iter().any(|e| e.rig_name == room_a) && all.iter().any(|e| e.rig_name == room_b),
+            "both hosted rooms are listed: {all:?}"
+        );
+
+        let one = supervisor.list_sessions(Some(room_a)).expect("one room");
+        assert_eq!(one.len(), 1, "a named room narrows the list: {one:?}");
+        assert_eq!(one[0].rig_name, room_a);
+
+        let refused = supervisor
+            .list_sessions(Some("ghost-room"))
+            .expect_err("an unhosted room");
+        assert!(
+            refused.contains("ghost-room"),
+            "the refusal names the room it could not read: {refused}"
+        );
+        assert!(
+            refused.contains(room_a) && refused.contains(room_b),
+            "and names the rooms it does host, so the caller sees the alternative: {refused}"
+        );
+
+        // A directory without a spec is not a room. Listing it would answer a refusal about somebody else's
+        // junk inside a call that asked for sessions.
+        fs::create_dir_all(state_dir.join("rooms").join("not-a-room")).expect("stray dir");
+        let still = supervisor.list_sessions(None).expect("hosted rooms");
+        assert_eq!(
+            still.len(),
+            2,
+            "a spec-less directory is not a room: {still:?}"
+        );
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    /// EVERY NAME THE LIST SERVES ALSO RESOLVES, and a name that is not a seat is refused BY NAME rather
+    /// than answered emptily: "there is no such seat" and "that seat's log is missing" are different facts.
+    #[tokio::test]
+    async fn every_served_name_resolves_and_an_unknown_one_is_refused_by_name() {
+        let state_dir = scratch("session-resolve");
+        let room = "resolve-room";
+        let seat = seat_key("resolve");
+        write_spec(&state_dir, room, &seat);
+        let supervisor = supervisor_at(&state_dir);
+
+        for name in [
+            RoomSupervisor::canonical_session_name(room, &seat),
+            RoomSupervisor::session_name(room, &seat),
+            RoomSupervisor::logical_id(room, &seat),
+            seat.clone(),
+        ] {
+            let (got_room, got_seat) = supervisor
+                .resolve_seat(&name)
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(
+                (got_room.as_str(), got_seat.as_str()),
+                (room, seat.as_str()),
+                "every name the list serves must resolve: {name}"
+            );
+        }
+
+        let unknown = supervisor
+            .resolve_seat("ghost-seat@nowhere")
+            .expect_err("no such seat");
+        assert!(
+            unknown.contains("ghost-seat@nowhere"),
+            "the refusal quotes what was asked for: {unknown}"
+        );
+        assert!(
+            unknown.contains(room),
+            "and names the rooms it looked in, so a reader can see the search space: {unknown}"
+        );
+
+        let empty = supervisor.resolve_seat("   ").expect_err("no name");
+        assert!(
+            empty.contains("no session name"),
+            "an empty name is refused as such, not looked up: {empty}"
+        );
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    /// A BARE SEAT KEY IN TWO ROOMS IS REFUSED rather than resolved to whichever room was read first: the two
+    /// candidates are different seats, and answering with one of them answers a different question.
+    #[tokio::test]
+    async fn a_bare_seat_key_in_two_rooms_is_refused_rather_than_guessed() {
+        let state_dir = scratch("session-ambiguous");
+        let shared = seat_key("shared");
+        write_spec(&state_dir, "amb-a", &shared);
+        write_spec(&state_dir, "amb-b", &shared);
+        let supervisor = supervisor_at(&state_dir);
+
+        let refused = supervisor.resolve_seat(&shared).expect_err("ambiguous");
+        assert!(refused.contains("more than one room"), "{refused}");
+        assert!(
+            refused.contains("amb-a") && refused.contains("amb-b"),
+            "both candidates are named, so the caller can qualify: {refused}"
+        );
+
+        // The qualified names stay unambiguous, which is the way out the refusal points at.
+        let (room, seat) = supervisor
+            .resolve_seat(&RoomSupervisor::canonical_session_name("amb-b", &shared))
+            .expect("qualified");
+        assert_eq!((room.as_str(), seat.as_str()), ("amb-b", shared.as_str()));
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    /// THE FILE THE RUNNER PUBLISHES IS THE TRANSCRIPT, and a seat whose log does not exist yet is refused BY
+    /// NAME: an empty string here would be uploaded as "nothing happened", which is the opposite fact.
+    #[tokio::test]
+    async fn the_transcript_reads_the_runners_log_and_refuses_when_it_is_absent() {
+        let state_dir = scratch("session-transcript");
+        let room = "transcript-room";
+        let seat = seat_key("transcript");
+        write_spec(&state_dir, room, &seat);
+        let supervisor = supervisor_at(&state_dir);
+
+        let absent = supervisor
+            .read_transcript(&RoomSupervisor::canonical_session_name(room, &seat), None)
+            .expect_err("the runner has written no log");
+        assert!(absent.contains("no transcript file"), "{absent}");
+        assert!(
+            absent.contains(".jsonl"),
+            "the refusal names the path it looked for, so a reader can check it: {absent}"
+        );
+
+        let logs = state_dir.join("rooms").join(room).join("logs");
+        fs::create_dir_all(&logs).expect("logs dir");
+        fs::write(logs.join(format!("{seat}.jsonl")), "one\ntwo\nthree\n").expect("log");
+
+        let whole = supervisor.read_transcript(&seat, None).expect("whole log");
+        assert_eq!(whole.content, "one\ntwo\nthree\n");
+        assert!(whole.path.ends_with(&format!("{seat}.jsonl")));
+        assert_eq!(
+            whole.session,
+            RoomSupervisor::canonical_session_name(room, &seat),
+            "the answer says which seat it is about"
+        );
+
+        let tail = supervisor
+            .read_transcript(&seat, Some(2))
+            .expect("newest two");
+        assert_eq!(
+            tail.content, "two\nthree\n",
+            "a line window keeps whole lines and their terminators"
+        );
+
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    /// `lines` IS A LINE WINDOW ON A JSONL FILE: a byte window would split a record, and a reader handed
+    /// half a record uploads half a message.
+    #[test]
+    fn tail_lines_keeps_whole_lines() {
+        assert_eq!(tail_lines("a\nb\nc\n", 2), "b\nc\n");
+        assert_eq!(
+            tail_lines("a\nb\nc\n", 9),
+            "a\nb\nc\n",
+            "fewer lines than asked for is the whole file"
+        );
+        assert_eq!(
+            tail_lines("a\nb\nc", 1),
+            "c",
+            "a file whose last line has no terminator still ends there"
+        );
+        assert_eq!(
+            tail_lines("a\nb\n", 0),
+            "",
+            "zero is a window of nothing, not the whole file"
+        );
+        assert_eq!(tail_lines("", 3), "");
     }
 
     /// A scratch state dir under the system temp dir, unique per test, removed by the caller.

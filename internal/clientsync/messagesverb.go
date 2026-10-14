@@ -16,10 +16,9 @@
 // prompt is worse than not delivering it, because the wrong prompt is somebody else's. THE MACHINE-WIDE
 // FALLBACK IS DELETED RATHER THAN REPAIRED: asking `rig ps --json` which sessions this machine runs was
 // an exec of the CLI this cutover removes, so it could not survive it in any world. The rig shape
-// (`--rig R`) derives each session from
-// THIS MACHINE's own node table instead — `rig ps --nodes --rig R --json` names every seat of the rig
-// and the canonical session it answers to — and skips a seat that is not running rather than typing
-// into a stopped session.
+// (`--rig R`) reads each session from the RUNTIME's own room status instead (`GetRoomStatus`, the source
+// `roomSeats` documents): it names every seat of the rig and the canonical session that seat answers to, and
+// a seat that is not running is skipped rather than typed into.
 //
 // THE RIG SHAPE IS THE SUPERVISED ONE. `sync messages --rig R --watch` is a child of rigd, so it runs
 // one pass over every seat, writes a heartbeat per pass, and never exits on a transient failure: the
@@ -64,10 +63,11 @@ which client typed the message.
 In the room-and-seat shape the session is --session <name>; the verb refuses without it rather than
 guessing which prompt to type into.
 
-In the --rig shape the room is the rig itself and every seat's own session is read from this machine's
-node table (` + "`rig ps --nodes --rig <rig> --json`" + `); a seat that is not running is skipped, and its messages
-stay pending until it is back. rigd supervises this shape with --watch: one pass every 10 s, one
-heartbeat per pass, and a transient failure waits for the next pass instead of ending the child.
+In the --rig shape the room is the rig itself and every seat's own session is read from the runtime's room
+status (the same read the room status verb makes), which names the canonical session each running seat
+answers to; a seat that is not running is skipped, and its messages stay pending until it is back. rigd
+supervises this shape with --watch: one pass every 10 s, one heartbeat per pass, and a transient failure
+waits for the next pass instead of ending the child.
 
   --limit <n>  the page size asked of the cloud (the cloud's own default and clamp apply)
   --dry-run    pull and print, send and acknowledge nothing (a --rig read is one pass; refused with --watch)

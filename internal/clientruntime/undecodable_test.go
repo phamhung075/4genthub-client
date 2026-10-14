@@ -112,6 +112,24 @@ func undecodableCalls() []undecodableCall {
 			rooms, err := c.ListAllRooms()
 			return sliceValue(rooms), err
 		}},
+		{"ListSessions", func(c *Client) (any, error) {
+			entries, err := c.ListSessions("")
+			return sliceValue(entries), err
+		}},
+		{"Transcript", func(c *Client) (any, error) {
+			answer, err := c.Transcript("room-a-seat-1@room-a", 0)
+			if err != nil {
+				return nil, err
+			}
+			return answer.Content, nil
+		}},
+		{"Capture", func(c *Client) (any, error) {
+			answer, err := c.Capture("room-a-seat-1@room-a", 0)
+			if err != nil {
+				return nil, err
+			}
+			return answer.Content, nil
+		}},
 	}
 }
 
@@ -122,6 +140,7 @@ var arrayAnswerVerbs = map[string]bool{
 	"GetRoomStatus": true,
 	"QueueList":     true,
 	"ListAllRooms":  true,
+	"ListSessions":  true,
 }
 
 // wrongShapeAnswer frames one successful response whose document is a different JSON kind than the verb

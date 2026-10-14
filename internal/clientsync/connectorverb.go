@@ -10,16 +10,14 @@ package clientsync
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
-	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // connectorUsage is the whole surface of this verb.
@@ -107,7 +105,7 @@ func RunConnectorVerb(ctx context.Context, args []string, stdout, stderr io.Writ
 		return clientcmd.ExitUsage
 	}
 
-	// The seat this session belongs to, as `rig ps --json` reports it. When the rig names no entry for
+	// The seat this session belongs to, as the RUNTIME reports it. When the runtime names no entry for
 	// the session, the frame carries NO room and NO seat - the server records a session it was not told
 	// the seat of, rather than one it was told to guess.
 	room, seat := rigSeatFor(ctx, session)
@@ -188,58 +186,42 @@ func (c sessionCandidate) answersTo(session string) bool {
 	return false
 }
 
-// rigSessionCandidates asks the rig which sessions exist, in the order `rig ps --json` reports them.
-// The shape of `rig ps --json` is not re-derived here: every plausible key is accepted, a candidate
-// without a usable name is skipped, and duplicates are dropped rather than listed twice.
+// rigSessionCandidates asks the RUNTIME which sessions exist. It is the read the connector's whole seat
+// resolution rests on: the runtime answers one entry per seat of every room it hosts, in the CLI's own keys,
+// so the same names reach the same code that used to read `rig ps --json`.
 //
-// CANONICAL FIRST, and that order is a fix rather than a preference: the real output carries
-// canonicalSessionName (<pod>-<member>@<rig>, the name the UI shows and the one a person passes to
-// --session), rigName and logicalId, and NO plain "name" - so the previous key order fell through to
-// logicalId and the default path addressed sessions by an identifier the UI never shows.
-//
-// ITS ONE CALLER NOW IS rigSeatFor: the machine-wide fallback that asked this to CHOOSE a session is deleted,
-// because asking `rig ps --json` at all is the shell-out this cutover removes. This stays as a DECLARED reach
-// (routed with the session list in DEPLOY-READY section 65) until the runtime has a session-list action, and its
-// consumer carries the same declaration at its own definition.
+// THE CLI REACH IS RETIRED RATHER THAN WRAPPED. This exec-ed `rig ps --json` - the shell-out the cutover
+// removes (DEPLOY-READY section 65, the parked runtime request this unit answers) - and it now reads the
+// runtime's own socket through the one client this package already uses for a room's status.
 func rigSessionCandidates(ctx context.Context) ([]sessionCandidate, error) {
-	out, err := runRig(ctx, "ps", "--json")
+	entries, err := clientruntime.NewClient("").ListSessions("")
 	if err != nil {
 		return nil, err
 	}
-	return parseRigPsSessions(out)
+	return candidatesFrom(entries), nil
 }
 
-// parseRigPsSessions reads `rig ps --json` output - a list, or an object carrying one under sessions,
-// items, nodes or result - into candidates.
-func parseRigPsSessions(out string) ([]sessionCandidate, error) {
-	var decoded any
-	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
-		return nil, fmt.Errorf("rig ps --json did not answer JSON: %w", err)
-	}
-	var entries []map[string]any
-	switch v := decoded.(type) {
-	case []any:
-		entries = sessionMaps(v)
-	case map[string]any:
-		for _, key := range []string{"sessions", "items", "nodes", "result"} {
-			list, ok := v[key].([]any)
-			if !ok {
-				continue
-			}
-			entries = sessionMaps(list)
-			if len(entries) > 0 {
-				break
-			}
-		}
-	}
+// candidatesFrom turns the runtime's entries into the candidates the sync verbs resolve seats with.
+//
+// THIS IS NOT A SECOND PARSER OF THE CLI'S LOOSE SHAPES. Every name it reads is a typed field the runtime
+// guarantees and pins by test (`clientruntime.SessionEntry`'s json tags ARE that contract). The CLI allowed
+// six spellings of a name and three of a status because its output was nobody's contract; this input is one,
+// so the tolerance that existed for the CLI's sake went with the CLI. What stays is what the candidate list
+// itself needs: a candidate with no usable name is skipped, and duplicates are dropped, because two entries
+// naming one session is a runtime bug and listing it twice would double every event uploaded.
+//
+// CANONICAL FIRST, and that order is a fix rather than a preference: the canonical name
+// (<pod>-<member>@<rig>) is the one the UI shows and the one a person passes to --session, so a verb that
+// printed the logicalId instead addressed sessions by an identifier nobody types.
+func candidatesFrom(entries []clientruntime.SessionEntry) []sessionCandidate {
 	var result []sessionCandidate
 	seen := map[string]bool{}
 	for _, entry := range entries {
 		c := sessionCandidate{
-			identifiers: sessionIdentifiers(entry),
-			rigName:     sessionRigName(entry),
-			member:      sessionMember(entry),
-			state:       sessionState(entry),
+			identifiers: entryIdentifiers(entry),
+			rigName:     entry.RigName,
+			member:      memberOf(entry.LogicalID),
+			state:       entry.SessionStatus,
 		}
 		if len(c.identifiers) == 0 {
 			continue
@@ -251,76 +233,33 @@ func parseRigPsSessions(out string) ([]sessionCandidate, error) {
 		seen[c.name] = true
 		result = append(result, c)
 	}
-	return result, nil
+	return result
 }
 
-func sessionMaps(list []any) []map[string]any {
-	var out []map[string]any
-	for _, item := range list {
-		if m, ok := item.(map[string]any); ok {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-// sessionNameKeys are the keys an entry may carry a name under, MOST CANONICAL FIRST.
-var sessionNameKeys = []string{"canonicalSessionName", "sessionName", "session_name", "name", "id", "logicalId"}
-
-// sessionIdentifiers lists every name an entry answers to, in that order and without repeats, so the
+// entryIdentifiers lists every name an entry answers to, MOST CANONICAL FIRST and without repeats, so the
 // first is the one a verb should print and type.
-func sessionIdentifiers(entry map[string]any) []string {
+func entryIdentifiers(entry clientruntime.SessionEntry) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, key := range sessionNameKeys {
-		value, ok := entry[key].(string)
-		if !ok || value == "" || seen[value] {
+	for _, name := range []string{entry.CanonicalSessionName, entry.SessionName, entry.LogicalID} {
+		if name == "" || seen[name] {
 			continue
 		}
-		seen[value] = true
-		out = append(out, value)
+		seen[name] = true
+		out = append(out, name)
 	}
 	return out
 }
 
-func sessionRigName(entry map[string]any) string {
-	for _, key := range []string{"rigName", "rig_name"} {
-		if value, ok := entry[key].(string); ok && value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-// sessionStateKeys are the keys a node record may carry its status under, most authoritative first.
-var sessionStateKeys = []string{"sessionStatus", "session_status", "status"}
-
-// sessionState is the node's status as one of 2.2's two session states. ONLY `running` is running: a
-// `detached` or `stopped` node is not a live session, and the Sessions page's `seat_state` distinguishes
-// a reported stop (stopped) from no report at all (null), so a guess here would erase that difference.
-func sessionState(entry map[string]any) string {
-	for _, key := range sessionStateKeys {
-		value, ok := entry[key].(string)
-		if !ok || value == "" {
-			continue
-		}
-		if value == SessionRunning {
-			return SessionRunning
-		}
-		return SessionStopped
-	}
-	return ""
-}
-
-// sessionMember is the seat key: the member after the FIRST dot of logicalId, by the rule the rest of
-// this client already uses (clientbridge.SeatName). A logicalId carrying no dot names no member, so
-// the candidate reports NO seat rather than one named after its own pod.
-func sessionMember(entry map[string]any) string {
-	logical, _ := entry["logicalId"].(string)
-	if !strings.Contains(logical, ".") {
+// memberOf is the seat key: the member after the FIRST dot of a logical id, by the rule the rest of this
+// client already uses (clientbridge.SeatName). An id carrying no dot names no member, so the candidate
+// reports NO seat rather than one named after its own pod.
+func memberOf(logicalID string) string {
+	_, member, found := strings.Cut(logicalID, ".")
+	if !found || member == "" {
 		return ""
 	}
-	return clientbridge.SeatName(entry)
+	return member
 }
 
 // rigSeatFor returns the room and the seat key the rig reports for a session, or two empty strings
@@ -328,9 +267,10 @@ func sessionMember(entry map[string]any) string {
 // its transcript are still worth reporting, and a session with no seat is one the UI shows without
 // an input box.
 //
-// IT IS A DECLARED REACH, and the declaration says what retires it: the candidate list it reads comes from
-// `rig ps --json`, and the runtime has no session-list action (DEPLOY-READY section 65). The alternative to waiting is a
-// contract change - the frame simply carries no room or seat - which is a different decision from this unit's.
+// IT IS NO LONGER A DECLARED REACH: the candidate list comes from the runtime's own session list
+// (`ListSessions`), which is the interface DEPLOY-READY section 65 parked and this unit builds. The
+// alternative it used to wait for - a contract change where the frame carries no room or seat at all -
+// remains a different decision, and it is not this one.
 func rigSeatFor(ctx context.Context, session string) (string, string) {
 	candidates, err := rigSessionCandidates(ctx)
 	if err != nil {
@@ -344,26 +284,17 @@ func rigSeatFor(ctx context.Context, session string) (string, string) {
 	return "", ""
 }
 
-// rigTranscript reads a session's transcript through the CLI. It is a DECLARED reach rather than a converted one:
-// the runtime's IPC has no transcript action (see DEPLOY-READY section 65, the parked request alongside the session
-// list this file also needs), so this stays an exec until that action exists or this verb changes its contract.
+// rigTranscript reads a session's transcript through the RUNTIME, from the file that seat's runner publishes.
+//
+// THE OLD PATH COULD NOT WORK WHERE IT MATTERED: `rig transcript` is not a verb the installed client has
+// ("4genteam: unknown command transcript"), so the exec this replaces was not a slower route to the same
+// bytes - it was a reach that failed wherever the installed client was what `rig` resolved to.
 func rigTranscript(ctx context.Context, session string) (string, error) {
-	return runRig(ctx, "transcript", session)
-}
-
-func runRig(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "rig", args...)
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = err.Error()
-		}
-		return "", fmt.Errorf("rig %s failed: %s", strings.Join(args, " "), detail)
+	answer, err := clientruntime.NewClient("").Transcript(session, 0)
+	if err != nil {
+		return "", err
 	}
-	return stdout.String(), nil
+	return answer.Content, nil
 }
 
 // transcriptEvents turns the tail of a transcript into the event shapes the wire takes, REDACTING

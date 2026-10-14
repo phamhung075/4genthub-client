@@ -3,6 +3,78 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the runtime answers the session list, a transcript and a pane, and the last execs go
+
+### Added
+- `rust/agenthub-runtime/src/types.rs` — three IPC actions: `ListSessions { room }` (a room, or every room the
+  daemon hosts), `Transcript { session, lines }` and `Capture { session, lines }`, plus their answers
+  (`SessionEntry`, `SessionActivity`, `TranscriptAnswer`, `CaptureAnswer`). `SessionEntry`'s serde renames are the
+  CLI's OWN camelCase (`canonicalSessionName`, `sessionName`, `rigName`, `logicalId`, `sessionStatus`,
+  `agentActivity.state`, `transcriptPath`) **because the client's one session-list parser reads exactly those
+  keys** — a second vocabulary here would make every native session invisible to that parser while the runtime
+  looked healthy. `sessionStatus` is `running` or `stopped` and nothing else: the client reduces every status to
+  those two, so the reduction happens once, where the evidence is.
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — `hosted_rooms()` (the `rooms/` directories that carry a spec; a
+  spec-less directory is not a room), `list_sessions(room)` (a PROJECTION of `get_room_status`, so the list and the
+  status cannot drift), `resolve_seat(session)`, `read_transcript(session, lines)` and `capture_session(session,
+  lines)`, plus `canonical_session_name` (`<room>-<seat>@<room>`) and `logical_id` (`<room>.<seat>`) beside
+  `session_name`.
+- `internal/clientruntime/sessions.go` — `ListSessions`, `Transcript` and `Capture` over the runtime socket, using
+  the one `decodeAnswer` decoder, with the empty room sent as an explicit `null` (the frame is adjacently tagged,
+  so dropping the key would ask a different question).
+
+### Changed
+- `internal/clientsync/connectorverb.go` — the connector's two reaches are RETIRED, not wrapped: `rigSessionCandidates`
+  reads the runtime's session list and `rigTranscript` reads the runtime's `Transcript`. `parseRigPsSessions`,
+  `sessionMaps`, `sessionIdentifiers`, `sessionRigName`, `sessionState`, `sessionNameKeys`, `sessionStateKeys` and
+  `runRig` are DELETED: they existed to tolerate the CLI's loose output (six spellings of a name, three of a status),
+  and that input is a typed contract now. `sessionMember` becomes `memberOf(logicalID)`.
+- `internal/clientsync/rigd.go` — the same three reads re-pointed (`Sessions`, `Transcript`, `Capture`), and
+  `rigNodeCandidates` deleted; its `--nodes --all-rigs` scope is what the runtime's own session list answers, from
+  the daemon that owns the rooms.
+- `internal/clientsync/messagesverb.go` — the two sentences that still advertised `rig ps --nodes --rig R --json`
+  as the rig shape's source now name the runtime's room status, which is what `roomSeats` has read since M3. (The
+  gate at `b24acfc` deferred this text to the first commit that touches `internal/clientsync`.)
+- `rust/agenthub-runtime/src/ipc/mod.rs` — the three actions dispatched.
+- Every refusal from the new surface NAMES what it could not find: an unhosted room with the rooms it does host, an
+  unknown seat with the rooms it searched, a seat whose log does not exist with the path it looked for, and a pane
+  that is not up with the session name. `get_room_status`'s own sentence is a contract other readers pin, so it is
+  left alone; `list_sessions` names the room around it.
+
+### Verified
+- 65 crate tests green, six of them new: the wire keys and the nested activity word, the all-rooms enumeration
+  (plus "a spec-less directory is not a room" and "an unhosted room is refused by its name"), every served name
+  resolving, a bare seat key in two rooms REFUSED rather than guessed, the transcript's whole/tail read and its
+  refusal when the runner has written no log, and the line window on a JSONL file.
+- Go: `go vet ./...` clean, `go test ./...` green, `gofmt -l` empty on both touched packages. The new verbs join
+  the package's own undecodable-answer instrument (`undecodableCalls`), so a wrong-shape or truncated answer to
+  any of the three is refused with exit 3 rather than read as an empty session list or an empty transcript.
+- LIVE, a scratch runtime from this branch over its own socket and a scratch state dir: `ListSessions` served both
+  seats with the canonical name, the runtime's session name, the logical id, `sessionStatus` and a nested
+  `agentActivity`; with a REAL pane created in that runtime's own tmux root the seat read `sessionStatus: running`
+  and `agentActivity.state: working` (source `running`), and **`Capture` returned the pane's own text**; the seat
+  that published nothing read `unknown` with no source (never-evidence), and the seat with no pane read `stopped`.
+  Every refusal was observed on the wire: `no room named "ghost-room" in this daemon (it hosts live-room)`,
+  `no seat named "ghost@nowhere" in any room this daemon hosts (live-room)`, `no transcript file for
+  "live-room-dev-b@live-room" at <path>`, `no live pane named ...: this daemon has no running session ...` — and
+  `Transcript` answered by all four spellings of one seat's name.
+- The parity rule is measured, not described: the LIVE `ListSessions` bytes were decoded through the client's own
+  `clientruntime.SessionEntry` and fed to `candidatesFrom`, which produced the right candidates (canonical name
+  first, `live-room`/`dev-a`, `running`) — a throwaway test over the captured bytes, removed afterwards.
+- `rustfmt --check` hunk counts on the PRISTINE files: supervisor **20 → 20**, ipc **9 → 9**, types **2 → 3** —
+  every hunk is a pre-existing compact variant, the diff never touches a line this change adds, and the third hunk
+  in `types.rs` is the same pre-existing block split in two because correctly-formatted variants now sit between
+  its halves. The crate-wide fmt-red is pre-existing and untouched.
+
+### Not claimed
+- `rig transcript` and `rig capture` are NOT verbs the installed client has (`4genteam: unknown command
+  transcript`), so no CLI parity could be measured against them and none is claimed: what is measured is the file
+  the runner publishes and the pane the runtime owns.
+- The node table (`rig ps --nodes --json`, §65's `GetNodes`) is a different request and stays parked; the two
+  room-scoped reaches in `respawnverb.go` belong to another row and are untouched.
+- Nothing was pushed, and no live daemon or seat was restarted: the live arm ran a scratch runtime under `/tmp`
+  with its own state dir and its own tmux root.
+
 ## 2026-10-14 — the runtime grows the activity producer the readers' seam re-points onto
 
 ### Added

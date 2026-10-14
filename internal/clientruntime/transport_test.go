@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
 // THE RUNTIME-FIRST SEAM, PINNED WHERE IT CAN BE FALSIFIED.
@@ -88,6 +90,102 @@ func fakeRuntime(t *testing.T, handler func(line string) string) (string, <-chan
 func noRuntimeSocket(t *testing.T) {
 	t.Helper()
 	t.Setenv(RuntimeSocketEnv, filepath.Join(t.TempDir(), "no-runtime.sock"))
+}
+
+// TestListSessionsAsksForTheRoomOrForEveryRoomItHosts: an empty room must travel as an EXPLICIT null (the
+// frame is adjacently tagged, so the key is a sibling of `action`) rather than being dropped, which would
+// ask a different question than the runtime's own "every room this daemon hosts".
+func TestListSessionsAsksForTheRoomOrForEveryRoomItHosts(t *testing.T) {
+	sock, requests := fakeRuntime(t, func(string) string {
+		return okDataResponse(`[{"canonicalSessionName":"room-a-seat-1@room-a","sessionName":"agenthub--room-a--seat-1",` +
+			`"rigName":"room-a","logicalId":"room-a.seat-1","sessionStatus":"running",` +
+			`"agentActivity":{"state":"idle","source":"idle"}}]`)
+	})
+	t.Setenv(RuntimeSocketEnv, sock)
+
+	client := NewClient(sock)
+	entries, err := client.ListSessions("")
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %#v, want the one the runtime served", entries)
+	}
+	if entries[0].CanonicalSessionName != "room-a-seat-1@room-a" || entries[0].AgentActivity.State != "idle" {
+		t.Errorf("entry = %#v, want the canonical name and the nested word", entries[0])
+	}
+	if got := awaitRequest(t, requests); got != `{"action":"ListSessions","payload":{"room":null}}` {
+		t.Errorf("frame = %q, want the null room of every-room-it-hosts", got)
+	}
+
+	if _, err := client.ListSessions("room-a"); err != nil {
+		t.Fatalf("ListSessions(room-a): %v", err)
+	}
+	if got := awaitRequest(t, requests); got != `{"action":"ListSessions","payload":{"room":"room-a"}}` {
+		t.Errorf("frame = %q, want the named room", got)
+	}
+}
+
+// TestContentReadsAskForTheSeatAndTheWindowTheCallerNamed: `lines` travels only when a window was asked for.
+// An absent bound is the runtime's own "read the file whole", so sending a zero would be this client
+// inventing a bound nobody chose - and a window is a LINE count, which is why it is not a byte estimate.
+func TestContentReadsAskForTheSeatAndTheWindowTheCallerNamed(t *testing.T) {
+	sock, requests := fakeRuntime(t, func(string) string {
+		return okDataResponse(`{"session":"room-a-seat-1@room-a","path":"/tmp/room-a/logs/seat-1.jsonl","content":"one\ntwo\n"}`)
+	})
+	t.Setenv(RuntimeSocketEnv, sock)
+
+	client := NewClient(sock)
+	answer, err := client.Transcript("room-a-seat-1@room-a", 0)
+	if err != nil {
+		t.Fatalf("Transcript: %v", err)
+	}
+	if answer.Content != "one\ntwo\n" || answer.Path == "" || answer.Session == "" {
+		t.Fatalf("answer = %#v, want the runtime's whole document", answer)
+	}
+	if got := awaitRequest(t, requests); got != `{"action":"Transcript","payload":{"session":"room-a-seat-1@room-a"}}` {
+		t.Errorf("frame = %q, want no lines key when no window was asked for", got)
+	}
+
+	if _, err := client.Transcript("room-a-seat-1@room-a", 300); err != nil {
+		t.Fatalf("Transcript with a window: %v", err)
+	}
+	if got := awaitRequest(t, requests); got != `{"action":"Transcript","payload":{"lines":300,"session":"room-a-seat-1@room-a"}}` {
+		t.Errorf("frame = %q, want the window the caller named", got)
+	}
+}
+
+// TestAContentReadRefusesAnAnswerThatNamesNoSession: the document PARSED and does not say which seat it is
+// about. Reading that as empty content is the lie these actions exist to remove - "there was nothing to
+// send" and "nobody told me what I asked about" are different facts, and only one of them is a measurement.
+func TestAContentReadRefusesAnAnswerThatNamesNoSession(t *testing.T) {
+	for _, verb := range []string{"Transcript", "Capture"} {
+		t.Run(verb, func(t *testing.T) {
+			sock, requests := fakeRuntime(t, func(string) string {
+				return okDataResponse(`{"path":"/tmp/room-a/logs/seat-1.jsonl","content":"something"}`)
+			})
+			t.Setenv(RuntimeSocketEnv, sock)
+
+			client := NewClient(sock)
+			var err error
+			if verb == "Transcript" {
+				_, err = client.Transcript("room-a-seat-1@room-a", 0)
+			} else {
+				_, err = client.Capture("room-a-seat-1@room-a", 0)
+			}
+			_ = awaitRequest(t, requests)
+
+			if err == nil {
+				t.Fatalf("a %s answer naming no session was accepted", verb)
+			}
+			if code := clientcmd.CodeOf(err, clientcmd.ExitOK); code != clientcmd.ExitRoomRefused {
+				t.Errorf("exit code = %d, want the room contract's refusal", code)
+			}
+			if !strings.Contains(err.Error(), "named no session") {
+				t.Errorf("refusal %q does not say what was missing", err)
+			}
+		})
+	}
 }
 
 // awaitRequest is assertQueueFrame's sibling for the fake runtime's own channel.

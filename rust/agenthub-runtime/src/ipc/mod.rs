@@ -155,6 +155,25 @@ impl IpcServer {
                 Err(e) => IpcResponse::err(e),
             },
 
+            IpcRequest::ListSessions { room } => match supervisor.list_sessions(room.as_deref()) {
+                Ok(entries) => IpcResponse::success(serde_json::to_value(entries).unwrap()),
+                Err(e) => IpcResponse::err(e),
+            },
+
+            IpcRequest::Transcript { session, lines } => {
+                match supervisor.read_transcript(&session, lines) {
+                    Ok(answer) => IpcResponse::success(serde_json::to_value(answer).unwrap()),
+                    Err(e) => IpcResponse::err(e),
+                }
+            }
+
+            IpcRequest::Capture { session, lines } => {
+                match supervisor.capture_session(&session, lines) {
+                    Ok(answer) => IpcResponse::success(serde_json::to_value(answer).unwrap()),
+                    Err(e) => IpcResponse::err(e),
+                }
+            }
+
             IpcRequest::Whoami { session, pid } => {
                 match supervisor.resolve_whoami(session.as_deref(), pid) {
                     Ok(resp) => IpcResponse::success(serde_json::to_value(resp).unwrap()),

@@ -354,6 +354,67 @@ pub struct WhoamiTranscript {
     pub tail_command: Option<String>,
 }
 
+/// One entry of the session list (`ListSessions`): one seat of one hosted room, in the CLI's OWN
+/// camelCase spellings so the client's existing session-list parser reads either source unchanged.
+///
+/// THE FIELD NAMES ARE THE CONTRACT, not a preference. `clientsync.parseRigPsSessions` reads
+/// `canonicalSessionName` FIRST - the name a person passes to `--session` - then `rigName` and
+/// `logicalId` (whose member after the FIRST dot is the seat key) and `sessionStatus`, and it SKIPS an
+/// entry with no usable name. Serving `SeatStatus`'s snake_case keys here instead would make every native
+/// session invisible to that parser while looking like a working answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEntry {
+    /// `<room>-<seat>@<room>`: the room IS the rig for a native room, the rule the client's own
+    /// `SeatSessionName` doc states, and the name a person addresses a seat by.
+    #[serde(rename = "canonicalSessionName")]
+    pub canonical_session_name: String,
+    /// The runtime's own session name (`agenthub--<room>--<seat>`): what tmux is addressed by.
+    #[serde(rename = "sessionName")]
+    pub session_name: String,
+    #[serde(rename = "rigName")]
+    pub rig_name: String,
+    /// `<room>.<seat>`: the client recovers the seat key from the member after the first dot, and a bare
+    /// seat key names no member to that reader.
+    #[serde(rename = "logicalId")]
+    pub logical_id: String,
+    /// `running` or `stopped`, and nothing else. The client reduces every status to those two values, so
+    /// the reduction happens once, here, where the evidence is - a third word would be reduced anyway.
+    #[serde(rename = "sessionStatus")]
+    pub session_status: String,
+    #[serde(rename = "agentActivity")]
+    pub agent_activity: SessionActivity,
+    pub runtime: String,
+    pub model: Option<String>,
+    #[serde(rename = "transcriptPath")]
+    pub transcript_path: Option<String>,
+}
+
+/// The activity half of a session entry, nested at `agentActivity.state` because that is where the
+/// client's node parser looks for it. `source` is the seat's own published word, so a reader sees the
+/// evidence the state was derived from instead of trusting the derivation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionActivity {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// A transcript read: the text, and the file it came from. The path travels with the text because a
+/// reader who gets text that looks wrong needs to know which file produced it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptAnswer {
+    pub session: String,
+    pub path: String,
+    pub content: String,
+}
+
+/// A pane capture: the text, and the seat it came from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureAnswer {
+    pub session: String,
+    pub content: String,
+}
+
 /// IPC Request frames over the local Unix domain socket.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", content = "payload")]
@@ -365,6 +426,26 @@ pub enum IpcRequest {
     SendText { session: String, text: String },
     GetRoomStatus { room: String },
     ListAllRooms,
+    /// The session list this daemon can answer for: every seat of every room it hosts, in the CLI's own
+    /// keys (`SessionEntry`). A `room` narrows it to one room; `None` means every room this daemon hosts.
+    ///
+    /// It exists so the connector and rigd stop exec-ing `rig ps --json`: the client's own session-list
+    /// parser reads this answer unchanged, which is what makes the CLI and the runtime comparable in one
+    /// test instead of described in two.
+    ListSessions {
+        room: Option<String>,
+    },
+    /// A seat's transcript, read from the file its runner publishes (`transcript_path`). `lines` bounds
+    /// it to the newest lines; `None` reads the file whole.
+    Transcript {
+        session: String,
+        lines: Option<usize>,
+    },
+    /// A seat's pane, taken through the same `TerminalManager` every other tmux call in this crate uses.
+    Capture {
+        session: String,
+        lines: Option<usize>,
+    },
     Whoami { session: Option<String>, pid: Option<u32> },
     ForceCompact { session: String },
     Ping,
