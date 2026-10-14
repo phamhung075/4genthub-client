@@ -14,7 +14,7 @@ func TestRuntimeSendLineNamesAnUnconfirmedSubmission(t *testing.T) {
 }
 
 func TestRuntimeSendLineReadsSubmittedAndMissingOutcomeAsSent(t *testing.T) {
-	for _, answer := range []string{`{"delivered":"s","outcome":"submitted"}`, `{"delivered":"s"}`, `not json`} {
+	for _, answer := range []string{`{"delivered":"s","outcome":"submitted"}`, `{"delivered":"s","outcome":"relayed","runner":{"relayed":"prompt"}}`, `{"delivered":"s"}`, `not json`} {
 		if got := RuntimeSendLine("s", []byte(answer)); got != "Sent to s\n" {
 			t.Errorf("answer %s: got %q, want the plain Sent line", answer, got)
 		}

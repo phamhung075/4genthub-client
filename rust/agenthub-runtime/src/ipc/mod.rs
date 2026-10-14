@@ -150,8 +150,8 @@ impl IpcServer {
                 Err(e) => IpcResponse::err(e),
             },
 
-            IpcRequest::SendText { session, text } => match TerminalManager::send_text(&session, &text) {
-                Ok(outcome) => IpcResponse::success(serde_json::json!({"delivered": session, "outcome": outcome})),
+            IpcRequest::SendText { session, text } => match supervisor.deliver_text(&session, &text) {
+                Ok(answer) => IpcResponse::success(answer),
                 Err(e) => IpcResponse::err(e),
             },
 

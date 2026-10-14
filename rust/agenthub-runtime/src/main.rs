@@ -211,11 +211,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         Commands::Send { session, text } => {
-            let outcome = pty::TerminalManager::send_text(&session, &text)
+            let answer = supervisor
+                .deliver_text(&session, &text)
                 .map_err(|e| format!("send error: {e}"))?;
-            match outcome {
-                pty::SendOutcome::Submitted => println!("delivered to {session}"),
-                pty::SendOutcome::Unconfirmed => println!("pasted to {session}, submission unconfirmed"),
+            match answer["outcome"].as_str() {
+                Some("unconfirmed") => println!("pasted to {session}, submission unconfirmed"),
+                _ => println!("delivered to {session}"),
             }
             Ok(())
         }

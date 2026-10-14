@@ -865,6 +865,41 @@ impl RoomSupervisor {
         }
     }
 
+    /// Deliver one message to a seat as ONE message.
+    ///
+    /// A runner seat's pane input is the runner's own line reader, so a multi-line paste would arrive as one
+    /// prompt per line: the envelope's `From:` line alone would be the first thing the agent is asked. Its
+    /// mailbox `text` verb carries the whole text in one frame and answers once the runner relayed it. The
+    /// runtimes with no runner own their pane's input (a TUI), where the bracketed tmux paste is the delivery.
+    pub fn deliver_text(&self, session: &str, text: &str) -> Result<serde_json::Value, String> {
+        let (room, seat) = self.resolve_seat(session)?;
+        let canonical = Self::session_name(&room, &seat);
+        if !self.seat_runtime(&room, &seat)?.has_runner() {
+            let outcome = TerminalManager::send_text(&canonical, text)?;
+            return Ok(serde_json::json!({"delivered": canonical, "outcome": outcome}));
+        }
+        let id = format!("send-{}-{}", std::process::id(), Utc::now().timestamp_millis());
+        let answer = crate::runner::send_to_seat(
+            &self.base_state_dir,
+            &canonical,
+            &serde_json::json!({"id": id, "type": "text", "text": text}),
+            Some((text.as_bytes(), true)),
+            true,
+        )?;
+        Ok(serde_json::json!({"delivered": canonical, "outcome": "relayed", "runner": answer}))
+    }
+
+    fn seat_runtime(&self, room: &str, seat: &str) -> Result<AgentRuntime, String> {
+        let spec_file = self.room_dir(room).join("spec.json");
+        let content = fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec for {room}: {e}"))?;
+        let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec for {room}: {e}"))?;
+        spec.seats
+            .iter()
+            .find(|s| s.seat_key == seat)
+            .map(|s| AgentRuntime::from_str_loose(&s.runtime))
+            .ok_or_else(|| format!("room {room} has no seat {seat}"))
+    }
+
     /// A seat's transcript: the file its runner publishes, read whole or as its newest `lines` lines.
     ///
     /// IT REFUSES BY NAME rather than answering with an empty string. A seat whose runner has not created
@@ -1714,6 +1749,42 @@ mod tests {
     /// tokio runtime (`#[tokio::test]`) even where nothing is awaited.
     fn supervisor_at(state_dir: &Path) -> RoomSupervisor {
         RoomSupervisor::new(state_dir, HookBus::new(state_dir.join("audit"), 8))
+    }
+
+    /// A MULTI-LINE MESSAGE TO A RUNNER SEAT IS ONE `text` FRAME IN ITS MAILBOX, not one pane line per line:
+    /// a pane paste is read by the runner's line reader as one prompt per line, so the agent's first prompt
+    /// was the envelope's `From:` line alone. Fails if delivery goes back through the pane.
+    #[tokio::test]
+    async fn a_multi_line_message_reaches_a_runner_seat_as_one_text_frame() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        let state_dir = scratch("deliver-one-frame");
+        let seat = seat_key("deliver");
+        write_spec(&state_dir, "deliver", &seat);
+        let run_dir = state_dir.join("rooms").join("deliver").join("run");
+        fs::create_dir_all(&run_dir).expect("run dir");
+        let listener = UnixListener::bind(run_dir.join(format!("{seat}.sock"))).expect("mailbox");
+        let runner = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("a frame");
+            let mut line = String::new();
+            BufReader::new(stream).read_line(&mut line).expect("one line");
+            let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("a frame");
+            let reply = frame["replyTo"].as_str().expect("replyTo").to_string();
+            let mut back = UnixStream::connect(reply).expect("reply socket");
+            writeln!(back, "{}", serde_json::json!({"relayed": "prompt"})).expect("reply");
+            frame
+        });
+
+        let text = "From: principal@demo\nTo: dev\n---\nthe body";
+        let answer = supervisor_at(&state_dir).deliver_text(&seat, text).expect("delivered");
+        let frame = runner.join().expect("runner thread");
+        assert_eq!(frame["type"], "text");
+        assert_eq!(frame["text"], text, "the whole message is one frame");
+        assert_eq!(answer["outcome"], "relayed");
+        assert_eq!(answer["runner"]["relayed"], "prompt");
+
+        let _ = fs::remove_dir_all(&state_dir);
     }
 
     fn write_spec(state_dir: &Path, room: &str, seat: &str) {
