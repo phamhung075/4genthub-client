@@ -126,6 +126,68 @@ func TestWaitUntilQuietProceedsOnIdleWithinTheQuietWindow(t *testing.T) {
 	}
 }
 
+// AND THE ALIAS AT THE CONSUMER, because the form matters here too: the daemon STORES `idle-at-prompt` and serves
+// `idle`, and if the stored form ever arrives at this waiter it must still open - a synonym that neither opens nor
+// refuses on purpose is how a gate stays shut forever with nothing said.
+func TestWaitUntilQuietProceedsOnTheStoredFormOfIdle(t *testing.T) {
+	now := 0.0
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "idle-at-prompt", true },
+		Since:        func(string, string) float64 { return 99 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
+	if !waiter.Wait("rig", "s") {
+		t.Error("the stored form of idle did not open the wait: the alias is where a gate goes silent")
+	}
+}
+
+// AND THE SENTENCE THAT TURNS THE NEXT VOCABULARY GROWTH INTO A FIVE-MINUTE FIX: a word nobody recognizes is NAMED,
+// once, when the wait gives up - not swallowed into a gate that simply never opens.
+func TestWaitUntilQuietNamesTheWordItDidNotRecognize(t *testing.T) {
+	now := 0.0
+	var said []string
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "drifting", true },
+		Since:        func(string, string) float64 { return 999 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		Report:       func(message string) { said = append(said, message) },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
+	if waiter.Wait("rig", "s") {
+		t.Fatal("a word nobody recognizes released the wait")
+	}
+	if len(said) != 1 {
+		t.Fatalf("the wait said %d sentences about an unrecognized word, want exactly one: %v", len(said), said)
+	}
+	if !strings.Contains(said[0], `"drifting"`) || !strings.Contains(said[0], "not one this client recognizes") {
+		t.Errorf("the sentence does not name the word it could not read: %q", said[0])
+	}
+}
+
+// AND A RECOGNIZED REFUSAL STAYS QUIET: `working` is a word this client knows, so its refusal is deliberate and there
+// is nothing to report - the report exists for words nobody has seen, not for seats that are simply busy.
+func TestWaitUntilQuietDoesNotReportARecognizedWord(t *testing.T) {
+	now := 0.0
+	var said []string
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "working", true },
+		Since:        func(string, string) float64 { return 999 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		Report:       func(message string) { said = append(said, message) },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
+	if waiter.Wait("rig", "s") {
+		t.Fatal("a working seat released the wait")
+	}
+	if len(said) != 0 {
+		t.Errorf("a recognized word was reported as unrecognized: %v", said)
+	}
+}
+
 // fakeSource stands in for the cloud and the pins on disk: a fixed cloud, and pins held in a map.
 type fakeSource struct {
 	cloud []SeatHash

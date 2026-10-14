@@ -20,15 +20,27 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Verified
 - `internal/clientseat` — `TestWaitUntilQuietDoesNotProceedOnAWordThatIsNotIdle` FAILS against the previous
   predicate (`needs_input released the wait: stillness was allowed to satisfy a destroyer`) and passes after; the two
-  unreadable-reading arms and the `idle` arm are green beside it. `internal/clientruntime` drives the set with
-  `idle`, `working`, `needs_input`, `unknown`, `running`, the empty word, `idle-at-prompt` and a word nobody defines.
-- `go vet` clean; `internal/clientruntime`, `internal/clientseat` and `internal/clientlifecycle` all green.
+  unreadable-reading arms and the `idle` arm are green beside it. The stored form's arm
+  (`TestWaitUntilQuietProceedsOnTheStoredFormOfIdle`) is red against the first version of this change, where the set
+  held `idle` alone and refused `idle-at-prompt` in silence.
+- `internal/clientruntime` — the set is driven with `idle`, `working`, `needs_input`, `unknown`, `running`, the empty
+  word, `idle-at-prompt` and a word nobody defines; `TestTheRefusalNamesTheWordItDidNotRecognize` pins that an
+  unrecognized refusal CARRIES its word while a recognized one refuses quietly, and `TestTheQuietSetNamesExactlyOneWord`
+  is the test a future widening of the set meets.
+- `go vet` clean; `internal/clientruntime`, `internal/clientseat` and `internal/clientlifecycle` all green; whole tree
+  builds.
 
 ### Open, named rather than implied
-- The read's own single home is NOT in this commit. The client's `ps` computes `activity` locally and never carries
-  `agentActivity` (measured: `rig ps --nodes --json` supplies it only through the daemon), so one home for read and
-  predicate needs the daemon-served read — `agentActivity` on `GET /api/rigs/:id/graph` enriches inventory with it —
-  which is the second half of this row and the same seam the runtime-vocabulary unit later re-points.
+- **The read is still the half that is missing, and it is now measured rather than inferred.** The readers exec
+  `rig ps --nodes --json` and read `node["agentActivity"]["state"]`, but that field is NOT in what the shim answers on
+  this box: the same command returns `activity: "<1m ago"` — a relative time, the client's own heuristic — and no
+  `agentActivity` key at all. So both readers have been reading a field that never arrives: `seatActivity` returns
+  `("", true)` and the allow-set refuses the empty word forever, which is precisely the "quiet gate cannot open
+  today" half of this row, and why a genuinely idle seat and a dead gate have been indistinguishable in silence.
+  The missing read is the daemon's: `agentActivity` is attached to node inventory at graph-payload time
+  (`rigs.js:326`, exposed at `rigs.js:353`), so the client needs a daemon call for it — `GET /api/rigs/<id>/graph`
+  with the id resolved from `/api/rigs` by name — and then one home for read and predicate, which is the second half
+  of this row and the seam the runtime-vocabulary unit later re-points.
 
 ## 2026-10-14 — the grid's input loop delivers a typed line in process, and reads the name from the record
 

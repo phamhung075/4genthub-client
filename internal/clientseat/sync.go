@@ -180,6 +180,11 @@ type QuietWaiter struct {
 	Sleep    func(seconds float64)
 	Clock    func() float64
 
+	// Report says, ONCE, what a wait that timed out could not make sense of. It exists because the failure this wait
+	// has on this box is silent: with no word arriving at all, a genuinely idle seat and a dead gate look identical -
+	// no quiet, forever, nothing said. nil means say nothing.
+	Report func(message string)
+
 	QuietSeconds float64
 	WaitSeconds  float64
 	PollSeconds  float64
@@ -195,19 +200,36 @@ func NewQuietWaiter(stateRoot string) QuietWaiter {
 		QuietSeconds: quietSeconds,
 		WaitSeconds:  quietWaitSeconds,
 		PollSeconds:  pollSeconds,
+		Report:       func(message string) { fmt.Fprintln(os.Stderr, message) },
 	}
 }
 
 func (w QuietWaiter) Wait(rig, seat string) bool {
 	deadline := w.Clock() + w.WaitSeconds
+	unrecognized := ""
+	note := func(word string) {
+		if word != "" && unrecognized == "" {
+			unrecognized = word
+		}
+	}
 	for w.Clock() < deadline {
-		if w.quietOnce(rig, seat) {
+		quiet, strange := w.quietOnce(rig, seat)
+		note(strange)
+		if quiet {
 			w.Sleep(w.PollSeconds)
-			if w.quietOnce(rig, seat) {
+			quiet, strange = w.quietOnce(rig, seat)
+			note(strange)
+			if quiet {
 				return true
 			}
 		}
 		w.Sleep(w.PollSeconds)
+	}
+	// ONCE, at the end, and only when a word arrived that this client has never seen: a vocabulary growth has to
+	// surface as a sentence rather than as a wait that never opens.
+	if unrecognized != "" && w.Report != nil {
+		w.Report(fmt.Sprintf("no quiet for %s/%s: the activity word %q is not one this client recognizes, so the "+
+			"wait cannot tell an idle seat from a dead gate", rig, seat, unrecognized))
 	}
 	return false
 }
@@ -222,12 +244,16 @@ func (w QuietWaiter) Wait(rig, seat string) bool {
 // instead of against one forbidden value: `!= "running"` ACCEPTED every word this client had never seen - `working`,
 // `needs_input`, and any word the daemon adds later - so the stillness clause decided by itself and a reseat could
 // proceed past a seat that was mid-turn. Stillness may DELAY a destroyer; only the allow-set's word releases one.
-func (w QuietWaiter) quietOnce(rig, seat string) bool {
+func (w QuietWaiter) quietOnce(rig, seat string) (quiet bool, unrecognized string) {
 	activity, read := w.Activity(rig, seat)
-	if !read || !clientruntime.ActivityReleasesTheWait(activity) {
-		return false
+	if !read {
+		return false, ""
 	}
-	return w.Since(rig, seat) >= w.QuietSeconds
+	released, unrecognized := clientruntime.ActivityReleasesTheWait(activity)
+	if !released {
+		return false, unrecognized
+	}
+	return w.Since(rig, seat) >= w.QuietSeconds, ""
 }
 
 func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }

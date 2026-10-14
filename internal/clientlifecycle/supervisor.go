@@ -346,7 +346,12 @@ func rigIdle(rig, seat string) bool {
 		word, _ := activity["state"].(string)
 		// The SAME predicate the quiet waiter uses: one home for the rule, so a vocabulary change is made once. A
 		// missing or non-string state reads as the empty word, which the set does not contain - refusal, not release.
-		return clientruntime.ActivityReleasesTheWait(word)
+		//
+		// The predicate also hands back the word it did not recognize, and THIS reader drops it: Idle is a plain
+		// hook and its consumer is the compaction decision, which prints its own sentence. Naming that here rather
+		// than leaving it implied - the launch half's unrecognized word is carried but not yet said.
+		released, _ := clientruntime.ActivityReleasesTheWait(word)
+		return released
 	}
 	return false
 }
