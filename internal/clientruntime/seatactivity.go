@@ -227,6 +227,57 @@ func SeatNode(ctx context.Context, room, seat string) (map[string]any, bool, err
 	return nil, false, nil
 }
 
+// RigEntry is one row of GET /api/ps: the rig list the daemon serves, each entry with the id the node
+// route is keyed on, the rig's name, and the daemon's own words for its state. It is the WIDE row, for a
+// reader whose question is about the rigs themselves - the `continue` listing prints them and the bridge's
+// notification sweep walks them - where openRigRigRow is the narrow one the node read resolves an id with.
+//
+// The route's vocabulary is kept rather than translated: status is the daemon's three-valued word
+// (running | partial | stopped), lifecycleState the state underneath it, and an archived rig carries
+// isArchived with its archivedAt stamp. A live rig answers archivedAt null, which a string field reads
+// as the zero value - the stamp is only ever printed beside the archived flag, never on its own.
+type RigEntry struct {
+	RigID          string `json:"rigId"`
+	Name           string `json:"name"`
+	RigName        string `json:"rigName"`
+	Status         string `json:"status"`
+	LifecycleState string `json:"lifecycleState"`
+	IsArchived     bool   `json:"isArchived"`
+	ArchivedAt     string `json:"archivedAt"`
+	NodeCount      int    `json:"nodeCount"`
+	RunningCount   int    `json:"runningCount"`
+}
+
+// RigEntries is the ONE reading of the daemon's rig list: GET /api/ps, the entries the daemon already
+// serves. Two callers ask it the same question - which rigs are there - and the second copy of the route
+// is how two readers come to disagree about the same machine.
+//
+// includeArchived is the daemon's OWN flag, and it is sent only when asked for: the daemon's default view
+// excludes archived rigs, so a client that spelled out a false-y flag would be asserting a rule the daemon
+// owns rather than reading the answer the daemon's default gives.
+//
+// THE THREE ANSWERS are RoomNodes', because a caller must be able to tell them apart:
+//
+//   - ok && err == nil: the daemon ANSWERED. entries may be empty, which is a daemon that knows no rig.
+//   - !ok && err == nil: NO RECORDS. This shell names no OpenRig daemon at all - the same absence the node
+//     read reports, never a failure, and this read cannot tell a caller that it is wrong to go on.
+//   - err != nil: the read was ATTEMPTED and FAILED - nothing answered, or the answer was not the list.
+//     A caller that needs the list refuses in these words rather than printing an empty one.
+func RigEntries(ctx context.Context, includeArchived bool) ([]RigEntry, bool, error) {
+	if !openRigDaemonConfigured() {
+		return nil, false, nil
+	}
+	path := "/api/ps"
+	if includeArchived {
+		path += "?includeArchived=true"
+	}
+	var entries []RigEntry
+	if why := openRigGetJSON(ctx, "rig list", path, &entries); why != "" {
+		return nil, false, errors.New(why)
+	}
+	return entries, true, nil
+}
+
 // openRigRigID resolves a rig's name to the id the node route is keyed on, over GET /api/ps.
 func openRigRigID(ctx context.Context, rig string) (string, string) {
 	var rows []openRigRigRow

@@ -3,6 +3,28 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the rig list is read from the daemon's own route, not from `rig ps`
+
+### Changed
+- `internal/clientruntime/seatactivity.go` — added `RigEntries(ctx, includeArchived)` over `GET /api/ps` (the
+  route the node read already resolves an id with) and the wide `RigEntry` row it decodes. It carries the
+  reading's three answers, so a caller can tell an answered list from NO RECORDS (this shell names no daemon)
+  and from a read that FAILED.
+- `internal/clientrestore/continue.go` — the no-argument listing prints the rig section from that route instead
+  of exec-ing `rig ps --include-archived`: name-sorted with the id breaking ties, `[archived]` marked because the
+  listing asked for archived rigs, capped at 30 rows as the shell's `head -30` did. A failed read says so; a
+  shell that names no daemon says that, rather than leaving the section empty under a heading that would then
+  read "no rigs here" (the line it replaces named the absent rig tool for the same reason).
+- `internal/clientbridge/notifications.go` — `humanRigs()` reads the same list (archived excluded, which is the
+  daemon's own default view) and deduplicates names, so one rig is not notified twice in a cycle. `ParseRigNames`
+  is deleted with its only caller.
+
+### Tests
+- `internal/clientrestore/continue_test.go` — the world serves `/api/ps` with the daemon's own row shape and its
+  archived-filtering default; the listing test is pinned to the new output, plus tests for a list that cannot be
+  read and for a shell that names no daemon. `internal/clientbridge/runloop_test.go` serves the route in the
+  fixture so every cycle walks a real one, and the bridge tests cover the unreadable-list note.
+
 ## 2026-10-14 — capture reads a pane through the runtime, not through the OpenRig daemon
 
 ### Changed

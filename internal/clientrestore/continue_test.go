@@ -37,6 +37,50 @@ func plainNodes() string {
 		`"model":"anthropic/claude-sonnet-4-5","sessionStatus":"stopped"}]`
 }
 
+// rigsFromNodes is the world's rig table when a case does not name one: one entry per rig the nodes name,
+// in the keys the real route sends. The status is read off its nodes' own words (a rig with no running
+// node is stopped, one whose nodes all run is running, anything between is partial) and lifecycleState
+// repeats that word, because no read in these cases asks for the state underneath it - the field is there
+// so the decode is exercised against the route's row shape, not so this fixture can model the daemon.
+func rigsFromNodes(nodes string) []map[string]any {
+	var rows []map[string]any
+	_ = json.Unmarshal([]byte(nodes), &rows)
+	entries := []map[string]any{}
+	at := map[string]int{}
+	for _, row := range rows {
+		name, _ := row["rigName"].(string)
+		if name == "" {
+			continue
+		}
+		index, seen := at[name]
+		if !seen {
+			index = len(entries)
+			at[name] = index
+			entries = append(entries, map[string]any{
+				"rigId": "01TESTRIG" + name, "name": name, "rigName": name,
+				"status": "stopped", "lifecycleState": "stopped",
+				"isArchived": false, "archivedAt": nil, "nodeCount": 0, "runningCount": 0,
+			})
+		}
+		entry := entries[index]
+		seatCount := entry["nodeCount"].(int) + 1
+		running := entry["runningCount"].(int)
+		if state, _ := row["sessionStatus"].(string); state == "running" {
+			running++
+		}
+		entry["nodeCount"], entry["runningCount"] = seatCount, running
+		switch {
+		case running == 0:
+			entry["status"], entry["lifecycleState"] = "stopped", "stopped"
+		case running == seatCount:
+			entry["status"], entry["lifecycleState"] = "running", "running"
+		default:
+			entry["status"], entry["lifecycleState"] = "partial", "running"
+		}
+	}
+	return entries
+}
+
 // world is one test's machine: a stub `rig` on the path the client resolves, a tmux read it controls, a
 // home under the test's temp dir, and the records of what happened.
 type world struct {
@@ -46,6 +90,12 @@ type world struct {
 	sends []string
 	walls []string
 	tmux  func() []string
+	// rigs is the rig table the world's /api/ps answers with. Nil means the rigs the nodes name, which is
+	// what every restore case needs; the listing cases name their own, because what a listed rig carries is
+	// the listing's subject.
+	rigs []map[string]any
+	// psCode, when it is not 0, is the status /api/ps answers INSTEAD of the table: the read that failed.
+	psCode int
 }
 
 // newWorld wires every seam and returns the machine. tmux answers the session names it is given - a
@@ -78,27 +128,34 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	clientcmd.LookPath = func(string) (string, error) { return w.stub, nil }
 	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
 
-	// THE DAEMON THE NODE READ TALKS TO. The world's node JSON is served over the daemon's OWN route (GET
-	// /api/ps, then GET /api/rigs/<id>/nodes), because the gate and the restore now read through
-	// clientruntime.RoomNodes rather than through a `rig ps` exec: a stub beside the seam would let this
-	// suite pass while the real read was broken. The rig names come from the nodes the test handed in.
+	// THE DAEMON THE READS TALK TO. The world's rig table and node JSON are served over the daemon's OWN
+	// routes (GET /api/ps, then GET /api/rigs/<id>/nodes), because the gate, the restore and the listing
+	// all read through clientruntime rather than through a `rig` exec: a stub beside the seam would let
+	// this suite pass while the real read was broken. The rigs are the ones the nodes name unless the case
+	// named its own table, and /api/ps filters archived rigs exactly as the daemon does - so a caller that
+	// did not ask for them lists none of them.
 	daemon := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.URL.Path == "/api/ps":
-			var rows []map[string]any
-			_ = json.Unmarshal([]byte(nodes), &rows)
-			seen := map[string]bool{}
-			list := []map[string]string{}
-			for _, row := range rows {
-				name, _ := row["rigName"].(string)
-				if name == "" || seen[name] {
+			if w.psCode != 0 {
+				out.WriteHeader(w.psCode)
+				_, _ = io.WriteString(out, "the rig table is not here\n")
+				return
+			}
+			entries := w.rigs
+			if entries == nil {
+				entries = rigsFromNodes(nodes)
+			}
+			includeArchived := req.URL.Query().Get("includeArchived") == "true"
+			listed := []map[string]any{}
+			for _, entry := range entries {
+				if archived, _ := entry["isArchived"].(bool); archived && !includeArchived {
 					continue
 				}
-				seen[name] = true
-				list = append(list, map[string]string{"rigId": "01TESTRIG" + name, "name": name, "rigName": name})
+				listed = append(listed, entry)
 			}
 			out.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(out).Encode(list)
+			_ = json.NewEncoder(out).Encode(listed)
 		case strings.HasPrefix(req.URL.Path, "/api/rigs/") && strings.HasSuffix(req.URL.Path, "/nodes"):
 			_, _ = io.WriteString(out, nodes)
 		default:
@@ -560,11 +617,25 @@ func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 	}
 }
 
-// TestTheListingNeedsNoRigTool: the briefs on disk are the one thing a reader wants on a machine that has
-// no daemon, which is why this verb resolves the rig tool itself instead of asking the dispatcher to.
+// TestTheListingNeedsNoRigTool: the rig lines come from the daemon and the briefs from the disk, so a
+// machine with no rig tool at all still shows a reader which rigs are there and which have briefs - which
+// is why this verb resolves the rig tool itself instead of asking the dispatcher to. The output is pinned
+// whole, surroundings included, so the section's shape cannot drift while its rig lines change source; the
+// table is out of order and carries an archived rig, so name order and the archived marker are asserted,
+// and the archived entry is there only because the listing asked the daemon for archived rigs (the
+// world's /api/ps hides them from a caller that did not).
 func TestTheListingNeedsNoRigTool(t *testing.T) {
 	w := newWorld(t, staticSessions(), plainNodes())
 	w.brief("rig-a.txt", "Text\n")
+	w.rigs = []map[string]any{
+		{"rigId": "01TESTRIGB", "name": "rig-b", "rigName": "rig-b", "status": "partial",
+			"lifecycleState": "running", "isArchived": false, "archivedAt": nil, "nodeCount": 2, "runningCount": 1},
+		{"rigId": "01TESTRIGA", "name": "rig-a", "rigName": "rig-a", "status": "running",
+			"lifecycleState": "running", "isArchived": false, "archivedAt": nil, "nodeCount": 1, "runningCount": 1},
+		{"rigId": "01TESTRIGZ", "name": "rig-z", "rigName": "rig-z", "status": "stopped",
+			"lifecycleState": "archived", "isArchived": true, "archivedAt": "2026-10-02 04:37:38",
+			"nodeCount": 2, "runningCount": 0},
+	}
 	previousLookPath := clientcmd.LookPath
 	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
 	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
@@ -573,15 +644,77 @@ func TestTheListingNeedsNoRigTool(t *testing.T) {
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
-	for _, want := range []string{"Rigs that can be continued:", "rig is not on PATH", "briefs on disk:", "  rig-a", continueListingUsage} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the listing is missing %q:\n%s", want, out)
-		}
+	want := "Rigs that can be continued:\n" +
+		"  rig-a  running\n" +
+		"  rig-b  partial\n" +
+		"  rig-z  stopped  [archived]\n" +
+		"\n" +
+		"briefs on disk:\n" +
+		"  rig-a\n" +
+		"\n" +
+		continueListingUsage + "\n"
+	if out != want {
+		t.Errorf("the listing printed:\n%s\nwant:\n%s", out, want)
 	}
 	// The usage line is printed once: the shell's own, not continueUsage behind a "Usage: " prefix, which
 	// already carries one of its own.
 	if strings.Contains(out, "Usage: usage:") {
 		t.Errorf("the listing repeats the prefix:\n%s", out)
+	}
+	if calls := w.calls(); len(calls) != 0 {
+		t.Errorf("the listing ran rig: %v", calls)
+	}
+}
+
+// TestTheListingSaysSoWhenTheRigListCannotBeRead: the rig section is a daemon read now, so THAT is what can
+// fail - and it fails in its own one line, in the voice the section already reported a failure in, while
+// the briefs below it still print and the run still ends 0. A daemon answering HTTP 500 is the case; a
+// 200 this client cannot decode takes the same line, because the read reports both as one failure.
+func TestTheListingSaysSoWhenTheRigListCannotBeRead(t *testing.T) {
+	w := newWorld(t, staticSessions(), plainNodes())
+	w.brief("rig-a.txt", "Text\n")
+	w.psCode = http.StatusInternalServerError
+
+	code, out, _ := w.run("continue")
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit = %d, want 0: the briefs are still listed", code)
+	}
+	for _, want := range []string{
+		"Rigs that can be continued:",
+		"  (the rig list could not be read: ",
+		"HTTP 500",
+		"briefs on disk:",
+		"  rig-a\n",
+		continueListingUsage,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the listing is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "  rig-a  ") {
+		t.Errorf("a read that failed printed a rig line:\n%s", out)
+	}
+}
+
+// TestTheListingSaysWhenNoDaemonIsNamed: a shell that names no OpenRig daemon has no rig list to read, and that
+// is not a failure - so the exit stays 0 and the briefs below print as usual. The line is printed rather than
+// the section left empty, because an empty section under "Rigs that can be continued:" reads as "no rigs here",
+// and the line this replaces named the absent rig tool for the same reason.
+func TestTheListingSaysWhenNoDaemonIsNamed(t *testing.T) {
+	w := newWorld(t, staticSessions(), plainNodes())
+	w.brief("rig-a.txt", "Text\n")
+	t.Setenv("OPENRIG_URL", "")
+	t.Setenv("OPENRIG_PORT", "")
+
+	code, out, _ := w.run("continue")
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	want := "Rigs that can be continued:\n" +
+		"  (no OpenRig daemon is named here, so there is no rig list to read)\n\n" +
+		"briefs on disk:\n  rig-a\n\n" + continueListingUsage + "\n"
+	if out != want {
+		t.Errorf("the listing printed:\n%s\nwant:\n%s", out, want)
 	}
 }
 

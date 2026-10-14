@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
 
@@ -70,12 +71,6 @@ type HumanRow struct {
 // HumanDestination is the queue destination that addresses one rig's human.
 func HumanDestination(rigName string) string {
 	return humanDestinationPrefix + rigName
-}
-
-// ParseRigNames reads `rig ps --json`: the rigs this machine can see. Only the name is used, because
-// the human destination is `human@<name>`.
-func ParseRigNames(output string) ([]any, error) {
-	return parseItems(output, "rig ps")
 }
 
 // ParseHumanRows reads `rig queue list --destination human@<rig> --json`.
@@ -200,23 +195,32 @@ func (b *Bridge) readRigTool(rig *clientcmd.Rig, args ...string) (string, error)
 	return b.Runner(context.Background(), append([]string{"rig"}, args...)...)
 }
 
-// humanRigs lists the rig names this machine can see, sorted so a cycle's work is deterministic.
-func (b *Bridge) humanRigs(rig *clientcmd.Rig) []string {
-	output, err := b.readRigTool(rig, "ps", "--json")
+// humanRigs lists the rig names this machine can see, sorted so a cycle's work is deterministic, and
+// deduplicated because two entries naming one rig would read that rig's human queue twice.
+//
+// The names are the daemon's rig list (clientruntime.RigEntries), which is where this client reads every
+// other fact about a rig: a `rig ps --json` exec answered the same question from the rig tool's own
+// vocabulary, and the daemon's route is the one producer both readers can share. The daemon's default view
+// excludes archived rigs, which is what this asks for: an archived room's human is not notified.
+func (b *Bridge) humanRigs() []string {
+	entries, ok, err := clientruntime.RigEntries(context.Background(), false)
 	if err != nil {
 		b.note("notify-rigs", fmt.Sprintf("rig unavailable: %v", err))
 		return nil
 	}
-	items, err := ParseRigNames(output)
-	if err != nil {
-		b.note("notify-rigs", "rig ps was not readable")
+	if !ok {
+		// NO RECORDS: this shell names no OpenRig daemon, so there is no rig list to walk and no failure
+		// to report - the same absence the node read answers.
 		return nil
 	}
-	names := make([]string, 0, len(items))
-	for _, item := range items {
-		if name := str(dict(item)["rigName"]); name != "" {
-			names = append(names, name)
+	names := make([]string, 0, len(entries))
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.Name == "" || seen[entry.Name] {
+			continue
 		}
+		seen[entry.Name] = true
+		names = append(names, entry.Name)
 	}
 	sort.Strings(names)
 	return names
@@ -260,7 +264,7 @@ func (b *Bridge) notifyHumans(rig *clientcmd.Rig) {
 		return
 	}
 	posted, changed := 0, false
-	for _, rigName := range b.humanRigs(rig) {
+	for _, rigName := range b.humanRigs() {
 		if posted >= notifyPostsPerCycle {
 			break
 		}

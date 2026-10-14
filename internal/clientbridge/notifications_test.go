@@ -3,6 +3,9 @@ package clientbridge
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -57,10 +60,6 @@ func TestListingParsersAcceptBothShapes(t *testing.T) {
 	}
 	if _, err := ParseHumanRows(`{"rows":[]}`); err == nil {
 		t.Fatal("a shape carrying no items must be an error, not an empty listing")
-	}
-	rigs, err := ParseRigNames(`[{"rigName":"room-a"}]`)
-	if err != nil || len(rigs) != 1 {
-		t.Fatalf("rig names: %v, %d", err, len(rigs))
 	}
 }
 
@@ -241,6 +240,37 @@ func TestNotifyDoesNothingWithoutASender(t *testing.T) {
 
 	if len(f.frames) != 0 {
 		t.Fatalf("posted %d frames with no notification sender, want 0", len(f.frames))
+	}
+	if delay != f.bridge.Interval {
+		t.Fatalf("delay = %v, want the normal interval %v", delay, f.bridge.Interval)
+	}
+}
+
+// TestNotifyNotesARigListItCouldNotRead: the sweep's rig list is a daemon read now, so the failure it must
+// survive is that read's - a daemon answering HTTP 500. It cannot name a rig to walk, so it posts nothing,
+// and it says so in the shape the rig read's failures already had; the cycle still returns on the normal
+// interval, because a notification the sweep could not assemble never fails the report beside it.
+func TestNotifyNotesARigListItCouldNotRead(t *testing.T) {
+	f := newFixture(t)
+	f.queueJSON = fixtureHumanQueue
+	broken := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, _ *http.Request) {
+		out.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(out, "no rig table here\n")
+	}))
+	t.Cleanup(broken.Close)
+	t.Setenv("OPENRIG_URL", broken.URL)
+
+	delay := f.bridge.Cycle(context.Background(), nil)
+
+	if len(f.frames) != 0 {
+		t.Fatalf("posted %d frames with no rig list to walk, want 0", len(f.frames))
+	}
+	// The note carries the read's own sentence: the rig read's failures are already worded as "the <label>
+	// read asked <path> and got HTTP <status>", so this case asserts that sentence rather than the key.
+	for _, want := range []string{"rig unavailable: ", "the rig list read asked /api/ps", "HTTP 500"} {
+		if !strings.Contains(f.logged(), want) {
+			t.Errorf("the note is missing %q:\n%s", want, f.logged())
+		}
 	}
 	if delay != f.bridge.Interval {
 		t.Fatalf("delay = %v, want the normal interval %v", delay, f.bridge.Interval)

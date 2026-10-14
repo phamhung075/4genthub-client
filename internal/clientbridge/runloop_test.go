@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +35,12 @@ import (
 // against a field that could not have differed in the first place.
 const fixtureNodes = `[{"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp",` +
 	`"sessionStatus":"running","agentActivity":{"state":"working"},"latestError":"boom in seat-a"}]`
+
+// fixtureRigs is the daemon's rig list for the fixture machine: the room the fixture's nodes and human rows
+// name, in the keys the route really sends. The notification sweep reads it, so a test that asserts what a
+// cycle posted is also asserting which rigs the sweep walked.
+const fixtureRigs = `[{"rigId":"01TESTRIGROOMA","name":"room-a","rigName":"room-a","status":"running",` +
+	`"lifecycleState":"running","isArchived":false,"archivedAt":null,"nodeCount":1,"runningCount":1}]`
 
 // step is one scripted exchange: the status the transport answers and the body it answers with, OR the
 // error of a transport that never answered. A failure is an ERROR and not a status, because the status
@@ -111,6 +118,22 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 	}
 	f.clock = &fakeClock{at: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	f.bridge.clock = f.clock.now
+
+	// THE DAEMON THE NOTIFICATION SWEEP TALKS TO. The sweep used to ask the rig tool for `ps --json`; it now
+	// reads the daemon's own /api/ps, so the fixture serves it: a stub beside the seam would let these
+	// cycles pass while the real read was broken. The list names the same machine the nodes describe, so the
+	// sweep and the report talk about one rig.
+	daemon := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/api/ps" {
+			out.WriteHeader(http.StatusNotFound)
+			return
+		}
+		out.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(out, fixtureRigs)
+	}))
+	t.Cleanup(daemon.Close)
+	t.Setenv("OPENRIG_URL", daemon.URL)
+	t.Setenv("OPENRIG_PORT", "")
 	return f
 }
 
