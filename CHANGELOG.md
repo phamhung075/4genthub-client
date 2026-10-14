@@ -3,6 +3,41 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the identity chain answers feedback, and a room's nodes are read without rig
+
+### Changed
+- `internal/clientfeedback/feedback.go` — the verb's `--room`/`--seat`/`--session` defaults come from
+  `clientruntime.ResolveIdentity` (the runtime socket, then a rig's OpenRig daemon, then this shell's seat
+  environment) instead of from an exec of `rig whoami --json`. The refusal no longer names a command that
+  cannot exist after the cutover. Commit `3840b8e`.
+- `internal/clientrestore/restore.go` — the restore brief is delivered by `clientruntime.DeliverToSession`,
+  which takes the session name AS GIVEN. The seam it replaces tried the runtime only behind a guard for the
+  Python-era `agenthub--<room>--<seat>` shape that this rig's sessions do not match, and swallowed the exec's
+  failure: a brief reported as delivered and dropped. Regression test on the REAL seam. Commit `4203d96`.
+- `internal/clientruntime/seatactivity.go` — exported `ReadRigNodes(ctx, rig)`: the daemon's node table over
+  `GET /api/ps` then `GET /api/rigs/<rigId>/nodes`, decoded in the CLI's own node keys with the seat half
+  derived from the logical id. `ReadSeatActivity` could not serve this — it answers one seat's activity word,
+  not a room's rows. The read is narrower than `rig ps --json --nodes` in exactly one key, `pid`, and says so
+  in its own doc because no consumer asks for it. Two of its three answers are told apart for the caller:
+  NO RECORDS (no daemon named, or a rig the daemon does not know) versus a FAILED read, which carries words.
+- `internal/clientlifecycle/lifecycle.go` — `rigNodes` reads the runtime first and then the daemon table;
+  `PeakGate` no longer resolves a rig tool, and a reading that FAILS is now a refusal in words
+  (`ExitUnavailable`) rather than `ExitOK`. Returning OK when the reading could not be taken is how a
+  peak-time resume could proceed with the gate never having decided. A room with no records still proceeds
+  silently, because there are no seats to bill.
+- `CHANGELOG.md`, `CHANGELOG/2026-10-14--guard-native-identity-and-delivery.md` — three statements claiming
+  `internal/clientsync/connectorverb.go` still execs `rig` are corrected. That file is 315 lines at `4203d96`
+  with no `exec`, no `LookPath`, no `runRig` and no `os/exec` import, and its own comment says THE CLI REACH
+  IS RETIRED; `fakeRig` stays because `cmd/seatcheck`'s tests still use it, not because a shape is owed.
+- `cmd/seatcheck` — the two seams named for the execs they replaced are renamed for what they do:
+  `seatIdentity` and `seatDelivery`.
+
+### Verified
+- `go build ./...` and `go vet ./...` clean; `go test ./...` every package ok.
+- The live daemon route was read once, read-only, to establish the row shape the seam decodes; the gated verbs
+  themselves were NOT run against the live rig, because every one of them mutates it. Detail and the
+  absence-versus-failure contract: `CHANGELOG/2026-10-14--identity-chain-and-node-read.md`.
+
 ## 2026-10-14 — ps names the room it could not see
 
 ### Fixed
@@ -564,12 +599,17 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
   this pin it dispositions seven as converted or deleted (the seatcheck pair included) and FOUR as not converted,
   each with its reason - `clientseat/sync.go` seatActivity and `clientlifecycle/supervisor.go` rigIdle, both blocked on
   the same missing native per-seat agent-activity read; `clientsync/respawnverb.go` runRigCapture, two thirds
-  convertible; and `clientcmd/command.go` RequireRig, the shared platform matrix rather than a site fix. One further
-  site that execs the name `rig` is NOT in that table at all: `internal/clientsync/connectorverb.go:355`
-  (`exec.CommandContext(ctx, "rig", args...)`), and TWO further seams the assignment key never listed at all, both of
-  which take their program from an ARGUMENT LIST rather than a literal, which is why no grep for `exec.Command("rig"`
-  can see them: `internal/clientsync/bundleverb.go:42-48` (`bundleRunRig`, argv built as `rig bundle create …` at :192)
+  convertible; and `clientcmd/command.go` RequireRig, the shared platform matrix rather than a site fix. TWO further
+  seams the assignment key never listed at all, both of which take their program from an ARGUMENT LIST rather than a
+  literal, which is why no grep for `exec.Command("rig"` can see them: `internal/clientsync/bundleverb.go:42-48`
+  (`bundleRunRig`, argv built as `rig bundle create …` at :192)
   and `internal/clientsync/switchverb.go:53-58` (`switchRunRig`, called as `rig ps --json --nodes --rig ROOM` at :350).
+  CORRECTION (2026-10-14, a later pass): this paragraph used to add a THIRD site, `internal/clientsync/connectorverb.go:355`
+  (`exec.CommandContext(ctx, "rig", args...)`). That site does not exist, and the file's own bytes say so: at 4203d96
+  `internal/clientsync/connectorverb.go` is 315 lines with no `exec`, no `LookPath`, no `runRig`, no `"rig"` program and no
+  `os/exec` import (`wc -l` = 315; a grep for `exec.`, `LookPath` and `os/exec` returns nothing), and the comment at :193
+  reads THE CLI REACH IS RETIRED. The removal predates this note. The two seams above are the accurate remainder, and the
+  count is one smaller than this paragraph claimed.
   So the inventory is NOT disposed - seven converted or deleted, four declared with a reason, three seams the key never
   listed - and no count is claimed here: the reviewer emits the site list at this pin, built from the seams and who
   supplies their argv.
@@ -779,9 +819,12 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
   vocabulary: `agent_socket_closed`, `agent_stdio_eof` and `agent_exited` join `stopped`, where the node table offered
   one `sessionStatus` field and could only ever say `running` or not.
 - The fixture moved with the seam. The tests that need a room's seats answer `roomSeats` (the new package variable) in
-  the order the pass should take them, instead of writing a stub `rig` into PATH. `fakeRig` stays behind for the ONE
-  shape still unconverted — the single-session resolution, which still reads `rig ps --json` in connectorverb.go — so
-  its remaining use is itself a marker of the remaining work.
+  the order the pass should take them, instead of writing a stub `rig` into PATH. `fakeRig` stays behind, but NOT for the
+  reason this entry first gave: it is kept because `cmd/seatcheck`'s own tests still use it (`exec_test.go`,
+  `main_test.go:553`), not because a shape is unconverted. CORRECTION (2026-10-14, a later pass): the shape it was said to
+  await — a single-session resolution reading `rig ps --json` in `connectorverb.go` — does not exist; that file is 315
+  lines at 4203d96 with no exec, no `LookPath` and no `os/exec` import, and its comment at :193 says THE CLI REACH IS
+  RETIRED. Nothing needed deleting, and no conversion is owed there.
 
 ### Verified
 - The tests can now fail in the direction that matters. RED-then-GREEN: with PATH emptied, putting `runRig` back into

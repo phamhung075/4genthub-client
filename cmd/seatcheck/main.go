@@ -91,9 +91,9 @@ var (
 	// pinsDir returns the pinned seats directory.
 	pinsDir = defaultPins
 	// identify returns who the calling seat is.
-	identify = rigWhoami
+	identify = seatIdentity
 	// deliver sends text to the session named target and returns the exit code.
-	deliver = rigSend
+	deliver = seatDelivery
 )
 
 // installedPinsDir is the pins directory baked in at BUILD time by whoever built this binary:
@@ -342,12 +342,13 @@ type identity struct {
 	Peers       map[string][]string
 }
 
-// rigWhoami reads the calling seat's identity from the CLIENT's own resolver — the runtime socket first, a
-// rig's OpenRig daemon second, the seat's own environment last — instead of exec-ing `rig whoami --json`.
-// After the cutover there is no `rig` to exec, and the environment rung is what makes this guard answer at all
-// on a machine with no daemon: a native seat states AGENTHUB_ROOM/AGENTHUB_SEAT, a seat the OpenRig daemon
-// hosts states OPENRIG_SESSION_NAME, and neither needs a process to be running.
-func rigWhoami() (identity, error) {
+// seatIdentity reads the calling seat's identity from the CLIENT's own resolver — the runtime socket first, a
+// rig's OpenRig daemon second, the seat's own environment last. It is named for what it reads rather than for
+// the exec it replaced: `rig whoami --json` is a name that does not exist after the cutover, and the
+// environment rung is what makes this guard answer at all on a machine with no daemon — a native seat states
+// AGENTHUB_ROOM/AGENTHUB_SEAT, a seat the OpenRig daemon hosts states OPENRIG_SESSION_NAME, and neither
+// needs a process to be running.
+func seatIdentity() (identity, error) {
 	resolved, err := clientruntime.ResolveIdentity(context.Background(), "", false)
 	if err != nil {
 		return identity{}, err
@@ -406,16 +407,16 @@ func appendAudit(path string, record commpolicy.AuditRecord) (err error) {
 	return f.Sync()
 }
 
-// rigSend delivers text to the session target through the CLIENT's own one-session delivery
+// seatDelivery delivers text to the session target through the CLIENT's own one-session delivery
 // (clientruntime.DeliverToSession): the runtime socket first, the OpenRig daemon as the fallback the live rig
-// still runs.
+// still runs. Named for what it does, not for the exec it replaced — see the note on seatIdentity.
 //
 // The exec is DELETED rather than repointed, and so is its second failure shape. `rig send -- TARGET TEXT`
 // existed because the OpenRig CLI was the only party that could reach a session; after this client's rename
 // `~/.local/bin/rig` is a symlink to THIS client, so the fallback had become a self-call whose exit code said
 // only that a shell had failed. What the caller has to learn is one thing — delivered or not — so every
 // non-zero the delivery can answer is mapped to exitDeliveryFailed by runSend.
-func rigSend(target, text string, stdout, stderr io.Writer) int {
+func seatDelivery(target, text string, stdout, stderr io.Writer) int {
 	return clientruntime.DeliverToSession(context.Background(), target, text, stdout, stderr)
 }
 

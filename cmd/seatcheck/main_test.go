@@ -547,8 +547,8 @@ func TestAuditScanCleanExits0(t *testing.T) {
 // the guard's own boundary — the fake rig on PATH records its own execution, and its record must not exist.
 func TestSendEndToEndDeliversNatively(t *testing.T) {
 	seatDir, _ := seatEnv(t, allowPolicy)
-	identify = rigWhoami
-	deliver = rigSend
+	identify = seatIdentity
+	deliver = seatDelivery
 	hermeticSeat(t)
 	argsPath := fakeRig(t)
 

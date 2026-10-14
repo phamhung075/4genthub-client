@@ -18,8 +18,9 @@ import (
 
 // THE EXEC IS GONE, AND THIS FILE IS WHERE THAT IS FALSIFIABLE.
 //
-// The guard's two seams used to shell out: `rig whoami --json` for the identity (main.go rigWhoami) and
-// `rig send -- TARGET TEXT` for the delivery (main.go rigSend). After the cutover there is no `rig` to exec —
+// The guard's two seams used to shell out: `rig whoami --json` for the identity and `rig send -- TARGET TEXT`
+// for the delivery. They are `seatIdentity` and `seatDelivery` now, and they exec nothing: after the cutover
+// there is no `rig` to exec —
 // the name is a symlink to this client, so the "fallback" would be a self-call — and the identity has a rung
 // the exec never had: the seat's own environment.
 //
@@ -168,9 +169,9 @@ func TestIdentityIsResolvedNativelyWithNoRigOnPath(t *testing.T) {
 	t.Setenv("AGENTHUB_ROOM", "room-a")
 	t.Setenv("AGENTHUB_SEAT", "go-dev")
 
-	who, err := rigWhoami()
+	who, err := seatIdentity()
 	if err != nil {
-		t.Fatalf("rigWhoami: %v", err)
+		t.Fatalf("seatIdentity: %v", err)
 	}
 	if who.Rig != "room-a" || who.Member != "go-dev" {
 		t.Fatalf("identity = rig %q member %q, want the seat the environment names", who.Rig, who.Member)
@@ -190,9 +191,9 @@ func TestIdentityComesFromTheRuntimeSocket(t *testing.T) {
 
 	_, requests := fakeRuntimeSocket(t, func(string) string { return okData(identityDocument) })
 
-	who, err := rigWhoami()
+	who, err := seatIdentity()
 	if err != nil {
-		t.Fatalf("rigWhoami: %v", err)
+		t.Fatalf("seatIdentity: %v", err)
 	}
 	if who.Rig != "room-a" || who.Member != "go-dev" {
 		t.Fatalf("identity = rig %q member %q, want the runtime's own answer", who.Rig, who.Member)
@@ -226,9 +227,9 @@ func TestIdentityFallsBackToTheOpenRigDaemon(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("OPENRIG_URL", srv.URL)
 
-	who, err := rigWhoami()
+	who, err := seatIdentity()
 	if err != nil {
-		t.Fatalf("rigWhoami: %v", err)
+		t.Fatalf("seatIdentity: %v", err)
 	}
 	if askedPath != "/api/whoami" {
 		t.Fatalf("asked %q, want the daemon's whoami route", askedPath)
@@ -252,8 +253,8 @@ func TestDeliveryGoesToTheRuntimeSocket(t *testing.T) {
 	})
 
 	var stdout, stderr bytes.Buffer
-	if code := rigSend("pod-b@r", "hello world", &stdout, &stderr); code != 0 {
-		t.Fatalf("rigSend = %d, want 0 (stderr %q)", code, stderr.String())
+	if code := seatDelivery("pod-b@r", "hello world", &stdout, &stderr); code != 0 {
+		t.Fatalf("seatDelivery = %d, want 0 (stderr %q)", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "pod-b@r") {
 		t.Fatalf("stdout = %q, want the delivery's own line", stdout.String())
@@ -302,8 +303,8 @@ func TestDeliveryFallsBackToTheOpenRigDaemon(t *testing.T) {
 	t.Setenv("OPENRIG_URL", srv.URL)
 
 	var stdout, stderr bytes.Buffer
-	if code := rigSend("pod-b@r", "hello world", &stdout, &stderr); code != 0 {
-		t.Fatalf("rigSend = %d, want 0 (stderr %q)", code, stderr.String())
+	if code := seatDelivery("pod-b@r", "hello world", &stdout, &stderr); code != 0 {
+		t.Fatalf("seatDelivery = %d, want 0 (stderr %q)", code, stderr.String())
 	}
 	if gotPath != "/api/transport/send" {
 		t.Fatalf("asked %q, want the daemon's send route", gotPath)
@@ -322,9 +323,9 @@ func TestDeliveryWithNoTransportAtAllIsOneRefusal(t *testing.T) {
 	argsPath := fakeRig(t)
 
 	var stdout, stderr bytes.Buffer
-	code := rigSend("pod-b@r", "hi", &stdout, &stderr)
+	code := seatDelivery("pod-b@r", "hi", &stdout, &stderr)
 	if code == 0 {
-		t.Fatalf("rigSend = 0 with no transport; stdout = %q", stdout.String())
+		t.Fatalf("seatDelivery = 0 with no transport; stdout = %q", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), "no runtime is answering at") {
 		t.Fatalf("stderr = %q, want the refusal to name the runtime", stderr.String())
