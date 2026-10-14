@@ -31,6 +31,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 // Commands is what the dispatcher registers from this package: one verb, `room`, whose Run switches over
@@ -328,10 +329,16 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	inv.printPair(stdout)
+	// A stopped room is one that is no longer meant to run: leave the list first, so the restart authority
+	// never brings a safeguard back for it, even when the runtime cannot be reached to stop the seats.
+	if err := clientservices.WriteRigdState(clientservices.RemoveRig(clientservices.ReadRigdState(), inv.room)); err != nil {
+		fmt.Fprintf(stderr, "4genteam room stop: could not drop %s from the rooms meant to run: %v\n", inv.room, err)
+		return clientcmd.ExitRoomRefused
+	}
 	if err := inv.client.StopRoom(inv.room); err != nil {
 		return reportDaemon(stderr, "stop", err)
 	}
-	fmt.Fprintf(stdout, "room %s: stopped\n", inv.room)
+	fmt.Fprintf(stdout, "room %s: stopped, and no longer meant to run\n", inv.room)
 	fmt.Fprintf(stdout, "the room's directory was left in place under %s: spec.json, seats/ and logs/ are still there, so the room can be started again\n", inv.stateDir)
 	return clientcmd.ExitOK
 }

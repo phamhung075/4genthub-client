@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 const testRoom = "room-a"
@@ -359,6 +360,7 @@ func TestRoomCompactReportsARuntimeRefusalVerbatim(t *testing.T) {
 // names no tmux command and no supervision process - neither of which this verb has any business starting,
 // stopping or mentioning.
 func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
+	useTempRigdState(t, "other")
 	daemon := newFakeDaemon(t, map[string]string{"StopRoom": okData("null")})
 
 	code, stdout, stderr := runRoom(t, daemon.args("stop", testRoom)...)
@@ -381,5 +383,46 @@ func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
 	// room startable again.
 	if !strings.Contains(stdout, "left in place") || !strings.Contains(stdout, "spec.json") {
 		t.Errorf("stdout = %q, want the room's directory named as left in place", stdout)
+	}
+}
+
+// useTempRigdState points the rooms-meant-to-run file at a temp store holding `rooms`, so a stop under test
+// never rewrites the machine's own list.
+func useTempRigdState(t *testing.T, rooms ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "rigd.json")
+	previous := clientservices.RigdStatePath
+	clientservices.RigdStatePath = func() (string, error) { return path, nil }
+	t.Cleanup(func() { clientservices.RigdStatePath = previous })
+	if err := clientservices.WriteRigdState(clientservices.RigdState{Rigs: rooms}); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestRoomStopDropsTheRoomFromTheRoomsMeantToRun pins the fix for a stopped room that rigd kept supervising:
+// the stop removes exactly that room from the list and leaves the others.
+func TestRoomStopDropsTheRoomFromTheRoomsMeantToRun(t *testing.T) {
+	useTempRigdState(t, testRoom, "other")
+	daemon := newFakeDaemon(t, map[string]string{"StopRoom": okData("null")})
+
+	if code, _, stderr := runRoom(t, daemon.args("stop", testRoom)...); code != clientcmd.ExitOK {
+		t.Fatalf("exit %d (stderr %q)", code, stderr)
+	}
+	if got := strings.Join(clientservices.ReadRigdState().Rigs, ","); got != "other" {
+		t.Errorf("rooms meant to run = %q, want only %q", got, "other")
+	}
+}
+
+// A room the runtime no longer knows is still dropped, so a stale entry can be cleared.
+func TestRoomStopDropsTheRoomEvenWhenTheRuntimeRefusesTheStop(t *testing.T) {
+	useTempRigdState(t, testRoom)
+	daemon := newFakeDaemon(t, map[string]string{"StopRoom": daemonError("no such room")})
+
+	if code, _, _ := runRoom(t, daemon.args("stop", testRoom)...); code == clientcmd.ExitOK {
+		t.Fatal("a refused StopRoom must not exit 0")
+	}
+	if rooms := clientservices.ReadRigdState().Rigs; len(rooms) != 0 {
+		t.Errorf("rooms meant to run = %v, want none", rooms)
 	}
 }
