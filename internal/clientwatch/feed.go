@@ -53,7 +53,7 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 	}
 	positions := map[string]position{}
 
-	opts := renderOptions{width: lineWidth(s.width), lines: s.lines, detail: s.detail, expand: s.expand,
+	opts := renderOptions{width: lineWidth(s.width, header != nil), lines: s.lines, detail: s.detail, expand: s.expand,
 		only: s.onlyKinds(), errorsOnly: s.errorsOnly, calls: newCallTracker()}
 	views := map[string]*seatView{}
 	for _, seat := range seats {
@@ -80,13 +80,21 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 				view.repeated = 0
 			}
 			view.last = text
-			if rule := view.ruleBefore(text, opts.width); rule != "" {
+			if header != nil {
+				// A pane holds one seat: the clock and the meter ride on the rule, so no step line is indented.
+				info := func() string {
+					return strings.TrimSpace(view.stamp(at) + " " + view.meter(header.tag(), header.percent()))
+				}
+				if rule := view.ruleBefore(text, opts.width, info); rule != "" {
+					fmt.Fprintln(out, rule)
+				}
+				fmt.Fprintln(out, text)
+				continue
+			}
+			if rule := view.ruleBefore(text, opts.width, nil); rule != "" {
 				fmt.Fprintln(out, rule)
 			}
 			name := fg(colours[seat]) + padRight(seat, 12) + reset
-			if header != nil {
-				name = view.meter(header.tag(), header.percent())
-			}
 			fmt.Fprintf(out, "%s %s%s\n", view.stamp(at), name, text)
 		}
 	}

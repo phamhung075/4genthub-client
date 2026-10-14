@@ -299,11 +299,14 @@ const (
 )
 
 // lineWidth is how many characters of a line to keep: the --width given, else what the pane holds.
-func lineWidth(requested int) int {
+func lineWidth(requested int, onePane bool) int {
 	if requested > 0 {
 		return requested
 	}
 	if columns := terminalColumns(); columns > 0 {
+		if onePane {
+			return max(minLineWidth, columns-1)
+		}
 		return max(minLineWidth, columns-prefixColumns)
 	}
 	return defaultWidth
@@ -371,7 +374,7 @@ func quietKind(style toolStyle) bool { return style.kind == "think" || style.kin
 
 // ruleBefore is the divider before a step, or "" when none is wanted. A call directly after the
 // reasoning that led to it joins that reasoning; every other step is separated, in red after a failure.
-func (v *seatView) ruleBefore(text string, width int) string {
+func (v *seatView) ruleBefore(text string, width int, info func() string) string {
 	style, isCall := callKind(text)
 	head := strings.TrimSpace(ansiSequence.ReplaceAllString(strings.SplitN(text, "\n", 2)[0], ""))
 	if !isCall {
@@ -384,13 +387,16 @@ func (v *seatView) ruleBefore(text string, width int) string {
 	if joined && !failed {
 		return ""
 	}
-	return kindRule(style, width, failed)
+	if info == nil {
+		return kindRule(style, width, failed, "")
+	}
+	return kindRule(style, width, failed, info())
 }
 
 // kindRule is the divider printed before a step: a plain rule in the kind's colour, thin and dim for
 // reasoning and incoming messages, red when the step before failed. The step line under it already
 // names the tool, so the rule carries only the colour.
-func kindRule(style toolStyle, width int, failed bool) string {
+func kindRule(style toolStyle, width int, failed bool, info string) string {
 	colour, bar := style.colour, "─"
 	if failed {
 		colour = 203
@@ -398,5 +404,9 @@ func kindRule(style toolStyle, width int, failed bool) string {
 	if quietKind(style) {
 		bar = "┄"
 	}
-	return fg(colour) + strings.Repeat(bar, min(width, 60)) + reset
+	length := min(width, 60)
+	if info == "" {
+		return fg(colour) + strings.Repeat(bar, length) + reset
+	}
+	return fg(colour) + strings.Repeat(bar, max(4, length-visibleLen(info)-1)) + reset + " " + info
 }
