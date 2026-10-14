@@ -100,7 +100,7 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 		}
 		if !found {
 			return 0, &clientcmd.CodedError{
-				Message: fmt.Sprintf("rig %q has no seat %q", rig, seat),
+				Message: fmt.Sprintf("rig %q has no seat %q: %s", rig, seat, seatArgumentHint(seat)),
 				Code:    clientcmd.ExitUsage,
 			}
 		}
@@ -172,7 +172,22 @@ func roomNodes(rig string) ([]map[string]any, error) {
 
 type sendCommand struct{}
 
-func (sendCommand) Name() string    { return "send" }
+func (sendCommand) Name() string { return "send" }
+
+// seatArgumentHint says what the SEAT argument is, for the refusal that fires when it resolves to no seat.
+//
+// The verifier who passed the canonical session name here spent two attempts learning the difference: "has no
+// seat" is true both of a seat key that does not exist and of a session name handed to the wrong argument, so
+// the reader had to guess which mistake they had made. Naming the expected argument is the whole difference
+// between a refusal that can be acted on and one that has to be reverse-engineered.
+func seatArgumentHint(seat string) string {
+	if strings.Contains(seat, "@") {
+		return fmt.Sprintf("%q is a session name; the SEAT argument is the rig's own seat key (e.g. \"reviewer\"), "+
+			"and a session is addressed with `rig send SESSION MESSAGE`", seat)
+	}
+	return "SEAT is the rig's own seat key as the rig declares it (e.g. \"reviewer\")"
+}
+
 func (sendCommand) Summary() string { return "send one signed message to one seat" }
 func (sendCommand) NeedsRig() bool  { return false }
 
@@ -242,7 +257,10 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		fmt.Fprintln(stdout, "  --to/--pod/--rig/--host/--context are REFUSED: this shim sends to one local session")
 		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape is the client's own: it sends MESSAGE to that seat, starting it with")
 		fmt.Fprintln(stdout, "\"From NAME:\" so the seat knows who wrote it (a runtime call carries no sender when it is not made")
-		fmt.Fprintln(stdout, "from a seat shell). THE SEAT'S SESSION NAME IS READ, NEVER COMPOSED: it comes from the record that")
+		fmt.Fprintln(stdout, "from a seat shell). SEAT is the rig's own seat key, as the rig declares it (e.g. \"reviewer\");")
+		fmt.Fprintln(stdout, "a canonical session name handed to that argument is refused BY NAME, because a session is")
+		fmt.Fprintln(stdout, "addressed with the SESSION shape above rather than here.")
+		fmt.Fprintln(stdout, "THE SEAT'S SESSION NAME IS READ, NEVER COMPOSED: it comes from the record that")
 		fmt.Fprintln(stdout, "owns the pane — the room's runtime first, the daemon's seat records second — and that record also")
 		fmt.Fprintln(stdout, "decides the transport, because the runtime cannot address a pane the daemon created. When the line")
 		fmt.Fprintln(stdout, "carries a switch only the daemon runs — --verify, --force, --wait-for-idle, --dangerously-interact,")
