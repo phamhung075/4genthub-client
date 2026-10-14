@@ -442,7 +442,14 @@ func runtimeBinary() (string, error) {
 func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, stdout, stderr io.Writer) int {
 	client := clientruntime.NewClient("")
 	reported, statusErr := client.GetRoomStatus(name)
-	restart, sendSpec := seatStartPlan(reported, statusErr)
+	restart, sendSpec, planFail := seatStartPlan(reported, statusErr)
+	if planFail != nil {
+		// REFUSED BEFORE ANY StartRoom: the status answer could not be read, so this process does not know what is
+		// running and must not start a room from the definition. Exit 3 is the room contract's number for a request
+		// the daemon did not serve, and the message is the one the decoder wrote - the verb, and the shape it got.
+		fmt.Fprintln(stderr, planFail)
+		return clientcmd.CodeOf(planFail, clientcmd.ExitRoomRefused)
+	}
 	seats := reported
 	// The seats are about to be started, and a seat proves itself by handshake: the runtime gives it a window
 	// that has to cover a first launch in a fresh cache, which builds the agent's model cache and is measured in
@@ -516,9 +523,20 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 //
 // Otherwise the seats that are not running are returned and started one at a time. A room where every seat
 // already runs returns neither: that is the second `up`, and it must change nothing.
-func seatStartPlan(reported []clientruntime.SeatStatus, err error) (restart []string, sendSpec bool) {
-	if err != nil || len(reported) == 0 {
-		return nil, true
+func seatStartPlan(reported []clientruntime.SeatStatus, err error) (restart []string, sendSpec bool, fail error) {
+	if err != nil {
+		// TWO KINDS OF ERROR, AND ONLY ONE OF THEM MAY START A ROOM. The runtime answering "no such room" is U1's
+		// case: the definition is the only source of its seats, so `up` sends it. An answer nobody could READ is the
+		// opposite fact - the runtime may know the room perfectly well - and starting from the definition then is a
+		// blind start, the one outcome check-then-start exists to prevent. Both arrive as errors and both leave with
+		// the room contract's exit 3, so they are told apart by TYPE rather than by the code they share.
+		if _, unreadable := err.(*clientruntime.UnreadableAnswer); unreadable {
+			return nil, false, err
+		}
+		return nil, true, nil
+	}
+	if len(reported) == 0 {
+		return nil, true, nil
 	}
 	running := false
 	for _, seat := range reported {
@@ -529,9 +547,9 @@ func seatStartPlan(reported []clientruntime.SeatStatus, err error) (restart []st
 		restart = append(restart, seat.Seat)
 	}
 	if !running {
-		return nil, true
+		return nil, true, nil
 	}
-	return restart, false
+	return restart, false, nil
 }
 
 // roomReadings is the room's current seats. A reading that fails keeps the last one the runtime gave: the

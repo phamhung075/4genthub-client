@@ -3,6 +3,37 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — an unreadable answer refuses, and a bare ok envelope is not an empty list
+
+### Changed
+- `internal/clientruntime/ipc.go` — **`decodeAnswer` refuses an answer that carries no data.** `json.Unmarshal("null",
+  &rows)` succeeds into a nil slice, so `{"ok":true}` was read as a successful empty list: `queue list` printed
+  "0 pending" at exit 0 against a runtime that had said nothing about the queue, which is the same lie as printing
+  blanks. The refusal is also a **type** now (`UnreadableAnswer`, wrapping the coded error so `CodeOf` still yields the
+  room contract's exit 3) rather than only a code, because every daemon failure shares that code and one caller must
+  tell them apart.
+- `internal/clientlifecycle/lifecycle.go` — **`seatStartPlan` stops collapsing "the daemon does not know the room"
+  with "nobody could read the answer".** `err != nil || len(reported) == 0` sent the whole definition for either, so
+  every unreadable status produced a `StartRoom` against a room that may have been running perfectly well — the blind
+  start check-then-start exists to prevent. Only the first may send the definition (U1: it is then the only source of
+  the room's seats); an unreadable status refuses before any `StartRoom` on the wire.
+
+### Verified
+- `internal/clientruntime` — `TestAnAnswerWithNoDataRefusesWhileAnEmptyArrayStillDecodes` fails against the previous
+  decoder (a data-less answer decoded as an empty list at exit 0) and passes after, with the control beside it: a real
+  empty array still reads as zero rows. `TestUndecodableAnswersAreRefused`,
+  `TestAWrongShapeRefusalNamesTheAnswerThatCouldNotBeRead` and `TestTheZeroValueIsNeverAWrongAnswer` stay green.
+- `internal/clientlifecycle` — `TestAnUnreadableStatusRefusesInsteadOfStartingTheRoomFromTheDefinition` pins the
+  refusal and its exit code, and `TestAnOrdinaryStatusErrorStillStartsFromTheDefinition` pins the other half so the
+  split is not over-tightened into "any error refuses"; `TestSeatStartPlan`'s six cases are unchanged.
+- `go test ./...` green across the tree, `go vet` clean.
+
+### Open, named rather than implied
+- There is no `up`-over-a-socket integration test in the tree, so the wire-level half of the acceptance — a fake
+  runtime answering an undecodable `GetRoomStatus`, with **no `StartRoom` in its request log** — is covered at the
+  decode and plan levels, not end to end through `up`. The unit arms assert what `up` now does; a socket-level `up`
+  arm would assert it where the reviewer measured it.
+
 ## 2026-10-14 — the quiet gate releases on one word, and the rule lives in one place
 
 ### Changed

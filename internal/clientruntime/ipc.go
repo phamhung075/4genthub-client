@@ -184,6 +184,14 @@ func (c *Client) CallWithDeadline(action string, payload any, timeout time.Durat
 // not serve (design §2.5), so a caller reading the exit code is told "this was not answered", never "this
 // was answered and the answer is empty".
 func decodeAnswer(action string, data any, out any) error {
+	// AN ANSWER WITH NO DATA IS NOT AN EMPTY ANSWER. json.Unmarshal("null", &rows) succeeds into a nil slice, so a
+	// bare `{"ok":true}` was read as a successful empty list - `queue list` printed "0 pending" at exit 0 against a
+	// runtime that had answered nothing about the queue. That is the same lie as printing blanks, and it is the
+	// shape this unit exists to remove: a document nobody could read must refuse, and an answer that carries no
+	// document must not be mistaken for one that carries an empty one.
+	if data == nil {
+		return unreadableAnswer(action, errors.New("the answer carried no data at all, so there is nothing to read"))
+	}
 	raw, err := json.Marshal(data)
 	if err != nil {
 		return unreadableAnswer(action, err)
@@ -198,12 +206,29 @@ func decodeAnswer(action string, data any, out any) error {
 // whose shape is not the one this verb asks for, and the decoder's own words kept so a reader can see which
 // shape arrived. It carries exit 3 (see decodeAnswer), so the verb's caller cannot mistake it for a
 // transport that was merely absent.
+// UnreadableAnswer is the refusal decodeAnswer raises, and it is a TYPE rather than only a code so that a caller can
+// tell the two kinds of error apart: the runtime ANSWERED and refused (a room it does not know, say - `up` must still
+// send the definition, because the definition is then the only source of its seats), versus nobody could READ the
+// answer (`up` must refuse, because starting from a definition nobody could check is a blind start). Both reach a
+// caller as an error and both leave with the room contract's exit 3; only one of them may be acted on, so the code
+// they share cannot be the thing that decides.
+type UnreadableAnswer struct {
+	*clientcmd.CodedError
+	Action string
+}
+
+// Unwrap keeps CodeOf working through the wrapper: an unreadable answer is still a coded one.
+func (e *UnreadableAnswer) Unwrap() error { return e.CodedError }
+
 func unreadableAnswer(action string, err error) error {
-	return &clientcmd.CodedError{
-		Message: fmt.Sprintf(
-			"the runtime's %s answer could not be read (the document it sent is not the shape this verb asks for): %v",
-			action, err),
-		Code: clientcmd.ExitRoomRefused,
+	return &UnreadableAnswer{
+		Action: action,
+		CodedError: &clientcmd.CodedError{
+			Message: fmt.Sprintf(
+				"the runtime's %s answer could not be read (the document it sent is not the shape this verb asks for): %v",
+				action, err),
+			Code: clientcmd.ExitRoomRefused,
+		},
 	}
 }
 

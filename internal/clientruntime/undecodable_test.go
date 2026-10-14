@@ -226,6 +226,33 @@ func TestAWrongShapeRefusalNamesTheAnswerThatCouldNotBeRead(t *testing.T) {
 // the task's own rule calls out: an undecodable Whoami must never answer with an EMPTY IDENTITY, and an
 // undecodable room list must never answer as NO ROOMS. Both are asserted on the value the caller gets,
 // which must be absent (nil) rather than empty.
+// AND AN ANSWER WITH NO DATA IS NOT AN EMPTY ANSWER, with the control beside it so the fix is not over-tightened:
+// {"ok":true} carried no document, and `json.Unmarshal("null", &rows)` used to succeed into a nil slice - so
+// `queue list` printed "0 pending" at exit 0 against a runtime that had said nothing about the queue. An empty
+// ARRAY is a real answer and must still read as zero rows.
+func TestAnAnswerWithNoDataRefusesWhileAnEmptyArrayStillDecodes(t *testing.T) {
+	var rows []map[string]any
+	err := decodeAnswer("QueueList", nil, &rows)
+	if err == nil {
+		t.Fatal("an answer carrying no data decoded as an empty list")
+	}
+	if code := clientcmd.CodeOf(err, clientcmd.ExitOK); code != clientcmd.ExitRoomRefused {
+		t.Errorf("exit code = %d, want %d (a failed read is not a successful empty answer)", code, clientcmd.ExitRoomRefused)
+	}
+	var unreadable *UnreadableAnswer
+	if !errors.As(err, &unreadable) {
+		t.Errorf("the refusal is not an UnreadableAnswer: %T", err)
+	}
+
+	var empty []map[string]any
+	if err := decodeAnswer("QueueList", []any{}, &empty); err != nil {
+		t.Errorf("a real empty array was refused: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("an empty array decoded to %d rows", len(empty))
+	}
+}
+
 func TestTheZeroValueIsNeverAWrongAnswer(t *testing.T) {
 	t.Run("Whoami", func(t *testing.T) {
 		client, requests := captureQueueRequest(t, wrongShapeAnswer("Whoami"))

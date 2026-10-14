@@ -3,6 +3,7 @@ package clientlifecycle
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -559,7 +560,7 @@ func TestSeatStartPlan(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			start, send := seatStartPlan(tc.reported, tc.readErr)
+			start, send, _ := seatStartPlan(tc.reported, tc.readErr)
 			if send != tc.wantSend {
 				t.Errorf("sendSpec = %v, want %v", send, tc.wantSend)
 			}
@@ -567,5 +568,45 @@ func TestSeatStartPlan(t *testing.T) {
 				t.Errorf("restart = %v, want %v", start, tc.wantStart)
 			}
 		})
+	}
+}
+
+// AND THE BLIND START IS REFUSED, which is what the table's first case used to permit. "The daemon does not know the
+// room" and "nobody could read the answer" both arrive as errors, and collapsing them meant every unreadable status
+// sent the whole definition - StartRoom on the wire against a room that may be running perfectly well. The two are
+// told apart by TYPE now, because the code they share (the room contract's exit 3) cannot tell them apart.
+func TestAnUnreadableStatusRefusesInsteadOfStartingTheRoomFromTheDefinition(t *testing.T) {
+	unreadable := &clientruntime.UnreadableAnswer{
+		Action: "GetRoomStatus",
+		CodedError: &clientcmd.CodedError{
+			Message: "the runtime's GetRoomStatus answer could not be read (the document it sent is not the shape " +
+				"this verb asks for): unexpected end of JSON input",
+			Code: clientcmd.ExitRoomRefused,
+		},
+	}
+	restart, send, fail := seatStartPlan(nil, unreadable)
+	if send || len(restart) != 0 {
+		t.Errorf("an unreadable status planned a start: restart=%v sendSpec=%v", restart, send)
+	}
+	if fail == nil {
+		t.Fatal("an unreadable status was not refused: the caller would go on to StartRoom")
+	}
+	if code := clientcmd.CodeOf(fail, clientcmd.ExitOK); code != clientcmd.ExitRoomRefused {
+		t.Errorf("exit code = %d, want %d (the room contract's refusal)", code, clientcmd.ExitRoomRefused)
+	}
+}
+
+// AND THE OTHER KIND OF ERROR STILL STARTS THE ROOM, so the split is not over-tightened into "any error refuses":
+// the daemon not knowing the room is exactly when the definition is the only source of its seats (U1).
+func TestAnOrdinaryStatusErrorStillStartsFromTheDefinition(t *testing.T) {
+	restart, send, fail := seatStartPlan(nil, errors.New("no such room 'x' is not a room directory"))
+	if !send {
+		t.Error("an ordinary status error did not send the definition: U1's unknown room would no longer start")
+	}
+	if len(restart) != 0 {
+		t.Errorf("restart = %v, want none", restart)
+	}
+	if fail != nil {
+		t.Errorf("an ordinary status error refused: %v", fail)
 	}
 }
