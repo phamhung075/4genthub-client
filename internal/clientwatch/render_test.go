@@ -179,7 +179,7 @@ func TestLinesBeyondTheCapAreCountedNotDroppedSilently(t *testing.T) {
 	for n := range 12 {
 		rows = append(rows, fmt.Sprintf("row %d", n))
 	}
-	rendered := events(toolResult(strings.Join(rows, "\n")), 200, false, 5)
+	rendered := eventsWith(toolResult(strings.Join(rows, "\n")), renderOptions{width: 200, lines: 5, expand: true})
 	if len(rendered) != 1 {
 		t.Fatalf("got %d lines, want 1", len(rendered))
 	}
@@ -196,7 +196,7 @@ func TestLinesZeroShowsAllLinesWithoutTruncation(t *testing.T) {
 	for n := range 12 {
 		rows = append(rows, fmt.Sprintf("row %d", n))
 	}
-	rendered := events(toolResult(strings.Join(rows, "\n")), 200, false, 0)
+	rendered := eventsWith(toolResult(strings.Join(rows, "\n")), renderOptions{width: 200, lines: 0, expand: true})
 	if len(rendered) != 1 {
 		t.Fatalf("got %d lines, want 1", len(rendered))
 	}

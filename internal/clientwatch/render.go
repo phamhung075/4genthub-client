@@ -31,18 +31,19 @@ var seatColors = []int{203, 114, 221, 75, 213, 87, 215, 183, 120, 229}
 type toolStyle struct {
 	glyph  string
 	colour int
+	kind   string
 }
 
 var (
-	readStyle     = toolStyle{"◉", 117}
-	searchStyle   = toolStyle{"⌕", 81}
-	writeStyle    = toolStyle{"✎", 221}
-	shellStyle    = toolStyle{"❯", 120}
-	webStyle      = toolStyle{"⌁", 75}
-	delegateStyle = toolStyle{"⇉", 183}
-	askStyle      = toolStyle{"?", 215}
-	mcpStyle      = toolStyle{"⬡", mcpColor}
-	otherStyle    = toolStyle{"→", defaultToolColor}
+	readStyle     = toolStyle{"◉", 117, "read"}
+	searchStyle   = toolStyle{"⌕", 81, "search"}
+	writeStyle    = toolStyle{"✎", 221, "write"}
+	shellStyle    = toolStyle{"❯", 120, "shell"}
+	webStyle      = toolStyle{"⌁", 75, "web"}
+	delegateStyle = toolStyle{"⇉", 183, "delegate"}
+	askStyle      = toolStyle{"?", 215, "ask"}
+	mcpStyle      = toolStyle{"⬡", mcpColor, "mcp"}
+	otherStyle    = toolStyle{"→", defaultToolColor, "other"}
 )
 
 // toolStyles maps a tool name to its style: reads blue, searches cyan, writes yellow, shell green,
@@ -324,17 +325,24 @@ func pythonText(value any) string {
 }
 
 // detailLines renders the agent's reasoning, what it says, and what it is told.
-func detailLines(role string, part *orderedJSONObject, width, lines int) []string {
+func detailLines(role string, part *orderedJSONObject, o renderOptions) []string {
+	width, lines := o.width, o.lines
 	kind, _ := part.get("type")
 	kindText, _ := kind.(string)
 	switch {
 	case role == "assistant" && kindText == "thinking":
+		if !o.keep("think") {
+			return nil
+		}
 		if text, ok := part.get("thinking"); ok {
 			if trimmed := strings.TrimSpace(pythonText(text)); trimmed != "" {
 				return []string{block(bold+fg(183)+"~ think "+reset, fg(183)+"\033[3m", trimmed, width, lines)}
 			}
 		}
 	case role == "assistant" && kindText == "text":
+		if !o.keep("say") {
+			return nil
+		}
 		if text, ok := part.get("text"); ok {
 			trimmed := strings.TrimSpace(pythonText(text))
 			if len([]rune(trimmed)) > 1 {
@@ -342,6 +350,9 @@ func detailLines(role string, part *orderedJSONObject, width, lines int) []strin
 			}
 		}
 	case role == "user" && kindText == "text":
+		if !o.keep("in") {
+			return nil
+		}
 		if text, ok := part.get("text"); ok {
 			if trimmed := strings.TrimSpace(pythonText(text)); trimmed != "" {
 				return []string{block(bold+fg(87)+"◂ in "+reset, fg(123), trimmed, width, lines)}
@@ -362,10 +373,16 @@ const hookMaxLines = 3
 
 // hookEvents renders what the runtime injects into a seat itself: a reminder or notice, a rule it injected
 // and the end of a session. The second result is false for a record that is none of these.
-func hookEvents(record *orderedJSONObject, width, lines int) ([]string, bool) {
+func hookEvents(record *orderedJSONObject, o renderOptions) ([]string, bool) {
+	width, lines := o.width, o.lines
 	kind, _ := record.get("type")
 	badge := func(label string) string {
 		return "\033[1;38;5;16;48;5;" + fmt.Sprint(hookColor) + "m " + label + " " + reset + " "
+	}
+	if o.errorsOnly || !o.keep("hook") {
+		if kind == "custom_message" || kind == "ttsr_injection" {
+			return nil, true
+		}
 	}
 	switch kind {
 	case "custom_message":
@@ -404,6 +421,12 @@ func hookEvents(record *orderedJSONObject, width, lines int) ([]string, bool) {
 // events renders one session-log line. A line that is not JSON, or that carries no event, renders
 // nothing - the caller tells the two apart by the empty result.
 func events(line string, width int, detail bool, lines int) []string {
+	return eventsWith(line, renderOptions{width: width, lines: lines, detail: detail})
+}
+
+// eventsWith is events with the view options: which kinds are kept, whether results stay full, and the
+// tracker that ties a result to the call that made it.
+func eventsWith(line string, o renderOptions) []string {
 	decoded, _, err := decodeOrderedJSON(line)
 	if err != nil {
 		return nil
@@ -421,19 +444,19 @@ func events(line string, width int, detail bool, lines int) []string {
 		}
 		return []string{}
 	}
-	if rendered, isHook := hookEvents(record, width, lines); isHook {
+	if rendered, isHook := hookEvents(record, o); isHook {
 		return rendered
 	}
 	if converted, isAgy := agyToOMP(record); isAgy {
 		out := []string{}
 		for _, c := range converted {
-			out = append(out, ompEvents(c, width, detail, lines)...)
+			out = append(out, ompEvents(c, o)...)
 		}
 		return out
 	}
 	out := []string{}
 	for _, converted := range claudeToOMP(record) {
-		out = append(out, ompEvents(converted, width, detail, lines)...)
+		out = append(out, ompEvents(converted, o)...)
 	}
 	return out
 }
@@ -648,7 +671,8 @@ func toolResultRecord(isError bool, text string) *orderedJSONObject {
 
 // ompEvents renders one omp-shaped record: a tool result (blocked, error, or plain), and the detail
 // lines that go with a tool call.
-func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []string {
+func ompEvents(record *orderedJSONObject, o renderOptions) []string {
+	width, detail, lines := o.width, o.detail, o.lines
 	message, _ := record.get("message")
 	msg, ok := message.(*orderedJSONObject)
 	if !ok {
@@ -677,16 +701,13 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 			}
 		}
 		head120 := cutRunes(text, 120)
-		switch {
-		case strings.HasPrefix(text, "Tool ") && strings.Contains(head120, "is blocked by tool policy"):
+		if strings.HasPrefix(text, "Tool ") && strings.Contains(head120, "is blocked by tool policy") {
 			return []string{block("\033[1;38;5;231;48;5;160m ✗ BLOCKED "+reset, fg(210), body, width, lines)}
-		default:
-			isError, _ := msg.get("isError")
-			if flag, _ := isError.(bool); flag {
-				return []string{block(bold+fg(203)+"✗ "+tool+reset, fg(203), body, width, lines)}
-			}
-			return []string{block(fg(resultColor)+"← "+tool+reset, fg(resultColor), body, width, lines)}
 		}
+		isError, _ := msg.get("isError")
+		failed, _ := isError.(bool)
+		toolName := strings.TrimSpace(tool)
+		return o.resultLines(msg, toolName, body, failed)
 	}
 	items, ok := rawContent.([]any)
 	if !ok {
@@ -699,7 +720,7 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 			continue
 		}
 		if detail {
-			out = append(out, detailLines(roleText, part, width, lines)...)
+			out = append(out, detailLines(roleText, part, o)...)
 		}
 		if kind, _ := part.get("type"); kind != "toolCall" {
 			continue
@@ -716,6 +737,9 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 		} else if mapped, known := toolStyles[name]; known {
 			style = mapped
 		}
+		if o.errorsOnly || !o.keep(style.kind) {
+			continue
+		}
 		arguments, _ := part.get("arguments")
 		label, body := name, callBody(arguments)
 		if device, isDevice := mcpDevice(name, arguments); isDevice {
@@ -731,12 +755,18 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 		}
 		head := fmt.Sprintf("%s%s%s %s%s", bold, fg(style.colour), style.glyph, label, reset)
 		intent := callIntent(arguments)
+		if id, _ := part.get("id"); o.calls != nil {
+			if callID, ok := id.(string); ok {
+				o.calls.note(callID, style.kind, body)
+			}
+		}
 		if path, removed, added, isEdit := editDiff(name, arguments); isEdit {
-			lead := head + "  " + fg(255) + path + reset
+			rows, plus, minus := lineDiff(removed, added)
+			lead := fmt.Sprintf("%s  %s%s%s  %s+%d%s %s−%d%s", head, fg(255), path, reset, fg(addedColour), plus, reset, fg(removedColour), minus, reset)
 			if intent != "" {
 				lead += "  " + fg(250) + "\033[3m" + intent + reset
 			}
-			out = append(out, lead+"\n"+diffBlock(removed, added, width, lines))
+			out = append(out, lead+"\n"+diffRows(rows, width, lines))
 			continue
 		}
 		switch {
@@ -762,6 +792,9 @@ type Header struct {
 	limit  int
 	model  string
 	tokens *int
+
+	// lastEvent is when the seat last did anything, for the working / quiet status in the title.
+	lastEvent time.Time
 
 	lastText string
 	lastAt   time.Time
@@ -789,12 +822,47 @@ func (h *Header) setTokens(tokens *int) { h.tokens = tokens }
 
 func (h *Header) tag() string { return barTag(h.tokens, h.limit) }
 
+func (h *Header) touch(at time.Time) {
+	if at.After(h.lastEvent) {
+		h.lastEvent = at
+	}
+}
+
+// percent is the context used, in whole percent of the compaction limit; 0 until a reading is known.
+func (h *Header) percent() int {
+	if h.tokens == nil || h.limit <= 0 {
+		return 0
+	}
+	return *h.tokens * 100 / h.limit
+}
+
+// status is what the seat is doing: working while events are arriving, then how long it has been quiet.
+func (h *Header) status() string {
+	if h.lastEvent.IsZero() {
+		return ""
+	}
+	age := h.now().Sub(h.lastEvent)
+	switch {
+	case age < 30*time.Second:
+		return fg(120) + "● working" + reset
+	case age < time.Minute:
+		return fg(stampColor) + "○ idle" + reset
+	case age < time.Hour:
+		return fg(stampColor) + fmt.Sprintf("○ quiet %dm", int(age.Minutes())) + reset
+	}
+	return fg(221) + fmt.Sprintf("○ quiet %dh%dm", int(age.Hours()), int(age.Minutes())%60) + reset
+}
+
 func (h *Header) title() string {
 	who := h.name
 	if h.model != "" {
 		who = h.name + " | " + h.model
 	}
-	return bold + fg(h.colour) + "== " + who + " ==" + reset + "  " + tokenBar(h.tokens, h.limit)
+	title := bold + fg(h.colour) + "== " + who + " ==" + reset + "  " + tokenBar(h.tokens, h.limit)
+	if status := h.status(); status != "" {
+		title += "  " + status
+	}
+	return title
 }
 
 // draw prints the bar line when the reading moved and the repeat interval has passed.
@@ -815,11 +883,6 @@ func (h *Header) draw() {
 		h.lastAt = h.now()
 	}
 }
-
-const (
-	removedColour = 203
-	addedColour   = 120
-)
 
 // editDiff is the path and the removed and added text of an edit call, so the feed can show what changed
 // instead of the arguments as a dump.
@@ -846,27 +909,4 @@ func editDiff(name string, args any) (path, removed, added string, ok bool) {
 	}
 	path, _ = text("path")
 	return path, removed, added, true
-}
-
-// diffBlock prints the removed lines in red behind "-" and the added lines in green behind "+", each with
-// a tinted background, so a change is read at a glance. The line limit counts both sides together.
-func diffBlock(removed, added string, width, lines int) string {
-	var rows []string
-	emit := func(sign string, colour int, text string) {
-		if text == "" {
-			return
-		}
-		for _, raw := range splitLines(strings.TrimRight(text, "\n")) {
-			for _, row := range wrapRunes(raw, width) {
-				rows = append(rows, "    "+bold+fg(colour)+sign+reset+" "+fg(colour)+row+reset)
-			}
-		}
-	}
-	emit("-", removedColour, removed)
-	emit("+", addedColour, added)
-	if lines > 0 && len(rows) > lines {
-		more := len(rows) - lines
-		rows = append(rows[:lines], "    "+fg(stampColor)+fmt.Sprintf("… +%d more lines", more)+reset)
-	}
-	return strings.Join(rows, "\n")
 }

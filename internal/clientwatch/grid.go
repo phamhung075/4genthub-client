@@ -369,7 +369,7 @@ func runLeadWindow(ctx context.Context, s shared) error {
 		pane    string
 		command string
 	}{
-		{root, fmt.Sprintf("feed --rig %s --seat lead --back 40 --width 200 --lines 25 --detail", s.rig)},
+		{root, fmt.Sprintf("feed --rig %s --seat lead --back 40 --width 0 --lines 25 --detail", s.rig)},
 		{below, fmt.Sprintf("input --rig %s --seat lead", s.rig)},
 	}
 	for _, entry := range commands {

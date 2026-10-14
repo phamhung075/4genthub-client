@@ -40,15 +40,19 @@ log reader for (`codex`, `agy`) keeps its pane and its header and shows no event
 Each grid pane is titled with the seat, its model and a bar of its context use against the compact
 limit (`== lead | deepseek-flash ==  ████████░░░░░░░░ 50% 75k/150k to compact`), renamed at most every
 5 seconds as the reading moves. The feed itself carries no header line there. A feed in a plain
-terminal (no `HERDR_PANE_ID`) prints the same line into the stream instead. Every event line is
-prefixed with the percentage, so the meter is never out of view.
+terminal (no `HERDR_PANE_ID`) prints the same line into the stream instead. The title ends with the
+seat's status: `● working` while an event is under 30 s old, then `○ idle` and `○ quiet Nm`.
+An event line is prefixed with the time the seat logged it, shown only when the minute changes, and
+with the context percentage, shown only when it crosses a 10% step.
 
 | Mark | Meaning |
 |---|---|
 | `<glyph> <tool> <intent>` | a tool call, its glyph and colour set by the kind of work: `◉` read (blue), `⌕` search (cyan), `✎` write or edit (yellow), `❯` shell (green), `⌁` web (blue), `⇉` delegate or todo (violet), `?` ask (orange), `→` anything else (white); the dim italic intent is the purpose the seat stated, and the main argument (command, path, prompt) follows on the lines below, with no `key=` |
-| `✎ edit <path>` | an edit shows the change itself: removed lines in red behind `-`, added lines in green behind `+`, removed first |
+| `✎ edit <path> +N −M` | an edit shows the change itself as a line diff: removed lines in red behind `-`, added lines in green behind `+`, one line of context, and the counts in the head |
 | `⬡ mcp <server_tool>` | a call to an MCP tool, made as a read or write on its `xd://mcp__<server>_<tool>` device; the body is the request |
-| `← <tool> text` | the result, dim, headed by the tool that answered |
+| `← <tool> text` | the result, dim, headed by the tool that answered and the call's brief and duration. A read shows `· N lines`; a shell result shows its first 3 lines; `--expand` shows every result in full |
+| `↺ repeated ×N` | the same event printed N more times in a row, folded into one |
+| a dim rule | a turn separator before each `◂ in` |
 | `✗ <tool> text` | an error result, red |
 | an orange `HOOK <name>` block | a reminder or notice the runtime injected into the seat (the `<system-reminder>` tags are removed; three lines at most) |
 | an orange `RULE` block | a rule the runtime injected, by name |
@@ -62,8 +66,7 @@ prefixed with the percentage, so the meter is never out of view.
 
 Colours: reads (`read`, `grep`, `find`, `ls`) light blue, writes (`write`, `edit`) yellow, shell
 (`bash`, `eval`) green, `mcp__*` calls pink. All are light tones chosen for a dark terminal. The
-timestamp is when the viewer printed the line, not when the seat ran it, so the lines replayed at
-startup share one time.
+time on a line is the seat's own record time, so replayed lines keep their real times.
 
 ## Options
 
@@ -74,8 +77,12 @@ startup share one time.
 | `--seat SEAT` | which seat: for `feed` and `inputs`, limit the view to this seat, repeatable; for `input`, the seat to send to, required |
 | `--cols N` | grid columns (default 2); `grid` and `watch` only |
 | `--back N` | events replayed per seat when a pane starts (default 40; 3 for `feed`). A pane holds only what was printed since it started, so raise this to see older work |
-| `--width N` | characters kept of each line (default 200; 170 for `feed`) |
+| `--width N` | characters kept of each line (default 0: the width of the pane, read with `stty size`; 200 when it cannot be read) |
 | `--lines N` | lines shown of each call, result or message (default 60) |
+| `--only KINDS` | keep only these kinds, comma separated: `read`, `search`, `write`, `shell`, `web`, `delegate`, `ask`, `mcp`, `other`, `think`, `say`, `in`, `hook`; an unknown kind is a usage error |
+| `--errors` | keep only failures, refusals and the end of a session |
+| `--changes` | keep only what the seats changed (same as `--only write`) |
+| `--expand` | keep every result in full instead of folding it |
 | `--detail` | also show the reasoning, what the agent says and what it is told; on for `grid` and `watch`, off for `feed` |
 
 ## Type to a seat from the grid
