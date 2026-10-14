@@ -358,7 +358,6 @@ func TestUpRefusesWhenACredentialIsMissingWithoutPrintingItsValue(t *testing.T) 
 		ran = append(ran, "ensureRig")
 		return clientcmd.ExitOK
 	}
-	ensureForcecompact = func(io.Writer) { ran = append(ran, "ensureForcecompact") }
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
@@ -399,7 +398,6 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 		ran = append(ran, "ensureRig")
 		return clientcmd.ExitOK
 	}
-	ensureForcecompact = func(io.Writer) {}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
 	waitSafeguards = func(string) ([]clientservices.Health, bool) {

@@ -72,7 +72,7 @@ func restoreAll(t *testing.T) {
 	t.Helper()
 	stubHeartbeat(t)
 	daemon, rigStep := ensureDaemon, ensureRig
-	force, record := ensureForcecompact, recordRigFor
+	record := recordRigFor
 	authority, wait := startAuthority, waitSafeguards
 	ui, watch, herdr := openUI, runWatchView, runHerdr
 	spawn, grace := spawnChild, SupervisorStartGrace
@@ -80,7 +80,7 @@ func restoreAll(t *testing.T) {
 	rows, authorityUp := rowsFor, rigdRunning
 	t.Cleanup(func() {
 		ensureDaemon, ensureRig = daemon, rigStep
-		ensureForcecompact, recordRigFor = force, record
+		recordRigFor = record
 		startAuthority, waitSafeguards = authority, wait
 		openUI, runWatchView, runHerdr = ui, watch, herdr
 		spawnChild, SupervisorStartGrace = spawn, grace
@@ -146,7 +146,7 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 }
 
 // TestUpInitialisesEveryServiceInOrder is the Python test of the same name, restated for 7.1: the daemon,
-// the rig, the forcecompact check, the room recorded as meant-to-run, rigd (the single restart authority),
+// the rig, the room recorded as meant-to-run, rigd (the single restart authority),
 // the same health check `doctor` makes, the watch view, the UI, then herdr.
 //
 // THE BRIDGE AND THE SUPERVISOR ARE NOT IN THIS LIST ANY MORE, and that is the ruling: `up` starts rigd,
@@ -164,7 +164,6 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 		ran = append(ran, "ensureRig")
 		return clientcmd.ExitOK
 	}
-	ensureForcecompact = func(io.Writer) { ran = append(ran, "ensureForcecompact") }
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
 	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startRigd"); return true }
 	waitSafeguards = func(string) ([]clientservices.Health, bool) {
@@ -180,7 +179,7 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	if code := (upCommand{}).Run(context.Background(), []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up returned %d (stderr: %q)", code, errOut.String())
 	}
-	want := []string{"ensureDaemon", "ensureRig", "ensureForcecompact", "recordRig", "startRigd", "waitSafeguards", "watch", "openUI", "herdr"}
+	want := []string{"ensureDaemon", "ensureRig", "recordRig", "startRigd", "waitSafeguards", "watch", "openUI", "herdr"}
 	if strings.Join(ran, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", ran, want)
 	}
@@ -227,7 +226,7 @@ func TestUpRefusesADefinitionThatNamesAnotherRoom(t *testing.T) {
 }
 
 // --room-only is an INSTRUMENT, and this is the property that makes it one: the room's own verdict is the
-// exit code, and nothing after the room runs - no forcecompact check, no rigd, no bridge wait, no watch
+// exit code, and nothing after the room runs - no rigd, no bridge wait, no watch
 // view, no UI, no herdr. A run whose red could come from any of those is not evidence about the room.
 func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 	for _, c := range []struct {
@@ -249,7 +248,6 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 				ran = append(ran, "ensureRig")
 				return c.room
 			}
-			ensureForcecompact = func(io.Writer) { ran = append(ran, "ensureForcecompact") }
 			recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
 			startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startRigd"); return true }
 			waitSafeguards = func(string) ([]clientservices.Health, bool) {

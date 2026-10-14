@@ -51,11 +51,10 @@ type seatState struct {
 // Everything external - the seat list, its log, the rig tool, the clock - is a field, so one pass is
 // testable with no rig, no tmux and no waiting.
 type Supervisor struct {
-	Rig          string
-	Quiet        int
-	StateRoot    string
-	Forcecompact string
-	Out          io.Writer
+	Rig       string
+	Quiet     int
+	StateRoot string
+	Out       io.Writer
 
 	Now        func() float64
 	Seats      func(rig string) []string
@@ -84,15 +83,14 @@ type Supervisor struct {
 }
 
 // New is a supervisor wired to the real world: tmux for the seat list, the runtime for idleness and
-// messages, and the forcecompact helper for an omp compact.
-func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *Supervisor {
+// messages, and the runtime daemon for a compact.
+func New(rig string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 	supervisor := &Supervisor{
-		Rig:          rig,
-		Quiet:        quiet,
-		StateRoot:    stateRoot,
-		Forcecompact: forcecompact,
-		Out:          out,
-		State:        map[string]*seatState{},
+		Rig:       rig,
+		Quiet:     quiet,
+		StateRoot: stateRoot,
+		Out:       out,
+		State:     map[string]*seatState{},
 	}
 	supervisor.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 	supervisor.Seats = seatlog.RigSeats
@@ -462,22 +460,14 @@ func tmuxInterrupt(rig, seat string) {
 	_ = cmd.Run()
 }
 
-// rpcCompact sends an RPC compact straight to the seat's omp, which reads it whatever the seat is doing.
-// The helper is not part of this binary: it needs CAP_SYS_PTRACE, so it is named on the command line or
-// through 4GENTEAM_FORCECOMPACT, and a machine without it says so in one line rather than pretending.
+// rpcCompact asks the runtime daemon to compact the seat through its runner, which reads the request
+// whatever the seat is doing.
 func (s *Supervisor) rpcCompact(rig, seat string) string {
-	if s.Forcecompact == "" {
-		return "forcecompact is not configured (set 4GENTEAM_FORCECOMPACT or pass --forcecompact): " +
-			"an omp seat past the limit cannot be compacted"
-	}
-	out, err := exec.Command(s.Forcecompact, clientruntime.SeatSessionName(rig, seat)).CombinedOutput()
-	if text := strings.TrimSpace(string(out)); text != "" {
-		return text
-	}
+	answer, err := clientruntime.NewClient("").ForceCompact(clientruntime.SeatSessionName(rig, seat))
 	if err != nil {
 		return err.Error()
 	}
-	return ""
+	return answer
 }
 
 // supervisorChild is a started supervisor or bridge from the caller's point of view: its pid, and a

@@ -51,7 +51,6 @@ func stubWholeUp(t *testing.T) *[]string {
 		*ran = append(*ran, "ensureRig")
 		return clientcmd.ExitOK
 	}
-	ensureForcecompact = func(io.Writer) {}
 	// The room recorded and the authority started are the steps after the gate; a test about the gate
 	// asserts whether the RESUME ran, so these two are stubbed to no-ops that cannot touch this machine.
 	recordRigFor = func(string, io.Writer) bool { return true }

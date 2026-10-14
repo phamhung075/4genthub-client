@@ -66,7 +66,7 @@ const (
 	statusUsage     = "usage: 4genteam status RIG"
 	logUsage        = "usage: 4genteam log RIG"
 	uiUsage         = "usage: 4genteam ui"
-	compactRunUsage = "usage: 4genteam compact-run --rig RIG [--quiet SECONDS] [--every SECONDS] [--once] [--state-root DIR] [--forcecompact PATH]"
+	compactRunUsage = "usage: 4genteam compact-run --rig RIG [--quiet SECONDS] [--every SECONDS] [--once][--state-root DIR]"
 )
 
 // ChildError carries a started child's exit status, so a start that failed can be named without
@@ -157,15 +157,14 @@ func requireRig(verb string, args []string, stderr io.Writer) (string, bool) {
 // room's verdict as this verb's exit code. Their signatures carry the state dir and the definition for one
 // reason beyond the work: the acceptance run has to be able to say WHICH of the two answered.
 var (
-	ensureDaemon       = ensureDaemonImpl
-	ensureRig          = ensureRigImpl
-	ensureForcecompact = ensureForcecompactImpl
-	recordRigFor       = recordRig
-	startAuthority     = startRigd
-	waitSafeguards     = waitForSafeguards
-	openUI             = openUIImpl
-	runWatchView       = runWatchViewImpl
-	runHerdr           = runHerdrImpl
+	ensureDaemon   = ensureDaemonImpl
+	ensureRig      = ensureRigImpl
+	recordRigFor   = recordRig
+	startAuthority = startRigd
+	waitSafeguards = waitForSafeguards
+	openUI         = openUIImpl
+	runWatchView   = runWatchViewImpl
+	runHerdr       = runHerdrImpl
 )
 
 type upCommand struct{}
@@ -325,8 +324,6 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 	if roomOnly {
 		return clientcmd.ExitOK
 	}
-	ensureForcecompact(stderr)
-
 	// 7.5: a bridge refused for a missing AGENTHUB_URL or AGENTHUB_TOKEN is a FAILED `up`. The check runs
 	// HERE, before rigd is started, because the alternative is a bridge that dies at once and a message
 	// about a process instead of about the variable that is missing. The value is never printed.
@@ -632,21 +629,6 @@ func PeakGate(name, verb string, allowPeak bool, stderr io.Writer) int {
 	return clientcmd.ExitOK
 }
 
-func ensureForcecompactImpl(stderr io.Writer) {
-	helper := ForcecompactPath()
-	if helper == "" {
-		fmt.Fprintln(stderr,
-			"4genteam: the forcecompact helper is not on PATH (set 4GENTEAM_FORCECOMPACT to its path): "+
-				"an omp seat past the hard limit cannot be force-compacted")
-		return
-	}
-	out, err := exec.Command("getcap", helper).Output()
-	if err != nil || strings.Contains(string(out), "cap_sys_ptrace") {
-		return
-	}
-	fmt.Fprintf(stderr, "4genteam: run once: sudo setcap cap_sys_ptrace+ep %s\n", helper)
-}
-
 // uiURLEnv names the 4genthub web UI to open; the default is the frontend this repository serves in development.
 const (
 	uiURLEnv  = "AGENTHUB_UI_URL"
@@ -894,7 +876,7 @@ func (compactRunCommand) Run(_ context.Context, args []string, stdout, stderr io
 		fmt.Fprintf(stderr, "4genteam compact-run: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	supervisor := New(options.Rig, options.Quiet, options.StateRoot, options.Forcecompact, stdout)
+	supervisor := New(options.Rig, options.Quiet, options.StateRoot, stdout)
 	supervisor.Log(fmt.Sprintf("supervising %s: limit %s, quiet %ds",
 		options.Rig, seatlog.Kilo(seatlog.CompactLimit), options.Quiet))
 	interrupted := make(chan os.Signal, 1)
@@ -914,12 +896,11 @@ func (compactRunCommand) Run(_ context.Context, args []string, stdout, stderr io
 
 // CompactRunOptions is one `compact-run`'s arguments.
 type CompactRunOptions struct {
-	Rig          string
-	Quiet        int
-	Every        int
-	Once         bool
-	StateRoot    string
-	Forcecompact string
+	Rig       string
+	Quiet     int
+	Every     int
+	Once      bool
+	StateRoot string
 }
 
 // ParseCompactRunOptions reads compact-run's arguments. It is separate from Run so the rule that has
@@ -940,7 +921,6 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 	every := flags.Int("every", 10, "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
 	stateRoot := flags.String("state-root", "", "where the client keeps its state: the flag, else ~/.config/4genthub")
-	forcecompact := flags.String("forcecompact", ForcecompactPath(), "the forcecompact helper, when this machine has one")
 	if err := flags.Parse(args); err != nil {
 		return options, false
 	}
@@ -954,12 +934,11 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 		return options, false
 	}
 	options = CompactRunOptions{
-		Rig:          *rig,
-		Quiet:        *quietFlag,
-		Every:        *every,
-		Once:         *once,
-		StateRoot:    root,
-		Forcecompact: *forcecompact,
+		Rig:       *rig,
+		Quiet:     *quietFlag,
+		Every:     *every,
+		Once:      *once,
+		StateRoot: root,
 	}
 	return options, true
 }

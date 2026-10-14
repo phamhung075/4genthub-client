@@ -89,10 +89,6 @@ settings allow exactly `Bash(seatcheck send:*)` and `pull` fails loudly when `se
 the binary this client built. A `4genteam seatcheck send …` subcommand would satisfy neither the pin nor the
 allow rule.
 
-The force-compaction helper for `omp` seats is the Rust program in `rust/forcecompact`; build it with
-`cargo build --release` and point the client at it with `4GENTEAM_FORCECOMPACT`, or leave that unset
-and let the client find `forcecompact` on `PATH`.
-
 ## The one credential and the one env file
 
 There is exactly one credential, `AGENTHUB_TOKEN`, paired with `AGENTHUB_URL`, and one file for it:
@@ -165,7 +161,6 @@ Every key lives in `~/.config/4genthub/.env` or the environment; only the first 
 | `TYPESAFE_API_KEY` | TypeSafe AI System One token for validation gate evaluation (model `jev-1.13.0`) |
 | `TYPESAFE_BASE_URL` | TypeSafe AI base endpoint (default `https://api.typesafe.ai/v1`) |
 | `DEEPSEEK_API_KEY` | DeepSeek API key for model seats and offload jobs |
-| `4GENTEAM_FORCECOMPACT` | the force-compaction helper's path; blank means: find `forcecompact` on `PATH` |
 | `4GENTEAM_CLAUDE_PROJECTS` | a Claude Code projects directory to read session logs from, as the fallback for a `claude-code` seat |
 | `COMPACT_LIMIT_TOKENS` | context size at which a seat is told to find a safe point (150000) |
 | `COMPACT_WARN_TOKENS` | urgent size, compacted without waiting for quiet (200000) |
@@ -177,7 +172,7 @@ Every key lives in `~/.config/4genthub/.env` or the environment; only the first 
 
 The client also respects four variables it does not own: `XDG_STATE_HOME`, which is the base of the
 supervisor's log directory (`$XDG_STATE_HOME/4genthub/logs`, else `~/.local/state/4genthub/logs`),
-`PATH`, which is where it looks for `herdr`, `tmux` and `forcecompact`, and `DEEPSEEK_HOLIDAYS` and
+`PATH`, which is where it looks for `herdr` and `tmux`, and `DEEPSEEK_HOLIDAYS` and
 `OFFPEAK_UTC`, which it reads with the same names the shell gate used so a machine switching to this
 client keeps the same behavior. Only `OFFPEAK_ONLY` is a key this client both reads and writes.
 

@@ -321,7 +321,7 @@ rig ps --nodes --rig <RIG>   # one row per seat of the room, with its lifecycle 
 ```
 
 `4genteam up <RIG>` is the way to bring a room back after a restart: in one command it checks the
-rig daemon, restores the rig, checks the force-compaction helper (`forcecompact`), starts the
+rig daemon, restores the rig, starts the
 status bridge, then the compaction supervisor, opens the watch view, opens the rig UI and hands
 over to herdr. Its positional is the **rig** name — the room name unless the user asked for a
 different one (`4genteam up` takes no room argument).
