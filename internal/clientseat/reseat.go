@@ -226,6 +226,11 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		fmt.Fprintln(stdout, "OpenRig CLI sends and attributed to this shell's OPENRIG_SESSION_NAME, which is the shape")
 		fmt.Fprintln(stdout, "`rig send` has always meant. When no runtime answers, a rig's OpenRig daemon is asked instead;")
 		fmt.Fprintln(stdout, "the switches below that name a handshake only the daemon runs always go to the daemon.")
+		fmt.Fprintln(stdout, "A canonical name is TRANSLATED before it is sent, because the runtime's own session for a seat is")
+		fmt.Fprintln(stdout, "`agenthub--ROOM--SEAT` and the two strings never matched: the name is READ from the seat's record —")
+		fmt.Fprintln(stdout, "the room's runtime first, the daemon's seat records second — and that record also picks the")
+		fmt.Fprintln(stdout, "transport, so the pane that is named is the pane that is written to. A session no record lists")
+		fmt.Fprintln(stdout, "keeps the string you typed, and the transport's refusal for it names what it expected.")
 		fmt.Fprintln(stdout, "\nOptions, wherever they appear on the line, are the OpenRig CLI's own:")
 		fmt.Fprintln(stdout, "  --verify                     the daemon re-confirms the snippet in its post-send capture")
 		fmt.Fprintln(stdout, "  --wait-for-idle <seconds>    wait for the target to be idle before typing")
@@ -235,14 +240,16 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 		fmt.Fprintln(stdout, "  --force                      back-compat no-op: a busy pane already sends-with-advisory")
 		fmt.Fprintln(stdout, "  --json                       print the daemon's answer as JSON")
 		fmt.Fprintln(stdout, "  --to/--pod/--rig/--host/--context are REFUSED: this shim sends to one local session")
-		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape is the client's own: it sends MESSAGE to that seat through the local")
-		fmt.Fprintln(stdout, "runtime, starting it with \"From NAME:\" so the seat knows who wrote it (a runtime call carries")
-		fmt.Fprintln(stdout, "no sender when it is not made from a seat shell). When the line carries a switch only the daemon")
-		fmt.Fprintln(stdout, "runs — --verify, --force, --wait-for-idle, --dangerously-interact, --raw, --json — that switch")
-		fmt.Fprintln(stdout, "decides the transport, and the message goes to the same seat's session (agenthub--RIG--SEAT) over")
-		fmt.Fprintln(stdout, "the daemon; --raw drops the \"From NAME:\" prefix, because raw means the text exactly. A switch")
-		fmt.Fprintln(stdout, "neither transport can honour stops the send rather than being ignored. It does NOT shell out to")
-		fmt.Fprintln(stdout, "`rig`: after this client's rename that name is this binary. NAME defaults to \""+defaultSender+"\".")
+		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape is the client's own: it sends MESSAGE to that seat, starting it with")
+		fmt.Fprintln(stdout, "\"From NAME:\" so the seat knows who wrote it (a runtime call carries no sender when it is not made")
+		fmt.Fprintln(stdout, "from a seat shell). THE SEAT'S SESSION NAME IS READ, NEVER COMPOSED: it comes from the record that")
+		fmt.Fprintln(stdout, "owns the pane — the room's runtime first, the daemon's seat records second — and that record also")
+		fmt.Fprintln(stdout, "decides the transport, because the runtime cannot address a pane the daemon created. When the line")
+		fmt.Fprintln(stdout, "carries a switch only the daemon runs — --verify, --force, --wait-for-idle, --dangerously-interact,")
+		fmt.Fprintln(stdout, "--raw, --json — the daemon is the only source consulted and the message goes there over the name")
+		fmt.Fprintln(stdout, "that record holds; --raw drops the \"From NAME:\" prefix, because raw means the text exactly. A")
+		fmt.Fprintln(stdout, "switch neither transport can honour stops the send rather than being ignored. It does NOT shell out")
+		fmt.Fprintln(stdout, "to `rig`: after this client's rename that name is this binary. NAME defaults to \""+defaultSender+"\".")
 		return clientcmd.ExitOK
 	}
 
@@ -339,7 +346,23 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 // Answering --verify over the runtime would report a verification that was never performed, so those route
 // to the daemon even when a runtime answers; that is the reason the fallback is kept rather than deleted.
 func sendToSession(ctx context.Context, session, text string, opts map[string]string, stdout, stderr io.Writer) int {
-	switch clientruntime.ResolveTransport() {
+	// THE NAME IS TRANSLATED BEFORE ANY TRANSPORT IS CHOSEN. `<room>-<seat>@<room>` is the canonical form the
+	// help documents and every seat's own session carries, but the runtime's session for that seat is
+	// `agenthub--<room>--<seat>`. Handed the canonical string, the runtime refused it (`tmux paste-buffer
+	// failed: can't find pane`) while the daemon that knows the name was never asked: the documented form was
+	// dead and only the native string delivered (F-B). The record that owns the pane resolves the pair - the
+	// runtime's room record first, the daemon's seat record second - and the transport it names is the one
+	// that can address that pane.
+	//
+	// A pair no record lists is left ALONE, deliberately: the caller's own string then goes to the transport it
+	// always did, and that transport's refusal is the honest answer for a session that does not exist.
+	transport := clientruntime.ResolveTransport()
+	if rig, seat, ok := clientruntime.CanonicalRigSeat(session); ok {
+		if address, err := clientruntime.ResolveSeatAddress(ctx, rig, seat); err == nil {
+			session, transport = address.SessionName, address.Transport
+		}
+	}
+	switch transport {
 	case clientruntime.TransportRuntime:
 		// A daemon-only switch still routes to the daemon, even though the runtime could carry the text: the
 		// switch is a promise about what the send REPORTS, and only the daemon can keep it.

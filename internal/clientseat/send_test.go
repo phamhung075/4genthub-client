@@ -155,8 +155,17 @@ func TestSendTakesTheDocumentedFlagsOnEitherSideOfTheMessage(t *testing.T) {
 			calls := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
-				_ = json.NewDecoder(r.Body).Decode(&got)
-				_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered","verified":true}`))
+				// The daemon is asked for its seat records first — the canonical name the caller typed is
+				// resolved, never composed — and what it names is what the send is addressed to.
+				switch r.URL.Path {
+				case "/api/ps":
+					_, _ = w.Write([]byte(`[{"rigId":"rig-min","rigName":"4genthub-min","name":"4genthub-min"}]`))
+				case "/api/rigs/rig-min/nodes":
+					_, _ = w.Write([]byte(`[{"logicalId":"4genthub-min.reviewer","canonicalSessionName":"4genthub-min-reviewer@4genthub-min"}]`))
+				default:
+					_ = json.NewDecoder(r.Body).Decode(&got)
+					_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered","verified":true}`))
+				}
 			}))
 			defer srv.Close()
 			t.Setenv("OPENRIG_URL", srv.URL)
@@ -168,8 +177,8 @@ func TestSendTakesTheDocumentedFlagsOnEitherSideOfTheMessage(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("exit = %d, stderr = %q", code, errOut.String())
 			}
-			if calls != 1 {
-				t.Fatalf("%d requests reached the daemon, want exactly one", calls)
+			if calls != 3 {
+				t.Fatalf("%d requests reached the daemon, want three: its rig list, its seat record, and the send", calls)
 			}
 			if got["session"] != target {
 				t.Errorf("delivered to %v, want the named seat %s", got["session"], target)

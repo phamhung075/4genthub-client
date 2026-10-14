@@ -55,6 +55,33 @@ var seatNameKeys = []string{"canonicalSessionName", "sessionName", "session_name
 // When neither answers, the refusal names what was missing rather than falling back to a composed name: a
 // guess that works for a room called `leg-solo` and fails for a rig called `4genthub-min` is worse than a
 // refusal, because it looks like a working address until the moment it is used.
+// CanonicalRigSeat splits the canonical session form `<room>-<seat>@<room>` - the string every seat's own
+// session name carries, the form this client's help documents and the form the envelope's reply hint tells a
+// recipient to use - into the room and the seat.
+//
+// ok is false for anything that is not that form, and that includes the runtime's OWN session name
+// (`agenthub--<room>--<seat>`), which has no `@` and is therefore passed through untouched. The room is the
+// part after the LAST `@` and must also be the prefix of the part before it, because a room name may itself
+// contain a dash: `4genthub-min-lead@4genthub-min` is room `4genthub-min`, seat `lead`. A string that carries
+// an `@` without that agreement is nobody's canonical name and is left alone rather than guessed at.
+func CanonicalRigSeat(session string) (rig, seat string, ok bool) {
+	at := strings.LastIndex(session, "@")
+	if at <= 0 || at == len(session)-1 {
+		return "", "", false
+	}
+	left, room := session[:at], session[at+1:]
+	prefix := room + "-"
+	if !strings.HasPrefix(left, prefix) || len(left) == len(prefix) {
+		return "", "", false
+	}
+	return room, left[len(prefix):], true
+}
+
+// ResolveSeatAddress reads the session name a seat's pane actually carries from the record that owns it: the
+// room's runtime first, the OpenRig daemon's seat records second. The name is READ, never composed - a
+// convention is what produced `agenthub--RIG--SEAT`, a string no seat carries, and this rig's own dashed name
+// makes the canonical string un-splittable for anyone downstream - so a seat absent from both records is a
+// refusal that names both doors, not a name built from the caller's two arguments.
 func ResolveSeatAddress(ctx context.Context, rig, seat string) (SeatAddress, error) {
 	return resolveSeatAddress(ctx, rig, seat, false)
 }
@@ -110,9 +137,13 @@ func seatAddressFromRuntime(rig, seat string) string {
 	if seat == "" {
 		return ""
 	}
-	room := strings.TrimSpace(os.Getenv(agentHubRoomEnv))
+	// THE ROOM THE CALLER NAMED WINS over the ambient `AGENTHUB_ROOM`. A seat shell always carries the room it
+	// sits in, so an env-first read answers for the WRONG room the moment a seat addresses another one -
+	// `send other-room-dev@other-room` from inside this rig's own shell asked this rig's room and heard that its
+	// seat was not there. The ambient value is the fallback for a caller that named no room at all.
+	room := strings.TrimSpace(rig)
 	if room == "" {
-		room = rig
+		room = strings.TrimSpace(os.Getenv(agentHubRoomEnv))
 	}
 	if room == "" {
 		return ""

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,7 +91,15 @@ func TestSendPrefersTheRuntimeSocket(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("OPENRIG_URL", srv.URL)
 
-	sock, requests := fakeRuntime(t, func(string) string {
+	sock, requests := fakeRuntime(t, func(line string) string {
+		if strings.Contains(line, `"GetRoomStatus"`) {
+			// The canonical name the caller typed is resolved through the seat's own record before the send -
+			// the runtime is the transport that cannot address the canonical form (F-B). This record names the
+			// same string the caller did, so nothing is rewritten and the delivery below is still measured on
+			// what the caller chose.
+			return `{"ok":true,"data":[{"room":"4genthub-min","seat":"fe-dev",` +
+				`"session_name":"4genthub-min-fe-dev@4genthub-min","runtime":"omp","state":"Running"}]}` + "\n"
+		}
 		return `{"ok":true,"data":{"delivered":"4genthub-min-fe-dev@4genthub-min"}}` + "\n"
 	})
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
@@ -109,25 +118,39 @@ func TestSendPrefersTheRuntimeSocket(t *testing.T) {
 		t.Errorf("stdout = %q, want the delivery confirmed by session name", out.String())
 	}
 
-	var frame struct {
+	// TWO requests reach the runtime, in this order: the room's own record, asked for the seat's session name,
+	// and the send itself. The daemon is still never asked, which is what this test is about.
+	var send struct {
 		Action  string            `json:"action"`
 		Payload map[string]string `json:"payload"`
 	}
-	select {
-	case line := <-requests:
-		if err := json.Unmarshal([]byte(line), &frame); err != nil {
-			t.Fatalf("the frame the verb wrote is not JSON: %v (%q)", err, line)
+	var seen []string
+	timeout := time.After(5 * time.Second)
+	for send.Action != "SendText" {
+		select {
+		case line := <-requests:
+			var frame struct {
+				Action  string            `json:"action"`
+				Payload map[string]string `json:"payload"`
+			}
+			if err := json.Unmarshal([]byte(line), &frame); err != nil {
+				t.Fatalf("the frame the verb wrote is not JSON: %v (%q)", err, line)
+			}
+			seen = append(seen, frame.Action)
+			if frame.Action == "SendText" {
+				send.Action, send.Payload = frame.Action, frame.Payload
+			}
+		case <-timeout:
+			t.Fatalf("no SendText reached the runtime socket; actions seen: %v", seen)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("send never wrote a request line to the runtime socket")
 	}
-	if frame.Action != "SendText" {
-		t.Errorf("action = %q, want SendText", frame.Action)
+	if len(seen) == 0 || seen[0] != "GetRoomStatus" {
+		t.Errorf("the runtime was asked for %v, want the room's record first and then the send", seen)
 	}
-	if frame.Payload["session"] != "4genthub-min-fe-dev@4genthub-min" {
-		t.Errorf("session = %q, want the one the caller named", frame.Payload["session"])
+	if send.Payload["session"] != "4genthub-min-fe-dev@4genthub-min" {
+		t.Errorf("session = %q, want the one the caller named", send.Payload["session"])
 	}
-	text := frame.Payload["text"]
+	text := send.Payload["text"]
 	if !strings.HasPrefix(text, "From: 4genthub-min-go-dev@4genthub-min\nTo: 4genthub-min-fe-dev@4genthub-min\n") ||
 		!strings.Contains(text, "probe") {
 		t.Errorf("delivered text = %q, want the envelope addressed to the target", text)
@@ -316,4 +339,103 @@ func TestSendRigSeatShapeNamesTheDaemonWhenASwitchForcedIt(t *testing.T) {
 	if strings.Contains(errOut.String(), "no runtime is answering") {
 		t.Errorf("the refusal blamed the runtime while the runtime was answering: %q", errOut.String())
 	}
+}
+
+// TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough PINS F-B'S OWN TWO COMMANDS.
+//
+// Measured by the architect on the native surface at 08839f0, in a natively started room: the canonical form
+// the help documents, `send leg-solo-solo@leg-solo "..."`, was REFUSED by the runtime - "tmux paste-buffer
+// failed: can't find pane: leg-solo-solo@leg-solo" - while the runtime's own string, `send
+// agenthub--leg-solo--solo "..."`, delivered with a real envelope. The address every seat's own name uses was
+// dead, and the working one was tribal knowledge.
+//
+// Both commands run here. The canonical name resolves through the seat's own record - the room the NAME names,
+// not this shell's ambient room - and travels on the transport that record names; the native name is not the
+// canonical form, so it is passed through untouched and no record is consulted.
+func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *testing.T) {
+	const native = "agenthub--leg-solo--solo"
+
+	run := func(t *testing.T, target string) (int, string, string, []string) {
+		t.Helper()
+		t.Setenv("OPENRIG_HOME", t.TempDir())
+		t.Setenv("OPENRIG_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+		// The ambient room must not decide which room is asked: this shell sits in 4genthub-min, and the send
+		// is addressed to leg-solo.
+		t.Setenv("AGENTHUB_ROOM", "4genthub-min")
+
+		var mu sync.Mutex
+		var lines []string
+		sock, _ := fakeRuntime(t, func(line string) string {
+			mu.Lock()
+			lines = append(lines, line)
+			mu.Unlock()
+			if strings.Contains(line, `"GetRoomStatus"`) {
+				return `{"ok":true,"data":[{"room":"leg-solo","seat":"solo","session_name":"` + native +
+					`","runtime":"omp","state":"Running"}]}` + "\n"
+			}
+			return `{"ok":true,"data":{}}` + "\n"
+		})
+		t.Setenv(clientruntime.RuntimeSocketEnv, sock)
+
+		var out, errOut bytes.Buffer
+		code := sendCommand{}.Run(context.Background(), nil, []string{target, "LEG CHECK ONE"}, &out, &errOut)
+		mu.Lock()
+		defer mu.Unlock()
+		return code, out.String(), errOut.String(), append([]string(nil), lines...)
+	}
+
+	t.Run("the canonical name is translated", func(t *testing.T) {
+		code, out, errOut, lines := run(t, "leg-solo-solo@leg-solo")
+		if code != 0 {
+			t.Fatalf("send leg-solo-solo@leg-solo exit = %d, stderr = %q", code, errOut)
+		}
+		if got := countContaining(lines, `"GetRoomStatus"`); got != 1 {
+			t.Errorf("GetRoomStatus asked %d times, want 1: the record is where the name comes from", got)
+		}
+		send := firstContaining(lines, `"SendText"`)
+		if send == "" {
+			t.Fatalf("no SendText reached the runtime; requests were %q", lines)
+		}
+		if !strings.Contains(send, native) {
+			t.Errorf("SendText = %s, want the record's own name %s", send, native)
+		}
+		if strings.Contains(send, "leg-solo-solo@leg-solo") {
+			t.Errorf("the canonical string was handed to the runtime as-is: %s", send)
+		}
+		if !strings.Contains(out, "Sent to "+native) {
+			t.Errorf("stdout = %q, want the name that was actually written to", out)
+		}
+	})
+
+	t.Run("the native name is passed through", func(t *testing.T) {
+		code, _, errOut, lines := run(t, native)
+		if code != 0 {
+			t.Fatalf("send %s exit = %d, stderr = %q", native, code, errOut)
+		}
+		if got := countContaining(lines, `"GetRoomStatus"`); got != 0 {
+			t.Errorf("GetRoomStatus asked %d times, want 0: the native name is not the canonical form", got)
+		}
+		if send := firstContaining(lines, `"SendText"`); !strings.Contains(send, native) {
+			t.Errorf("SendText = %s, want the native name untouched", send)
+		}
+	})
+}
+
+func countContaining(lines []string, want string) int {
+	n := 0
+	for _, line := range lines {
+		if strings.Contains(line, want) {
+			n++
+		}
+	}
+	return n
+}
+
+func firstContaining(lines []string, want string) string {
+	for _, line := range lines {
+		if strings.Contains(line, want) {
+			return line
+		}
+	}
+	return ""
 }

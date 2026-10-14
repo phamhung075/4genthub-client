@@ -33,6 +33,21 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   (`--verify`, `--force`, `--wait-for-idle`, `--dangerously-interact`) resolves through the daemon alone
   (`ResolveDaemonSeatAddress`), so a healthy runtime is not disturbed for a handshake it can never run, and its
   refusal still names the switch that forced the transport.
+- `internal/clientseat` + `internal/clientruntime`: the two-positional SESSION shape now TRANSLATES the
+  canonical address instead of handing it to a transport that cannot address it. F-B's reproduction, verbatim:
+  `send leg-solo-solo@leg-solo "..."` was refused by the runtime (`tmux paste-buffer failed: can't find pane`)
+  while `send agenthub--leg-solo--solo "..."` delivered, because nothing mapped one string to the other.
+  `CanonicalRigSeat` splits `<room>-<seat>@<room>` - the room is the part after the LAST `@`, so a dashed room
+  name splits correctly - the record that owns the pane resolves the pair, and the record's own transport
+  carries the send. The address the envelope PRINTS to a recipient is therefore an address `send` accepts,
+  inside the same round trip; that inconsistency was one message deep, not only between help text and runtime.
+  A native `agenthub--<room>--<seat>` name carries no `@` and is passed through untouched; a pair no record
+  lists keeps the caller's own string, and the transport's refusal for it is the answer.
+- `seatAddressFromRuntime` reads the room the CALLER named before the ambient `AGENTHUB_ROOM`: a seat shell
+  always carries the room it sits in, so an env-first read answered for the wrong room the moment a seat
+  addressed another one.
+- `send --help` now says both things the verb does: a canonical name is translated through the seat's record,
+  and the seat shape reads the seat's session name from that record rather than composing `agenthub--RIG--SEAT`.
 
 ### Verified
 - `go build ./...`, `go vet ./...`, `go test ./... -count=1` → 24 packages ok.
@@ -56,6 +71,17 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   "<text>"` printed `Sent to 4genthub-min-lead@4genthub-min` (the daemon record's own name, exit 0) and the
   target pane then carried `From owner session: <text>`. Before this change the same shape composed
   `agenthub--4genthub-min--lead` and the local runtime refused it.
+- `TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough` runs F-B's two commands against a
+  fake runtime: the canonical one asks the room's record once and sends to the name that record holds, never
+  handing the canonical string to the runtime; the native one sends verbatim and asks no record at all.
+  `TestCanonicalRigSeatSplitsTheDocumentedFormAndNothingElse` pins the split, including this rig's dashed name.
+  Two session-shape tests that counted requests were updated to the new first request (the record), not
+  re-pinned: their subjects - the runtime is preferred over the daemon, the flags reach the daemon - are
+  unchanged and still asserted.
+- Live, on this rig, branch-built binary: `send 4genthub-min-lead@4genthub-min "<text>"` printed
+  `Sent to 4genthub-min-lead@4genthub-min` (exit 0, one busy-pane advisory), the text arrived in that pane, and
+  the envelope's own reply hint named that same canonical address - the string the transport hands every
+  recipient is the one `send` now accepts.
 
 ### The value that was invisible, and the install still owed
 
