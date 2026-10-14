@@ -7,11 +7,15 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 - `internal/clientlifecycle/lifecycle.go` — both "could not open the OpenRig UI" lines pointed at
-  `rig daemon status`, which is not a verb the installed client has. They name `4genteam doctor`
-  (exit 0, one row per safeguard), the client's own read of the local stack.
-- `internal/clientseat/reseat.go` — the session-name hint names `4genteam send SESSION MESSAGE` (its usage
-  line word for word), the send help's node pointer names `4genteam ps <RIG> --nodes --json` (exit 0, a
-  `SESSION` column per seat), and the rendered-unconfirmed footer names `4genteam capture <session>`.
+  `rig daemon status`, which is not a verb the installed client has. They name `4genteam doctor`: one
+  row per safeguard, and it exits 0 only when every row is running, so a bare exit code from it is a
+  snapshot rather than a property (the gate measured 0 and 3 within the same hour, a `bridge: silent`
+  row present in both), the client's own read of the local stack.
+- `internal/clientseat/reseat.go` — the session-name hint names `4genteam send SESSION MESSAGE`: the shape
+  its no-args refusal states (`SESSION and MESSAGE, or RIG SEAT and MESSAGE, are required`) and the usage
+  line `reseat.go:237` prints to stdout. The send help's node pointer names
+  `4genteam ps <RIG> --nodes --json` (run: exit 0, a `SESSION` column per seat), and the
+  rendered-unconfirmed footer names `4genteam capture <session>`.
 - `internal/clientruntime/openrigdaemon.go` — the `↩ Reply:` footer rendered `rig send`; it names
   `4genteam send`, this client's own verb and transport.
 - `internal/clientwatch/commands.go` — the `inputs` and `input` notes said a line typed in a pane "is sent
