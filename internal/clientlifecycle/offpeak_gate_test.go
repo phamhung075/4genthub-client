@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -258,14 +260,11 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 	}
 }
 
-// TestTheGateProceedsWhenTheRoomHasNoRecords: NO RECORDS is not a refusal. There are no seats to bill, which
-// is the shape of a room being started for the first time on a machine that has no rig daemon at all, so
-// the verb goes on to restore it and its own errors, if any, are the ones reported. The START is the same -
-// the gate does not run - but it is SAID: this test used to require EMPTY stderr here ("nothing is printed
-// for no records - it is the normal case, not a diagnostic"), which is the silence that let a DeepSeek seat
-// start on the peak rate with no line anywhere admitting the check never happened. The assertion moved with
-// the behavior and now requires the line.
-func TestTheGateProceedsWhenTheRoomHasNoRecords(t *testing.T) {
+// TestTheGateDecidesAFirstStartOnTheDefinition: a room with NO RECORDS is the shape of a first start, and `up`
+// has the definition in hand, so the gate decides on the seats it declares. A definition with no DeepSeek seat
+// passes, and nothing is said: the gate DID run. (The room-with-nothing-known case, where it did not, is
+// TestPeakGateSaysWhenItDidNotRunForARoomItHasNoRecordsOf.)
+func TestTheGateDecidesAFirstStartOnTheDefinition(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
 	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
@@ -274,16 +273,13 @@ func TestTheGateProceedsWhenTheRoomHasNoRecords(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(), []string{"room-alpha", "--team", writeRoomDefinition(t, "room-alpha")}, &out, &errOut)
 	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want 0: a room with no records has nothing to bill (stderr %q)", code, errOut.String())
+		t.Fatalf("exit %d, want 0: the definition declares no DeepSeek seat (stderr %q)", code, errOut.String())
 	}
 	if !strings.Contains(strings.Join(*ran, ","), "ensureRig") {
 		t.Error("a room with no records must still be restored, so its own error can be reported")
 	}
-	for _, want := range []string{"4genteam up:", "room-alpha", "no node records", "did NOT run"} {
-		if !strings.Contains(errOut.String(), want) {
-			t.Errorf("the start went ahead with the gate never having decided, and said so nowhere: "+
-				"stderr %q does not name %q", errOut.String(), want)
-		}
+	if strings.Contains(errOut.String(), "did NOT run") {
+		t.Errorf("the gate decided on the definition, so it must not say it did not run: %q", errOut.String())
 	}
 }
 
@@ -328,5 +324,32 @@ func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), clientoffpeak.PinEnv) {
 		t.Errorf("the error does not name the variable: %q", errOut.String())
+	}
+}
+
+// A FIRST START HAS NO RECORDS, and `up` knows what it is about to run: the definition's seats. At peak a
+// definition that declares a DeepSeek seat is refused before the room is touched, instead of proceeding with a
+// printed "the gate did NOT run".
+func TestUpRefusesAtPeakAFirstStartWhoseDefinitionDeclaresADeepSeekSeat(t *testing.T) {
+	restoreAll(t)
+	ran := stubWholeUp(t)
+	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	gateEnv(t, "2026-10-09 02:00")
+
+	directory := t.TempDir()
+	body := `{"room":{"slug":"room-alpha"},"seats":[{"seat_key":"dev","seat_type":"developer","runtime":"omp","model":"deepseek/deepseek-flash"}],"links":[],"seat_overlays":{}}`
+	if err := os.WriteFile(filepath.Join(directory, "team.json"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := (upCommand{}).Run(context.Background(), []string{"room-alpha", "--team", directory}, &out, &errOut)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
+	}
+	if strings.Join(*ran, ",") != "ensureDaemon" {
+		t.Errorf("steps = %v, want the daemon and NOT the room", *ran)
+	}
+	if !strings.Contains(errOut.String(), "room-alpha.dev") || !strings.Contains(errOut.String(), "deepseek/deepseek-flash") {
+		t.Errorf("the refusal does not name the declared seat and model:\n%s", errOut.String())
 	}
 }

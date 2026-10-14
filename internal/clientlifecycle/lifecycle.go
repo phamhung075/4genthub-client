@@ -313,7 +313,7 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 	// THE GATE RUNS BEFORE THE RESTORE, and after the daemon only because the room's models are read from
 	// the daemon. So a refusal starts the daemon and nothing else: no seat is resumed, which is the step
 	// that would have started DeepSeek work at the peak rate.
-	if code := PeakGate(name, "up", allowPeak, stderr); code != clientcmd.ExitOK {
+	if code := peakGate(name, "up", allowPeak, declaredNodes(spec), stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	if code := ensureRig(name, spec, daemonLog, stdout, stderr); code != clientcmd.ExitOK {
@@ -597,6 +597,11 @@ var rigNodes = func(name string) ([]map[string]any, bool, error) {
 // (a malformed OFFEPEAK_UTC is a typo in the environment, and this client fails loudly on those rather than
 // guessing a clock).
 //
+// `up` is the one verb that knows what a room is ABOUT to run: the definition it was given. A first start has
+// no records, and gating it on nothing is how a DeepSeek seat started at peak with only a printed apology, so
+// `up` passes the definition's own seats as `declared` and the gate decides on those when the room has no
+// records of its own.
+//
 // A READING THAT FAILS IS A REFUSAL, in words: this used to resolve a rig tool and return ExitOK when it
 // could not, which is how a peak-time resume could proceed with the gate never having decided. A room with
 // NO records is different and still proceeds - there are no seats to bill, which is the shape of a room
@@ -606,11 +611,34 @@ var rigNodes = func(name string) ([]map[string]any, bool, error) {
 // the whole guard on this fail-open case, and it is here, once, so that no verb reaching this gate - `up`,
 // `compact`, or a restore - can forget to print it.
 func PeakGate(name, verb string, allowPeak bool, stderr io.Writer) int {
+	return peakGate(name, verb, allowPeak, nil, stderr)
+}
+
+// declaredNodes is a definition's seats in the shape of the room's node records, which is what the gate reads.
+func declaredNodes(spec clientruntime.RoomSpec) []map[string]any {
+	nodes := make([]map[string]any, 0, len(spec.Seats))
+	for _, seat := range spec.Seats {
+		model := ""
+		if seat.Model != nil {
+			model = *seat.Model
+		}
+		nodes = append(nodes, map[string]any{
+			"logicalId": fmt.Sprintf("%s.%s", spec.Room, seat.SeatKey),
+			"model":     model,
+		})
+	}
+	return nodes
+}
+
+func peakGate(name, verb string, allowPeak bool, declared []map[string]any, stderr io.Writer) int {
 	nodes, ok, err := rigNodes(name)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam %s: the room's node records could not be read, so the peak gate cannot "+
 			"say whether starting this room bills at peak: %v\n", verb, err)
 		return clientcmd.ExitUnavailable
+	}
+	if !ok && len(declared) > 0 {
+		nodes, ok = declared, true
 	}
 	if !ok {
 		fmt.Fprintf(stderr, "4genteam %s: the room %s has no node records, so the peak gate did NOT run for "+
