@@ -281,31 +281,54 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 	// honour goes to the transport that can, and the send stops when neither can. Without this the switches
 	// below were PARSED AND DROPPED here - `--wait-for-idle` typed into a busy seat without waiting, and
 	// `--verify` reporting nothing at all, where reporting is the whole reason a caller passes it.
-	if switches := seatSendSwitches(opts); switches != "" {
+	// THE SEAT'S SESSION NAME IS READ, NEVER COMPOSED, and the record that answers also decides the transport.
+	//
+	// What this replaces, and why it had to go: this shape used to render `<rig>-<seat>@<rig>` itself and hand
+	// that to the local runtime. Two things were wrong with it. The name was invented from a convention rather
+	// than read from the seat's own record - and this rig's name carries a dash, so the canonical string it
+	// produces cannot be split back into halves by anyone downstream. And the transport was hard-coded to the
+	// runtime, which owns a tmux server of its own and therefore cannot address a pane the daemon created:
+	// measured, it answered `can't find pane: 4genthub-min-lead@4genthub-min` for a pane that WAS named that,
+	// and `agenthub--4genthub-min--4genthub-min-lead` for a call whose seat argument was already the full
+	// session name. Neither name reached the seat, which is the owner's always-fails in one verb.
+	//
+	// The deleted shell fallback stays deleted: after this client's rename `rig` resolves to THIS binary, so
+	// the old fallback was a self-call whose inner refusal was what the user read.
+	switches := seatSendSwitches(opts)
+	var address clientruntime.SeatAddress
+	if switches != "" {
+		// A daemon-only switch commits this send to the daemon before anything else happens, so the daemon's
+		// seat record is the only source consulted - a healthy runtime is not disturbed for a request it can
+		// never carry.
+		address, err = clientruntime.ResolveDaemonSeatAddress(ctx, rig, seat)
+	} else {
+		address, err = clientruntime.ResolveSeatAddress(ctx, rig, seat)
+	}
+	if err != nil {
+		if switches != "" {
+			// The send came here BECAUSE of that switch, so naming the switch and the daemon aims the reader at
+			// the transport the flag needs, rather than at the record lookup that failed first.
+			fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", clientruntime.DaemonSwitchMissing(switches))
+			return clientcmd.ExitUnavailable
+		}
+		return report(stderr, err)
+	}
+	if switches != "" {
 		// --raw means raw: no "From NAME:" prefix, because a caller who asked for the text exactly asked for
 		// the text exactly. Every other switch keeps this shape's own attribution.
 		body := text
 		if opts["raw"] == "true" {
 			body = strings.Join(positional[2:], " ")
 		}
-		return daemonSend(ctx, clientruntime.SeatSessionName(rig, seat), body, opts, switches, stdout, stderr)
+		return daemonSend(ctx, address.SessionName, body, opts, switches, stdout, stderr)
 	}
-
-	// The seat send is the CLIENT'S OWN, and it goes through the local runtime: the fallback that shelled
-	// out to `rig send` is DELETED rather than repaired. After this client's own rename that name resolves
-	// to THIS binary (`~/.local/bin/rig` is a symlink to `4genteam`), so the "fallback" was a self-call: the
-	// outer verb would hand the two-argument OpenRig form to itself and the inner refusal was what the user
-	// read - a failure report about a command nobody asked for. A send that the runtime refuses now reports
-	// the runtime's own reason, which is the only party that knows why.
-	rtClient := clientruntime.NewClient("")
-	if err := rtClient.SendTextToSeat(rig, seat, text); err != nil {
-		return report(stderr, &clientcmd.CodedError{
-			Message: fmt.Sprintf("could not send to %s/%s: %v", rig, seat, err),
-			Code:    ExitFailed,
-		})
+	// The owner of the pane carries the text: a name read from the daemon's seat table goes back to the
+	// daemon, a name read from a room's runtime goes to that runtime. Sending to the wrong one is not a
+	// transport preference - the other one cannot address the pane at all.
+	if address.Transport == clientruntime.TransportDaemon {
+		return daemonSend(ctx, address.SessionName, text, opts, "", stdout, stderr)
 	}
-	fmt.Fprintf(stdout, "Sent to %s/%s\n", rig, seat)
-	return clientcmd.ExitOK
+	return runtimeSend(address.SessionName, text, opts, stdout, stderr)
 }
 
 // sendToSession delivers one message to one session over the transport this machine actually has.

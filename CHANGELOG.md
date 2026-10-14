@@ -21,6 +21,18 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   carried whole (the CLI prints it unmodified). `whoami` asks the runtime for this seat's NATIVE session name
   (`agenthub--<room>--<seat>`) when the environment names the halves and no session, rather than a bare empty
   session.
+- `internal/clientseat` + `internal/clientruntime`: the `send RIG SEAT MESSAGE` shape no longer RENDERS a
+  session name from the room and seat it was handed — `agenthub--RIG--SEAT`, a name no seat on this rig
+  carries, which the local runtime therefore refused while a healthy daemon was never asked. The name is now
+  READ, by the new `internal/clientruntime.ResolveSeatAddress`, from the record that owns the pane: the room's
+  runtime record first (`GetRoomStatus(room)` under the native socket's room scope), the OpenRig daemon's seat
+  records second (`/api/ps` maps the rig NAME the caller typed to the rigId the records use,
+  `/api/rigs/<id>/nodes` lists the seat with its session name as a field). Neither door closing composes one:
+  a seat absent from both records is refused with both doors named and exit 3. The record that answers also
+  decides the transport, so the pane that is named is the pane that is written to. A daemon-only switch
+  (`--verify`, `--force`, `--wait-for-idle`, `--dangerously-interact`) resolves through the daemon alone
+  (`ResolveDaemonSeatAddress`), so a healthy runtime is not disturbed for a handshake it can never run, and its
+  refusal still names the switch that forced the transport.
 
 ### Verified
 - `go build ./...`, `go vet ./...`, `go test ./... -count=1` → 24 packages ok.
@@ -33,6 +45,17 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   earlier commits, and four (`rigIdle`, `seatActivity`, `respawn`'s node read, and `clientcmd.RequireRig`'s
   shared platform matrix) need the seat's decision — three of them on ONE missing capability, a native
   per-seat agent-activity read that the runtime does not expose.
+- `go build ./...`, `go vet ./internal/clientruntime ./internal/clientseat`, `gofmt -l` clean, and
+  `go test ./... -count=1` → 24 packages ok, 0 failing.
+- The seat-shape tests now pin the RECORD rather than a convention: the fake daemon answers `/api/ps` and
+  `/api/rigs/<id>/nodes`, and the assertion is the name that record carries (`lab-dev@lab`, three requests:
+  rig list, seat record, send). They fail on the pre-change code, which never asked those two routes and
+  asserted `agenthub--lab--dev` — the composed name. `TestSendRigSeatShapeNamesTheDaemonWhenASwitchForcedIt`
+  is unchanged and still passes, which is what keeps the gate's refusal pinned through the resolver split.
+- End to end on this rig, with the branch-built binary against the live daemon: `send 4genthub-min lead
+  "<text>"` printed `Sent to 4genthub-min-lead@4genthub-min` (the daemon record's own name, exit 0) and the
+  target pane then carried `From owner session: <text>`. Before this change the same shape composed
+  `agenthub--4genthub-min--lead` and the local runtime refused it.
 
 ### The value that was invisible, and the install still owed
 

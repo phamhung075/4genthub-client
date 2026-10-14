@@ -205,8 +205,18 @@ func TestSendRigSeatShapeHonoursTheDaemonOnlySwitches(t *testing.T) {
 	daemonCalls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		daemonCalls++
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered","verified":true}`))
+		// The seat's session name is READ from the daemon's own seat record - `/api/ps` maps the rig NAME the
+		// caller typed to the rigId the records use, and the nodes route lists the seat with its name as a
+		// field. The send itself is whatever path is left.
+		switch r.URL.Path {
+		case "/api/ps":
+			_, _ = w.Write([]byte(`[{"rigId":"rig-lab","rigName":"lab","name":"lab"}]`))
+		case "/api/rigs/rig-lab/nodes":
+			_, _ = w.Write([]byte(`[{"logicalId":"lab.dev","canonicalSessionName":"lab-dev@lab"}]`))
+		default:
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered","verified":true}`))
+		}
 	}))
 	defer srv.Close()
 	t.Setenv("OPENRIG_URL", srv.URL)
@@ -225,11 +235,12 @@ func TestSendRigSeatShapeHonoursTheDaemonOnlySwitches(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("send RIG SEAT --wait-for-idle 5 --verify exit = %d, stderr = %q", code, errOut.String())
 	}
-	if daemonCalls != 1 {
-		t.Fatalf("%d requests reached the daemon, want exactly 1: the switches name a handshake only it runs", daemonCalls)
+	if daemonCalls != 3 {
+		t.Fatalf("%d requests reached the daemon, want exactly 3: its rig list, its seat record, and the send - the "+
+			"switches name a handshake only it runs", daemonCalls)
 	}
-	if got["session"] != "agenthub--lab--dev" {
-		t.Errorf("the daemon was asked for session %v, want the seat's own agenthub--lab--dev", got["session"])
+	if got["session"] != "lab-dev@lab" {
+		t.Errorf("the daemon was asked for session %v, want the name its own seat record carries", got["session"])
 	}
 	if got["waitForIdleMs"] != float64(5000) {
 		t.Errorf("waitForIdleMs = %v, want 5000: --wait-for-idle 5 has to reach the party that waits", got["waitForIdleMs"])
@@ -252,8 +263,15 @@ func TestSendRigSeatShapeRawSendsTheTextExactly(t *testing.T) {
 
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered"}`))
+		switch r.URL.Path {
+		case "/api/ps":
+			_, _ = w.Write([]byte(`[{"rigId":"rig-lab","rigName":"lab","name":"lab"}]`))
+		case "/api/rigs/rig-lab/nodes":
+			_, _ = w.Write([]byte(`[{"logicalId":"lab.dev","canonicalSessionName":"lab-dev@lab"}]`))
+		default:
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			_, _ = w.Write([]byte(`{"ok":true,"outcome":"delivered"}`))
+		}
 	}))
 	defer srv.Close()
 	t.Setenv("OPENRIG_URL", srv.URL)
