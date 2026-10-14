@@ -316,6 +316,8 @@ type seatView struct {
 	bucketSet bool
 	last      string
 	repeated  int
+	step      string
+	failed    bool
 }
 
 // stamp is the clock of a line: shown when the minute changes and blank under it.
@@ -328,12 +330,12 @@ func (v *seatView) stamp(at time.Time) string {
 	return fg(stampColor) + minute + reset
 }
 
-// meter is the percent tag: shown when the context moved a tenth, blank under it.
+// meter is the percent tag: shown when the context moved five points, blank under it.
 func (v *seatView) meter(tag string, pct int) string {
 	if tag == "" {
 		return ""
 	}
-	bucket := pct / 10
+	bucket := pct / 5
 	if v.bucketSet && bucket == v.bucket {
 		return strings.Repeat(" ", visibleLen(tag))
 	}
@@ -364,8 +366,37 @@ func callKind(text string) (toolStyle, bool) {
 	return toolStyle{}, false
 }
 
-// kindRule is the divider printed before every tool call: a plain rule in the kind's colour. The call
-// line under it already names the tool, so the rule carries only the colour.
-func kindRule(style toolStyle, width int) string {
-	return fg(style.colour) + strings.Repeat("─", min(width, 60)) + reset
+// quietKind is a step that is frequent and not an action: its rule is thin and dim.
+func quietKind(style toolStyle) bool { return style.kind == "think" || style.kind == "in" }
+
+// ruleBefore is the divider before a step, or "" when none is wanted. A call directly after the
+// reasoning that led to it joins that reasoning; every other step is separated, in red after a failure.
+func (v *seatView) ruleBefore(text string, width int) string {
+	style, isCall := callKind(text)
+	head := strings.TrimSpace(ansiSequence.ReplaceAllString(strings.SplitN(text, "\n", 2)[0], ""))
+	if !isCall {
+		v.failed = strings.HasPrefix(head, "✗ ")
+		return ""
+	}
+	joined := v.step == "think" && !quietKind(style) && style.kind != "say"
+	failed := v.failed
+	v.step, v.failed = style.kind, false
+	if joined && !failed {
+		return ""
+	}
+	return kindRule(style, width, failed)
+}
+
+// kindRule is the divider printed before a step: a plain rule in the kind's colour, thin and dim for
+// reasoning and incoming messages, red when the step before failed. The step line under it already
+// names the tool, so the rule carries only the colour.
+func kindRule(style toolStyle, width int, failed bool) string {
+	colour, bar := style.colour, "─"
+	if failed {
+		colour = 203
+	}
+	if quietKind(style) {
+		bar = "┄"
+	}
+	return fg(colour) + strings.Repeat(bar, min(width, 60)) + reset
 }

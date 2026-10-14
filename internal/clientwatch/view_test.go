@@ -89,8 +89,27 @@ func TestAChangeOfToolKindGetsALabelledRule(t *testing.T) {
 	if _, ok := callKind(fg(249) + "← read" + reset); ok {
 		t.Error("a result was taken for a call")
 	}
-	rule := plain(kindRule(writeStyle, 80))
+	rule := plain(kindRule(writeStyle, 80, false))
 	if strings.Trim(rule, "─") != "" || len([]rune(rule)) != 60 {
 		t.Errorf("rule = %q", rule)
+	}
+}
+
+func TestRuleWeightJoiningAndFailure(t *testing.T) {
+	v := &seatView{}
+	think := bold + fg(183) + "~ think " + reset + "x"
+	edit := fg(221) + "✎ edit" + reset + " f"
+	if rule := plain(v.ruleBefore(think, 80)); !strings.Contains(rule, "┄") {
+		t.Errorf("think rule not thin: %q", rule)
+	}
+	if rule := v.ruleBefore(edit, 80); rule != "" {
+		t.Errorf("a call after its reasoning got a rule: %q", rule)
+	}
+	if rule := plain(v.ruleBefore(edit, 80)); !strings.Contains(rule, "─") {
+		t.Errorf("a call after a call has no rule: %q", rule)
+	}
+	v.ruleBefore(fg(203)+"✗ edit"+reset+" boom", 80)
+	if rule := v.ruleBefore(think, 80); !strings.Contains(rule, fg(203)) {
+		t.Errorf("rule after a failure is not red: %q", rule)
 	}
 }

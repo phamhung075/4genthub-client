@@ -80,14 +80,16 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 				view.repeated = 0
 			}
 			view.last = text
-			if style, isCall := callKind(text); isCall {
-				fmt.Fprintln(out, kindRule(style, opts.width))
+			if rule := view.ruleBefore(text, opts.width); rule != "" {
+				fmt.Fprintln(out, rule)
 			}
 			name := fg(colours[seat]) + padRight(seat, 12) + reset
 			if header != nil {
 				name = view.meter(header.tag(), header.percent())
 			}
-			fmt.Fprintf(out, "%s %s%s\n", view.stamp(at), name, text)
+			prefix := view.stamp(at) + " " + name
+			text = strings.ReplaceAll(text, "\n", "\n"+strings.Repeat(" ", visibleLen(prefix)))
+			fmt.Fprintf(out, "%s%s\n", prefix, text)
 		}
 	}
 
