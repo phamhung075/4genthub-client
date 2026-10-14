@@ -664,13 +664,13 @@ func openUIImpl(rig *clientcmd.Rig, stderr io.Writer) {
 	if rig == nil {
 		tool, err := clientcmd.RequireRig()
 		if err != nil {
-			fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: rig daemon status)")
+			fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: 4genteam doctor)")
 			return
 		}
 		rig = tool
 	}
 	if _, err := rig.Run(context.Background(), "ui", "open"); err != nil {
-		fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: rig daemon status)")
+		fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: 4genteam doctor)")
 	}
 }
 

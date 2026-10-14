@@ -11,7 +11,7 @@ import (
 // one they have to reverse-engineer. Each arm is one fact.
 func TestTheSeatRefusalNamesTheArgumentItExpects(t *testing.T) {
 	sessionName := seatArgumentHint("4genthub-min-reviewer@4genthub-min")
-	for _, want := range []string{"is a session name", "seat key", "rig send SESSION MESSAGE"} {
+	for _, want := range []string{"is a session name", "seat key", "4genteam send SESSION MESSAGE"} {
 		if !strings.Contains(sessionName, want) {
 			t.Fatalf("a session name in the SEAT position must be told what it is and where it belongs; %q is "+
 				"missing from: %s", want, sessionName)

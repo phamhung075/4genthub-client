@@ -374,7 +374,7 @@ func openRigSendBody(sender, recipient, body string, stamp time.Time, generation
 		}
 		header = append(header, "Sent: "+stamp.UTC().Format("01-02 15:04")+"Z"+suffix)
 	}
-	reply := `↩ Reply: rig send ` + label + ` "..."`
+	reply := `↩ Reply: 4genteam send ` + label + ` "..."`
 	if strings.HasSuffix(label, "@external") {
 		reply = `↩ Reply if needed: rig queue create --destination ` + label + ` --body "..." --verify`
 	}

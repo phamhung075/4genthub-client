@@ -3,6 +3,32 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — every printed rig reference names a command that exists on this box
+
+### Changed
+- `internal/clientlifecycle/lifecycle.go` — both "could not open the OpenRig UI" lines pointed at
+  `rig daemon status`, which is not a verb the installed client has. They name `4genteam doctor`
+  (exit 0, one row per safeguard), the client's own read of the local stack.
+- `internal/clientseat/reseat.go` — the session-name hint names `4genteam send SESSION MESSAGE` (its usage
+  line word for word), the send help's node pointer names `4genteam ps <RIG> --nodes --json` (exit 0, a
+  `SESSION` column per seat), and the rendered-unconfirmed footer names `4genteam capture <session>`.
+- `internal/clientruntime/openrigdaemon.go` — the `↩ Reply:` footer rendered `rig send`; it names
+  `4genteam send`, this client's own verb and transport.
+- `internal/clientwatch/commands.go` — the `inputs` and `input` notes said a line typed in a pane "is sent
+  with `rig send`". The pane has not exec'd `rig` since `grid.go`'s `sendLine` moved in process through
+  `clientruntime.RuntimeSendText`, so the note was stale: it now says the line goes through this client's
+  own transport.
+- Pins moved with the strings: `clientruntime/openrigdaemon_test.go` (both footers) and
+  `clientseat/seatargument_test.go`. The no-generation assertion in `openrigdaemon_test.go` now matches the
+  generation suffix marker `· gen ` instead of the bare word `gen`, which "4genteam" itself contains.
+- Kept with a named reason, in `SWEEP-printed-rig-strings-2026-10-14.md`: the `@external` reply's
+  `rig queue create` (this client's `queue` shim refuses writes by name, so no native writer exists to point
+  at), the `switch` runtime-change procedure and `sync bundle`'s `rig up <bundle> --target` (no native verb
+  consumes a rig.yaml or a `.rigbundle`; `4genteam up` takes `RIG --team DIR`), and the install-checker's
+  `rig daemon stop|start` (a different daemon from the one `4genteam stop`/`up` manage). Generated policy
+  matchers, exec-failure reports and read-shape diagnostics name data or a condition rather than an
+  instruction, and are untouched. No argv or exec site changed here.
+
 ## 2026-10-14 — `continue` names the client's own read, not the tool the cutover removes
 
 ### Changed

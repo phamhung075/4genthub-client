@@ -78,11 +78,11 @@ var verbUsages = map[string]verbUsage{
 	},
 	"inputs": {
 		line:  "usage: 4genteam inputs <open|hide> --rig RIG [--seat SEAT ...]",
-		notes: "an input pane under each seat pane; a line typed there is sent with `rig send`.",
+		notes: "an input pane under each seat pane; a line typed there is sent to that seat through this client's own transport.",
 	},
 	"input": {
 		line:  "usage: 4genteam input --rig RIG --seat SEAT",
-		notes: "one seat's input pane: read lines and send each with `rig send`. /hide or Ctrl-D leaves.",
+		notes: "one seat's input pane: read lines and send each to that seat through this client's own transport. /hide or Ctrl-D leaves.",
 	},
 }
 

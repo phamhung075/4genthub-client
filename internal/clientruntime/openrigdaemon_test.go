@@ -180,7 +180,7 @@ func TestSendMessagePostsTheOpenRigEnvelopeToTheDaemon(t *testing.T) {
 	if lines[3] != "---" || lines[5] != "---" || lines[4] != "no action needed" {
 		t.Errorf("body block = %q, want the text between two --- rules", strings.Join(lines[3:6], "|"))
 	}
-	if lines[6] != `↩ Reply: rig send 4genthub-min-go-dev@4genthub-min "..."` {
+	if lines[6] != `↩ Reply: 4genteam send 4genthub-min-go-dev@4genthub-min "..."` {
 		t.Errorf("line 7 = %q, want the reply hint addressed back to the sender", lines[6])
 	}
 }
@@ -224,14 +224,14 @@ func TestSendBodyIsTheOpenRigCLIsProse(t *testing.T) {
 		"---",
 		"probe",
 		"---",
-		`↩ Reply: rig send 4genthub-min-lead@4genthub-min "..."`,
+		`↩ Reply: 4genteam send 4genthub-min-lead@4genthub-min "..."`,
 	}, "\n")
 	if got != want {
 		t.Errorf("envelope =\n%s\nwant\n%s", got, want)
 	}
 
 	noGen := openRigSendBody("lead@rig", "go-dev@rig", "x", stamp, "")
-	if strings.Contains(noGen, "gen") {
+	if strings.Contains(noGen, "· gen ") {
 		t.Errorf("a send with no occupant generation still rendered one: %q", noGen)
 	}
 

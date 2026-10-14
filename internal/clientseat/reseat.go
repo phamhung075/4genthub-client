@@ -183,7 +183,7 @@ func (sendCommand) Name() string { return "send" }
 func seatArgumentHint(seat string) string {
 	if strings.Contains(seat, "@") {
 		return fmt.Sprintf("%q is a session name; the SEAT argument is the rig's own seat key (e.g. \"reviewer\"), "+
-			"and a session is addressed with `rig send SESSION MESSAGE`", seat)
+			"and a session is addressed with `4genteam send SESSION MESSAGE`", seat)
 	}
 	return "SEAT is the rig's own seat key as the rig declares it (e.g. \"reviewer\")"
 }
@@ -236,7 +236,7 @@ func (sendCommand) Run(ctx context.Context, _ *clientcmd.Rig, args []string, std
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, "usage: 4genteam send SESSION MESSAGE [options]")
 		fmt.Fprintln(stdout, "       4genteam send [--from NAME] RIG SEAT MESSAGE")
-		fmt.Fprintln(stdout, "\nSESSION is a canonical session name (`rig ps --nodes --json` names every seat's). It goes to")
+		fmt.Fprintln(stdout, "\nSESSION is a canonical session name (`4genteam ps <RIG> --nodes --json` names every seat's). It goes to")
 		fmt.Fprintln(stdout, "the runtime's own socket — this client's transport — wrapped in the From/To/Sent envelope the")
 		fmt.Fprintln(stdout, "OpenRig CLI sends and attributed to this shell's OPENRIG_SESSION_NAME, which is the shape")
 		fmt.Fprintln(stdout, "`rig send` has always meant. When no runtime answers, a rig's OpenRig daemon is asked instead;")
@@ -551,7 +551,7 @@ func printVerify(stdout io.Writer, session string, result clientruntime.SendResu
 	case "delivered":
 		fmt.Fprintln(stdout, "Delivery: delivered (message landed; render confirmed)")
 	case "rendered-unconfirmed":
-		fmt.Fprintf(stdout, "Delivery: rendered-unconfirmed (landed; pane re-render not confirmed - confirm with: rig capture %s)\n", session)
+		fmt.Fprintf(stdout, "Delivery: rendered-unconfirmed (landed; pane re-render not confirmed - confirm with: 4genteam capture %s)\n", session)
 	}
 	if result.PromptInteraction != "" {
 		fmt.Fprintf(stdout, "Note: the pane-effect check could not run (explicit interaction (%s); consumption unverified; no automatic submit retry); the verdict above is transport-level only.\n", result.PromptInteraction)
