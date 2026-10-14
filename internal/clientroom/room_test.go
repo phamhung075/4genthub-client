@@ -379,7 +379,7 @@ func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
 	// prints echoes back the --state-dir the caller passed, so a substring test there would fail on the checkout
 	// path rather than on the verb. What the verb touched is the
 	// wire, and assertRequests above already pins it to one StopRoom and nothing else.
-	// The directory is LEFT IN PLACE, and the report says so: spec.json, seats/ and logs/ are what makes the
+	// The directory is LEFT IN PLACE, and the report says so: its spec.json and seats/ are what make the
 	// room startable again.
 	if !strings.Contains(stdout, "left in place") || !strings.Contains(stdout, "spec.json") {
 		t.Errorf("stdout = %q, want the room's directory named as left in place", stdout)

@@ -104,8 +104,8 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "ALERT segment when the runtime flagged the seat - alert=<kind> quiet_seconds=<secs|unknown>")
 	fmt.Fprintln(out, "waiting_qitem_ids=<id,id|none>. A seat with no alert prints the four fields and nothing else, and")
 	fmt.Fprintln(out, "`unknown` is a seat that published no freshness stamp: unknown quiet time is NOT zero seconds.")
-	fmt.Fprintln(out, "stop sends StopRoom: exactly that room's own sessions. The room's directory (spec.json, seats/,")
-	fmt.Fprintln(out, "logs/) is LEFT IN PLACE so the room can be started again; nothing outside the room is touched.")
+	fmt.Fprintln(out, "stop sends StopRoom: exactly that room's own sessions. The room's directory (its spec.json and")
+	fmt.Fprintln(out, "seats/) is LEFT IN PLACE so the room can be started again; nothing outside the room is touched.")
 	fmt.Fprintln(out, "reseat sends StopSeat then RestartSeat for one seat, in that order.")
 	fmt.Fprintln(out, "compact asks the runtime to compact each RUNNING seat (the protocol's compact is session-scoped,")
 	fmt.Fprintln(out, "so ForceCompact takes the session name). A seat that is not running is refused by name, and a")
@@ -321,8 +321,8 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 // reach for tmux itself, must not stop rigd or any of its children, and must not touch the bridge or
 // another room. the rig orchestrator's state home is never a path in this function's world at all.
 //
-// The room's directory is left in place and the report says so: spec.json, seats/ and logs/ are what makes
-// the room startable again, and deleting them is a separate verb's business, not a stop's.
+// The room's directory is left in place and the report says so: its spec.json and seats/ are what make the
+// room startable again, and deleting them is a separate verb's business, not a stop's.
 func runStop(args []string, stdout, stderr io.Writer) int {
 	inv, code, ok := parseInvocation("stop", args, 1, stdout, stderr)
 	if !ok {
@@ -349,7 +349,7 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 		return reportDaemon(stderr, "stop", err)
 	}
 	fmt.Fprintf(stdout, "room %s: stopped, and no longer meant to run\n", inv.room)
-	fmt.Fprintf(stdout, "the room's directory was left in place under %s: spec.json, seats/ and logs/ are still there, so the room can be started again\n", inv.stateDir)
+	fmt.Fprintf(stdout, "the room's directory was left in place under %s: its spec.json and seats/ are still there, so the room can be started again\n", inv.stateDir)
 	return clientcmd.ExitOK
 }
 
