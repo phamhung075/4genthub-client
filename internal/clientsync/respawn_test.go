@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,16 +21,17 @@ const (
 	aliveNode = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1","sessionStatus":"running","agentActivity":{"state":"idle","reason":null}}`
 )
 
-// rigStub answers the rig's COMMAND leg - `rig seat launch` - and records every call, so a test asserts
-// what was launched and what the reading was when it decided. It does NOT answer the READ any more:
-// answers is the node table the DAEMON serves, one scripted answer per reading with the last repeating
-// (rigNodeDaemon below), because the verb reads a seat through clientruntime.SeatNode rather than through
-// a `rig ps` exec, and a stub beside that seam would let this suite pass while the real read was broken.
-// reads counts the readings the verb actually took.
+// rigStub scripts the READ the verb makes: answers is the node table the DAEMON serves, one scripted answer
+// per reading with the last repeating (rigNodeDaemon below), because the verb reads a seat through
+// clientruntime.SeatNode rather than through a `rig ps` exec, and a stub beside that seam would let this
+// suite pass while the real read was broken. reads counts the readings the verb actually took.
+//
+// THERE IS NO COMMAND LEG LEFT TO STUB, and that is the point: the launch arrived here as a rigResult and is
+// now a refusal the verb speaks itself (TestRespawnRefusesToLaunchTheDeadSeatAndSaysSo). So what a test needs
+// to pin about the command is that NO command ran, which poisonRig below answers by planting a `rig` that
+// would have been found and would have left a trace.
 type rigStub struct {
 	answers []string
-	launch  rigResult
-	calls   [][]string
 	reads   int
 }
 
@@ -67,16 +68,9 @@ func (s *rigStub) rigNames() []string {
 	return names
 }
 
-func (s *rigStub) run(args ...string) rigResult {
-	s.calls = append(s.calls, args)
-	return s.launch
-}
-
+// stubRig points the verb's read at the stub's scripted answers.
 func stubRig(t *testing.T, stub *rigStub) {
 	t.Helper()
-	original := runRigCapture
-	runRigCapture = stub.run
-	t.Cleanup(func() { runRigCapture = original })
 	rigNodeDaemon(t, stub.rigNames(), stub.nodeAnswer)
 }
 
@@ -126,80 +120,93 @@ func brokenNodeDaemon(t *testing.T) {
 	t.Setenv(clientruntime.RuntimeSocketEnv, filepath.Join(t.TempDir(), "no-runtime.sock"))
 }
 
-func launched(stub *rigStub) []string {
-	for _, call := range stub.calls {
-		if call[0] == "seat" {
-			return call
+// poisonRig plants a `rig` FIRST on PATH that records having been run, and returns the reading of that
+// record.
+//
+// IT REPLACES WHAT `launched` USED TO ASSERT, and it asserts more: `launched` read a stub's call list, so it
+// could only see the one exec this verb used to make - a second reach for the program anywhere else would
+// have gone unseen. This one plants a `rig` that exec.LookPath would find and that writes its trace, so any
+// path in the verb that reaches for the program at all is caught, and "nothing was launched" is a fact about
+// the environment rather than about which stub was installed.
+func poisonRig(t *testing.T) func() bool {
+	t.Helper()
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "rig-was-run")
+	script := "#!/bin/sh\n: > '" + marker + "'\n"
+	if err := os.WriteFile(filepath.Join(dir, "rig"), []byte(script), 0o755); err != nil {
+		t.Fatalf("planting a `rig` on PATH: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}
+}
+
+// The behaviours the Python tests pin, and the one this build cannot perform: the seat's own record is the
+// one that decides, an unknown or a live seat is refused without any command being run, an unreadable record
+// refuses in the read's own words, and the dead reading must hold for --after-seconds - after which the
+// launch REFUSES in words, because the native runtime has no launch verb for it (C3 §4).
+//
+// The two behaviours the old launch seam pinned are DELETED WITH IT, not retargeted: "judge the launch by
+// the seat's state rather than by the exit code" and "a warned launch over a seat that came up is a success"
+// were both about reading a `rig` invocation, and this verb makes none. What replaces them is the pin that
+// no invocation happens at all.
+func TestRespawnRefusesToLaunchTheDeadSeatAndSaysSo(t *testing.T) {
+	rigRan := poisonRig(t)
+	stub := &rigStub{answers: []string{"[" + deadNode + "]"}}
+	stubRig(t, stub)
+
+	var stdout, stderr bytes.Buffer
+	code := RunRespawnVerb(context.Background(),
+		[]string{"room1", "alpha", "--after-seconds", "0"}, &stdout, &stderr)
+
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit %d, want %d: a launch this build cannot make is not a success (stderr %q)",
+			code, clientcmd.ExitUnavailable, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing at all: the refusal is spoken on stderr", stdout.String())
+	}
+	for _, want := range []string{
+		"cannot launch room1-alpha@room1",
+		"the native runtime has no launch verb",
+		"4genteam room reseat",
+	} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("the refusal does not name %q:\n%s", want, stderr.String())
 		}
 	}
-	return nil
+	if rigRan() {
+		t.Error("the verb reached for `rig` on the launch leg: the refusal must not fall back (R4)")
+	}
 }
 
-// The six behaviours the Python tests pin: it launches only for a seat that holds the dead reading,
-// it judges the launch by the seat's state rather than by the exit code, and it refuses an unknown or
-// a live seat without launching anything.
-func TestRespawnLaunchesOnlyWhenTheSeatReadsDead(t *testing.T) {
-	stub := &rigStub{answers: []string{"[" + deadNode + "]"}, launch: rigResult{stdout: "fresh occupant started\n"}}
+// The same dead seat read through the whole deadline: the refusal is the LAST step of the verb, so the
+// reading it decided the seat needed was still taken - a refusal that short-circuited the read would pass
+// every other test in this file while dropping the watch the caller asked --after-seconds for.
+func TestRespawnRefusesTheLaunchOnlyAfterTheDeadReadingHeld(t *testing.T) {
+	rigRan := poisonRig(t)
+	stub := &rigStub{answers: []string{"[" + deadNode + "]"}}
 	stubRig(t, stub)
 
 	var stdout, stderr bytes.Buffer
 	code := RunRespawnVerb(context.Background(),
 		[]string{"room1", "alpha", "--after-seconds", "0"}, &stdout, &stderr)
 
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr.String())
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "fresh occupant started") {
-		t.Errorf("stdout = %q, want the launch's own report", stdout.String())
+	if stub.reads < 2 {
+		t.Errorf("took %d readings, want the dead reading and then the session it could not launch", stub.reads)
 	}
-	want := []string{"seat", "launch", "room1-alpha@room1", "--fresh", "--stop", "--reason", defaultRespawnReason}
-	if got := launched(stub); strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Errorf("launched %v, want %v", got, want)
-	}
-}
-
-func TestRespawnReportsSuccessWhenTheLaunchWarnedButTheSeatCameUp(t *testing.T) {
-	stub := &rigStub{
-		answers: []string{"[" + deadNode + "]", "[" + aliveNode + "]"},
-		launch: rigResult{
-			stderr: "Fresh occupant started but runtime identity requires attention\n",
-			err:    errors.New("exit status 1"),
-		},
-	}
-	stubRig(t, stub)
-
-	var stdout, stderr bytes.Buffer
-	code := RunRespawnVerb(context.Background(),
-		[]string{"room1", "alpha", "--after-seconds", "0"}, &stdout, &stderr)
-
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want %d: a seat that came up is a successful respawn", code, clientcmd.ExitOK)
-	}
-	if !strings.Contains(stderr.String(), "rig seat launch warned: Fresh occupant started but runtime identity requires attention") {
-		t.Errorf("stderr = %q, want the launch's warning and the fact the seat came up", stderr.String())
-	}
-}
-
-func TestRespawnFailsWhenTheSeatIsStillDeadAfterTheLaunch(t *testing.T) {
-	stub := &rigStub{
-		answers: []string{"[" + deadNode + "]"},
-		launch:  rigResult{stderr: "cannot attach\n", err: errors.New("exit status 1")},
-	}
-	stubRig(t, stub)
-
-	var stdout, stderr bytes.Buffer
-	code := RunRespawnVerb(context.Background(),
-		[]string{"room1", "alpha", "--after-seconds", "0"}, &stdout, &stderr)
-
-	if code != clientcmd.ExitRemote {
-		t.Errorf("exit %d, want %d", code, clientcmd.ExitRemote)
-	}
-	if !strings.Contains(stderr.String(), "rig seat launch reported: cannot attach") {
-		t.Errorf("stderr = %q, want the launch's message rather than a traceback", stderr.String())
+	if rigRan() {
+		t.Error("the verb reached for `rig` on the launch leg: the refusal must not fall back (R4)")
 	}
 }
 
 func TestRespawnRefusesALiveSeat(t *testing.T) {
+	rigRan := poisonRig(t)
 	stub := &rigStub{answers: []string{"[" + aliveNode + "]"}}
 	stubRig(t, stub)
 
@@ -213,12 +220,13 @@ func TestRespawnRefusesALiveSeat(t *testing.T) {
 	if !strings.Contains(stderr.String(), "not in the dead-agent state") {
 		t.Errorf("stderr = %q, want the refusal", stderr.String())
 	}
-	if got := launched(stub); got != nil {
-		t.Errorf("a live seat was launched anyway: %v", got)
+	if rigRan() {
+		t.Error("a live seat was launched anyway: the verb ran `rig`")
 	}
 }
 
 func TestRespawnRefusesAnUnknownSeat(t *testing.T) {
+	rigRan := poisonRig(t)
 	stub := &rigStub{answers: []string{"[]"}}
 	stubRig(t, stub)
 
@@ -232,20 +240,18 @@ func TestRespawnRefusesAnUnknownSeat(t *testing.T) {
 	if !strings.Contains(stderr.String(), "OpenRig lists no node room1.alpha") {
 		t.Errorf("stderr = %q, want the missing node named", stderr.String())
 	}
-	if got := launched(stub); got != nil {
-		t.Errorf("an unknown seat was launched anyway: %v", got)
+	if rigRan() {
+		t.Error("an unknown seat was launched anyway: the verb ran `rig`")
 	}
 }
 
 // TestRespawnRefusesWhenTheNodeReadFails: a record that could not be READ is not the answer "the room
 // lists no such seat". The two used to arrive as one - a `rig ps` exec that failed with no stdout was
-// parsed as an empty node list - and a respawn is a launch, so the seat it cannot see must be refused in
-// the read's own words rather than composed into room.seat and launched.
+// parsed as an empty node list - so the seat it cannot see must be refused in the read's own words rather
+// than composed into room.seat and acted on.
 func TestRespawnRefusesWhenTheNodeReadFails(t *testing.T) {
-	stub := &rigStub{
-		answers: []string{"[" + deadNode + "]"},
-		launch:  rigResult{stdout: "fresh occupant started\n"},
-	}
+	rigRan := poisonRig(t)
+	stub := &rigStub{answers: []string{"[" + deadNode + "]"}}
 	stubRig(t, stub)
 	brokenNodeDaemon(t)
 
@@ -259,8 +265,8 @@ func TestRespawnRefusesWhenTheNodeReadFails(t *testing.T) {
 	if !strings.Contains(stderr.String(), "the node read asked /api/ps") {
 		t.Errorf("stderr = %q, want the failed read rather than a missing node", stderr.String())
 	}
-	if got := launched(stub); got != nil {
-		t.Errorf("it launched on a reading it could not make: %v", got)
+	if rigRan() {
+		t.Error("it ran `rig` on a reading it could not make")
 	}
 }
 
