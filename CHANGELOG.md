@@ -3,6 +3,15 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — `continue` names the client's own read, not the tool the cutover removes
+
+### Changed
+- `internal/clientrestore/restore.go` — the closing `done` line told the operator to verify with
+  `rig ps --nodes --rig <rig>`, which is the tool this cutover takes off PATH, so an operator who followed it
+  would find the command missing. It names `4genteam ps <RIG> --nodes` — the client's own node table, read
+  through the runtime — which is the same read the migrated verbs use. The line and its pin in
+  `continue_test.go` moved together. Flagged as the gate's nit on `bb4f412`.
+
 ## 2026-10-14 — `sync respawn` refuses its launch in words, and an undelivered brief fails the restore
 
 ### Changed

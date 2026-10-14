@@ -122,7 +122,10 @@ func (r *restorer) restore(rigName, brief string) bool {
 		}
 	}
 	r.openWatch(rigName)
-	r.log.printf("%s: done — verify with: rig ps --nodes --rig %s", rigName, rigName)
+	// The pointer names the CLIENT's own read - `4genteam ps <RIG> --nodes`, which reads the node table through
+	// the runtime (RigEntries) - and not `rig ps --nodes --rig RIG`, which is the tool this cutover removes and
+	// which an operator following the old line would find missing (the gate's nit at bb4f412).
+	r.log.printf("%s: done — verify with: 4genteam ps %s --nodes", rigName, rigName)
 	return true
 }
 

@@ -274,7 +274,7 @@ func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
 		"rig-a: briefed alpha",
 		"rig-a: briefed beta",
 		"rig-a: watch wall opened",
-		"rig-a: done — verify with: rig ps --nodes --rig rig-a",
+		"rig-a: done — verify with: 4genteam ps rig-a --nodes",
 	} {
 		if !strings.Contains(w.log(), line) {
 			t.Errorf("the log is missing %q:\n%s", line, w.log())
