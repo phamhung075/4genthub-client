@@ -122,6 +122,10 @@ fn readiness_refusal(
 pub struct RoomSupervisor {
     base_state_dir: PathBuf,
     active_rooms: Arc<Mutex<HashMap<String, RoomSpec>>>,
+    /// THE SOCKET THIS DAEMON ANSWERS ON, kept because every seat it starts has to know it: a seat's own
+    /// `4genteam send`/`room queue` resolves the socket from `$AGENTHUB_RUNTIME_SOCKET` and then this machine's
+    /// own path, so a seat that is not told would address whichever daemon owns the default socket.
+    runtime_socket: PathBuf,
     hook_bus: HookBus,
 }
 
@@ -186,13 +190,49 @@ fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
     })
 }
 
+/// The environment ONE seat's runner and its agent are launched with.
+///
+/// A pure function rather than an inline block, so what a seat inherits can be pinned without a tmux server:
+/// this map IS the contract between the daemon and the client a seat runs (`4genteam send`, `room queue`), and
+/// a field missing here is a seat that answers a different daemon, or none.
+///
+/// `AGENTHUB_RUNTIME_SOCKET` is the daemon's OWN socket, and it OVERRIDES whatever the room's spec recorded:
+/// the socket that matters to a seat is the one the daemon that started it answers on, and a value written into
+/// a spec at `up` time can only be the socket of whichever daemon existed then. Measured 2026-10-14 in an
+/// isolated run: the run's own seat carried no socket at all, resolved this machine's own (the box's live
+/// runtime) and had its message refused for a mailbox under the LIVE state directory.
+fn seat_env(
+    seat: &SeatSpec,
+    room: &str,
+    session_name: &str,
+    seat_dir: &Path,
+    runtime_socket: &Path,
+) -> HashMap<String, String> {
+    let mut env = seat.env.clone();
+    env.insert("AGENTHUB_ROOM".into(), room.into());
+    env.insert("AGENTHUB_SEAT".into(), seat.seat_key.clone());
+    env.insert("AGENTHUB_ROLE".into(), seat.seat_type.clone());
+    env.insert("AGENTHUB_RUNTIME".into(), seat.runtime.clone());
+    env.insert("AGENTHUB_SESSION_NAME".into(), session_name.into());
+    env.insert("PI_CODING_AGENT_DIR".into(), seat_dir.to_string_lossy().to_string());
+    env.insert(
+        "AGENTHUB_RUNTIME_SOCKET".into(),
+        runtime_socket.to_string_lossy().to_string(),
+    );
+    if let Some(m) = &seat.model {
+        env.insert("AGENTHUB_MODEL".into(), m.clone());
+    }
+    env
+}
+
 impl RoomSupervisor {
-    pub fn new(base_state_dir: impl Into<PathBuf>, hook_bus: HookBus) -> Self {
+    pub fn new(base_state_dir: impl Into<PathBuf>, hook_bus: HookBus, runtime_socket: impl Into<PathBuf>) -> Self {
         let base_state_dir = base_state_dir.into();
         let _ = fs::create_dir_all(&base_state_dir);
         Self {
             base_state_dir,
             active_rooms: Arc::new(Mutex::new(HashMap::new())),
+            runtime_socket: runtime_socket.into(),
             hook_bus,
         }
     }
@@ -380,16 +420,7 @@ impl RoomSupervisor {
         };
 
         // Build environment variables
-        let mut env = seat.env.clone();
-        env.insert("AGENTHUB_ROOM".into(), room.into());
-        env.insert("AGENTHUB_SEAT".into(), seat.seat_key.clone());
-        env.insert("AGENTHUB_ROLE".into(), seat.seat_type.clone());
-        env.insert("AGENTHUB_RUNTIME".into(), seat.runtime.clone());
-        env.insert("AGENTHUB_SESSION_NAME".into(), session_name.clone());
-        env.insert("PI_CODING_AGENT_DIR".into(), seat_dir.to_string_lossy().to_string());
-        if let Some(m) = &seat.model {
-            env.insert("AGENTHUB_MODEL".into(), m.clone());
-        }
+        let env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket);
 
         // WHEN THIS GENERATION'S PANE WAS CREATED. The readiness proof below is a file the previous
         // generation's teardown also writes into, so existence alone cannot separate a handshake from an
@@ -1735,7 +1766,11 @@ mod tests {
     /// A supervisor needs a `HookBus`, whose constructor spawns its audit task, so these tests run on a
     /// tokio runtime (`#[tokio::test]`) even where nothing is awaited.
     fn supervisor_at(state_dir: &Path) -> RoomSupervisor {
-        RoomSupervisor::new(state_dir, HookBus::new(state_dir.join("audit"), 8))
+        RoomSupervisor::new(
+            state_dir,
+            HookBus::new(state_dir.join("audit"), 8),
+            state_dir.join("run").join("agenthub.sock"),
+        )
     }
 
     /// THE ROOM'S LAYOUT IS PART OF STARTING THE ROOM, not something its first writer creates: the
@@ -2293,6 +2328,44 @@ mod tests {
         // ...and the missing advisory is absent, not a fabricated empty one.
         assert!(statuses[0].alert.is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A SEAT IS STARTED KNOWING WHICH DAEMON IT BELONGS TO. A seat's own `4genteam send`/`room queue`
+    /// resolves the socket from `$AGENTHUB_RUNTIME_SOCKET` and then THIS MACHINE'S own path, so a seat whose env
+    /// lacks it addresses whichever daemon owns the default socket - measured 2026-10-14 in an isolated run: the
+    /// run's own seat reached the box's live runtime, whose answer was a refusal for a mailbox under the live
+    /// state directory.
+    ///
+    /// The spec's own entry does not win: the socket that matters is the one the daemon that STARTED the seat
+    /// answers on, and a value recorded in a spec can only be the socket of whichever daemon existed then.
+    #[test]
+    fn a_seats_env_states_the_socket_of_the_daemon_that_started_it() {
+        let seat: SeatSpec = serde_json::from_value(serde_json::json!({
+            "seat_key": "dev",
+            "seat_type": "developer",
+            "runtime": "omp",
+            "env": {"AGENTHUB_RUNTIME_SOCKET": "/tmp/stale.sock"}
+        }))
+        .expect("seat");
+        let env = seat_env(
+            &seat,
+            "isolated",
+            "agenthub--isolated--dev",
+            Path::new("/state/rooms/isolated/seats/dev"),
+            Path::new("/tmp/isolation/rt/agenthub.sock"),
+        );
+
+        assert_eq!(
+            env.get("AGENTHUB_RUNTIME_SOCKET").map(String::as_str),
+            Some("/tmp/isolation/rt/agenthub.sock"),
+            "the seat has to be told the socket of the daemon that started it"
+        );
+        assert_eq!(env.get("AGENTHUB_ROOM").map(String::as_str), Some("isolated"));
+        assert_eq!(
+            env.get("AGENTHUB_SESSION_NAME").map(String::as_str),
+            Some("agenthub--isolated--dev"),
+            "the session name the seat's own client sends as"
+        );
     }
 
     /// The nudge pass enumerates the rooms that are on disk. With no tmux session behind any seat, no seat

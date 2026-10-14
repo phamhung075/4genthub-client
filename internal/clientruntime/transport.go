@@ -62,13 +62,21 @@ func seatEnvParts() (room, seat, session string, ok bool) {
 	return room, seat, SeatSessionName(room, seat), true
 }
 
-// RuntimeSendText delivers one message to one session through the runtime socket and returns the runtime's
-// OWN answer document.
+// RuntimeSendText delivers one message to one session through the runtime socket this shell's environment
+// resolves, and returns the runtime's OWN answer document.
 //
 // The text is wrapped in the From/To/Sent envelope unless opts.Raw. `--json` prints the document returned
 // here, which is why the answer is taken at the frame rather than through Client.SendText (that helper drops
 // it): the frame is the identical one SendText writes.
 func RuntimeSendText(session, text string, opts SendOptions) ([]byte, error) {
+	return RuntimeSendTextOn("", session, text, opts)
+}
+
+// RuntimeSendTextOn is the same frame on a NAMED socket, so a verb that can be pointed at another daemon
+// writes to THAT daemon. Sending to one runtime while the address it was resolved from came from another is
+// the pair that produced the measured defect: a seat of an isolated run addressed the box's live runtime and
+// was refused for a mailbox under the live runtime's state directory.
+func RuntimeSendTextOn(socket, session, text string, opts SendOptions) ([]byte, error) {
 	body := text
 	if !opts.Raw {
 		sender := opts.Sender
@@ -77,7 +85,7 @@ func RuntimeSendText(session, text string, opts SendOptions) ([]byte, error) {
 		}
 		body = sendEnvelope(sender, session, text, time.Now())
 	}
-	resp, err := NewClient("").Call("SendText", map[string]string{"session": session, "text": body})
+	resp, err := NewClient(socket).Call("SendText", map[string]string{"session": session, "text": body})
 	if err != nil {
 		return nil, err
 	}

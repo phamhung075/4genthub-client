@@ -201,6 +201,7 @@ var sendFlagSpecs = []clientruntime.FlagSpec{
 	{Name: "from", Value: true},
 	{Name: "raw"},
 	{Name: "json"},
+	{Name: "socket", Value: true},
 	{Name: "verify"},
 	{Name: "force"},
 	{Name: "dangerously-interact"},
@@ -241,6 +242,9 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		fmt.Fprintln(stdout, "\nOptions, wherever they appear on the line:")
 		fmt.Fprintln(stdout, "  --raw    send the text exactly, with no From/To/Sent envelope")
 		fmt.Fprintln(stdout, "  --json   print the runtime's answer as JSON")
+		fmt.Fprintln(stdout, "  --socket PATH  the runtime daemon's Unix socket: the flag, else $"+clientruntime.RuntimeSocketEnv+", else")
+		fmt.Fprintln(stdout, "  this machine's own. A seat of another daemon - an isolated run, a second daemon on this box - is reached")
+		fmt.Fprintln(stdout, "  with it, and the seat's name is read from THAT daemon's record.")
 		fmt.Fprintln(stdout, "  --verify/--force/--wait-for-idle/--dangerously-interact/--reason and --to/--pod/--rig/--host/--context")
 		fmt.Fprintln(stdout, "  are REFUSED: nothing is sent when one is present")
 		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape sends MESSAGE to that seat, starting it with \"From NAME:\" so the seat")
@@ -262,11 +266,15 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		}
 	}
 
+	// THE SOCKET IS RESOLVED ONCE, and every read and write this verb makes goes through it: the seat's name
+	// is READ from a record, so a name read from one daemon and a send written to another is a pair that can
+	// only be right by luck.
+	socket := sendSocket(opts)
+
 	// `send SESSION MESSAGE`: the message goes through the runtime socket.
 	if len(positional) == 2 {
-		return sendToSession(positional[0], positional[1], opts, stdout, stderr)
+		return sendToSession(positional[0], positional[1], opts, socket, stdout, stderr)
 	}
-
 	if len(positional) < 3 {
 		fmt.Fprintln(stderr, "4genteam send: SESSION and MESSAGE, or RIG SEAT and MESSAGE, are required")
 		return clientcmd.ExitUsage
@@ -280,7 +288,7 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 
 	// THE SEAT'S SESSION NAME IS READ, NEVER COMPOSED, from the room's runtime record: a name invented from
 	// a convention cannot be split back into halves for a room whose name carries a dash.
-	address, err := clientruntime.ResolveSeatAddress(rig, seat)
+	address, err := clientruntime.ResolveSeatAddressOn(socket, rig, seat)
 	if err != nil {
 		return report(stderr, err)
 	}
@@ -289,7 +297,18 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	if opts["raw"] == "true" {
 		text = strings.Join(positional[2:], " ")
 	}
-	return runtimeSend(address.SessionName, text, opts, stdout, stderr)
+	return runtimeSend(address.SessionName, text, opts, socket, stdout, stderr)
+}
+
+// sendSocket is the socket this send is aimed at: the flag, else this shell's own resolution. It is named in
+// the refusal as well, because a caller who pointed the verb at another daemon has to read WHICH daemon
+// answered - and `4genteam send SESSION MESSAGE --socket PATH` is the only way to reach a daemon that does not
+// own this machine's own socket (an isolated run, a second daemon on the same box).
+func sendSocket(opts map[string]string) string {
+	if explicit := strings.TrimSpace(opts["socket"]); explicit != "" {
+		return explicit
+	}
+	return clientruntime.DefaultSocketPath()
 }
 
 // sendToSession delivers one message to one session through the runtime socket.
@@ -299,23 +318,23 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 // room's runtime record resolves the pair. A pair no record lists is left ALONE, deliberately: the caller's
 // own string then goes to the runtime as typed, and its refusal is the honest answer for a session that
 // does not exist.
-func sendToSession(session, text string, opts map[string]string, stdout, stderr io.Writer) int {
+func sendToSession(session, text string, opts map[string]string, socket string, stdout, stderr io.Writer) int {
 	if rig, seat, ok := clientruntime.CanonicalRigSeat(session); ok {
-		if address, err := clientruntime.ResolveSeatAddress(rig, seat); err == nil {
+		if address, err := clientruntime.ResolveSeatAddressOn(socket, rig, seat); err == nil {
 			session = address.SessionName
 		}
 	}
-	return runtimeSend(session, text, opts, stdout, stderr)
+	return runtimeSend(session, text, opts, socket, stdout, stderr)
 }
 
 // runtimeSend sends through the socket, wrapped in the From/To/Sent envelope unless --raw. `--json` prints
 // the runtime's own answer document.
-func runtimeSend(session, text string, opts map[string]string, stdout, stderr io.Writer) int {
-	raw, err := clientruntime.RuntimeSendText(session, text, clientruntime.SendOptions{
+func runtimeSend(session, text string, opts map[string]string, socket string, stdout, stderr io.Writer) int {
+	raw, err := clientruntime.RuntimeSendTextOn(socket, session, text, clientruntime.SendOptions{
 		Raw: opts["raw"] == "true",
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam send: the runtime at %s refused it: %v; nothing was sent\n", clientruntime.DefaultSocketPath(), err)
+		fmt.Fprintf(stderr, "4genteam send: the runtime at %s refused it: %v; nothing was sent\n", socket, err)
 		return clientcmd.ExitRemote
 	}
 	if opts["json"] == "true" {

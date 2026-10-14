@@ -68,16 +68,23 @@ func TestTheRoomRecordAnswersBothWays(t *testing.T) {
 	original := seatStatuses
 	t.Cleanup(func() { seatStatuses = original })
 
-	seatStatuses = func(string) ([]SeatStatus, error) {
+	asked := ""
+	seatStatuses = func(socket, room string) ([]SeatStatus, error) {
+		asked = socket
 		return []SeatStatus{{Seat: "reviewer", SessionName: "agenthub--4genthub-min--reviewer"}}, nil
 	}
 
-	address, err := ResolveSeatAddress("4genthub-min", "reviewer")
+	address, err := ResolveSeatAddressOn("/tmp/another-daemon.sock", "4genthub-min", "reviewer")
 	if err != nil {
 		t.Fatalf("a seat the record lists did not resolve: %v", err)
 	}
 	if address.SessionName != "agenthub--4genthub-min--reviewer" || address.Source == "" {
 		t.Errorf("address = %+v, want the record's own session name and the source it was read from", address)
+	}
+	// THE SOCKET IS THE CALLER'S. A record read from one daemon while the send goes to another is a pair that
+	// can only be right by luck, so the read has to be made against the socket it will write to.
+	if asked != "/tmp/another-daemon.sock" {
+		t.Errorf("the record was read from %q, want the socket the caller named", asked)
 	}
 
 	_, err = ResolveSeatAddress("4genthub-min", "lead")

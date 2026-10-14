@@ -47,9 +47,17 @@ func CanonicalRigSeat(session string) (rig, seat string, ok bool) {
 	return room, left[len(prefix):], true
 }
 
-// ResolveSeatAddress reads the session name a seat's pane actually carries from the room's runtime. The name
-// is READ, never composed - a convention is what produced `agenthub--RIG--SEAT`, a string no seat carries - so a
-// seat the runtime does not list is a refusal that names it, not a name built from the caller's two arguments.
+// ResolveSeatAddress reads the record from the socket this shell's environment resolves.
+func ResolveSeatAddress(rig, seat string) (SeatAddress, error) {
+	return ResolveSeatAddressOn("", rig, seat)
+}
+
+// ResolveSeatAddressOn reads the session name a seat's pane actually carries from the room's runtime on a NAMED
+// socket. The name is READ, never composed - a convention is what produced `agenthub--RIG--SEAT`, a string no
+// seat carries - so a seat the runtime does not list is a refusal that names it, not a name built from the
+// caller's two arguments. The socket is named because a verb that can be pointed at another daemon has to ask
+// THAT daemon: a record read from one runtime while the send goes to another is a pair that can only be right
+// by luck.
 //
 // A FAILED READ IS NOT THAT REFUSAL. Measured 2026-10-14 on this box, during a transport outage: the shared
 // daemon's socket had been unlinked, and `send 4genthub-min lead` answered "no record of 4genthub-min/lead: the
@@ -57,8 +65,8 @@ func CanonicalRigSeat(session string) (rig, seat string, ok bool) {
 // /mnt/wslg/runtime-dir/agenthub.sock: ... no such file or directory`. The two send an operator to different
 // places - a room definition versus a dead socket - and this file's own rule is that an unreadable record is
 // not an answer about the room. So the read answers three things and each is reported as itself.
-func ResolveSeatAddress(rig, seat string) (SeatAddress, error) {
-	session, found, err := seatAddressFromRuntime(rig, seat)
+func ResolveSeatAddressOn(socket, rig, seat string) (SeatAddress, error) {
+	session, found, err := seatAddressFromRuntime(socket, rig, seat)
 	switch {
 	case err != nil:
 		return SeatAddress{}, &clientcmd.CodedError{
@@ -76,9 +84,11 @@ func ResolveSeatAddress(rig, seat string) (SeatAddress, error) {
 }
 
 // seatStatuses is the room read this file makes. A package-level var, which is the repo's rule for a seam - not
-// an interface invented for a test - so both answers below can be driven without a daemon.
-var seatStatuses = func(room string) ([]SeatStatus, error) {
-	return NewClient("").GetRoomStatus(room)
+// an interface invented for a test - so both answers below can be driven without a daemon. The socket is a
+// PARAMETER and not a package-level choice: every caller that can be aimed at another daemon must read the
+// record from the daemon it is about to write to.
+var seatStatuses = func(socket, room string) ([]SeatStatus, error) {
+	return NewClient(socket).GetRoomStatus(room)
 }
 
 // seatAddressFromRuntime is the FIELD path: ask the room's own runtime for the seat's real session name. It
@@ -88,7 +98,7 @@ var seatStatuses = func(room string) ([]SeatStatus, error) {
 // The room is `AGENTHUB_ROOM` when this shell is a native seat - the launcher that hosts a seat states the
 // room as a field, and the native shape's first positional argument names the same room. A runtime that has
 // no such room answers nothing.
-func seatAddressFromRuntime(rig, seat string) (string, bool, error) {
+func seatAddressFromRuntime(socket, rig, seat string) (string, bool, error) {
 	if seat == "" {
 		return "", false, nil
 	}
@@ -103,7 +113,7 @@ func seatAddressFromRuntime(rig, seat string) (string, bool, error) {
 	if room == "" {
 		return "", false, nil
 	}
-	statuses, err := seatStatuses(room)
+	statuses, err := seatStatuses(socket, room)
 	if err != nil {
 		return "", false, err
 	}
