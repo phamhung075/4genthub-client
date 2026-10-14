@@ -358,13 +358,8 @@ func callKind(text string) (toolStyle, bool) {
 	return toolStyle{}, false
 }
 
-// kindRule is the divider printed before every tool call: the kind's glyph and name in its own colour
-// on a rule, so a run of reads, then an edit, then a shell command is seen at a glance.
+// kindRule is the divider printed before every tool call: a plain rule in the kind's colour. The call
+// line under it already names the tool, so the rule carries only the colour.
 func kindRule(style toolStyle, width int) string {
-	label := " " + style.glyph + " " + style.kind + " "
-	fill := min(width, 60) - len([]rune(label)) - 2
-	if fill < 2 {
-		fill = 2
-	}
-	return fg(style.colour) + "──" + label + strings.Repeat("─", fill) + reset
+	return fg(style.colour) + strings.Repeat("─", min(width, 60)) + reset
 }

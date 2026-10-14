@@ -87,7 +87,7 @@ func TestAChangeOfToolKindGetsALabelledRule(t *testing.T) {
 		t.Error("a result was taken for a call")
 	}
 	rule := plain(kindRule(writeStyle, 80))
-	if !strings.Contains(rule, "✎ write") || !strings.HasPrefix(rule, "──") {
+	if strings.Trim(rule, "─") != "" || len([]rune(rule)) != 60 {
 		t.Errorf("rule = %q", rule)
 	}
 }
