@@ -364,7 +364,9 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                         if let Some(err) = &error_text {
                             mirror(&format!("ERROR rpc: {err}"));
                         }
-                        if failed {
+                        if failed && id.starts_with(COMPACT_ID_PREFIX) {
+                            mirror("compact refused; no turn is affected, the seat keeps its state");
+                        } else if failed {
                             if let Some(err) = error_text {
                                 let has_pending = pending_reader.lock().is_some();
                                 if !is_our_prompt && has_pending && !turn_active {
@@ -900,9 +902,13 @@ fn gc_after_spill(state_dir: &Path, target: &RunnerTarget, sent: &frame::Sent) -
 /// This is what replaces the `pidfd_getfd` theft: the daemon writes one JSON line into the seat's
 /// mailbox socket and the runner — the process that owns the child's channel — relays it. A seat with no
 /// runner is a refusal naming the seat, not a silent success.
+/// The id prefix of a compaction frame relayed to a seat. Its reply is not a turn: an agent with nothing yet
+/// to compact answers `Nothing to compact (session too small)`, and that must not read as a refused turn.
+const COMPACT_ID_PREFIX: &str = "forcecompact-";
+
 pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<String, String> {
     let target = target_from_session(session_or_target)?;
-    let id = format!("forcecompact-{}", std::process::id());
+    let id = format!("{COMPACT_ID_PREFIX}{}", std::process::id());
     // Fire-and-forget, which is what compact's callers already had: no `replyTo`, so the relay is a write
     // into the seat's mailbox and nothing more. It goes through the same sender the daemon uses for anything
     // else it has to say to a seat, so the fallback exit cannot drift into a second copy of it.
@@ -1536,6 +1542,14 @@ mod tests {
             Failure::Terminal(what) => assert!(what.contains("refused"), "{what}"),
             Failure::Retryable(what) => panic!("a refused turn is not retryable ({what})"),
         }
+    }
+
+    /// A compact reply carries the compact frame's id and is never a turn: a fresh seat answering
+    /// `Nothing to compact` must not be published `blocked`.
+    #[test]
+    fn a_compact_reply_id_is_recognised() {
+        assert!(format!("{COMPACT_ID_PREFIX}{}", std::process::id()).starts_with(COMPACT_ID_PREFIX));
+        assert!(!"runner-resume-1-1".starts_with(COMPACT_ID_PREFIX));
     }
 
     /// The rule parity 1 turns on: a turn that is still running is never resumed from an error line, and
