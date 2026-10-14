@@ -3,6 +3,7 @@ package clientbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -52,7 +54,15 @@ type Bridge struct {
 	// Runner runs a LOCAL tool that is not rig; rig itself arrives through clientcmd.Rig, the one
 	// place an external command starts. Named Runner rather than Run so it cannot collide with the
 	// loop's own Run method.
-	Runner    Runner
+	Runner Runner
+	// Nodes reads the seats this machine hosts, in the node shape BuildSeats reads; Links reads one room's
+	// declared links. Both default to the agenthub runtime, and are seams so a test needs no daemon.
+	Nodes func() ([]any, error)
+	Links func(room string) ([]rigEdge, error)
+	// Rooms lists the hosted rooms and Queue reads one room's active human-addressed rail rows, which the
+	// notification sweep walks; they default to the runtime too.
+	Rooms     func() ([]string, error)
+	Queue     func(room string) ([]any, error)
 	Known     map[string]string
 	PinsDir   string
 	StatePath string
@@ -79,7 +89,8 @@ func NewBridge(machineID string, interval time.Duration, send Sender, notify Sen
 		interval = time.Duration(DefaultInterval * float64(time.Second))
 	}
 	return &Bridge{
-		MachineID: machineID, Interval: interval, Send: send, Notify: notify, Runner: execRunner,
+		MachineID: machineID, Interval: interval, Send: send, Notify: notify, Runner: execRunner, Nodes: runtimeNodes, Links: runtimeLinks,
+		Rooms: runtimeRooms, Queue: runtimeHumanQueue,
 		Known: known, PinsDir: pinsDir, StatePath: statePath, Note: note,
 		clock: time.Now, state: ReadSyncState(statePath), notified: ReadNotifiedState(statePath),
 		notes: map[string]string{},
@@ -127,11 +138,11 @@ func (b *Bridge) read(key string, argv []string, parse func(string) ([]any, erro
 	return items
 }
 
-// BuildPayload reads the local state and builds what would be sent. Every read goes through a seam
-// that cannot start a shell: the rig tool arrives through the clientcmd.Rig contract (the one place
-// an external command starts, and the Windows route with it), and herdr through the Runner.
-func (b *Bridge) BuildPayload(rig *clientcmd.Rig) Payload {
-	nodes := b.readRig(rig)
+// BuildPayload reads the local state and builds what would be sent. The seats and the topology come from
+// the agenthub runtime (Nodes, Links); herdr is read through the Runner, the one seam that cannot start a
+// shell.
+func (b *Bridge) BuildPayload() Payload {
+	nodes := b.readNodes()
 	agents := b.read("herdr", []string{"herdr", "api", "snapshot"}, ParseHerdrAgents)
 
 	seats, invalid, duplicates := BuildSeats(nodes, b.Known, b.PinsDir, b.stripDetail)
@@ -146,54 +157,77 @@ func (b *Bridge) BuildPayload(rig *clientcmd.Rig) Payload {
 		ReportedAt: UTCNow(),
 		Seats:      seats,
 		Agents:     BuildAgents(agents),
-		Edges:      BuildEdges(RigRooms(nodes), func(rigID string) []rigEdge { return b.readEdges(rig, rigID) }),
+		Edges:      BuildEdges(RigRooms(nodes), b.readEdges),
 	}
 }
 
-// readEdges reads `rig export <rigId> -o /dev/stdout` the same two ways readRig reads the nodes,
-// and reads a rig it cannot export as having no edges.
-func (b *Bridge) readEdges(rig *clientcmd.Rig, rigID string) []rigEdge {
-	key := "edges " + rigID
-	argv := []string{"rig", "export", rigID, "-o", "/dev/stdout"}
-	var output string
-	var err error
-	if rig != nil {
-		output, err = rig.Run(context.Background(), argv[1:]...)
-	} else {
-		output, err = b.Runner(context.Background(), argv...)
-	}
-	var edges []rigEdge
-	if err == nil {
-		edges, err = ParseRigEdges(output)
-	}
+// readEdges reads one room's links, and reads a room it cannot read as having no edges.
+func (b *Bridge) readEdges(room string) []rigEdge {
+	edges, err := b.Links(room)
 	if err != nil {
-		b.note(key, fmt.Sprintf("rig unavailable: %v", err))
+		b.note("edges "+room, fmt.Sprintf("runtime unavailable: %v", err))
 		return nil
 	}
-	b.note(key, "rig ok")
+	b.note("edges "+room, "runtime ok")
 	return edges
 }
 
-// readRig reads `rig ps --json --nodes -A` through the contract when the dispatcher resolved the rig
-// tool, and through the Runner when a caller supplied one instead (the tests, and any environment
-// where rig is reached another way).
-func (b *Bridge) readRig(rig *clientcmd.Rig) []any {
-	if rig != nil {
-		output, err := rig.Run(context.Background(), "ps", "--json", "--nodes", "-A")
-		if err != nil {
-			b.note("rig", fmt.Sprintf("rig unavailable: %v", err))
-			return nil
-		}
-		items, err := ParseRigNodes(output)
-		if err != nil {
-			b.note("rig", fmt.Sprintf("rig unavailable: %v", err))
-			return nil
-		}
-		b.note("rig", "rig ok")
-		return items
+// readNodes reads the hosted seats. A machine whose runtime is not running hosts none, so it reports an
+// empty list and says why once, rather than failing the report.
+func (b *Bridge) readNodes() []any {
+	nodes, err := b.Nodes()
+	if err != nil {
+		b.note("runtime", fmt.Sprintf("runtime unavailable: %v", err))
+		return nil
 	}
-	return b.read("rig", []string{"rig", "ps", "--json", "--nodes", "-A"}, ParseRigNodes)
+	b.note("runtime", "runtime ok")
+	return nodes
 }
+
+// runtimeNodes lists every seat of every room the runtime hosts, in the node shape a `rig ps` listing
+// had: the room is both the rig id and the rig name.
+func runtimeNodes() ([]any, error) {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return nil, errRuntimeAbsent
+	}
+	entries, err := client.ListSessions("")
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]any, 0, len(entries))
+	for _, entry := range entries {
+		node := map[string]any{
+			"rigId": entry.RigName, "rigName": entry.RigName, "logicalId": entry.LogicalID,
+			"runtime": entry.Runtime, "sessionStatus": entry.SessionStatus,
+			"agentActivity": map[string]any{"state": entry.AgentActivity.State},
+		}
+		if entry.Detail != nil {
+			node["latestError"] = *entry.Detail
+		}
+		nodes = append(nodes, node)
+	}
+	return nodes, nil
+}
+
+// runtimeLinks reads one room's declared links from the runtime.
+func runtimeLinks(room string) ([]rigEdge, error) {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return nil, errRuntimeAbsent
+	}
+	links, err := client.RoomLinks(room)
+	if err != nil {
+		return nil, err
+	}
+	edges := make([]rigEdge, 0, len(links))
+	for _, link := range links {
+		edges = append(edges, rigEdge{link.From, link.To, link.Kind})
+	}
+	return edges, nil
+}
+
+var errRuntimeAbsent = errors.New("the agenthub runtime is not running")
 
 // LocalRecord is what this machine can say about each seat from its own record - unchanged, changed
 // or unknown - and never the cloud's verdict, which only the answer to a report knows.
@@ -272,13 +306,13 @@ func (b *Bridge) ApplyVerdicts(body []byte) {
 // secret-bearing, so the NEXT cycle drops detail entirely rather than scrubbing harder; and a 401
 // fails loud and actionable, because a rejected credential never recovers by retrying and a bridge
 // that cannot report must say so instead of looping quietly.
-func (b *Bridge) Cycle(ctx context.Context, rig *clientcmd.Rig) time.Duration {
+func (b *Bridge) Cycle(ctx context.Context) time.Duration {
 	// The beat is the FIRST thing the cycle does, before any early return: a cycle that finds nothing
 	// to send, or that fails, still proves the bridge is alive. The bridge is one per machine, so no rig.
 	if err := clientservices.WriteHeartbeat(clientservices.Bridge, ""); err != nil {
 		b.note("heartbeat", fmt.Sprintf("heartbeat write failed: %v", err))
 	}
-	payload := b.BuildPayload(rig)
+	payload := b.BuildPayload()
 	for where, record := range b.LocalRecord(payload.Seats) {
 		if record.SinceLastInSync == "changed" {
 			b.note("changed:"+where, fmt.Sprintf(
@@ -289,7 +323,7 @@ func (b *Bridge) Cycle(ctx context.Context, rig *clientcmd.Rig) time.Duration {
 	// The human-addressed rows are forwarded whether or not a report goes out this cycle. The early
 	// return below skips the REPORT when nothing changed, and a row addressed to the human is news on
 	// its own, so this must not sit behind that decision.
-	b.notifyHumans(rig)
+	b.notifyHumans()
 
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -358,9 +392,9 @@ func (b *Bridge) fail(message string) time.Duration {
 // Run loops until ctx is done. With once it runs a single cycle and reports whether anything was
 // accepted: EXIT_OK only when nothing is degraded and no backoff is held, clientcmd.ExitRemote otherwise - so a
 // one-shot run can be used as a check rather than only as a report.
-func (b *Bridge) Run(ctx context.Context, rig *clientcmd.Rig, once bool) int {
+func (b *Bridge) Run(ctx context.Context, once bool) int {
 	for {
-		delay := b.Cycle(ctx, rig)
+		delay := b.Cycle(ctx)
 		if once {
 			if b.backoff == 0 && !b.stripDetail {
 				return clientcmd.ExitOK

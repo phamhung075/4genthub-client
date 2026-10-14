@@ -28,6 +28,7 @@ type SessionEntry struct {
 	Runtime              string          `json:"runtime"`
 	Model                *string         `json:"model,omitempty"`
 	TranscriptPath       *string         `json:"transcriptPath,omitempty"`
+	Detail               *string         `json:"detail,omitempty"`
 }
 
 // SessionActivity is the seat's activity word, nested where the node table nests it (`agentActivity.state`).
@@ -35,6 +36,19 @@ type SessionEntry struct {
 type SessionActivity struct {
 	State  string `json:"state"`
 	Source string `json:"source,omitempty"`
+}
+
+// RoomLinks reads the links the room's spec declares between its seats.
+func (c *Client) RoomLinks(room string) ([]SeatLink, error) {
+	resp, err := c.Call("GetRoomLinks", map[string]string{"room": room})
+	if err != nil {
+		return nil, err
+	}
+	var links []SeatLink
+	if err := decodeAnswer("GetRoomLinks", resp.Data, &links); err != nil {
+		return nil, err
+	}
+	return links, nil
 }
 
 // TranscriptAnswer is a transcript read: the text, and the file it came from.

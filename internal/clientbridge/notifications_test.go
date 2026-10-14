@@ -3,9 +3,7 @@ package clientbridge
 import (
 	"context"
 	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +48,7 @@ func TestListingParsersAcceptBothShapes(t *testing.T) {
 		"list":  `[{"qitemId":"a"}]`,
 		"items": `{"items":[{"qitemId":"a"}]}`,
 	} {
-		rows, err := ParseHumanRows(output)
+		rows, err := parseItems(output, "rig queue list")
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -58,7 +56,7 @@ func TestListingParsersAcceptBothShapes(t *testing.T) {
 			t.Fatalf("%s: parsed %d rows, want 1", name, len(rows))
 		}
 	}
-	if _, err := ParseHumanRows(`{"rows":[]}`); err == nil {
+	if _, err := parseItems(`{"rows":[]}`, "rig queue list"); err == nil {
 		t.Fatal("a shape carrying no items must be an error, not an empty listing")
 	}
 }
@@ -70,7 +68,7 @@ func TestNotifyPostsOneFrameForAHumanRow(t *testing.T) {
 	f := newFixture(t)
 	f.queueJSON = fixtureHumanQueue
 
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 
 	if len(f.frames) != 1 {
 		t.Fatalf("posted %d frames, want exactly 1", len(f.frames))
@@ -140,9 +138,9 @@ func TestNotifyDoesNotPostTheSameRowTwice(t *testing.T) {
 	f := newFixture(t)
 	f.queueJSON = fixtureHumanQueue
 
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 	f.clock.plusSeconds(60)
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 
 	if len(f.frames) != 1 {
 		t.Fatalf("posted %d frames over two cycles, want 1: the second cycle re-sent a row it had sent", len(f.frames))
@@ -154,7 +152,7 @@ func TestNotifyDoesNotPostTheSameRowTwice(t *testing.T) {
 func TestNotifyStateSurvivesARestart(t *testing.T) {
 	f := newFixture(t)
 	f.queueJSON = fixtureHumanQueue
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 
 	var restarted [][]byte
 	next := NewBridge("pc-1", time.Second, nil,
@@ -163,8 +161,9 @@ func TestNotifyStateSurvivesARestart(t *testing.T) {
 			return 200, nil, nil
 		}, nil, f.dir, f.statePath, nil)
 	next.Runner = f.bridge.Runner
+	next.Rooms, next.Queue = f.bridge.Rooms, f.bridge.Queue
 	next.clock = f.clock.now
-	next.notifyHumans(nil)
+	next.notifyHumans()
 
 	if len(restarted) != 0 {
 		t.Fatalf("a restarted bridge posted %d frames, want 0: the sent-id record did not survive", len(restarted))
@@ -178,7 +177,7 @@ func TestNotifyRetriesARefusedPost(t *testing.T) {
 	f.queueJSON = fixtureHumanQueue
 	f.notifySteps = []step{{code: 500, answer: []byte(`{"detail":"no"}`)}}
 
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 	if len(f.frames) != 1 {
 		t.Fatalf("posted %d frames, want 1 attempt", len(f.frames))
 	}
@@ -187,7 +186,7 @@ func TestNotifyRetriesARefusedPost(t *testing.T) {
 	}
 
 	f.clock.plusSeconds(60)
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 	if len(f.frames) != 2 {
 		t.Fatalf("posted %d frames, want the refused row retried on the next cycle", len(f.frames))
 	}
@@ -204,7 +203,7 @@ func TestNotifySkipsARowWithNoText(t *testing.T) {
 	f.queueJSON = `[{"qitemId":"qitem-empty","state":"pending","destinationSession":"human@room-a",` +
 		`"summary":"  ","body":"\n  \n"}]`
 
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 
 	if len(f.frames) != 0 {
 		t.Fatalf("posted %d frames for a row with no text, want 0", len(f.frames))
@@ -222,7 +221,7 @@ func TestNotifyIgnoresARowAddressedToASeat(t *testing.T) {
 	f.queueJSON = `[{"qitemId":"qitem-seat","state":"pending","destinationSession":"room-a-reviewer@room-a",` +
 		`"summary":"this one is not the human's"}]`
 
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 
 	if len(f.frames) != 0 {
 		t.Fatalf("posted %d frames for a row addressed to a seat, want 0", len(f.frames))
@@ -236,7 +235,7 @@ func TestNotifyDoesNothingWithoutASender(t *testing.T) {
 	f.queueJSON = fixtureHumanQueue
 	f.bridge.Notify = nil
 
-	delay := f.bridge.Cycle(context.Background(), nil)
+	delay := f.bridge.Cycle(context.Background())
 
 	if len(f.frames) != 0 {
 		t.Fatalf("posted %d frames with no notification sender, want 0", len(f.frames))
@@ -246,31 +245,22 @@ func TestNotifyDoesNothingWithoutASender(t *testing.T) {
 	}
 }
 
-// TestNotifyNotesARigListItCouldNotRead: the sweep's rig list is a daemon read now, so the failure it must
-// survive is that read's - a daemon answering HTTP 500. It cannot name a rig to walk, so it posts nothing,
-// and it says so in the shape the rig read's failures already had; the cycle still returns on the normal
-// interval, because a notification the sweep could not assemble never fails the report beside it.
-func TestNotifyNotesARigListItCouldNotRead(t *testing.T) {
+// TestNotifyNotesARoomListItCouldNotRead: the sweep's room list is a runtime read, so the failure it must
+// survive is that read's. It cannot name a room to walk, so it posts nothing and says so; the cycle still
+// returns on the normal interval, because a notification the sweep could not assemble never fails the report
+// beside it.
+func TestNotifyNotesARoomListItCouldNotRead(t *testing.T) {
 	f := newFixture(t)
 	f.queueJSON = fixtureHumanQueue
-	broken := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, _ *http.Request) {
-		out.WriteHeader(http.StatusInternalServerError)
-		_, _ = io.WriteString(out, "no rig table here\n")
-	}))
-	t.Cleanup(broken.Close)
-	t.Setenv("OPENRIG_URL", broken.URL)
+	f.bridge.Rooms = func() ([]string, error) { return nil, errors.New("the runtime answered HTTP 500") }
 
-	delay := f.bridge.Cycle(context.Background(), nil)
+	delay := f.bridge.Cycle(context.Background())
 
 	if len(f.frames) != 0 {
-		t.Fatalf("posted %d frames with no rig list to walk, want 0", len(f.frames))
+		t.Fatalf("posted %d frames with no room list to walk, want 0", len(f.frames))
 	}
-	// The note carries the read's own sentence: the rig read's failures are already worded as "the <label>
-	// read asked <path> and got HTTP <status>", so this case asserts that sentence rather than the key.
-	for _, want := range []string{"rig unavailable: ", "the rig list read asked /api/ps", "HTTP 500"} {
-		if !strings.Contains(f.logged(), want) {
-			t.Errorf("the note is missing %q:\n%s", want, f.logged())
-		}
+	if !strings.Contains(f.logged(), "runtime unavailable: the runtime answered HTTP 500") {
+		t.Errorf("the note is missing the read's own sentence:\n%s", f.logged())
 	}
 	if delay != f.bridge.Interval {
 		t.Fatalf("delay = %v, want the normal interval %v", delay, f.bridge.Interval)
@@ -307,7 +297,7 @@ func TestNotifyRedactsAKnownSecretBeforeItLeavesTheMachine(t *testing.T) {
 		`"sourceSession":"room-a-lead@room-a",` +
 		`"summary":"the token is ` + value + ` - rotate it"}]`
 
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 
 	if len(f.frames) != 1 {
 		t.Fatalf("posted %d frames, want exactly 1", len(f.frames))
@@ -333,7 +323,7 @@ func TestNotifyDropsARowTheCloudWouldRefuseForever(t *testing.T) {
 	f.queueJSON = fixtureHumanQueue
 	f.notifySteps = []step{{code: 422, answer: []byte(`{"detail":"the payload is not a notification"}`)}}
 
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 
 	if len(f.frames) != 1 {
 		t.Fatalf("posted %d frames, want 1 attempt", len(f.frames))
@@ -347,7 +337,7 @@ func TestNotifyDropsARowTheCloudWouldRefuseForever(t *testing.T) {
 	}
 
 	f.clock.plusSeconds(60)
-	f.bridge.Cycle(context.Background(), nil)
+	f.bridge.Cycle(context.Background())
 	if len(f.frames) != 1 {
 		t.Fatalf("the terminally refused row was posted again: %d frames over two cycles, want 1", len(f.frames))
 	}

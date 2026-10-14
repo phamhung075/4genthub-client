@@ -160,6 +160,11 @@ impl IpcServer {
                 Err(e) => IpcResponse::err(e),
             },
 
+            IpcRequest::GetRoomLinks { room } => match supervisor.get_room_links(&room) {
+                Ok(links) => IpcResponse::success(serde_json::to_value(links).unwrap()),
+                Err(e) => IpcResponse::err(e),
+            },
+
             IpcRequest::ListSessions { room } => match supervisor.list_sessions(room.as_deref()) {
                 Ok(entries) => IpcResponse::success(serde_json::to_value(entries).unwrap()),
                 Err(e) => IpcResponse::err(e),

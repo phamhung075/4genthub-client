@@ -387,6 +387,9 @@ pub struct SessionEntry {
     pub model: Option<String>,
     #[serde(rename = "transcriptPath")]
     pub transcript_path: Option<String>,
+    /// Why the seat is not running, when it is not: the status bridge reports it as the seat's diagnostic text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// The activity half of a session entry, nested at `agentActivity.state` because that is where the
@@ -435,6 +438,8 @@ pub enum IpcRequest {
     SetSeatModel { room: String, seat: String, model: String },
     SendText { session: String, text: String },
     GetRoomStatus { room: String },
+    /// The links a room's spec declares between its seats, for the status bridge's topology report.
+    GetRoomLinks { room: String },
     ListAllRooms,
     /// The session list this daemon can answer for: every seat of every room it hosts, in the CLI's own
     /// keys (`SessionEntry`). A `room` narrows it to one room; `None` means every room this daemon hosts.

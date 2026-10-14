@@ -100,17 +100,17 @@ func TestPortedVerbsRefuseOnTheEnvironment(t *testing.T) {
 	}
 }
 
-// TestBridgeIsRefusedByThePlatformMatrixBeforeItIsRefusedAsUnported: `bridge` is the one pending
-// command that needs rig, so with no rig it must fail on the MATRIX - the reason a user can act on -
-// rather than on the porting note.
-func TestBridgeIsRefusedByThePlatformMatrixBeforeItIsRefusedAsUnported(t *testing.T) {
+// TestBridgeIsNotGovernedByThePlatformMatrix: the bridge reads its seats, topology and human queue from the
+// agenthub runtime, so a machine with no rig tool is not refused for it. With no rig on PATH the verb reaches
+// its own argument check (here, a missing cloud setting) instead of stopping at the matrix.
+func TestBridgeIsNotGovernedByThePlatformMatrix(t *testing.T) {
 	rigMissing(t)
 	var out, errOut bytes.Buffer
-	if code := run([]string{"bridge", "once"}, &out, &errOut); code != clientcmd.ExitUnavailable {
-		t.Fatalf("exit code = %d, want %d", code, clientcmd.ExitUnavailable)
+	if code := run([]string{"bridge", "once"}, &out, &errOut); code == clientcmd.ExitUnavailable {
+		t.Fatalf("exit code = %d: the bridge was refused as if it needed rig", code)
 	}
-	if !strings.Contains(errOut.String(), "rig is not on PATH") {
-		t.Errorf("message = %q, want the MATRIX's reason, not the porting note", errOut.String())
+	if strings.Contains(errOut.String(), "rig is not on PATH") {
+		t.Errorf("message = %q, want the bridge's own answer, not the matrix's reason", errOut.String())
 	}
 }
 
@@ -254,8 +254,6 @@ func TestHelpIsAnsweredBeforeThePlatformMatrix(t *testing.T) {
 	// for the matrix half.
 	for _, args := range [][]string{
 		{"ui"},
-		{"bridge"},
-		{"bridge", "once"},
 	} {
 		out.Reset()
 		errOut.Reset()

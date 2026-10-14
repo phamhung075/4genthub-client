@@ -625,6 +625,14 @@ impl RoomSupervisor {
     }
 
     /// Get all seat statuses for a room.
+    /// The links the room's spec declares between its seats. A room with none answers an empty list.
+    pub fn get_room_links(&self, room: &str) -> Result<Vec<SeatLink>, String> {
+        let content = fs::read_to_string(self.room_dir(room).join("spec.json"))
+            .map_err(|e| format!("cannot read room spec: {e}"))?;
+        let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        Ok(spec.links)
+    }
+
     pub fn get_room_status(&self, room: &str) -> Result<Vec<SeatStatus>, String> {
         let room_dir = self.room_dir(room);
         let spec_file = room_dir.join("spec.json");
@@ -806,6 +814,7 @@ impl RoomSupervisor {
                     runtime: status.runtime.clone(),
                     model: status.model.clone(),
                     transcript_path: status.transcript_path.clone(),
+                    detail: status.detail.clone(),
                 });
             }
         }
@@ -2137,6 +2146,25 @@ mod tests {
 
         assert!(supervisor.set_seat_model("lab", "nobody", "m").unwrap_err().contains("not found"));
         assert!(supervisor.set_seat_model("lab", "dev", " ").unwrap_err().contains("empty"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A room's links are read back from its spec, so the bridge reports the topology the room was started with.
+    #[tokio::test]
+    async fn room_links_are_read_from_the_room_spec() {
+        let dir = scratch("room-links");
+        write_spec(&dir, "lab", "dev");
+        let supervisor = supervisor_at(&dir);
+        assert!(supervisor.get_room_links("lab").unwrap().is_empty());
+
+        let spec_file = dir.join("rooms/lab/spec.json");
+        let mut spec: RoomSpec = serde_json::from_str(&fs::read_to_string(&spec_file).unwrap()).unwrap();
+        spec.links.push(SeatLink { from: "dev".into(), kind: "delegates_to".into(), to: "qa".into() });
+        fs::write(&spec_file, serde_json::to_string(&spec).unwrap()).unwrap();
+
+        let links = supervisor.get_room_links("lab").unwrap();
+        assert_eq!((links[0].from.as_str(), links[0].kind.as_str(), links[0].to.as_str()), ("dev", "delegates_to", "qa"));
+        assert!(supervisor.get_room_links("ghost").unwrap_err().contains("cannot read room spec"));
         let _ = fs::remove_dir_all(&dir);
     }
 

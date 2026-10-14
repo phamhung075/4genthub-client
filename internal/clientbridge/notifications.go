@@ -1,15 +1,12 @@
 package clientbridge
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
@@ -71,11 +68,6 @@ type HumanRow struct {
 // HumanDestination is the queue destination that addresses one rig's human.
 func HumanDestination(rigName string) string {
 	return humanDestinationPrefix + rigName
-}
-
-// ParseHumanRows reads `rig queue list --destination human@<rig> --json`.
-func ParseHumanRows(output string) ([]any, error) {
-	return parseItems(output, "rig queue list")
 }
 
 // parseItems unwraps a JSON listing: a list, or an object carrying `items`. Both shapes are what the
@@ -185,70 +177,67 @@ func notifyKey(row HumanRow) string {
 	return row.Rig + "/" + row.ID
 }
 
-// readRigTool runs one `rig` subcommand through the clientcmd.Rig contract when the dispatcher resolved
-// the rig tool, and through the Runner when a caller supplied one instead (the tests, and any
-// environment where rig is reached another way) - the same two paths readRig and readEdges take.
-func (b *Bridge) readRigTool(rig *clientcmd.Rig, args ...string) (string, error) {
-	if rig != nil {
-		return rig.Run(context.Background(), args...)
+// humanRooms lists the rooms this machine's runtime hosts, sorted so a cycle's work is deterministic.
+func (b *Bridge) humanRooms() []string {
+	rooms, err := b.Rooms()
+	if err != nil {
+		b.note("notify-rigs", fmt.Sprintf("runtime unavailable: %v", err))
+		return nil
 	}
-	return b.Runner(context.Background(), append([]string{"rig"}, args...)...)
+	sort.Strings(rooms)
+	return rooms
 }
 
-// humanRigs lists the rig names this machine can see, sorted so a cycle's work is deterministic, and
-// deduplicated because two entries naming one rig would read that rig's human queue twice.
-//
-// The names are the daemon's rig list (clientruntime.RigEntries), which is where this client reads every
-// other fact about a rig: a `rig ps --json` exec answered the same question from the rig tool's own
-// vocabulary, and the daemon's route is the one producer both readers can share. The daemon's default view
-// excludes archived rigs, which is what this asks for: an archived room's human is not notified.
-func (b *Bridge) humanRigs() []string {
-	entries, ok, err := clientruntime.RigEntries(context.Background(), false)
+// humanRows reads the rows addressed to one room's human. The listing is the rail's active rows, so closed
+// rows are not notified: a row the human has already answered is not news.
+func (b *Bridge) humanRows(room string) []HumanRow {
+	destination := HumanDestination(room)
+	items, err := b.Queue(room)
 	if err != nil {
-		b.note("notify-rigs", fmt.Sprintf("rig unavailable: %v", err))
-		return nil
-	}
-	if !ok {
-		// NO RECORDS: this shell names no OpenRig daemon, so there is no rig list to walk and no failure
-		// to report - the same absence the node read answers.
-		return nil
-	}
-	names := make([]string, 0, len(entries))
-	seen := map[string]bool{}
-	for _, entry := range entries {
-		if entry.Name == "" || seen[entry.Name] {
-			continue
-		}
-		seen[entry.Name] = true
-		names = append(names, entry.Name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// humanRows reads the rows addressed to one rig's human. The listing is the daemon's default view, so
-// closed rows are not notified: a row the human has already answered is not news.
-func (b *Bridge) humanRows(rig *clientcmd.Rig, rigName string) []HumanRow {
-	destination := HumanDestination(rigName)
-	output, err := b.readRigTool(rig, "queue", "list", "--destination", destination, "--json",
-		"--limit", strconv.Itoa(notifyRowsPerRig))
-	if err != nil {
-		b.note("notify-queue "+destination, fmt.Sprintf("rig unavailable: %v", err))
-		return nil
-	}
-	items, err := ParseHumanRows(output)
-	if err != nil {
-		b.note("notify-queue "+destination, "the queue listing was not readable")
+		b.note("notify-queue "+destination, fmt.Sprintf("runtime unavailable: %v", err))
 		return nil
 	}
 	rows := make([]HumanRow, 0, len(items))
 	for _, item := range items {
-		row, ok := HumanRowFrom(item, rigName)
+		row, ok := HumanRowFrom(item, room)
 		if ok {
 			rows = append(rows, row)
 		}
 	}
 	return rows
+}
+
+// runtimeRooms lists the rooms the runtime hosts.
+func runtimeRooms() ([]string, error) {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return nil, errRuntimeAbsent
+	}
+	return client.ListAllRooms()
+}
+
+// runtimeHumanQueue reads the active rows of one room's rail addressed to its human, in the item shape
+// HumanRowFrom reads.
+func runtimeHumanQueue(room string) ([]any, error) {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return nil, errRuntimeAbsent
+	}
+	destination, limit := HumanDestination(room), int64(notifyRowsPerRig)
+	rows, err := client.QueueList(room, clientruntime.QueueListFilter{
+		DestinationSession: &destination, ActiveOnly: true, Limit: &limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]any, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, map[string]any{
+			"qitemId": row.QitemID, "state": row.State, "summary": row.Summary, "body": row.Body,
+			"sourceSession": row.SourceSession, "destinationSession": row.DestinationSession,
+		})
+	}
+	return items, nil
 }
 
 // notifyHumans posts one frame for each human-addressed row that has not been posted yet.
@@ -259,16 +248,16 @@ func (b *Bridge) humanRows(rig *clientcmd.Rig, rigName string) []HumanRow {
 // failure or a 5xx is neither silently dropped nor counted as delivered, while a row the cloud would
 // refuse identically forever is not posted again on every cycle. The record is therefore "handled",
 // not strictly "delivered", and the note beside a terminal refusal carries the status and the answer.
-func (b *Bridge) notifyHumans(rig *clientcmd.Rig) {
+func (b *Bridge) notifyHumans() {
 	if b.Notify == nil {
 		return
 	}
 	posted, changed := 0, false
-	for _, rigName := range b.humanRigs() {
+	for _, rigName := range b.humanRooms() {
 		if posted >= notifyPostsPerCycle {
 			break
 		}
-		for _, row := range b.humanRows(rig, rigName) {
+		for _, row := range b.humanRows(rigName) {
 			if posted >= notifyPostsPerCycle {
 				break
 			}

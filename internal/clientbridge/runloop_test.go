@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,12 +34,6 @@ import (
 // against a field that could not have differed in the first place.
 const fixtureNodes = `[{"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp",` +
 	`"sessionStatus":"running","agentActivity":{"state":"working"},"latestError":"boom in seat-a"}]`
-
-// fixtureRigs is the daemon's rig list for the fixture machine: the room the fixture's nodes and human rows
-// name, in the keys the route really sends. The notification sweep reads it, so a test that asserts what a
-// cycle posted is also asserting which rigs the sweep walked.
-const fixtureRigs = `[{"rigId":"01TESTRIGROOMA","name":"room-a","rigName":"room-a","status":"running",` +
-	`"lifecycleState":"running","isArchived":false,"archivedAt":null,"nodeCount":1,"runningCount":1}]`
 
 // step is one scripted exchange: the status the transport answers and the body it answers with, OR the
 // error of a transport that never answered. A failure is an ERROR and not a status, because the status
@@ -111,29 +104,22 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 			// empty source, not a failed report.
 			return "", fmt.Errorf("herdr: not on PATH")
 		}
-		if f.queueJSON != "" && len(argv) > 1 && argv[1] == "queue" {
-			return f.queueJSON, nil
-		}
-		return f.rigJSON, nil
+		return "", fmt.Errorf("%s: not a tool this fixture runs", argv[0])
 	}
+	f.bridge.Nodes = func() ([]any, error) { return ParseRigNodes(f.rigJSON) }
+	f.bridge.Links = func(string) ([]rigEdge, error) { return nil, nil }
 	f.clock = &fakeClock{at: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	f.bridge.clock = f.clock.now
 
-	// THE DAEMON THE NOTIFICATION SWEEP TALKS TO. The sweep used to ask the rig tool for `ps --json`; it now
-	// reads the daemon's own /api/ps, so the fixture serves it: a stub beside the seam would let these
-	// cycles pass while the real read was broken. The list names the same machine the nodes describe, so the
-	// sweep and the report talk about one rig.
-	daemon := httptest.NewServer(http.HandlerFunc(func(out http.ResponseWriter, req *http.Request) {
-		if req.URL.Path != "/api/ps" {
-			out.WriteHeader(http.StatusNotFound)
-			return
+	// THE RUNTIME THE NOTIFICATION SWEEP TALKS TO: it hosts the room the nodes describe, and its rail holds
+	// the human rows the test scripts, so the sweep and the report talk about one room.
+	f.bridge.Rooms = func() ([]string, error) { return []string{"room-a"}, nil }
+	f.bridge.Queue = func(string) ([]any, error) {
+		if f.queueJSON == "" {
+			return nil, nil
 		}
-		out.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(out, fixtureRigs)
-	}))
-	t.Cleanup(daemon.Close)
-	t.Setenv("OPENRIG_URL", daemon.URL)
-	t.Setenv("OPENRIG_PORT", "")
+		return parseItems(f.queueJSON, "rig queue list")
+	}
 	return f
 }
 
@@ -174,7 +160,7 @@ func (f *fixture) reported(t *testing.T, i int) Payload {
 	return payload
 }
 
-func (f *fixture) cycle() time.Duration { return f.bridge.Cycle(context.Background(), nil) }
+func (f *fixture) cycle() time.Duration { return f.bridge.Cycle(context.Background()) }
 
 func (f *fixture) logged() string { return strings.Join(f.notes, "\n") }
 
@@ -392,7 +378,7 @@ func TestRunOnceExitCodes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, tc.step)
-			if got := f.bridge.Run(context.Background(), nil, true); got != tc.want {
+			if got := f.bridge.Run(context.Background(), true); got != tc.want {
 				t.Errorf("run once against %s exited %d, want %d", tc.name, got, tc.want)
 			}
 		})
@@ -407,7 +393,7 @@ func TestRunReturnsWhenTheContextIsDone(t *testing.T) {
 	cancel()
 
 	done := make(chan int, 1)
-	go func() { done <- f.bridge.Run(ctx, nil, false) }()
+	go func() { done <- f.bridge.Run(ctx, false) }()
 	select {
 	case code := <-done:
 		if code != clientcmd.ExitOK {
@@ -493,7 +479,7 @@ func TestAnUnreadableRecordReadsAsEmptyRatherThanInventingAHash(t *testing.T) {
 	}
 	f.bridge.state = ReadSyncState(f.bridge.StatePath)
 
-	payload := f.bridge.BuildPayload(nil)
+	payload := f.bridge.BuildPayload()
 	record := f.bridge.LocalRecord(payload.Seats)
 	if len(record) == 0 {
 		t.Fatalf("the fixture reported no seats to compare: %+v", payload.Seats)
@@ -595,7 +581,7 @@ func TestTheRecordSurvivesARestartAndNamesAChangedSeat(t *testing.T) {
 			t.Errorf("the changed seat's note does not carry %s: %q", want, logged)
 		}
 	}
-	payload := restarted.bridge.BuildPayload(nil)
+	payload := restarted.bridge.BuildPayload()
 	note := restarted.bridge.LocalRecord(payload.Seats)["room-a/seat-a"]
 	if note.Running != "run999" || note.LastInSync != "cloud456" || note.SinceLastInSync != "changed" {
 		t.Errorf("the local record reads %+v, want running=run999 last_in_sync=cloud456 since=changed", note)
