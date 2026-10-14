@@ -47,12 +47,12 @@ func TestPinnedHashUsedWhenValid(t *testing.T) {
 	}
 
 	// Half two, where the Python asserted it: the built payload's hash field, seat by seat.
-	nodes, err := ParseRigNodes(`[
+	nodes, err := parseItems(`[
 		{"rigName":"eng","logicalId":"eng.coder","runtime":"omp","sessionStatus":"running","agentActivity":{"state":"working"}},
 		{"rigName":"eng","logicalId":"eng.reviewer","runtime":"omp","sessionStatus":"running","agentActivity":{"state":"working"}}
-	]`)
+	]`, "rig ps")
 	if err != nil {
-		t.Fatalf("ParseRigNodes: %v", err)
+		t.Fatalf("unwrapping the two-seat fixture: %v", err)
 	}
 	seats, invalid, _ := BuildSeats(nodes, nil, pinsDir, false)
 	if invalid != 0 {

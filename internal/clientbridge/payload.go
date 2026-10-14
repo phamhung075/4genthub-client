@@ -269,12 +269,6 @@ func BuildAgents(raw []any) []AgentStatus {
 	return agents
 }
 
-// ParseRigNodes reads `rig ps --json --nodes` output: a list, or an object carrying `items`. The
-// unwrapping is shared with the queue reader (parseItems), so the two cannot disagree about it.
-func ParseRigNodes(output string) ([]any, error) {
-	return parseItems(output, "rig ps")
-}
-
 // ParseHerdrAgents reads `herdr api snapshot` output: result.snapshot.agents.
 func ParseHerdrAgents(output string) ([]any, error) {
 	var decoded any
