@@ -3,6 +3,28 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the grid's input loop delivers a typed line in process, and reads the name from the record
+
+### Changed
+- `internal/clientwatch/grid.go` — **the input loop's `rig send` exec is gone.** It ran `rig send <composed name>`:
+  after this client's rename `rig` resolves to this same binary, so the grid started a copy of itself and showed the
+  caller a subprocess refusal, and `fmt.Sprintf("%s-%s@%s", rig, seat, rig)` INVENTED the session name from a
+  convention instead of reading it from the seat's record — the defect the SEAT shape's send path records as fixed.
+  The line is now delivered through the send verb's own primitives (`ResolveSeatAddress`, then `RuntimeSendText` or
+  `OpenRigSend` according to the transport the record names), with `SendOptions.Sender` preserving what the exec used
+  to inherit from `OPENRIG_SESSION_NAME`. `sendLine` is a package var, so the tests drive the loop with no daemon.
+
+### Verified
+- `internal/clientwatch` — `TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop` now asserts the invariant rather than
+  the exec: **zero** `rig` processes, exactly the one line delivered, and `/hide` not sent. Green.
+- THE DECOY ARM, which is the criterion's hole closed by measurement: with `/tmp/go-decoy/rig` first on PATH and the
+  REAL `sendLine` (no seam replaced anywhere), one line typed into the loop produced an EMPTY decoy log and the
+  native refusal `failed: no record of room1/alpha: the room's runtime has no room "room1", and the daemon at
+  http://127.0.0.1:7433 does not list that seat; no name was composed - a seat's session name is read from the
+  record`. Before the conversion the same arm logged `DECOY rig INVOKED with: send room1-alpha@room1 hello seat`.
+- `go build ./...`, `go vet`, and `go test` for clientwatch, clientruntime, clientseat and clientps: all green. NOT
+  touched: `gofmt -l` names `internal/clientwatch/render_test.go` at this pin, pre-existing and not this unit's file.
+
 ## 2026-10-14 — the window gate's minors: the pane-gone refusal says what happened, and the heading it replaced is back
 
 ### Fixed

@@ -129,6 +129,18 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	}
 
 	sends := 0
+	// THE INVARIANT THIS ARM EXISTS FOR: a typed line is DELIVERED IN PROCESS, and not by starting a
+	// process. The shape this replaces ran `rig send <composed name>`, which after this client's rename
+	// is a self-call, and it invented the session name from a convention (`{rig}-{seat}@{rig}`) instead
+	// of reading it from the seat's record - the same defect the SEAT shape's send path records as fixed.
+	var delivered []string
+	previousSend := sendLine
+	sendLine = func(_ context.Context, rig, seat, text string) error {
+		delivered = append(delivered, rig+"/"+seat+": "+text)
+		return nil
+	}
+	t.Cleanup(func() { sendLine = previousSend })
+
 	stdin := strings.NewReader("hello there\n/hide\n")
 	stdout := &strings.Builder{}
 	if err := runInputLoop(context.Background(), "r", "lead", stdin, stdout); err != nil {
@@ -136,12 +148,13 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	}
 	for _, call := range fake.callsOf("rig") {
 		sends++
-		if got := strings.Join(call, " "); got != "rig send r-lead@r hello there" {
-			t.Errorf("sent %q", got)
-		}
+		t.Errorf("the loop started a rig process: %s", strings.Join(call, " "))
 	}
-	if sends != 1 {
-		t.Errorf("sends = %d, want 1 (the /hide line must not be sent)", sends)
+	if sends != 0 {
+		t.Errorf("rig processes = %d, want 0: the line must be delivered in process", sends)
+	}
+	if len(delivered) != 1 || delivered[0] != "r/lead: hello there" {
+		t.Errorf("delivered = %v, want exactly the one line to r/lead (the /hide line must not be sent)", delivered)
 	}
 	if !strings.Contains(stdout.String(), "sent") {
 		t.Errorf("stdout = %q", stdout.String())

@@ -3,12 +3,15 @@ package clientwatch
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // The compaction limits the token bar is drawn against. Each is read from the environment so it can be
@@ -293,10 +296,42 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 	return nil
 }
 
-// runInputLoop reads lines and sends each to its seat with `rig send`, the same route any other message
-// takes. An empty line skips; Ctrl-D or /hide leaves.
+// sendLine delivers one typed line to its seat, in process. A var so the tests drive the loop without a
+// daemon or a runtime.
+//
+// IT REPLACES AN EXEC OF `rig send`, and two things were wrong with that. After this client's rename `rig`
+// resolves to THIS SAME BINARY, so the grid started a copy of itself and read its refusal back through a
+// subprocess; and the name it used was INVENTED from a convention (`{rig}-{seat}@{rig}`) rather than read
+// from the seat's record - the defect the SEAT shape's send path records as fixed. So the name is resolved,
+// the record decides the transport (the runtime and the daemon own different panes; the wrong one cannot
+// address the pane at all), and the sender is preserved: the exec used to inherit OPENRIG_SESSION_NAME, and
+// a line typed at the grid is written BY that seat's watcher, so it must be stamped the same way.
+//
+// The three calls below are the send verb's own primitives, and this is the THIRD writer of that shape the
+// `saySender` comment in clientlifecycle names as the moment to consolidate it into the runtime client.
+// Consolidating means touching the gated send path, so it is left to its own unit rather than smuggled in
+// here.
+var sendLine = func(ctx context.Context, rig, seat, text string) error {
+	address, err := clientruntime.ResolveSeatAddress(ctx, rig, seat)
+	if err != nil {
+		return err
+	}
+	options := clientruntime.SendOptions{Sender: os.Getenv("OPENRIG_SESSION_NAME")}
+	switch address.Transport {
+	case clientruntime.TransportRuntime:
+		_, err = clientruntime.RuntimeSendText(address.SessionName, text, options)
+		return err
+	case clientruntime.TransportDaemon:
+		_, _, err = clientruntime.OpenRigSend(ctx, address.SessionName, text, options)
+		return err
+	default:
+		return errors.New(clientruntime.FallbackMissing())
+	}
+}
+
+// runInputLoop reads lines and sends each to its seat, the same route any other message takes. An empty
+// line skips; Ctrl-D or /hide leaves.
 func runInputLoop(ctx context.Context, rig, seat string, in io.Reader, out io.Writer) error {
-	target := fmt.Sprintf("%s-%s@%s", rig, seat, rig)
 	scanner := bufio.NewScanner(in)
 	for {
 		fmt.Fprintf(out, "%s > ", seat)
@@ -310,8 +345,7 @@ func runInputLoop(ctx context.Context, rig, seat string, in io.Reader, out io.Wr
 		if line == "" {
 			continue
 		}
-		_, err := execCommand(ctx, "rig", "send", target, line)
-		if err != nil {
+		if err := sendLine(ctx, rig, seat, line); err != nil {
 			message := err.Error()
 			if len(message) > 200 {
 				message = message[:200]
