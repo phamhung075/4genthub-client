@@ -90,7 +90,12 @@ fn published_state(path: &Path) -> Option<String> {
 /// The refusal used to print only the first world - "(no <path>)" - while a STALE record sat on disk, which
 /// tells a reader who can see that file nothing about why the start was refused. Kept as a function so both
 /// worlds are pinned by a test rather than by a live run that has to be staged to reach them.
-fn readiness_refusal(room: &str, seat: &str, path: &Path, launched_at: std::time::SystemTime) -> String {
+fn readiness_refusal(
+    room: &str,
+    seat: &str,
+    path: &Path,
+    launched_at: std::time::SystemTime,
+) -> String {
     let stale = fs::metadata(path)
         .and_then(|meta| meta.modified())
         .map(|modified| modified < launched_at)
@@ -446,7 +451,9 @@ impl RoomSupervisor {
             }
             if std::time::Instant::now() >= deadline {
                 match signal {
-                    Some(path) => return Err(readiness_refusal(room, &seat.seat_key, &path, launched_at)),
+                    Some(path) => {
+                        return Err(readiness_refusal(room, &seat.seat_key, &path, launched_at))
+                    }
                     // The other runtimes have no runner that could hand a readiness word back, so the proof they
                     // can give is the one taken above: the session is STILL ALIVE after the grace period. Reaching
                     // this point means that check passed on this very iteration, so the seat is up - and the grace
