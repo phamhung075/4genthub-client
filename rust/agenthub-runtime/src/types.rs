@@ -153,6 +153,88 @@ pub enum SeatLifecycleState {
     Dead,
 }
 
+/// THE ACTIVITY WORD: whether the agent in a seat is working, waiting for a person, at its prompt, or
+/// something this runtime cannot tell. It is the vocabulary the daemon already defines and the ruling
+/// already fixes - `working | needs_input | idle | unknown` (`seat-restart-in-place.ts:121`) - reused
+/// word for word, because a second vocabulary is the defect this type exists to remove.
+///
+/// A DIFFERENT AXIS FROM `SeatLifecycleState`, and folding them together is how a gate goes wrong: a seat
+/// is routinely `Running` (its pane is up, its agent handshook) and `Idle` (no turn in flight) at the same
+/// moment, and it is the second answer a quiet wait or a reseat needs. `Idle` here is the ONLY word that
+/// may authorise a destroyer; `Unknown` is NEVER EVIDENCE and may never authorise one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityWord {
+    /// A turn is in flight, or about to be: the agent is working, retrying, or blocked by something that
+    /// is not a person.
+    Working,
+    /// Mid-turn AND waiting for a person - a dialog this pane cannot answer. A destroyer here eats a turn
+    /// that was about to continue, which is why this word must never release one.
+    NeedsInput,
+    /// At the prompt with no turn in flight. The only word that authorises.
+    Idle,
+    /// Not evidence of anything: nothing was published, the agent is gone, or the word is one this build
+    /// does not know. Refuses by definition rather than by accident.
+    Unknown,
+}
+
+impl ActivityWord {
+    /// The daemon's own spelling, so a reader comparing this against `agentActivity.state` compares like
+    /// with like instead of against a private synonym.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ActivityWord::Working => "working",
+            ActivityWord::NeedsInput => "needs_input",
+            ActivityWord::Idle => "idle",
+            ActivityWord::Unknown => "unknown",
+        }
+    }
+
+    /// What the runner's OWN published state is in the activity vocabulary - one mapping, in one place,
+    /// because the runner is the producer of both words and they must never be derived twice.
+    ///
+    /// The left-hand words are the runner's (`runner::write_state`), the right-hand ones are the daemon's.
+    /// Read each line as a claim about the AGENT:
+    ///
+    ///   * `idle` - the turn ended and nothing is in flight: at the prompt.
+    ///   * `needs_input` - a dialog this pane cannot answer: mid-turn, blocked on a person.
+    ///   * `retrying` / `blocked` / `working` - work is in flight or is about to be retried.
+    ///   * every death (`agent_exited`, `agent_stdio_eof`, `agent_socket_closed`) and every word not
+    ///     listed - `Unknown`. A dead agent must never read as `idle`: the seat is not at a prompt, its
+    ///     agent is gone, and `Unknown` is what says so while refusing to authorise anything.
+    pub fn from_runner_state(state: &str) -> ActivityWord {
+        match state {
+            "idle" => ActivityWord::Idle,
+            "needs_input" => ActivityWord::NeedsInput,
+            "working" | "retrying" | "blocked" => ActivityWord::Working,
+            _ => ActivityWord::Unknown,
+        }
+    }
+
+    /// The word back from its own spelling: the reader's side of `as_str`, so a word read off the wire is
+    /// the same value a producer wrote, and a synonym this build does not know is `Unknown` rather than a
+    /// silent guess.
+    pub fn from_str_loose(word: &str) -> ActivityWord {
+        match word {
+            "idle" => ActivityWord::Idle,
+            "needs_input" => ActivityWord::NeedsInput,
+            "working" => ActivityWord::Working,
+            _ => ActivityWord::Unknown,
+        }
+    }
+
+    /// The word for a seat's published state document, `Unknown` when there is no document at all or the
+    /// document carries no word. Both cases are "a report that cannot tell", which is what `Unknown`
+    /// means; neither may be read as "not running".
+    pub fn from_state_document(document: Option<&serde_json::Value>) -> ActivityWord {
+        document
+            .and_then(|d| d.get("activity"))
+            .and_then(|a| a.as_str())
+            .map(ActivityWord::from_str_loose)
+            .unwrap_or(ActivityWord::Unknown)
+    }
+}
+
 /// The advisory a seat carries when the daemon has joined the seat's freshness with the room's rail: the
 /// seat is up, and the rail is holding work addressed to it that nobody has picked up.
 ///
@@ -187,6 +269,14 @@ pub struct SeatStatus {
     /// (`runner::state_file_path`) for an omp seat, or its session still existing for the other runtimes.
     pub pid: Option<u32>,
     pub state: SeatLifecycleState,
+    /// THE WORD A DESTROYER READS, on its own axis from `state`: parsed from the seat's own published
+    /// state document (`runner::state_file_path`) - the runner writes it beside `state` - and `Unknown`
+    /// when the seat published nothing or no word. Never a guess, and never a word that authorises.
+    pub activity: ActivityWord,
+    /// The runner's own word this activity was derived from, so a reader sees the evidence instead of
+    /// trusting the derivation. Omitted when the seat published nothing, because there is no source then.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity_source: Option<String>,
     /// Why a seat is not running, when it is not. A start that failed names its reason here instead of
     /// leaving a caller to guess from a `stopped` with no explanation.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -311,5 +401,97 @@ impl IpcResponse {
             error: Some(msg.into()),
             data: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ActivityWord;
+
+    /// THE VOCABULARY IS THE DAEMON'S, spelled the same way, because a second vocabulary is the defect this
+    /// type exists to remove: these four strings are what a reader compares against `agentActivity.state`,
+    /// and the ruling fixes them (`seat-restart-in-place.ts:121`).
+    #[test]
+    fn the_four_words_are_the_daemons_four_words() {
+        assert_eq!(ActivityWord::Working.as_str(), "working");
+        assert_eq!(ActivityWord::NeedsInput.as_str(), "needs_input");
+        assert_eq!(ActivityWord::Idle.as_str(), "idle");
+        assert_eq!(ActivityWord::Unknown.as_str(), "unknown");
+        // AND THE WIRE AGREES WITH THE ACCESSOR, because a word that serializes differently from `as_str` is
+        // two vocabularies wearing one name - exactly what a reader comparing the two would trip on.
+        for word in [
+            ActivityWord::Working,
+            ActivityWord::NeedsInput,
+            ActivityWord::Idle,
+            ActivityWord::Unknown,
+        ] {
+            assert_eq!(
+                serde_json::to_string(&word).expect("encode"),
+                format!("\"{}\"", word.as_str())
+            );
+        }
+    }
+
+    /// WHAT THE RUNNER'S OWN PUBLISHED STATES ARE, one case per word `runner::write_state` writes.
+    #[test]
+    fn the_runner_states_map_to_the_daemons_vocabulary() {
+        for (state, want) in [
+            ("idle", ActivityWord::Idle),
+            ("needs_input", ActivityWord::NeedsInput),
+            ("working", ActivityWord::Working),
+            ("retrying", ActivityWord::Working),
+            ("blocked", ActivityWord::Working),
+            // EVERY DEATH IS UNKNOWN, NEVER IDLE: the agent is gone, the seat is not at its prompt, and a
+            // word that authorised here would let a reseat read "nothing to lose" off a dead pane.
+            ("agent_exited", ActivityWord::Unknown),
+            ("agent_stdio_eof", ActivityWord::Unknown),
+            ("agent_socket_closed", ActivityWord::Unknown),
+            // And a word nobody here knows is not evidence of anything.
+            ("drifting", ActivityWord::Unknown),
+            ("", ActivityWord::Unknown),
+        ] {
+            assert_eq!(
+                ActivityWord::from_runner_state(state),
+                want,
+                "state {state:?}"
+            );
+        }
+    }
+
+    /// THE PARSE SIDE ROUND-TRIPS the four words, and anything else - a synonym some future producer
+    /// invents, a case the daemon never serves - lands on `Unknown` rather than being guessed at.
+    #[test]
+    fn the_word_round_trips_and_a_synonym_is_unknown() {
+        for word in [
+            ActivityWord::Working,
+            ActivityWord::NeedsInput,
+            ActivityWord::Idle,
+            ActivityWord::Unknown,
+        ] {
+            assert_eq!(ActivityWord::from_str_loose(word.as_str()), word);
+        }
+        assert_eq!(ActivityWord::from_str_loose("busy"), ActivityWord::Unknown);
+        assert_eq!(ActivityWord::from_str_loose("IDLE"), ActivityWord::Unknown);
+    }
+
+    /// A SEAT THAT PUBLISHED NOTHING, OR PUBLISHED NO WORD, IS `Unknown`: the two cases that must never be
+    /// read as "not running", and the reason this is parsed rather than re-derived from `state`.
+    #[test]
+    fn a_document_without_a_word_is_unknown() {
+        assert_eq!(
+            ActivityWord::from_state_document(None),
+            ActivityWord::Unknown
+        );
+        let without =
+            serde_json::json!({"state": "idle", "classification": "", "resume_attempts": 0});
+        assert_eq!(
+            ActivityWord::from_state_document(Some(&without)),
+            ActivityWord::Unknown
+        );
+        let with = serde_json::json!({"state": "idle", "activity": "idle"});
+        assert_eq!(
+            ActivityWord::from_state_document(Some(&with)),
+            ActivityWord::Idle
+        );
     }
 }

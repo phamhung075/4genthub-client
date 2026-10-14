@@ -149,6 +149,11 @@ struct SeatFacts {
     /// The runner's own word for what it is doing: `idle`, `retrying`, `needs_input`, `blocked`, or a
     /// death (`agent_exited`, …). `None` when the seat published nothing.
     published_state: Option<String>,
+    /// THE ACTIVITY WORD the seat published, in the daemon's vocabulary - the fact a quiet wait and a
+    /// reseat read. Only PARSED here, never derived: the runner writes it from the same transition as
+    /// `published_state`, so this side cannot invent a second mapping. `Unknown` when the seat published
+    /// nothing or published no word, which is never evidence.
+    activity: ActivityWord,
     /// The seat's freshness stamp: the state file's `updated_at`.
     last_active: Option<DateTime<Utc>>,
     /// The active rail rows addressed to this seat, by qitem id.
@@ -318,6 +323,10 @@ impl RoomSupervisor {
             model: seat.model.clone(),
             pid: None,
             state: SeatLifecycleState::Dead,
+            // A seat that never came up published nothing, so there is no word to report: `Unknown` is
+            // that answer, and it refuses by definition.
+            activity: ActivityWord::Unknown,
+            activity_source: None,
             detail: Some(reason),
             started_at: None,
             token_estimate: 0,
@@ -479,6 +488,11 @@ impl RoomSupervisor {
             model: seat.model.clone(),
             pid: Some(pid),
             state: SeatLifecycleState::Running,
+            // The pane is up; the agent has not published a turn yet, so there is no activity word to
+            // report and `Unknown` says exactly that. It is not `idle`: a seat that has not spoken has not
+            // said it is at its prompt.
+            activity: ActivityWord::Unknown,
+            activity_source: None,
             // RUNNING means the seat is up, and the detail says up ON WHAT EVIDENCE: absent for an omp seat, whose
             // state file is the agent's own word, and stated for the others, where the only fact taken was that the
             // pane outlived the grace and no agent has confirmed anything.
@@ -656,6 +670,8 @@ impl RoomSupervisor {
                 model: seat.model,
                 pid: None,
                 state,
+                activity: facts.activity,
+                activity_source: facts.published_state.clone(),
                 detail,
                 started_at: None,
                 token_estimate: 0,
@@ -694,6 +710,11 @@ impl RoomSupervisor {
         let published_state = published
             .as_ref()
             .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string));
+        // THE WORD, PARSED NOT DERIVED: the runner publishes it beside `state`, so a document without one
+        // (an old-format document, or a seat that never published) is `Unknown` - never a re-derivation
+        // from `state`, which would be a second mapping, and never `idle`, which would authorise a
+        // reseat on the strength of a document nobody could read.
+        let activity = ActivityWord::from_state_document(published.as_ref());
         // The runner's `updated_at` IS the seat's freshness: it is stamped every time the seat publishes
         // (turn ended, retry started, death seen), so it answers "when did this seat last do something".
         // The launch instant `start_seat` records is a different fact - when the pane was created - and it
@@ -718,6 +739,7 @@ impl RoomSupervisor {
         SeatFacts {
             alive,
             published_state,
+            activity,
             last_active,
             waiting_qitem_ids,
         }
@@ -1106,6 +1128,44 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// THE RUNTIME REPORTS THE ACTIVITY WORD - the producer's whole purpose. A seat's published state document
+    /// is served as `activity` in the daemon's vocabulary, with the runner's own word beside it as
+    /// `activity_source` so a reader sees the evidence instead of trusting the derivation; and a seat that
+    /// published nothing is `unknown`, never `idle`, because a document nobody can read must not authorise a
+    /// reseat. One document per word, written by the helper the other status tests use.
+    #[tokio::test]
+    async fn the_status_serves_the_activity_word_the_seat_published() {
+        let state_dir = scratch("activity-status");
+        let room = "activity-room";
+        let seat = seat_key("activity");
+        write_spec(&state_dir, room, &seat);
+        let supervisor = supervisor_at(&state_dir);
+
+        for (state, word) in [
+            ("idle", "idle"),
+            ("needs_input", "needs_input"),
+            ("retrying", "working"),
+            ("blocked", "working"),
+            ("agent_exited", "unknown"),
+        ] {
+            write_state_file(&state_dir, room, &seat, state, "2026-10-14T01:00:00.000Z");
+
+            let statuses = supervisor.get_room_status(room).expect("status");
+            let row = statuses.iter().find(|s| s.seat == seat).expect("the seat");
+
+            assert_eq!(
+                row.activity.as_str(),
+                word,
+                "the runner published {state:?}"
+            );
+            assert_eq!(
+                row.activity_source.as_deref(),
+                Some(state),
+                "the source word travels beside the word, so a reader sees the evidence"
+            );
+        }
+    }
+
     /// A scratch state dir under the system temp dir, unique per test, removed by the caller.
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -1154,6 +1214,9 @@ mod tests {
             run_dir.join(format!("{seat}.state.json")),
             serde_json::json!({
                 "state": state,
+                // THE WORD THE RUNNER PUBLISHES BESIDE IT, so a fixture document is shaped like a real one
+                // instead of leaving every status test's seat reading as `unknown` by accident.
+                "activity": ActivityWord::from_runner_state(state).as_str(),
                 "classification": "",
                 "resume_attempts": 0,
                 "updated_at": updated_at,
@@ -1352,6 +1415,7 @@ mod tests {
         let alert = alert_for(&SeatFacts {
             alive: true,
             published_state: Some("idle".to_string()),
+            activity: ActivityWord::Idle,
             last_active: Some(last_active),
             waiting_qitem_ids: ids.clone(),
         })
@@ -1366,6 +1430,7 @@ mod tests {
         let unknown = alert_for(&SeatFacts {
             alive: true,
             published_state: None,
+            activity: ActivityWord::Unknown,
             last_active: None,
             waiting_qitem_ids: vec!["qitem-c".to_string()],
         })
@@ -1376,6 +1441,7 @@ mod tests {
         assert!(alert_for(&SeatFacts {
             alive: false,
             published_state: Some("agent_exited".to_string()),
+            activity: ActivityWord::Unknown,
             last_active: Some(last_active),
             waiting_qitem_ids: ids.clone(),
         })
@@ -1384,6 +1450,7 @@ mod tests {
         assert!(alert_for(&SeatFacts {
             alive: true,
             published_state: Some("idle".to_string()),
+            activity: ActivityWord::Idle,
             last_active: Some(last_active),
             waiting_qitem_ids: Vec::new(),
         })

@@ -1103,6 +1103,11 @@ pub fn nudge_seat(
 pub fn write_state(state_path: &Path, state: &str, classification: &str, attempts: u32) -> Result<(), String> {
     let payload = serde_json::json!({
         "state": state,
+        // THE WORD, PUBLISHED WHERE THE STATE IS PUBLISHED, derived from the same string in the same call
+        // so the two cannot drift. A reader that wants the daemon's vocabulary reads this instead of
+        // deriving its own - a second derivation anywhere would be the second vocabulary this exists to
+        // prevent - and the runtime's own status serves it unchanged.
+        "activity": crate::types::ActivityWord::from_runner_state(state).as_str(),
         "classification": classification,
         "resume_attempts": attempts,
         "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -1468,6 +1473,10 @@ mod tests {
         assert_eq!(read["state"], "retrying");
         assert_eq!(read["classification"], "provider rate limit");
         assert_eq!(read["resume_attempts"], 2);
+        // THE WORD IS PUBLISHED WITH THE STATE, derived from the same string in the same call, so the two
+        // cannot drift: `retrying` is work in flight, which is `working` in the daemon's vocabulary - and a
+        // reader that compares this against `agentActivity.state` compares like with like.
+        assert_eq!(read["activity"], "working");
         assert!(read["updated_at"].as_str().is_some_and(|t| t.ends_with('Z')));
         // no temp file survives the publish
         assert!(!path.with_extension("json.tmp").exists());

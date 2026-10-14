@@ -3,6 +3,50 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the runtime grows the activity producer the readers' seam re-points onto
+
+### Added
+- `rust/agenthub-runtime/src/types.rs` — `ActivityWord`, the daemon's own vocabulary reused word for word
+  (`working | needs_input | idle | unknown`, `seat-restart-in-place.ts:121`). `from_runner_state` maps the runner's
+  published states onto it (`idle` → idle, `needs_input` → needs_input, `retrying`/`blocked`/`working` → working,
+  every death and every unrecognized word → unknown), `as_str` and the serde spelling are pinned to the same four
+  strings, `from_str_loose` reads a word back, and `from_state_document` reads it off a seat's document. `SeatStatus`
+  carries `activity` beside `activity_source` (the runner's own word), so a reader sees the evidence instead of
+  trusting the derivation.
+- `rust/agenthub-runtime/src/runner/mod.rs` — `write_state` publishes `activity` alongside `state`, derived from the
+  same string in the same call, so the two cannot drift and a second vocabulary cannot appear.
+
+### Changed
+- `rust/agenthub-runtime/src/supervisor/mod.rs` — `get_room_status` serves the seat's published word: `seat_facts`
+  parses it (never re-derives it), and a seat that published nothing, or published no word, is `unknown` — never
+  `idle`, because a document nobody could read must not authorise a reseat.
+
+### Verified
+- 59 crate tests green, including `the_status_serves_the_activity_word_the_seat_published` (a real `RoomSupervisor`
+  over a scratch room, one document per word — idle/needs_input/working/unknown — each asserted with its source word)
+  and four vocabulary tests (the four strings, the per-state mapping, the parse round-trip, the absent-word case).
+- LIVE, the patched binary's own `status` verb over a scratch room with one seat per word:
+
+  ```
+  a  state=stopped  activity=idle         activity_source=idle
+  b  state=stopped  activity=needs_input  activity_source=needs_input
+  c  state=stopped  activity=working      activity_source=retrying
+  d  state=stopped  activity=unknown      activity_source=agent_exited
+  ```
+
+  and, asked once before that, with no document published for the seats, the same verb reported `unknown` with the
+  source `agent_socket_closed` — the never-evidence rule holding on the wire, not only in a test. Note the lifecycle
+  column: these seats were `stopped` while their activity words were definite, which is the whole reason the two axes
+  are separate fields.
+- `rustfmt --check` hunk counts unchanged on every file touched (types 2→2, runner 34→34, supervisor 20→20); the
+  crate-wide fmt-red is pre-existing and untouched.
+
+### Not claimed
+- A strict same-seat round-trip against the daemon's `agentActivity.state` needs a seat that is BOTH in a native room
+  and registered with the OpenRig daemon, and that conjunction arrives with the cutover. Measured here is the
+  vocabulary (byte-identical spellings, pinned by test) and the daemon's live words for this rig tonight
+  (idle/running/unknown), which are exactly what this mapping produces from the corresponding runner states.
+
 ## 2026-10-14 — the idle readers ask the daemon, not a program found on PATH
 
 ### Changed
