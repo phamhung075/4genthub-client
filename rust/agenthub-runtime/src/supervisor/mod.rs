@@ -280,6 +280,14 @@ impl RoomSupervisor {
 
         let room_dir = self.room_dir(&room_name);
         fs::create_dir_all(&room_dir).map_err(|e| format!("cannot create room dir: {e}"))?;
+        // THE ROOM'S LAYOUT IS CREATED WITH THE ROOM, not left to whichever writer happens to get there
+        // first: `seats/`, `logs/` and `run/` are the room's own shape, read by the acceptance and by an
+        // operator, and a `logs/` that appeared only once a runner had a diagnostic to write made "no log
+        // yet" and "no such directory" the same answer.
+        for dir in ["seats", "logs", "run"] {
+            fs::create_dir_all(room_dir.join(dir))
+                .map_err(|e| format!("cannot create the room's {dir} dir: {e}"))?;
+        }
 
         let mut final_spec = spec;
         let spec_file = room_dir.join("spec.json");
@@ -1749,6 +1757,42 @@ mod tests {
     /// tokio runtime (`#[tokio::test]`) even where nothing is awaited.
     fn supervisor_at(state_dir: &Path) -> RoomSupervisor {
         RoomSupervisor::new(state_dir, HookBus::new(state_dir.join("audit"), 8))
+    }
+
+    /// THE ROOM'S LAYOUT IS PART OF STARTING THE ROOM, not something its first writer creates: the
+    /// acceptance asserts `seats/`, `logs/` and `run/` immediately after `up`, and run 4 was starved by
+    /// that single assertion because `logs/` existed nowhere until a writer happened to need it.
+    ///
+    /// The room here has NO SEATS, so `start_room` refuses - "started no seat (0 of 0)" is its own answer
+    /// and not a silent success - and the point of the test is that the layout is already in place when it
+    /// answers, exactly as the room's directory and `spec.json` are.
+    #[tokio::test]
+    async fn starting_a_room_creates_its_seats_logs_and_run_directories() {
+        let state_dir = scratch("room-layout");
+        let spec: RoomSpec = serde_json::from_value(serde_json::json!({
+            "room": "layout",
+            "seats": [],
+            "links": []
+        }))
+        .expect("spec");
+
+        let refused = supervisor_at(&state_dir)
+            .start_room(spec)
+            .expect_err("a room with no seats is refused rather than reported as started");
+        assert!(
+            refused.contains("started no seat"),
+            "the refusal names what happened: {refused}"
+        );
+
+        let room_dir = state_dir.join("rooms").join("layout");
+        for dir in ["seats", "logs", "run"] {
+            assert!(
+                room_dir.join(dir).is_dir(),
+                "{dir}/ is part of the room's shape, not something its first writer creates: {}",
+                room_dir.display()
+            );
+        }
+        let _ = fs::remove_dir_all(&state_dir);
     }
 
     /// A MULTI-LINE MESSAGE TO A RUNNER SEAT IS ONE `text` FRAME IN ITS MAILBOX, not one pane line per line:
