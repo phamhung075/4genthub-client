@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -742,7 +743,8 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 	return out
 }
 
-// Header is the seat name and its token bar as a line of the feed, repeated when the reading moves.
+// Header is the seat name, model and token bar: a line of the feed, repeated when the reading moves, or
+// the title of the pane the feed runs in.
 //
 // A pinned row needs a terminal scroll region, and lines scrolled inside a region never reach the
 // scrollback, so the pane could not be scrolled. A plain line keeps the scrollback.
@@ -756,12 +758,20 @@ type Header struct {
 	lastText string
 	lastAt   time.Time
 
+	// pane, when set, takes the title instead of the feed: the grid pane's own title carries it.
+	pane func(title string)
+
 	// now and out are the clock and the sink, so a test can drive the repeat rule without waiting.
 	now func() time.Time
 	out func(string)
 }
 
-const headerRepeat = 20 * time.Second
+const (
+	headerRepeat = 20 * time.Second
+	paneRepeat   = 5 * time.Second
+)
+
+var ansiSequence = regexp.MustCompile("\033\\[[0-9;]*m")
 
 func newHeader(name string, colour, limit int, model string, out func(string)) *Header {
 	return &Header{name: name, colour: colour, limit: limit, model: model, now: time.Now, out: out}
@@ -783,6 +793,14 @@ func (h *Header) title() string {
 func (h *Header) draw() {
 	title := h.title()
 	waited := h.now().Sub(h.lastAt)
+	if h.pane != nil {
+		if plain := ansiSequence.ReplaceAllString(title, ""); plain != h.lastText && waited >= paneRepeat {
+			h.pane(plain)
+			h.lastText = plain
+			h.lastAt = h.now()
+		}
+		return
+	}
 	if title != h.lastText && waited >= headerRepeat {
 		h.out(title)
 		h.lastText = title

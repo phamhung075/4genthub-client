@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"time"
 )
 
@@ -40,6 +41,9 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 		logPath, _ := seatLog(root, s.rig, seats[0])
 		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModel(logPath),
 			func(line string) { fmt.Fprintln(out, line) })
+		if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
+			header.pane = func(title string) { _, _ = herdr(ctx, "pane", "rename", paneID, title) }
+		}
 	}
 
 	type position struct {

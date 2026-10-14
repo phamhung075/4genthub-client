@@ -37,9 +37,11 @@ log reader for (`codex`, `agy`) keeps its pane and its header and shows no event
 
 ## What a line means
 
-Each pane starts with a header naming the seat and its model, and a bar of its context use against
-the compact limit. Every event line after that is prefixed with the same percentage, so the meter
-does not scroll out of view.
+Each grid pane is titled with the seat, its model and a bar of its context use against the compact
+limit (`== lead | deepseek-flash ==  ████████░░░░░░░░ 50% 75k/150k to compact`), renamed at most every
+5 seconds as the reading moves. The feed itself carries no header line there. A feed in a plain
+terminal (no `HERDR_PANE_ID`) prints the same line into the stream instead. Every event line is
+prefixed with the percentage, so the meter is never out of view.
 
 | Mark | Meaning |
 |---|---|

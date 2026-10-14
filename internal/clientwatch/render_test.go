@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The feed renderer's contract, ported from tests/test_watch_tools.py test-for-test. Every test here
@@ -498,5 +499,34 @@ func TestEachKindOfToolHasItsOwnGlyph(t *testing.T) {
 	}
 	if len(seen) != 7 {
 		t.Errorf("glyphs are not distinct per kind: %v", seen)
+	}
+}
+
+func TestAPaneHeaderGoesToThePaneTitleAsPlainText(t *testing.T) {
+	now := time.Unix(1000, 0)
+	titles := []string{}
+	streamed := []string{}
+	header := newHeader("lead", 120, 150000, "deepseek-flash", func(line string) { streamed = append(streamed, line) })
+	header.now = func() time.Time { return now }
+	header.pane = func(title string) { titles = append(titles, title) }
+	used := 75000
+	header.setTokens(&used)
+	header.draw()
+	now = now.Add(time.Second)
+	used = 90000
+	header.draw()
+	now = now.Add(paneRepeat)
+	header.draw()
+	if len(streamed) != 0 {
+		t.Errorf("the header was also written to the feed: %v", streamed)
+	}
+	if len(titles) != 2 {
+		t.Fatalf("got %d renames, want 2 (the second change waits out the interval): %v", len(titles), titles)
+	}
+	if want := "== lead | deepseek-flash ==  ████████░░░░░░░░ 50% 75k/150k to compact"; titles[0] != want {
+		t.Errorf("title %q, want %q", titles[0], want)
+	}
+	if strings.Contains(titles[1], "\033") {
+		t.Errorf("escape sequences in the pane title: %q", titles[1])
 	}
 }
