@@ -5,7 +5,8 @@ target seat was mid-turn. This is the client's half of the two found in the live
 U3 harness: the text was refused by the agent (`Agent is already processing. Use steer() or followUp() …`) and
 dropped, while the receipt named the target, the state file said `idle`, and the transcript, pane, queue and
 logs held nothing. The record of the finding is
-`CHANGELOG/2026-10-14--send-claims-a-submission-the-runner-refused.md`; the queue-instead-of-drop, the
+`CHANGELOG/2026-10-14--send-claims-a-submission-the-runner-refused.md` in the product repo (`4genthub`, not
+this client repo); the queue-instead-of-drop, the
 refusal reported back and mid-turn activity published are the runtime's half.
 
 ## What was wrong
@@ -56,9 +57,11 @@ successful send to a runner seat.
 `outcome: relayed` is reachable only from `RoomSupervisor::deliver_text`'s runner branch, added by
 `11438a5` ("deliver send as one text frame to a runner seat", 2026-10-14 21:11:16 +0200). The binary the room
 runs — `~/.local/bin/agenthub-runtime`, sha256 `c1272c6c…`, built 21:09:11 +0200, and `/proc/<pid>/exe` for
-all six live processes — **predates it**: its strings contain no `send-{}-{}`, the id format string that exists
-only at `rust/agenthub-runtime/src/supervisor/mod.rs:881`. So the daemon serving the room today answers the
-pane path for every seat, `submitted` included, **including when the agent refused the prompt** — which is why
+every live runtime process at that minute (six then; the count moves with the room, and what that check
+establishes is that every one of them predates it) — **predates it**: its strings contain no `send-{}-{}`, the
+id format string that exists only at `rust/agenthub-runtime/src/supervisor/mod.rs:881`. So the daemon serving
+the room today answers the pane path for every seat, `submitted` included, **including when the agent refused
+the prompt** — which is why
 the harness log carries `{"delivered":"agenthub--c2-lab--dev","outcome":"submitted"}` beside that seat's runner
 printing `gave up: the agent refused the turn`. This client change closes the receipt on a runner-aware
 runtime (any install at or after `11438a5`); on the older daemon the same case still reads `Sent to`, and that
