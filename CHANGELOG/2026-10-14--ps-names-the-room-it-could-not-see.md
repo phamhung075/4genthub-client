@@ -22,8 +22,11 @@ Against this rig's own live room the verb is unchanged: five seats, empty stderr
 ### The state-root half stays owed, and the reason is a runtime one
 
 **CORRECTED 2026-10-14, after the architect's ruling (ARCH-RULING-u6-socket-selection-explicit-S-2026-10-14.md) and
-a direct re-measurement: the paragraph that stood here said tmux "ignores TMUX_TMPDIR" on this box. That is FALSE,
-and it was inherited from the reverted attempt's message and reproduced by me instead of being tested.** Measured
+a direct re-measurement.** The shas this corrects, named because a commit message cannot be edited without a
+history rewrite: **`3f07cc2`** is where this entry was first committed with the wrong sentence, and **`28a93d1`**'s
+message is where the reading came from — a reverted attempt whose "measured failing" conclusion was inherited by a
+later author and then reproduced by me instead of re-tested. The offending paragraph said tmux "ignores TMUX_TMPDIR"
+on this box. That is FALSE.** Measured
 both ways on tmux 3.4 here:
 
 - the base directory EXISTS: `mkdir -p /tmp/p4 && TMUX_TMPDIR=/tmp/p4 tmux -L p ls` → the error names
