@@ -53,6 +53,7 @@ with the context percentage, shown only when it crosses a 10% step.
 | `← <tool> text` | the result, dim, headed by the tool that answered and the call's brief and duration. A read shows `· N lines`; a shell result shows its first 3 lines; `--expand` shows every result in full |
 | `↺ repeated ×N` | the same event printed N more times in a row, folded into one |
 | a dim rule | a turn separator before each `◂ in` |
+| `── ✎ write ────` | a rule in the kind's colour, printed whenever the next tool call is a different kind from the last one (read, search, write, shell, web, delegate, ask, mcp, other) |
 | `✗ <tool> text` | an error result, red |
 | an orange `HOOK <name>` block | a reminder or notice the runtime injected into the seat (the `<system-reminder>` tags are removed; three lines at most) |
 | an orange `RULE` block | a rule the runtime injected, by name |

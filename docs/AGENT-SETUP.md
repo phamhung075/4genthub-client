@@ -33,7 +33,7 @@ is `https://www.4genthub.com/`) and for the account's key. Both are theirs to gi
 
 ```bash
 4genteam --help            # the client; prints the verb list
-4genteam doctor            # reports safeguard stack health (rigd, compact, watchdog, bridge)
+4genteam doctor            # reports safeguard stack health (rigd, compact, watchdog, roomguard, bridge)
 tmux -V
 herdr --version
 curl -fsS <SERVER-URL>/health

@@ -40,8 +40,10 @@ const (
 	Compact  = "compact"
 	Watchdog = "watchdog"
 	Messages = "messages"
-	Bridge   = "bridge"
-	Rigd     = "rigd"
+	// RoomGuard is the idle-room guard: it asks Jev when every seat is idle and nudges a stuck seat.
+	RoomGuard = "roomguard"
+	Bridge    = "bridge"
+	Rigd      = "rigd"
 )
 
 // The four states of 7.2. There is no fifth, and `running` is the ONLY state doctor accepts.
@@ -64,6 +66,8 @@ const (
 	// MessagesEvery is the seat deliverer's pass interval, 10 s: one pass over every running seat of one
 	// rig, then one heartbeat, then this sleep - the cast of `sync messages --rig R --watch`.
 	MessagesEvery = 10 * time.Second
+	// RoomGuardEvery is the idle guard's pass interval, 30 s.
+	RoomGuardEvery = 30 * time.Second
 	// BridgeBackoffCap is the bridge's own retry cap, 120 s (clientbridge.MaxBackoffSecs).
 	BridgeBackoffCap = 120 * time.Second
 	// RigdHeartbeat is the socket heartbeat rigd answers to, 25 s (the server's ready.heartbeat_s).
@@ -72,12 +76,12 @@ const (
 
 // Safeguards is the list a report walks: the rig-scoped rows first, then the two machine-scoped rows.
 // One bridge per machine and one rigd per machine, which is why those two carry no rig.
-func Safeguards() []string { return []string{Compact, Watchdog, Messages, Bridge, Rigd} }
+func Safeguards() []string { return []string{Compact, Watchdog, Messages, RoomGuard, Bridge, Rigd} }
 
 // RigScoped reports whether a safeguard runs once per rig rather than once per machine. It decides both
 // the heartbeat file's name and whether the row carries a rig at all.
 func RigScoped(safeguard string) bool {
-	return safeguard == Compact || safeguard == Watchdog || safeguard == Messages
+	return safeguard == Compact || safeguard == Watchdog || safeguard == Messages || safeguard == RoomGuard
 }
 
 // SilentAfter is 7.4's rule in one line: silent means a heartbeat age past three times the child's
@@ -95,6 +99,8 @@ func DefaultSilentAfter(safeguard string) time.Duration {
 		return SilentAfter(WatchdogInterval)
 	case Messages:
 		return SilentAfter(MessagesEvery)
+	case RoomGuard:
+		return SilentAfter(RoomGuardEvery)
 	case Bridge:
 		return SilentAfter(BridgeBackoffCap)
 	case Rigd:
@@ -113,6 +119,8 @@ func Pattern(safeguard, rig string) string {
 		return "compact-run --rig " + rig
 	case Watchdog:
 		return "^[^ ]*4genteam watchdog " + rig + " --watch"
+	case RoomGuard:
+		return "^[^ ]*4genteam idle-run --rig " + rig
 	case Messages:
 		return "^[^ ]*4genteam sync messages --rig " + rig + " --watch"
 	case Bridge:
@@ -326,11 +334,12 @@ func (e Env) recorded(safeguard, rig string) (Health, bool) {
 // will grow a bounded read; the computation itself touches only local files and pgrep.
 func Verify(ctx context.Context, env Env) []Health {
 	_ = ctx
-	rows := make([]Health, 0, len(env.Rigs)*3+2)
+	rows := make([]Health, 0, len(env.Rigs)*4+2)
 	for _, rig := range env.Rigs {
 		rows = append(rows, verifyRow(env, Compact, rig))
 		rows = append(rows, verifyRow(env, Watchdog, rig))
 		rows = append(rows, verifyRow(env, Messages, rig))
+		rows = append(rows, verifyRow(env, RoomGuard, rig))
 	}
 	rows = append(rows, verifyRow(env, Bridge, ""), verifyRow(env, Rigd, ""))
 	return rows

@@ -316,6 +316,7 @@ type seatView struct {
 	bucketSet bool
 	last      string
 	repeated  int
+	kind      string // kind of the last tool call shown, so a change of kind is marked
 }
 
 // stamp is the clock of a line: shown when the minute changes and blank under it.
@@ -342,3 +343,29 @@ func (v *seatView) meter(tag string, pct int) string {
 }
 
 func visibleLen(text string) int { return len([]rune(ansiSequence.ReplaceAllString(text, ""))) }
+
+// callStyles are the styles a tool call can wear, found again by the glyph that heads its first line.
+var callStyles = []toolStyle{readStyle, searchStyle, writeStyle, shellStyle, webStyle, delegateStyle, askStyle, mcpStyle, otherStyle}
+
+// callKind is the style of an event that is a tool call, judged by its first glyph; ok is false for a
+// result, a hook, a thought or a message.
+func callKind(text string) (toolStyle, bool) {
+	head := strings.TrimSpace(ansiSequence.ReplaceAllString(strings.SplitN(text, "\n", 2)[0], ""))
+	for _, style := range callStyles {
+		if strings.HasPrefix(head, style.glyph+" ") {
+			return style, true
+		}
+	}
+	return toolStyle{}, false
+}
+
+// kindRule is the divider printed when the work changes kind: the kind's glyph and name in its own colour
+// on a rule, so a run of reads, then an edit, then a shell command is seen at a glance.
+func kindRule(style toolStyle, width int) string {
+	label := " " + style.glyph + " " + style.kind + " "
+	fill := min(width, 60) - len([]rune(label)) - 2
+	if fill < 2 {
+		fill = 2
+	}
+	return fg(style.colour) + "──" + label + strings.Repeat("─", fill) + reset
+}

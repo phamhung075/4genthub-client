@@ -77,3 +77,17 @@ func TestOnlyRefusesAnUnknownKind(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestAChangeOfToolKindGetsALabelledRule(t *testing.T) {
+	read, ok := callKind(fg(117) + "◉ read" + reset + " path")
+	if !ok || read.kind != "read" {
+		t.Fatalf("read call not recognised: %v %v", read, ok)
+	}
+	if _, ok := callKind(fg(249) + "← read" + reset); ok {
+		t.Error("a result was taken for a call")
+	}
+	rule := plain(kindRule(writeStyle, 80))
+	if !strings.Contains(rule, "✎ write") || !strings.HasPrefix(rule, "──") {
+		t.Errorf("rule = %q", rule)
+	}
+}
