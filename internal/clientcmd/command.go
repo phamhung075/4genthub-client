@@ -86,8 +86,16 @@ func CodeOf(err error, fallback int) int {
 	return fallback
 }
 
-// Run executes rig with an ARGUMENT LIST - the only place any command starts rig, so the
-// no-shell-string rule has one home.
+// Run executes rig with an ARGUMENT LIST, so the no-shell-string rule has one home - and the Prefix
+// route (the `wsl.exe -e rig` form a native-Windows machine reaches OpenRig through) rides with every
+// argument list a caller builds here.
+//
+// IT IS NOT THE ONLY PLACE A COMMAND STARTS RIG. Three verbs resolve and start the program themselves -
+// clientsync/bundleverb.go (LookPath then exec.Command), clientsync/switchverb.go and
+// clientsync/respawnverb.go (the same shape) - and so they do not carry Prefix. They are NOT routed back
+// through this engine on purpose: each is slated to lose its exec entirely (bundle is a verb rewrite,
+// switch and respawn lose their rig legs), and adding a call to an engine whose caller is being deleted
+// would be work on a path that is going away. Until then the door count is four, not one.
 func (r *Rig) Run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, r.Program, append(append([]string{}, r.Prefix...), args...)...)
 	out, err := cmd.CombinedOutput()
