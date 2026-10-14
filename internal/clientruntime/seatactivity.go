@@ -195,6 +195,38 @@ func RoomNodes(ctx context.Context, room string) ([]map[string]any, bool, error)
 	return daemonNodes(ctx, room)
 }
 
+// SeatNode is ONE seat's row of a room's node records: the reading a verb needs when its question is about
+// a single seat rather than the whole room - `sync switch` asks which canonical session a seat carries,
+// and `sync respawn` asks whether that seat's agent has died. It is RoomNodes narrowed to one row, so a
+// caller asks the same question of the same transports and hears the same three answers.
+//
+// The narrowing is the reason it is its own function rather than a loop at each call site: what a caller
+// does with a seat that is NOT there is a decision, and a row lookup copy-pasted into two verbs is how the
+// two come to disagree about whether that is a refusal or a shrug. It stays out of the seat's absence:
+//
+//   - found && err == nil: the room's records list this seat, and row is its row.
+//   - !found && err == nil: the records do NOT list this seat - whether they listed other seats or were
+//     empty, which for a question about ONE seat is the same answer: this client cannot see that seat. A
+//     caller for which that means "there is nothing to act on" proceeds on it.
+//   - err != nil: the read was ATTEMPTED and FAILED. That is NOT the answer "no such seat" - the read
+//     could not be made at all - so a caller must refuse in those words rather than treat it as a room
+//     without that seat.
+func SeatNode(ctx context.Context, room, seat string) (map[string]any, bool, error) {
+	nodes, ok, err := RoomNodes(ctx, room)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	for _, node := range nodes {
+		if name, _ := node["seat"].(string); name == seat {
+			return node, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
 // openRigRigID resolves a rig's name to the id the node route is keyed on, over GET /api/ps.
 func openRigRigID(ctx context.Context, rig string) (string, string) {
 	var rows []openRigRigRow

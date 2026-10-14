@@ -14,6 +14,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 const (
@@ -50,8 +51,9 @@ type rigResult struct {
 // deliberately not the same seam: the package one returns stdout only and folds a non-zero exit into
 // its error message, and that is not enough here. `rig seat launch` can start the occupant and still
 // exit non-zero, so respawn decides on the seat's own state afterwards and needs the raw stderr (its
-// last line is what an operator is shown) with the exit beside it. A var so a test drives the verb
-// without a rig.
+// last line is what an operator is shown) with the exit beside it. IT CARRIES THE COMMAND LEG ONLY: the
+// seat's record is read over the client's own transport (clientruntime.SeatNode), so no `rig ps` travels
+// through here any more. A var so a test drives the verb without a rig.
 var runRigCapture = func(args ...string) rigResult {
 	path, err := exec.LookPath("rig")
 	if err != nil {
@@ -66,7 +68,7 @@ var runRigCapture = func(args ...string) rigResult {
 
 // RunRespawnVerb is `sync respawn`: the deliberate primitive for a seat whose agent died outside
 // OpenRig's own stop, since OpenRig has no automatic trigger for that.
-func RunRespawnVerb(_ context.Context, args []string, stdout, stderr io.Writer) int {
+func RunRespawnVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {
 			_, _ = io.WriteString(stdout, respawnUsage)
@@ -79,7 +81,7 @@ func RunRespawnVerb(_ context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	return respawn(room, seat, after, reason, allowPeak, stdout, stderr)
+	return respawn(ctx, room, seat, after, reason, allowPeak, stdout, stderr)
 }
 
 func parseRespawnArgs(args []string) (room, seat string, after float64, reason string, err error) {
@@ -127,7 +129,7 @@ func parseRespawnArgs(args []string) (room, seat string, after float64, reason s
 	return positionals[0], positionals[1], after, reason, nil
 }
 
-func respawn(room, seat string, after float64, reason string, allowPeak bool, stdout, stderr io.Writer) int {
+func respawn(ctx context.Context, room, seat string, after float64, reason string, allowPeak bool, stdout, stderr io.Writer) int {
 	room, err := ValidateName("room", room)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
@@ -140,7 +142,7 @@ func respawn(room, seat string, after float64, reason string, allowPeak bool, st
 	}
 	deadline := time.Now().Add(time.Duration(after * float64(time.Second)))
 	for {
-		node, err := seatNode(room, seat)
+		node, err := seatNode(ctx, room, seat)
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 			return clientcmd.ExitRemote
@@ -173,7 +175,7 @@ func respawn(room, seat string, after float64, reason string, allowPeak bool, st
 		}
 		time.Sleep(time.Duration(respawnPollSeconds * float64(time.Second)))
 	}
-	session, err := canonicalSession(room, seat)
+	session, err := canonicalSession(ctx, room, seat)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync respawn: %v\n", err)
 		return clientcmd.ExitRemote
@@ -192,7 +194,7 @@ func respawn(room, seat string, after float64, reason string, allowPeak bool, st
 		}
 		// The launch may have started the occupant and still exited non-zero, so the seat's state
 		// decides - an automated caller must not read a successful respawn as a failure.
-		node, err := seatNode(room, seat)
+		node, err := seatNode(ctx, room, seat)
 		if err != nil {
 			node = nil
 		}
@@ -209,53 +211,21 @@ func respawn(room, seat string, after float64, reason string, allowPeak bool, st
 	return clientcmd.ExitOK
 }
 
-// seatNode is the `rig ps` node for room.seat, or nil when OpenRig does not list it.
-func seatNode(room, seat string) (map[string]any, error) {
-	result := runRigCapture("ps", "--json", "--nodes", "--rig", room)
-	if result.err != nil && strings.TrimSpace(result.stdout) == "" {
-		return nil, fmt.Errorf("rig ps failed: %w", result.err)
-	}
-	nodes, err := parseRigNodes(result.stdout)
+// seatNode is the ONE seat's record for room.seat, or nil when the room's records do not list it.
+//
+// The read is the client's own node read (clientruntime.SeatNode) rather than a `rig ps` exec, which is
+// what makes its three answers distinguishable here: a room that does not list the seat is nil (nothing to
+// act on), and a read that could not be made is the error - an unreadable record is NOT the answer "no
+// such seat", and `respawn` must refuse on it rather than launch for a seat it could not read.
+func seatNode(ctx context.Context, room, seat string) (map[string]any, error) {
+	node, found, err := clientruntime.SeatNode(ctx, room, seat)
 	if err != nil {
-		return nil, fmt.Errorf("rig ps returned invalid JSON: %w", err)
-	}
-	for _, node := range nodes {
-		if logicalSeat(node) == seat {
-			return node, nil
-		}
-	}
-	return nil, nil
-}
-
-// parseRigNodes reads both shapes `rig ps` has been seen to answer: a bare list, and an object whose
-// `items` is the list.
-func parseRigNodes(text string) ([]map[string]any, error) {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return nil, nil
-	}
-	var list []map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &list); err == nil {
-		return list, nil
-	}
-	var envelope struct {
-		Items []map[string]any `json:"items"`
-	}
-	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
 		return nil, err
 	}
-	return envelope.Items, nil
-}
-
-// logicalSeat is the seat part of a node's logical id: `room.seat` keeps everything after the first
-// dot, so a seat whose own name carries one is still compared whole.
-func logicalSeat(node map[string]any) string {
-	logical, _ := node["logicalId"].(string)
-	parts := strings.SplitN(logical, ".", 2)
-	if len(parts) != 2 {
-		return ""
+	if !found {
+		return nil, nil
 	}
-	return parts[1]
+	return node, nil
 }
 
 // agentIsGone is the reading a dead agent leaves: the session is up, the runtime hook is not.
@@ -273,27 +243,20 @@ func agentIsGone(node map[string]any) bool {
 	return state == "unknown" && reason == "no_runtime_hook"
 }
 
-// canonicalSession is the live canonical session name of a seat, or "" when OpenRig lacks it.
-func canonicalSession(room, seat string) (string, error) {
-	result := runRigCapture("ps", "--json", "--nodes", "--rig", room)
-	if result.err != nil && strings.TrimSpace(result.stdout) == "" {
-		return "", fmt.Errorf("rig ps failed: %w", result.err)
-	}
-	nodes, err := parseRigNodes(result.stdout)
+// canonicalSession is the live canonical session name of a seat, or "" when the room's records do not list
+// it. It reads through the same clientruntime.SeatNode the seat's own record comes from - the ONE seat
+// read both halves of this verb go through - so an unreadable record is the error it already wraps rather
+// than an empty name that would make the caller launch a composed one.
+func canonicalSession(ctx context.Context, room, seat string) (string, error) {
+	node, found, err := clientruntime.SeatNode(ctx, room, seat)
 	if err != nil {
-		return "", fmt.Errorf("rig ps returned invalid JSON: %w", err)
+		return "", err
 	}
-	for _, node := range nodes {
-		name, _ := node["canonicalSessionName"].(string)
-		named, _ := node["rigName"].(string)
-		if named == "" {
-			named = room
-		}
-		if name != "" && named == room && logicalSeat(node) == seat {
-			return name, nil
-		}
+	if !found {
+		return "", nil
 	}
-	return "", nil
+	name, _ := node["canonicalSessionName"].(string)
+	return name, nil
 }
 
 func lastLine(text string) string {

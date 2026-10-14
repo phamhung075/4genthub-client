@@ -2,8 +2,8 @@
 // OpenRig applies it where it can - which is not always, and the verb says so rather than pretending.
 //
 // THE CLOUD CHANGE IS THE AUTHORITY, so it is recorded even when OpenRig cannot be reached: a missing
-// rig or a seat absent from `rig ps` still exits 0 with `applied=none`, because the operator's intent
-// has been recorded and only the local half is outstanding.
+// rig or a seat the room's own records do not list still exits 0 with `applied=none`, because the
+// operator's intent has been recorded and only the local half is outstanding.
 //
 // A RUNTIME CHANGE CANNOT BE APPLIED IN PLACE. OpenRig has no runtime-swap primitive, so a changed
 // runtime prints the manual steps and touches no rig at all; only a model change is applied, and only
@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 const switchUsage = `usage: 4genteam sync switch ROOM SEAT [--runtime R] [--model M] [--apply none|set-model|restart] [--reason TEXT]
@@ -39,7 +40,7 @@ var switchApplyModes = []string{"none", "set-model", "restart"}
 var switchModelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
 // errSwitchRigNotFound is the ONE sentinel for "no rig on PATH", so the verb can tell the Python's
-// FileNotFoundError from a genuine `rig ps` failure.
+// FileNotFoundError from a genuine `rig seat` command failure.
 var errSwitchRigNotFound = errors.New("`rig` executable not found on PATH")
 
 // switchRigAnswer is one `rig` invocation: its stdout, and the failure when it had one.
@@ -255,7 +256,7 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 		if modelChanged {
 			modelForRig = model
 		}
-		applied, err = switchApplyToRig(room, seat, modelForRig, mode == "restart", reason, stderr)
+		applied, err = switchApplyToRig(ctx, room, seat, modelForRig, mode == "restart", reason, stderr)
 		if err != nil {
 			return fail(err)
 		}
@@ -293,13 +294,11 @@ func switchCurrentOccupant(ctx context.Context, baseURL, token, room, seat strin
 }
 
 // switchApplyToRig ports apply_to_rig: the model goes through `rig seat set-model`, `--apply restart`
-// also stops and relaunches fresh, and a missing rig or an absent seat is a NOTE rather than a failure.
-func switchApplyToRig(room, seat, model string, restart bool, reason string, stderr io.Writer) (string, error) {
-	session, err := switchCanonicalSession(room, seat)
-	if errors.Is(err, errSwitchRigNotFound) {
-		fmt.Fprintln(stderr, "note: `rig` not found on PATH; the cloud change is recorded only")
-		return "none", nil
-	}
+// also stops and relaunches fresh, and a seat the room's records do not list is a NOTE rather than a
+// failure. Only the COMMAND legs resolve `rig` now; the seat's canonical name is read over the client's
+// own transport, so an unreadable node record is refused rather than mistaken for an absent seat.
+func switchApplyToRig(ctx context.Context, room, seat, model string, restart bool, reason string, stderr io.Writer) (string, error) {
+	session, err := switchCanonicalSession(ctx, room, seat)
 	if err != nil {
 		return "", err
 	}
@@ -324,10 +323,12 @@ func switchApplyToRig(room, seat, model string, restart bool, reason string, std
 			continue
 		}
 		if errors.Is(answer.err, errSwitchRigNotFound) {
-			return "", &clientcmd.CodedError{
-				Message: "`rig` executable not found on PATH",
-				Code:    clientcmd.ExitRemote,
-			}
+			// THIS VERB'S CONTRACT, kept where the absence now surfaces: a machine without `rig` on PATH
+			// is a NOTE rather than a failure, because the cloud change is the authority and has already
+			// been recorded - the local half is what is outstanding, not the operator's intent. The read
+			// no longer goes through `rig`, so this is no longer detected by the read failing.
+			fmt.Fprintln(stderr, "note: `rig` not found on PATH; the cloud change is recorded only")
+			return "none", nil
 		}
 		return "", &clientcmd.CodedError{
 			Message: fmt.Sprintf("`rig seat %s` failed with exit code %d", command[2], switchExitCode(answer.err)),
@@ -344,37 +345,27 @@ func switchApplyToRig(room, seat, model string, restart bool, reason string, std
 }
 
 // switchCanonicalSession ports canonical_session: the live canonical session name of a seat, or "" when
-// OpenRig does not list it. A missing rig is the sentinel; a non-zero `rig ps` and invalid JSON are
-// reported with the Python's messages.
-func switchCanonicalSession(room, seat string) (string, error) {
-	answer := switchRunRig("rig", "ps", "--json", "--nodes", "--rig", room)
-	if answer.err != nil {
-		if errors.Is(answer.err, errSwitchRigNotFound) {
-			return "", errSwitchRigNotFound
-		}
-		return "", &clientcmd.CodedError{
-			Message: fmt.Sprintf("rig ps failed with exit code %d", switchExitCode(answer.err)),
-			Code:    clientcmd.ExitRemote,
-		}
-	}
-	nodes, err := parseRigNodes(answer.stdout)
+// the room's records do not list that seat - which, for a question about one seat, is the same answer
+// whether the room has no seats or only other ones.
+//
+// The read is the client's own node read rather than a `rig ps` exec, so a read that FAILED is a refusal
+// rather than the answer "no such seat": the two used to arrive as one, and a verb that launched or
+// re-modelled the wrong thing on an unreadable record is exactly what the seam exists to stop. Because
+// that read is scoped to the room it was asked about, the old `rigName == room` check is redundant and is
+// gone - a row that answered is one of THIS room's rows.
+func switchCanonicalSession(ctx context.Context, room, seat string) (string, error) {
+	node, found, err := clientruntime.SeatNode(ctx, room, seat)
 	if err != nil {
 		return "", &clientcmd.CodedError{
-			Message: fmt.Sprintf("rig ps returned invalid JSON: %v", err),
+			Message: fmt.Sprintf("the room's node records could not be read: %v", err),
 			Code:    clientcmd.ExitRemote,
 		}
 	}
-	for _, node := range nodes {
-		name, _ := node["canonicalSessionName"].(string)
-		named, _ := node["rigName"].(string)
-		if named == "" {
-			named = room
-		}
-		if name != "" && named == room && logicalSeat(node) == seat {
-			return name, nil
-		}
+	if !found {
+		return "", nil
 	}
-	return "", nil
+	name, _ := node["canonicalSessionName"].(string)
+	return name, nil
 }
 
 // switchValidateChoice ports validate_choice: the allowed-values check, and the pattern check when one

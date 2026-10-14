@@ -64,8 +64,11 @@ func switchWriteJSON(w http.ResponseWriter, status int, body any) {
 	_, _ = w.Write(encoded)
 }
 
-// switchRigStub answers `rig ps` from a scripted node list and records every argv in order. A seat
-// command answers seatErr, so a test drives the failure branch without a rig.
+// switchRigStub answers the rig's COMMAND legs - `rig seat set-model|stop|launch` - and records every argv
+// in order; a seat command answers seatErr, so a test drives the failure branch without a rig, and missing
+// stands for a `rig` that is not on PATH. It does NOT answer the READ any more: nodes is the table the
+// DAEMON serves (switchStubRig below), because the verb reads a seat's canonical session through
+// clientruntime.SeatNode rather than through a `rig ps` exec.
 type switchRigStub struct {
 	nodes   []map[string]any
 	missing bool
@@ -78,14 +81,26 @@ func (s *switchRigStub) run(argv ...string) switchRigAnswer {
 	if s.missing {
 		return switchRigAnswer{err: errSwitchRigNotFound}
 	}
-	if len(argv) > 1 && argv[1] == "ps" {
-		encoded, _ := json.Marshal(s.nodes)
-		return switchRigAnswer{stdout: string(encoded)}
-	}
 	if s.seatErr != nil {
 		return switchRigAnswer{err: s.seatErr}
 	}
 	return switchRigAnswer{}
+}
+
+// rigNames is the rigs the scripted rows name, deduplicated: the daemon's rig list is what makes the node
+// route askable at all, since that route is keyed on the rig's id rather than on its name.
+func (s *switchRigStub) rigNames() []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, row := range s.nodes {
+		name, _ := row["rigName"].(string)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names
 }
 
 func (s *switchRigStub) seatCalls() [][]string {
@@ -103,6 +118,11 @@ func switchStubRig(t *testing.T, stub *switchRigStub) {
 	original := switchRunRig
 	switchRunRig = stub.run
 	t.Cleanup(func() { switchRunRig = original })
+	rows, err := json.Marshal(stub.nodes)
+	if err != nil {
+		t.Fatalf("encoding the scripted node rows: %v", err)
+	}
+	rigNodeDaemon(t, stub.rigNames(), func() string { return string(rows) })
 }
 
 // switchPSNodes is the Python's PS_NODES: two seats, seat1 the second.
@@ -302,8 +322,10 @@ func TestSwitchApplyNoneNeverCallsRig(t *testing.T) {
 	}
 }
 
-// test_switch_missing_rig_binary_records_cloud_and_exits_0: the cloud change is the authority, so a
-// missing rig is a NOTE and a zero exit.
+// TestSwitchMissingRigBinaryRecordsCloudAndExitsZero: the cloud change is the authority and is recorded
+// first, and a machine without `rig` on PATH is a NOTE - the verb answers applied=none and exits 0. The
+// seat's canonical session is no longer resolved by running `rig` at all, so the absence surfaces where
+// `rig` is still used, the `rig seat set-model` leg.
 func TestSwitchMissingRigBinaryRecordsCloudAndExitsZero(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
 	stub := &switchRigStub{nodes: switchPSNodes(), missing: true}
@@ -322,6 +344,35 @@ func TestSwitchMissingRigBinaryRecordsCloudAndExitsZero(t *testing.T) {
 	}
 	if !strings.HasSuffix(out, "applied=none\n") {
 		t.Errorf("stdout = %q, want it to end applied=none", out)
+	}
+}
+
+// TestSwitchRefusesWhenTheNodeReadFails: the seat's canonical session could not be READ, which is not the
+// answer "the room's records do not list that seat". The read's failure is a refusal in the read's own
+// words - the cloud change is already recorded, and no `rig seat` command runs for a seat whose session
+// this verb could not name.
+func TestSwitchRefusesWhenTheNodeReadFails(t *testing.T) {
+	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
+	stub := &switchRigStub{nodes: switchPSNodes()}
+	switchStubRig(t, stub)
+	brokenNodeDaemon(t)
+
+	code, out, errOut := switchRun(t, cloud, []string{"room1", "seat1", "--model", "new-model"})
+
+	if code != clientcmd.ExitRemote {
+		t.Fatalf("exit %d, want %d", code, clientcmd.ExitRemote)
+	}
+	if !strings.Contains(errOut, "the room's node records could not be read") {
+		t.Errorf("stderr = %q, want the failed read named", errOut)
+	}
+	if len(cloud.puts) != 1 {
+		t.Errorf("put %d times, want 1: the cloud change is recorded before the local half", len(cloud.puts))
+	}
+	if got := stub.seatCalls(); len(got) != 0 {
+		t.Errorf("rig seat was called on a reading it could not make: %v", got)
+	}
+	if out != "" {
+		t.Errorf("stdout = %q, want nothing", out)
 	}
 }
 

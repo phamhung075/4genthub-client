@@ -3,6 +3,34 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — sync switch and sync respawn read a seat without rig
+
+### Changed
+- `internal/clientruntime` — `SeatNode(ctx, room, seat) (row map[string]any, found bool, err error)`: `RoomNodes`
+  narrowed to one seat, so a verb whose question is about a single seat asks the same question of the same
+  transports and hears the same three answers. `found == false` means the room's records do not list that seat
+  — including when they are empty, which for a question about ONE seat is the same answer — while a read that
+  FAILED is an error, so "I could not read" is never read as "no such seat".
+- `internal/clientsync/switchverb.go` — `switchCanonicalSession` reads the seat through that seam instead of
+  exec-ing `rig ps --json --nodes --rig ROOM`: a failed read is a refusal in words, and because the read is
+  scoped to the room it was asked about, the old `rigName == room` check is gone rather than restated. `rig`
+  absence is now detected where `rig` is still used — the `rig seat set-model|stop|launch` command legs — AND
+  THE VERB'S CONTRACT IS UNCHANGED: a machine without `rig` on PATH is a NOTE, and the recorded cloud change
+  still exits 0 with `applied=none`.
+- `internal/clientsync/respawnverb.go` — `seatNode` and `canonicalSession` read through the same seam;
+  `parseRigNodes` (which tolerated two shapes of the exec's stdout) and its `logicalSeat` helper are gone with
+  the exec. A read that fails is refused rather than read as a missing node.
+
+### Tests
+- Both verb suites stop faking the read through an exec stub and serve it over the daemon's own route
+  (`GET /api/ps`, then `GET /api/rigs/<rigId>/nodes`), so the verb's own test fails when the read breaks:
+  `TestSwitchModelPutsBodyKeepsRuntimeAndSetsModel` and `TestRespawnLaunchesOnlyWhenTheSeatReadsDead` were each
+  shown failing against a node route answering HTTP 500. Added `TestSwitchRefusesWhenTheNodeReadFails` and
+  `TestRespawnRefusesWhenTheNodeReadFails`, which pin the failed-read refusal rather than the absent-seat note.
+
+### Verified
+- `gofmt -l` clean; `go build ./...` and `go vet ./...` clean; `go test ./...` every package ok.
+
 ## 2026-10-14 — the node reading becomes one seam, and the watchdog counts a room without rig
 
 ### Changed
