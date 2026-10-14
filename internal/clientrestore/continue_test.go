@@ -81,12 +81,11 @@ func rigsFromNodes(nodes string) []map[string]any {
 	return entries
 }
 
-// world is one test's machine: a stub `rig` on the path the client resolves, a tmux read it controls, a
+// world is one test's machine: stubbed runtime steps, a tmux read it controls, a
 // home under the test's temp dir, and the records of what happened.
 type world struct {
 	t     *testing.T
 	home  string
-	stub  string
 	sends []string
 	walls []string
 	tmux  func() []string
@@ -114,19 +113,6 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	tmuxRead = func() (string, error) { return strings.Join(w.tmux(), "\n"), nil }
 	now = func() time.Time { return time.Date(2026, 10, 10, 15, 0, 0, 0, time.UTC) }
 	t.Cleanup(func() { realHome, tmuxRead, now = previousHome, previousTmux, previousNow })
-
-	// The stub IS the daemon: the client reaches rig only through Rig.Run, which resolves the tool
-	// through clientcmd.LookPath, so pointing that at a script is pointing the whole client at a fake.
-	w.stub = filepath.Join(t.TempDir(), "rig")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellQuote(filepath.Join(w.home, "calls")) + "\n" +
-		"if [ \"$1\" = ps ]; then printf '%s' " + shellQuote(nodes) + "; fi\n" +
-		"exit 0\n"
-	if err := os.WriteFile(w.stub, []byte(script), 0o755); err != nil {
-		t.Fatalf("writing the stub rig: %v", err)
-	}
-	previousLookPath := clientcmd.LookPath
-	clientcmd.LookPath = func(string) (string, error) { return w.stub, nil }
-	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
 
 	// THE DAEMON THE READS TALK TO. The world's rig table and node JSON are served over the daemon's OWN
 	// routes (GET /api/ps, then GET /api/rigs/<id>/nodes), because the gate, the restore and the listing
@@ -179,6 +165,8 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	// so a suite that runs after this one is never handed a stubbed restorer.
 	previousSteps := restoreSteps
 	restoreSteps = func(r *restorer) {
+		r.ensureDaemon = func(context.Context) error { w.record("daemon up"); return nil }
+		r.revive = func(_ context.Context, room string) error { w.record("up " + room + " --existing"); return nil }
 		r.send = func(_ context.Context, session, text string) error {
 			w.sends = append(w.sends, session+"\t"+text)
 			return nil
@@ -192,7 +180,17 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	return w
 }
 
-// calls is every `rig` invocation the stub recorded, in order.
+// record notes one runtime step the restorer took, in order.
+func (w *world) record(call string) {
+	handle, err := os.OpenFile(filepath.Join(w.home, "calls"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		w.t.Fatalf("recording %q: %v", call, err)
+	}
+	defer handle.Close()
+	_, _ = handle.WriteString(call + "\n")
+}
+
+// calls is every runtime step the restorer took, in order.
 func (w *world) calls() []string {
 	raw, err := os.ReadFile(filepath.Join(w.home, "calls"))
 	if err != nil {
@@ -293,6 +291,8 @@ func TestAnUndeliveredBriefIsAFailedRestore(t *testing.T) {
 
 	previousSteps := restoreSteps
 	restoreSteps = func(r *restorer) {
+		r.ensureDaemon = func(context.Context) error { w.record("daemon up"); return nil }
+		r.revive = func(_ context.Context, room string) error { w.record("up " + room + " --existing"); return nil }
 		r.send = func(context.Context, string, string) error { return errors.New("no transport answered") }
 		r.wall = func(string) (bool, string) { return true, "" }
 	}
@@ -666,10 +666,6 @@ func TestTheListingNeedsNoRigTool(t *testing.T) {
 			"lifecycleState": "archived", "isArchived": true, "archivedAt": "2026-10-02 04:37:38",
 			"nodeCount": 2, "runningCount": 0},
 	}
-	previousLookPath := clientcmd.LookPath
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
-	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
-
 	code, out, _ := w.run("continue")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
@@ -745,31 +741,6 @@ func TestTheListingSaysWhenNoDaemonIsNamed(t *testing.T) {
 		"briefs on disk:\n  rig-a\n\n" + continueListingUsage + "\n"
 	if out != want {
 		t.Errorf("the listing printed:\n%s\nwant:\n%s", out, want)
-	}
-}
-
-// TestTheRestoreFormsRefuseWithNoRigTool: the forms that need the daemon give the same one message every
-// other verb gives, rather than a nil-pointer panic or a half-restore. `continue <rig>` needs the rig tool
-// for the restore; `--all` needs it only once there IS a brief to continue - with none, there is nothing to
-// do and nothing to refuse, which is what the shell answered too.
-func TestTheRestoreFormsRefuseWithNoRigTool(t *testing.T) {
-	w := newWorld(t, staticSessions(), plainNodes())
-	previousLookPath := clientcmd.LookPath
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
-	t.Cleanup(func() { clientcmd.LookPath = previousLookPath })
-
-	if code, _, _ := w.run("continue", "--all"); code != clientcmd.ExitOK {
-		t.Errorf("--all with no briefs: exit = %d, want 0: there is nothing to do, so nothing to refuse", code)
-	}
-	w.brief("rig-a.txt", "Text\n")
-	for _, args := range [][]string{{"continue", "rig-a", "--no-brief"}, {"continue", "--all"}} {
-		code, _, errOut := w.run(args...)
-		if code != clientcmd.ExitUnavailable {
-			t.Errorf("%v: exit = %d, want %d", args, code, clientcmd.ExitUnavailable)
-		}
-		if !strings.Contains(errOut, "rig is not on PATH") {
-			t.Errorf("%v: stderr = %q, want the platform matrix's reason", args, errOut)
-		}
 	}
 }
 
@@ -849,7 +820,7 @@ func TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt(t *testing.T) {
 	t.Setenv("OPENRIG_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
 
 	var out bytes.Buffer
-	r, err := newRestorer(nil, &teeLog{out: &out})
+	r, err := newRestorer(&teeLog{out: &out})
 	if err != nil {
 		t.Fatalf("newRestorer: %v", err)
 	}

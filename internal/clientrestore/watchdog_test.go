@@ -21,12 +21,12 @@ var beats []string
 
 // isolate points the package's home at a temporary directory and stubs every seam the watchdog can reach:
 // no real home, no tmux, no rig. It restores them when the test ends. Everything a test sets AFTER calling
-// it (a per-test tmuxRead, watchdogNodesJSON, LookPath) is restored by the same cleanup.
+// it (a per-test tmuxRead, watchdogNodesJSON) is restored by the same cleanup.
 func isolate(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	oldHome, oldTmux, oldIdent := realHome, tmuxRead, tmuxServerIdentity
-	oldNodes, oldSleep, oldLimit, oldLook := watchdogNodesJSON, watchSleep, watchPollLimit, clientcmd.LookPath
+	oldNodes, oldSleep, oldLimit := watchdogNodesJSON, watchSleep, watchPollLimit
 	// Every poll of the watch loop now beats. The seam is replaced here, so no test writes into the
 	// machine's own log directory; the beat is recorded for the focused test that asserts it.
 	oldBeat := clientservices.WriteHeartbeat
@@ -43,7 +43,7 @@ func isolate(t *testing.T) string {
 	watchPollLimit = 0
 	t.Cleanup(func() {
 		realHome, tmuxRead, tmuxServerIdentity = oldHome, oldTmux, oldIdent
-		watchdogNodesJSON, watchSleep, watchPollLimit, clientcmd.LookPath = oldNodes, oldSleep, oldLimit, oldLook
+		watchdogNodesJSON, watchSleep, watchPollLimit = oldNodes, oldSleep, oldLimit
 		clientservices.WriteHeartbeat = oldBeat
 	})
 	return home
@@ -83,7 +83,6 @@ func drivePolls(states []string) {
 
 func testWatcher(buf *bytes.Buffer) *watcher {
 	return &watcher{
-		rig:      &clientcmd.Rig{Program: "rig"},
 		log:      &teeLog{out: buf},
 		stderr:   io.Discard,
 		logPath:  "/tmp/rig-watchdog.log",
@@ -434,21 +433,6 @@ func TestAllWithoutWatchIsUsage(t *testing.T) {
 	}
 }
 
-// TestNoRigToolIsUnavailable: the daemon-reading forms refuse in one message with ExitUnavailable when the
-// rig tool is missing.
-func TestNoRigToolIsUnavailable(t *testing.T) {
-	isolate(t)
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
-	var out, errBuf bytes.Buffer
-	code := watchdogCommand{}.Run(context.Background(), nil, []string{"demo"}, &out, &errBuf)
-	if code != clientcmd.ExitUnavailable {
-		t.Fatalf("exit %d, want %d", code, clientcmd.ExitUnavailable)
-	}
-	if !strings.Contains(errBuf.String(), "rig is not on PATH") {
-		t.Errorf("stderr = %q, want the platform matrix's message", errBuf.String())
-	}
-}
-
 // TestCheckReportsAnyDeadRig: the shell's `for … done` exited with the LAST rig's status, so a dead rig
 // that was not last left the exit code at 0 - the one thing a caller that reads only the exit code acts on.
 // The aggregate makes that deterministic: any dead rig in the pass is exitDead, wherever it sits. The two
@@ -458,7 +442,6 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 	home := isolate(t)
 	writeBrief(t, home, "alpha")
 	writeBrief(t, home, "zulu")
-	clientcmd.LookPath = func(string) (string, error) { return "/stub/rig", nil }
 	// The daemon expects a running seat in both, and tmux has one for zulu only: alpha is dead, and it is
 	// the FIRST rig in the pass, which is the position the shell's last-status exit code got wrong.
 	watchdogNodesJSON = func(string) (string, error) {
@@ -482,7 +465,6 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 func TestListingWorksWithoutRigTool(t *testing.T) {
 	home := isolate(t)
 	writeBrief(t, home, "alpha")
-	clientcmd.LookPath = func(string) (string, error) { return "", errors.New("not found") }
 	var out, errBuf bytes.Buffer
 	code := watchdogCommand{}.Run(context.Background(), nil, nil, &out, &errBuf)
 	if code != clientcmd.ExitOK {

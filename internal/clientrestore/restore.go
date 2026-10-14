@@ -23,9 +23,13 @@ const briefSendTimeout = 40 * time.Second
 // used by `continue` for the rig the caller named and by `watchdog` when it decides a rig is dead - one
 // implementation, so the two verbs cannot restore differently.
 type restorer struct {
-	rig    *clientcmd.Rig
 	log    *teeLog
 	briefs string
+	// ensureDaemon and revive are the two steps that reach the runtime: the daemon up, and the room's
+	// stopped seats started again from the spec it holds. They are fields so a test restores a whole room
+	// with no daemon.
+	ensureDaemon func(ctx context.Context) error
+	revive       func(ctx context.Context, room string) error
 	// send and wall are the two steps that reach past the daemon - the brief, and the watch wall - and
 	// they are struct fields so a test drives a whole restore with no seat, no terminal and no wall.
 	send func(ctx context.Context, session, text string) error
@@ -40,15 +44,16 @@ var restoreSteps func(*restorer)
 
 // newRestorer wires the real world: the rig tool the caller resolved, the brief directory the shell used,
 // `rig send` for the brief, and this same binary for the watch wall.
-func newRestorer(rig *clientcmd.Rig, log *teeLog) (*restorer, error) {
+func newRestorer(log *teeLog) (*restorer, error) {
 	briefs, err := briefDir()
 	if err != nil {
 		return nil, err
 	}
 	r := &restorer{
-		rig:    rig,
-		log:    log,
-		briefs: briefs,
+		log:          log,
+		briefs:       briefs,
+		ensureDaemon: func(ctx context.Context) error { return clientruntime.NewClient("").EnsureDaemon(ctx) },
+		revive:       reviveRoom,
 		// send is the brief's delivery, over the client's OWN transports: the runtime socket, then the
 		// OpenRig daemon, then a refusal. It used to try SendTextToSeat behind a guard that parsed the
 		// Python-era agenthub--<room>--<seat> session shape - which the sessions this rig actually has
@@ -91,7 +96,7 @@ func (r *restorer) restore(rigName, brief string) bool {
 		r.log.printf("%s: already live, skipping restore", rigName)
 	} else {
 		r.log.printf("%s: restoring from latest snapshot (every seat resumes its own session)", rigName)
-		if _, err := r.rig.Run(context.Background(), "up", rigName, "--existing"); err != nil {
+		if err := r.revive(context.Background(), rigName); err != nil {
 			// The shell sent this command's output to the log and did not stop on its status; the seat
 			// count is what decides, so a failed restore has to be reported here instead of silently
 			// becoming "no seats up".
@@ -215,17 +220,38 @@ func watchWall(rigName string) (bool, string) {
 	return true, ""
 }
 
-// daemonUp is the shell's daemon_up(): the daemon must be up before a rig is restored - and before the
+// daemonUp is the shell's daemon_up(): the runtime daemon must be up before a rig is restored - and before the
 // peak gate, which reads the room's node records from it. The start's failure is logged rather than
 // returned, the way the shell carried on: the step that needs the daemon reports what it could not do.
 func (r *restorer) daemonUp() {
-	if _, err := r.rig.Run(context.Background(), "daemon", "status"); err == nil {
-		return
-	}
-	r.log.printf("daemon down: starting")
-	if _, err := r.rig.Run(context.Background(), "daemon", "start"); err != nil {
+	if err := r.ensureDaemon(context.Background()); err != nil {
 		r.log.printf("daemon did not start: %v", err)
 	}
+}
+
+// reviveRoom starts the stopped seats of a room the runtime holds a spec for. Each seat resumes its own saved
+// session, which is what the OpenRig snapshot restore did. A seat that already runs is left alone: a restart
+// would cycle live agents, and `continue` on a live room must change nothing. A room the runtime does not
+// know is the daemon's refusal, returned as it came.
+func reviveRoom(_ context.Context, room string) error {
+	client := clientruntime.NewClient("")
+	seats, err := client.GetRoomStatus(room)
+	if err != nil {
+		return err
+	}
+	var failed []string
+	for _, seat := range seats {
+		if strings.EqualFold(strings.TrimSpace(seat.State), "running") {
+			continue
+		}
+		if _, err := client.RestartSeat(room, seat.Seat); err != nil {
+			failed = append(failed, seat.Seat+": "+err.Error())
+		}
+	}
+	if len(failed) > 0 {
+		return errors.New("seats that did not start: " + strings.Join(failed, "; "))
+	}
+	return nil
 }
 
 // gate is the DeepSeek peak gate for a restore, through the same exported gate `up` and `compact` obey -

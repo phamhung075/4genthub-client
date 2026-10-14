@@ -97,11 +97,7 @@ func runContinue(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 		}
 		brief = defaultPath
 	}
-	rig, code := resolveRig(stderr)
-	if code != clientcmd.ExitOK {
-		return code
-	}
-	restore, err := newRestorer(rig, log)
+	restore, err := newRestorer(log)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
 		return clientcmd.ExitUnavailable
@@ -147,18 +143,6 @@ func defaultBrief(rigName string) (string, error) {
 	return filepath.Join(dir, rigName+".txt"), nil
 }
 
-// resolveRig is the platform matrix for the two forms that need the daemon. It is the SAME refusal the
-// dispatcher gives a NeedsRig verb - one message naming what is missing - because this package asked for
-// it only so the listing can run without it.
-func resolveRig(stderr io.Writer) (*clientcmd.Rig, int) {
-	rig, err := clientcmd.RequireRig()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
-		return nil, clientcmd.ExitUnavailable
-	}
-	return rig, clientcmd.ExitOK
-}
-
 // continueOne restores and briefs one rig: the shell's continue_rig(), preceded by the daemon and the
 // gate.
 //
@@ -196,11 +180,7 @@ func continueAll(allowPeak bool, log *teeLog, stderr io.Writer) int {
 		log.printf("--all: no brief files in %s, nothing to continue", dir)
 		return clientcmd.ExitOK
 	}
-	rig, code := resolveRig(stderr)
-	if code != clientcmd.ExitOK {
-		return code
-	}
-	restore, err := newRestorer(rig, log)
+	restore, err := newRestorer(log)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
 		return clientcmd.ExitUnavailable

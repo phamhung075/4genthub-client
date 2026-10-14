@@ -234,7 +234,6 @@ func noteServerIdentity(log *teeLog) {
 // watcher is one rig's report-and-watch: the shell's check_rig() and watch_rig() with the seam fields a
 // test needs. Its action IS the restorer's, bound here so the two verbs restore identically.
 type watcher struct {
-	rig       *clientcmd.Rig
 	log       *teeLog
 	allowPeak bool
 	stderr    io.Writer
@@ -246,13 +245,12 @@ type watcher struct {
 }
 
 // newWatcher binds the restorer whose work this watcher drives.
-func newWatcher(rig *clientcmd.Rig, restore *restorer, log *teeLog, allowPeak bool, stderr io.Writer) *watcher {
+func newWatcher(restore *restorer, log *teeLog, allowPeak bool, stderr io.Writer) *watcher {
 	path := ""
 	if dir, err := logDir(); err == nil {
 		path = filepath.Join(dir, watchdogLogName)
 	}
 	return &watcher{
-		rig:       rig,
 		log:       log,
 		allowPeak: allowPeak,
 		stderr:    stderr,
@@ -398,28 +396,22 @@ func watchdogListing(stdout, stderr io.Writer) int {
 	return clientcmd.ExitOK
 }
 
-// openWatchdog is the shared head of every daemon-reading form: the log (which also resolves the home),
-// the rig tool, and the restorer both the report and the watch will use. It is one message and
-// ExitUnavailable when the home or the rig tool is missing, the same rule the rest of this package follows.
-func openWatchdog(stdout, stderr io.Writer) (*teeLog, *clientcmd.Rig, *restorer, int) {
+// openWatchdog is the shared head of every daemon-reading form: the log (which also resolves the home)
+// and the restorer both the report and the watch will use. It is one message and
+// ExitUnavailable when the home is missing, the same rule the rest of this package follows.
+func openWatchdog(stdout, stderr io.Writer) (*teeLog, *restorer, int) {
 	log, err := openLog(watchdogLogName, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
-		return nil, nil, nil, clientcmd.ExitUnavailable
+		return nil, nil, clientcmd.ExitUnavailable
 	}
-	rig, err := clientcmd.RequireRig()
+	restore, err := newRestorer(log)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
 		log.close()
-		return nil, nil, nil, clientcmd.ExitUnavailable
+		return nil, nil, clientcmd.ExitUnavailable
 	}
-	restore, err := newRestorer(rig, log)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
-		log.close()
-		return nil, nil, nil, clientcmd.ExitUnavailable
-	}
-	return log, rig, restore, clientcmd.ExitOK
+	return log, restore, clientcmd.ExitOK
 }
 
 // watchdogCheck is the shell's --check: one report pass over every rig that has a brief, changing nothing.
@@ -435,12 +427,12 @@ func watchdogCheck(allowPeak bool, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
-	log, rig, restore, code := openWatchdog(stdout, stderr)
+	log, restore, code := openWatchdog(stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
 	defer log.close()
-	w := newWatcher(rig, restore, log, allowPeak, stderr)
+	w := newWatcher(restore, log, allowPeak, stderr)
 	dead := false
 	for _, brief := range briefsOnDisk(dir) {
 		if w.check(strings.TrimSuffix(filepath.Base(brief), ".txt"), "report") == exitDead {
@@ -475,12 +467,12 @@ func watchdogOne(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 			return clientcmd.ExitUsage
 		}
 	}
-	log, rig, restore, code := openWatchdog(stdout, stderr)
+	log, restore, code := openWatchdog(stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
 	defer log.close()
-	w := newWatcher(rig, restore, log, allowPeak, stderr)
+	w := newWatcher(restore, log, allowPeak, stderr)
 	if !watching {
 		return w.check(rigName, "report")
 	}
@@ -510,12 +502,12 @@ func watchdogAll(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
-	log, rig, restore, code := openWatchdog(stdout, stderr)
+	log, restore, code := openWatchdog(stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
 	defer log.close()
-	w := newWatcher(rig, restore, log, allowPeak, stderr)
+	w := newWatcher(restore, log, allowPeak, stderr)
 	names := make([]string, 0)
 	for _, brief := range briefsOnDisk(dir) {
 		names = append(names, strings.TrimSuffix(filepath.Base(brief), ".txt"))
