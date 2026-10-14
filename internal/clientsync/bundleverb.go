@@ -1,7 +1,7 @@
 // The `sync bundle` verb: build a .rigbundle from the snapshot a seat is PINNED to, and say at BUILD
 // time what the bundle does not contain.
 //
-// The pin is the whole point. `rig bundle create` is asked for the rig root and the output, but the
+// The pin is the whole point. The bundle is built from the rig root and the output path, but the
 // seat's resolved snapshot comes from the lock this client wrote - the same hash a running seat was
 // launched from - so the bundle the operator ships and the seat that is running are the same artifact.
 //
@@ -14,11 +14,9 @@ package clientsync
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -31,21 +29,6 @@ const bundleUsage = `usage: 4genteam sync bundle ROOM SEAT --rig-yaml PATH --rig
 Build a .rigbundle from the snapshot ROOM/SEAT is pinned to, then print its path. The pinned hash is
 the one used, so the bundle and the running seat are the same artifact.
 `
-
-// errBundleRigNotFound is the ONE sentinel for "no rig on PATH": the seam below returns it, and the verb
-// turns it into the Python's message rather than leaking a lookpath error.
-var errBundleRigNotFound = errors.New("`rig` executable not found on PATH")
-
-// bundleRunRig is the one place this file starts `rig`, with an ARGUMENT LIST (the first element is the
-// program). A var so a test drives the verb without a rig; a non-zero exit arrives as *exec.ExitError
-// and is read for its code, never discarded.
-var bundleRunRig = func(argv []string) error {
-	path, err := exec.LookPath(argv[0])
-	if err != nil {
-		return errBundleRigNotFound
-	}
-	return exec.Command(path, argv[1:]...).Run()
-}
 
 // bundleArgs is the parsed command line.
 type bundleArgs struct {
@@ -129,8 +112,7 @@ func bundleParseArgs(args []string) (bundleArgs, error) {
 	return parsed, nil
 }
 
-// bundleCreate ports cmd_bundle's body. It reads the pin, builds the exact argv the Python builds (with
-// the source label this tree uses), and then warns about the seats the rig root leaves unpinned.
+// bundleCreate ports cmd_bundle's body. It reads the pin, packs the bundle (bundlepack.go), and then warns about the seats the rig root leaves unpinned.
 func bundleCreate(parsed bundleArgs, stdout, stderr io.Writer) int {
 	room, err := ValidateName("room", parsed.room)
 	if err != nil {
@@ -186,24 +168,14 @@ func bundleCreate(parsed bundleArgs, stdout, stderr io.Writer) int {
 	bundlePath := filepath.Join(outDir,
 		fmt.Sprintf("%s-%s-%s.rigbundle", room, seat, bundleHashPrefix(pinnedHash, 8)))
 
-	// THE ARGV IS THE PYTHON'S, argument for argument; only the source label differs, because the
-	// product name the Python stamped is not this tree's. The locked hash - not the cloud's - is what
-	// travels in the notes.
-	command := []string{
-		"rig", "bundle", "create", parsed.rigYAML,
-		"--rig-root", parsed.rigRoot,
-		"-o", bundlePath,
-		"--name", room + "-" + seat,
-		"--bundle-version", "1.0.0",
-		"--notes", "resolved_sha256=" + pinnedHash + " source=4genteam",
+	// The locked hash - not the cloud's - is what travels in the notes.
+	spec := bundleSpec{
+		name: room + "-" + seat, version: "1.0.0",
+		notes:   "resolved_sha256=" + pinnedHash + " source=4genteam",
+		rigYAML: parsed.rigYAML, rigRoot: parsed.rigRoot,
 	}
-	if err := bundleRunRig(command); err != nil {
-		if errors.Is(err, errBundleRigNotFound) {
-			fmt.Fprintln(stderr, "4genteam sync bundle: `rig` executable not found on PATH")
-			return clientcmd.ExitRemote
-		}
-		fmt.Fprintf(stderr, "4genteam sync bundle: rig bundle create failed with exit code %d\n",
-			bundleExitCode(err))
+	if err := bundlePack(spec, bundlePath); err != nil {
+		fmt.Fprintf(stderr, "4genteam sync bundle: cannot build the bundle: %v\n", err)
 		return clientcmd.ExitRemote
 	}
 
@@ -308,14 +280,4 @@ func bundleHashPrefix(hash string, length int) string {
 		return hash
 	}
 	return hash[:length]
-}
-
-// bundleExitCode is the exit code a failed command carried, or 1 when the failure says nothing about
-// one - the Python reports `err.returncode`, and a *exec.ExitError is the one Go shape that has it.
-func bundleExitCode(err error) int {
-	var coded interface{ ExitCode() int }
-	if errors.As(err, &coded) {
-		return coded.ExitCode()
-	}
-	return 1
 }
