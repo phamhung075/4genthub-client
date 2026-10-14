@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // The three limits, read from the environment by ApplyLimits (a BLANK value means the documented
@@ -67,7 +68,7 @@ func Kilo(tokens int) string {
 // writes one for a Claude Code seat too, holding only its guide) does not count as an omp seat. An empty path means the seat has no log this
 // machine can read, which the caller skips rather than guessing at.
 func SeatLog(stateRoot, rig, seat string) (string, string) {
-	seatDir := filepath.Join(stateRoot, rig+"-"+seat+"@"+rig)
+	seatDir := clientruntime.SeatDir(stateRoot, rig, seat)
 	if info, err := os.Stat(seatDir); err == nil && info.IsDir() {
 		if session := NewestSession(seatDir); session != "" {
 			return session, "omp"
@@ -99,7 +100,7 @@ func claudeLog(rig, seat string) string {
 	if ClaudeProjectsDir == "" {
 		return ""
 	}
-	out, err := exec.Command("pgrep", "-af", "claude .*--name "+rig+"-"+seat+"@"+rig).Output()
+	out, err := exec.Command("pgrep", "-af", "claude .*--name "+clientruntime.SeatSessionName(rig, seat)).Output()
 	if err != nil {
 		return ""
 	}
@@ -184,8 +185,8 @@ func RigSeats(rig string) []string {
 	}
 	var seats []string
 	for _, name := range strings.Fields(string(out)) {
-		if strings.HasPrefix(name, rig+"-") && strings.HasSuffix(name, "@"+rig) {
-			seats = append(seats, strings.TrimSuffix(strings.TrimPrefix(name, rig+"-"), "@"+rig))
+		if room, seat, ok := clientruntime.ParseSeatSessionName(name); ok && room == rig {
+			seats = append(seats, seat)
 		}
 	}
 	sort.Strings(seats)

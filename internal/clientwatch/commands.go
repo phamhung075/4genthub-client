@@ -200,27 +200,22 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 	// The room and every named seat must exist BEFORE anything else happens: a name that is not there is
 	// the caller's to fix, and telling them so beats opening a pane that shows nothing, streaming
 	// "following 0 seats" forever, or reporting a missing tool for a room that was never going to work.
-	if err := requireRoomAndSeats(state.rig, state.seats); err != nil {
+	stateRoot, err := resolveStateRoot(state.stateRoot)
+	if err != nil {
+		return reportError(err, stderr)
+	}
+	if err := requireRoomAndSeats(stateRoot, state.rig, state.seats); err != nil {
 		return reportError(err, stderr)
 	}
 
 	switch verb {
 	case "feed":
-		root, err := resolveStateRoot(state.stateRoot)
-		if err != nil {
-			return reportError(err, stderr)
-		}
-		if err := runFeed(ctx, root, state, stdout); err != nil {
+		if err := runFeed(ctx, stateRoot, state, stdout); err != nil {
 			return reportError(err, stderr)
 		}
 		return clientcmd.ExitOK
 	case "grid", "watch":
 		if err := requireHerdr(); err != nil {
-			return reportError(err, stderr)
-		}
-		// Every pane these verbs open runs `feed`, so the state root is checked now rather than left to
-		// N panes each printing the same refusal.
-		if _, err := resolveStateRoot(state.stateRoot); err != nil {
 			return reportError(err, stderr)
 		}
 		run := func() error {

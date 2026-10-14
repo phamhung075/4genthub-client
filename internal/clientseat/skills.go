@@ -2,6 +2,7 @@ package clientseat
 
 import (
 	"fmt"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"os"
 	"path/filepath"
 
@@ -11,14 +12,14 @@ import (
 
 // deliverSkills makes an omp seat's own skill directory exactly the skills `sync rig` built for it.
 //
-// An omp seat reads skills from <stateRoot>/<seat session>/agent/skills (its PI_CODING_AGENT_DIR), and
+// An omp seat reads skills from <stateRoot>/rooms/<room>/seats/<seat>/skills (its PI_CODING_AGENT_DIR), and
 // nothing else copies `<store>/<rig>/rig/agents/<seat>/skills` there: measured 2026-10-11, a restarted
 // fe-dev answered "No such skill" for a skill present in the store. The directory is replaced, not merged,
 // so a skill the client tree no longer carries disappears from the seat too.
 //
 // A seat with no agent directory under the state root is not an omp seat and is left alone.
 func deliverSkills(store, stateRoot, rig, seat string) error {
-	agentDir := filepath.Join(stateRoot, rig+"-"+seat+"@"+rig, "agent")
+	agentDir := clientruntime.SeatDir(stateRoot, rig, seat)
 	if info, err := os.Stat(agentDir); err != nil || !info.IsDir() {
 		return nil
 	}

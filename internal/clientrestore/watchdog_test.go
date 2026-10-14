@@ -68,7 +68,7 @@ func drivePolls(states []string) {
 	idx := -1
 	tmuxRead = func() (string, error) {
 		if idx >= 0 && states[idx] == "alive" {
-			return "demo-seat@demo\n", nil
+			return "agenthub--demo--seat\n", nil
 		}
 		return "", nil
 	}
@@ -447,7 +447,7 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 	watchdogNodesJSON = func(string) (string, error) {
 		return `[{"lifecycleState":"running"}]`, nil
 	}
-	tmuxRead = func() (string, error) { return "zulu-seat@zulu\n", nil }
+	tmuxRead = func() (string, error) { return "agenthub--zulu--seat\n", nil }
 
 	var out, errBuf bytes.Buffer
 	code := watchdogCommand{}.Run(context.Background(), []string{"--check"}, &out, &errBuf)

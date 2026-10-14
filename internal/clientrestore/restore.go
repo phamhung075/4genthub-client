@@ -146,7 +146,7 @@ func (r *restorer) brief(rigName string, seats []string, body string) []string {
 			text = "Your seat: " + seat + ". " + strings.TrimRight(string(own), "\n")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), briefSendTimeout)
-		err := r.send(ctx, rigName+"-"+seat+"@"+rigName, text)
+		err := r.send(ctx, clientruntime.SeatSessionName(rigName, seat), text)
 		cancel()
 		if err != nil {
 			r.log.printf("%s: send failed for %s", rigName, seat)

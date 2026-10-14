@@ -422,7 +422,7 @@ const saySender = "owner session"
 //     state.told/state.warned and read whenever the seat next looks at its pane, so arriving later changes nothing
 //     except that they are no longer held behind a busy seat.
 func rigSay(rig, seat, text string, raw bool) {
-	session := rig + "-" + seat + "@" + rig
+	session := clientruntime.SeatSessionName(rig, seat)
 	if raw {
 		_ = runtimeSendText(session, text)
 		return
@@ -451,11 +451,11 @@ func rigAbort(rig, seat string) {
 	// this keystroke. The old code discarded it too (Start + Release), so this is not a new silence. The alternative
 	// is a supervisor log line, which this function cannot reach without a logger seam of its own: if a reader needs
 	// the refusal visible, THAT seam is the change to make - not a silent retry here.
-	_ = runtimeSendText(rig+"-"+seat+"@"+rig, "/abort")
+	_ = runtimeSendText(clientruntime.SeatSessionName(rig, seat), "/abort")
 }
 
 func tmuxInterrupt(rig, seat string) {
-	cmd, err := clientenv.TmuxCommand("send-keys", "-t", rig+"-"+seat+"@"+rig, "Escape")
+	cmd, err := clientenv.TmuxCommand("send-keys", "-t", clientruntime.SeatSessionName(rig, seat), "Escape")
 	if err != nil {
 		return
 	}
@@ -470,7 +470,7 @@ func (s *Supervisor) rpcCompact(rig, seat string) string {
 		return "forcecompact is not configured (set 4GENTEAM_FORCECOMPACT or pass --forcecompact): " +
 			"an omp seat past the limit cannot be compacted"
 	}
-	out, err := exec.Command(s.Forcecompact, rig+"-"+seat+"@"+rig).CombinedOutput()
+	out, err := exec.Command(s.Forcecompact, clientruntime.SeatSessionName(rig, seat)).CombinedOutput()
 	if text := strings.TrimSpace(string(out)); text != "" {
 		return text
 	}

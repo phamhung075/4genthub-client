@@ -3,6 +3,11 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — watch, feed, grid and input resolve native rooms
+
+### Fixed
+- `feed`, `watch`, `grid`, `input` and `inputs` reported "no such room" for a room started by `4genteam up`, because the existence check read the cloud seat store. It now reads `<state root>/rooms/<room>/seats/<seat>`. Seat session names, the seat directory (`clientruntime.SeatDir`: sessions, skills, `config.yml`) and the restore/supervisor/seatlog targets use the runtime's own naming instead of `<rig>-<seat>@<rig>`. Tests: `clientwatch`, `clientrestore`, `clientlifecycle`, `clientseat`, `seatlog`.
+
 ## 2026-10-14 — every client tmux call reaches the runtime's own tmux server
 
 ### Fixed

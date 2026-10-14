@@ -28,13 +28,13 @@ import (
 // deepSeekNodes is a room whose seat runs a DeepSeek model: the case the gate exists for, since resuming
 // it bills the peak rate. The keys are the ones clientoffpeak reads off `rig ps --nodes --json`.
 func deepSeekNodes() string {
-	return `[{"logicalId":"rig-a.dev","canonicalSessionName":"rig-a-dev@rig-a","rigName":"rig-a",` +
+	return `[{"logicalId":"rig-a.dev","canonicalSessionName":"agenthub--rig-a--dev","rigName":"rig-a",` +
 		`"model":"deepseek/deepseek-flash","sessionStatus":"stopped"}]`
 }
 
 // plainNodes is a room with no DeepSeek seat anywhere: the gate never has an opinion about it.
 func plainNodes() string {
-	return `[{"logicalId":"rig-a.dev","canonicalSessionName":"rig-a-dev@rig-a","rigName":"rig-a",` +
+	return `[{"logicalId":"rig-a.dev","canonicalSessionName":"agenthub--rig-a--dev","rigName":"rig-a",` +
 		`"model":"anthropic/claude-sonnet-4-5","sessionStatus":"stopped"}]`
 }
 
@@ -260,7 +260,7 @@ func staticSessions(names ...string) func() []string {
 // second `rig up --existing` on a live rig is what the verb must avoid, and the brief still goes out, in
 // the seats' own order, with the shared text.
 func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-beta@rig-a", "rig-a-alpha@rig-a", "other-rig-alpha@other-rig"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--beta", "agenthub--rig-a--alpha", "agenthub--other-rig--alpha"), plainNodes())
 	brief := w.brief("rig-a.txt", "Take the next board row.\n")
 
 	code, _, errOut := w.run("continue", "rig-a", brief)
@@ -271,8 +271,8 @@ func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
 		t.Errorf("the restore ran on a live rig: %v", w.calls())
 	}
 	want := []string{
-		"rig-a-alpha@rig-a\tYour seat: alpha. Take the next board row.",
-		"rig-a-beta@rig-a\tYour seat: beta. Take the next board row.",
+		"agenthub--rig-a--alpha\tYour seat: alpha. Take the next board row.",
+		"agenthub--rig-a--beta\tYour seat: beta. Take the next board row.",
 	}
 	if strings.Join(w.sends, "\n") != strings.Join(want, "\n") {
 		t.Errorf("briefs sent:\n%q\nwant:\n%q", w.sends, want)
@@ -297,7 +297,7 @@ func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
 // missed are named, and the verb leaves non-zero. Before this, each seat was logged as failed and the verb
 // still ended saying done, which is the shape R3 forbids: a delivery reported that never happened.
 func TestAnUndeliveredBriefIsAFailedRestore(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 	brief := w.brief("rig-a.txt", "Take the next board row.\n")
 
 	previousSteps := restoreSteps
@@ -329,7 +329,7 @@ func TestADeadRigIsRestoredFromItsSnapshot(t *testing.T) {
 	var w *world
 	w = newWorld(t, func() []string {
 		if strings.Contains(strings.Join(w.calls(), "|"), "up rig-a") {
-			return []string{"rig-a-alpha@rig-a"}
+			return []string{"agenthub--rig-a--alpha"}
 		}
 		return nil
 	}, plainNodes())
@@ -342,7 +342,7 @@ func TestADeadRigIsRestoredFromItsSnapshot(t *testing.T) {
 	if !strings.Contains(strings.Join(w.calls(), "|"), "up rig-a --existing") {
 		t.Errorf("the snapshot restore did not run: %v", w.calls())
 	}
-	if len(w.sends) != 1 || !strings.HasPrefix(w.sends[0], "rig-a-alpha@rig-a\tYour seat: alpha. Resume the port.") {
+	if len(w.sends) != 1 || !strings.HasPrefix(w.sends[0], "agenthub--rig-a--alpha\tYour seat: alpha. Resume the port.") {
 		t.Errorf("briefs sent = %q, want one to alpha with the shared text", w.sends)
 	}
 	if !strings.Contains(w.log(), "rig-a: restoring from latest snapshot") {
@@ -353,7 +353,7 @@ func TestADeadRigIsRestoredFromItsSnapshot(t *testing.T) {
 // TestASeatWithItsOwnBriefGetsThatInsteadOfTheSharedOne: briefs/<rig>/<seat>.txt replaces the shared text
 // for that seat, so no generic paragraph is pushed onto a seat that has its own.
 func TestASeatWithItsOwnBriefGetsThatInsteadOfTheSharedOne(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a", "rig-a-beta@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha", "agenthub--rig-a--beta"), plainNodes())
 	shared := w.brief("rig-a.txt", "Shared text\n")
 	w.brief(filepath.Join("rig-a", "beta.txt"), "Beta only\n")
 
@@ -393,7 +393,7 @@ func TestNoSeatsUpAbortsForThatRig(t *testing.T) {
 // The restore happened - that work is not undone - but the run's answer is a failure, because the caller
 // asked for a briefing and did not get one.
 func TestAMissingBriefFileIsReportedAndFailsTheRun(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 
 	code, _, _ := w.run("continue", "rig-a", filepath.Join(w.home, "nope.txt"))
 	if code != ExitRestoreFailed {
@@ -407,7 +407,7 @@ func TestAMissingBriefFileIsReportedAndFailsTheRun(t *testing.T) {
 // TestNoBriefRequestedSendsNothing: --no-brief is a restore with no words, and it must not fall back to
 // the default brief file - the caller said not to brief.
 func TestNoBriefRequestedSendsNothing(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 	w.brief("rig-a.txt", "Default text that must NOT be sent\n")
 
 	code, _, _ := w.run("continue", "rig-a", "--no-brief")
@@ -472,7 +472,7 @@ func TestAllowPeakRestoresTheSameRoom(t *testing.T) {
 // there has nothing to start, and its brief is text to seats that are running - so a peak reading must not
 // refuse it, which is also what a caller watching a live room expects.
 func TestAnAlreadyLiveRigIsNotGated(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), deepSeekNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), deepSeekNodes())
 	gateEnv(t, "2026-10-08 07:00")
 	brief := w.brief("rig-a.txt", "Text\n")
 
@@ -488,7 +488,7 @@ func TestAnAlreadyLiveRigIsNotGated(t *testing.T) {
 // TestTheDefaultBriefIsTheRigsOwnFile: no second argument means <home>/.config/4genthub/briefs/<rig>.txt, which is
 // the path the help, the listing and this default must agree on.
 func TestTheDefaultBriefIsTheRigsOwnFile(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 	w.brief("rig-a.txt", "Default text\n")
 
 	if code, _, errOut := w.run("continue", "rig-a"); code != clientcmd.ExitOK {
@@ -501,7 +501,7 @@ func TestTheDefaultBriefIsTheRigsOwnFile(t *testing.T) {
 
 // TestAllContinuesEveryRigThatHasABrief, one at a time, and does not stop at the first rig that fails.
 func TestAllContinuesEveryRigThatHasABrief(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a", "rig-b-alpha@rig-b"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha", "agenthub--rig-b--alpha"), plainNodes())
 	w.brief("rig-b.txt", "B text\n")
 	w.brief("rig-a.txt", "A text\n") // sorted, so rig-a is briefed first
 
@@ -534,7 +534,7 @@ func TestAllWithNoBriefsSaysSo(t *testing.T) {
 // exit code can tell a run that resumed every room from one that did not. The rig that could not come up
 // is named in the log, which is the record a reader has after the fact.
 func TestAllReportsARigItCouldNotBringUp(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 	w.brief("rig-a.txt", "A text\n")
 	w.brief("rig-b.txt", "B text\n") // no seat of rig-b is up, so its restore cannot end with a live room
 
@@ -560,9 +560,9 @@ func TestAllReportsARigItCouldNotBringUp(t *testing.T) {
 // left it stopped, so it is not a run that brought everything up either. Exit non-zero, the room named, and
 // nothing started for it: --allow-peak is how a caller asks for the peak-hour restore.
 func TestAllCountsARefusedRig(t *testing.T) {
-	bothDeepSeek := `[{"logicalId":"rig-a.dev","canonicalSessionName":"rig-a-dev@rig-a","rigName":"rig-a",` +
+	bothDeepSeek := `[{"logicalId":"rig-a.dev","canonicalSessionName":"agenthub--rig-a--dev","rigName":"rig-a",` +
 		`"model":"deepseek/deepseek-flash","sessionStatus":"stopped"},` +
-		`{"logicalId":"rig-b.dev","canonicalSessionName":"rig-b-dev@rig-b","rigName":"rig-b",` +
+		`{"logicalId":"rig-b.dev","canonicalSessionName":"agenthub--rig-b--dev","rigName":"rig-b",` +
 		`"model":"deepseek/deepseek-flash","sessionStatus":"stopped"}]`
 	w := newWorld(t, staticSessions(), bothDeepSeek)
 	gateEnv(t, "2026-10-08 07:00") // Thursday 07:00Z: inside the 06:00-10:00 peak block
@@ -587,7 +587,7 @@ func TestAllCountsARefusedRig(t *testing.T) {
 // second argument as a brief PATH and ignored everything after it, so a caller who mistyped got a restore
 // with a briefing that never happened.
 func TestAnArgumentTheVerbDoesNotKnowIsRefusedByName(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 	for _, args := range [][]string{
 		{"continue", "--wat", "rig-a"},
 		{"continue", "-x"},
@@ -612,7 +612,7 @@ func TestAnArgumentTheVerbDoesNotKnowIsRefusedByName(t *testing.T) {
 // TestTheWallIsSkippedWithoutATerminalHost: herdr hosts the wall, and the shell logged a skip rather than
 // a failure on a machine that has no wall. RIG_CONTINUE_WATCH=0 is the other way out, for a headless run.
 func TestTheWallIsSkippedWithoutATerminalHost(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 	w.run("continue", "rig-a", "--no-brief")
 	if !strings.Contains(w.log(), "rig-a: watch wall opened") {
 		t.Errorf("the stubbed wall did not report opening:\n%s", w.log())
@@ -624,7 +624,7 @@ func TestTheWallIsSkippedWithoutATerminalHost(t *testing.T) {
 		t.Errorf("watchWall with no herdr = (%v, %q), want (false, %q)", opened, why, wallNoTerminal)
 	}
 
-	w2 := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w2 := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 	t.Setenv(watchEnv, "0")
 	w2.run("continue", "rig-a", "--no-brief")
 	if len(w2.walls) != 0 {
@@ -670,10 +670,10 @@ func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 // out of order, so name order and each room's one-word state (running, partial, stopped) are asserted.
 func TestTheListingNeedsNoRigTool(t *testing.T) {
 	nodes := `[` +
-		`{"logicalId":"rig-b.one","canonicalSessionName":"rig-b-one@rig-b","rigName":"rig-b","model":"m","sessionStatus":"running"},` +
-		`{"logicalId":"rig-b.two","canonicalSessionName":"rig-b-two@rig-b","rigName":"rig-b","model":"m","sessionStatus":"stopped"},` +
-		`{"logicalId":"rig-a.dev","canonicalSessionName":"rig-a-dev@rig-a","rigName":"rig-a","model":"m","sessionStatus":"running"},` +
-		`{"logicalId":"rig-z.dev","canonicalSessionName":"rig-z-dev@rig-z","rigName":"rig-z","model":"m","sessionStatus":"stopped"}]`
+		`{"logicalId":"rig-b.one","canonicalSessionName":"agenthub--rig-b--one","rigName":"rig-b","model":"m","sessionStatus":"running"},` +
+		`{"logicalId":"rig-b.two","canonicalSessionName":"agenthub--rig-b--two","rigName":"rig-b","model":"m","sessionStatus":"stopped"},` +
+		`{"logicalId":"rig-a.dev","canonicalSessionName":"agenthub--rig-a--dev","rigName":"rig-a","model":"m","sessionStatus":"running"},` +
+		`{"logicalId":"rig-z.dev","canonicalSessionName":"agenthub--rig-z--dev","rigName":"rig-z","model":"m","sessionStatus":"stopped"}]`
 	w := newWorld(t, staticSessions(), nodes)
 	w.brief("rig-a.txt", "Text\n")
 
@@ -766,11 +766,11 @@ func TestHelpIsAnsweredBeforeAnythingElse(t *testing.T) {
 // and counting it would make the watchdog think a dead rig is up - the one mistake that silences it.
 func TestRigSessionsReadsOnlyThisRigsSeats(t *testing.T) {
 	names := []string{
-		"rig-a-beta@rig-a",
-		"rig-a-alpha@rig-a",
-		"other-rig-a-alpha@other-rig-a",
+		"agenthub--rig-a--beta",
+		"agenthub--rig-a--alpha",
+		"agenthub--other-rig-a--alpha",
 		"rig-a@rig-a",
-		"rig-aa-alpha@rig-aa",
+		"agenthub--rig-aa--alpha",
 		"rig-a-late@rig-a-x",
 		"",
 	}
@@ -796,7 +796,7 @@ func TestAMissingTmuxServerReadsAsNoSessions(t *testing.T) {
 // TestTheLogLineKeepsTheShellsShape: `date -Is` then the message, so a log the client writes and the log
 // the script wrote read as one file rather than two dialects.
 func TestTheLogLineKeepsTheShellsShape(t *testing.T) {
-	w := newWorld(t, staticSessions("rig-a-alpha@rig-a"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
 	w.run("continue", "rig-a", "--no-brief")
 	first := strings.SplitN(w.log(), "\n", 2)[0]
 	if !strings.HasPrefix(first, "2026-10-10T15:00:00+00:00 ") {
@@ -807,7 +807,7 @@ func TestTheLogLineKeepsTheShellsShape(t *testing.T) {
 // TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt drives the REAL delivery seam rather than the
 // stubbed one, because this is the seam whose native branch was unreachable: it looked for the Python-era
 // agenthub--<room>--<seat> session shape, which the sessions this rig actually has do not match, then
-// exec'd `rig send` and SWALLOWED its failure - so a brief for 4genthub-min-reviewer@4genthub-min was
+// exec'd `rig send` and SWALLOWED its failure - so a brief for agenthub--4genthub-min--reviewer was
 // reported as briefed and dropped. The seal is the pair of facts below: the delivery is refused for the
 // real session shape, and the refusal says what could not deliver it.
 func TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt(t *testing.T) {
@@ -827,7 +827,7 @@ func TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newRestorer: %v", err)
 	}
-	if err := r.send(context.Background(), "4genthub-min-reviewer@4genthub-min", "Your seat: reviewer. hello"); err == nil {
+	if err := r.send(context.Background(), "agenthub--4genthub-min--reviewer", "Your seat: reviewer. hello"); err == nil {
 		t.Fatal("a brief no transport delivered was reported as delivered")
 	} else if !strings.Contains(err.Error(), "no runtime is answering") {
 		t.Errorf("the refusal does not name the transport that did not answer: %v", err)

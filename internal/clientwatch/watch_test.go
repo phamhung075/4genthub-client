@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,9 @@ func runVerbT(t *testing.T, verb string, args ...string) (int, string, string) {
 	t.Helper()
 	stdout := &strings.Builder{}
 	stderr := &strings.Builder{}
+	if !slices.Contains(args, "--state-root") {
+		args = append(slices.Clone(args), "--state-root", withStateRoot(t))
+	}
 	code := runVerb(context.Background(), verb, args, stdout, stderr)
 	return code, stdout.String(), stderr.String()
 }
@@ -166,26 +170,33 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 // caller passes it as --state-root. The root itself is unused by the grid; the panes it opens read it.
 func withStateRoot(t *testing.T) string {
 	t.Helper()
-	return t.TempDir()
+	if testStateRoot != "" {
+		return testStateRoot
+	}
+	testStateRoot = t.TempDir()
+	t.Cleanup(func() { testStateRoot = "" })
+	return testStateRoot
 }
 
-// withSeatStore gives the verb a seat store holding this room and these seats, so a verb that resolves
-// a room from --rig has a machine to resolve it on. It is the store the existence check reads and not
-// the live sessions: a room whose seats are all stopped is still a room.
+// testStateRoot is the one state root a test's verbs run against, so the room a test builds and the root
+// the verb reads are the same tree.
+var testStateRoot string
+
+// withSeatStore gives the verb a native room holding these seats, under the test's state root
+// (<root>/rooms/<room>/seats/<seat>, the layout `4genteam up` leaves), so a verb that resolves a room from
+// --rig has a machine to resolve it on. It is what the existence check reads and not the live sessions: a
+// room whose seats are all stopped is still a room.
 func withSeatStore(t *testing.T, rig string, seats ...string) string {
 	t.Helper()
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, rig), 0o755); err != nil {
+	root := withStateRoot(t)
+	if err := os.MkdirAll(filepath.Join(root, "rooms", rig), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, seat := range seats {
-		if err := os.MkdirAll(filepath.Join(root, rig, seat), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, "rooms", rig, "seats", seat), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	restore := seatStore
-	seatStore = func() string { return root }
-	t.Cleanup(func() { seatStore = restore })
 	return root
 }
 
@@ -628,5 +639,32 @@ func TestSmokeFeedReadsTheLiveRig(t *testing.T) {
 	}
 	if len(captured) == 0 {
 		t.Errorf("the feed rendered nothing; the smoke is only meaningful with a live rig")
+	}
+}
+
+// A room `4genteam up` started is a room even when every seat is stopped, and the cloud seat store's layout
+// (<root>/<room>/<seat>) is not where the check looks.
+func TestTheExistenceCheckReadsTheNativeRoomLayout(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "rooms", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireRoomAndSeats(root, "r", nil); err != nil {
+		t.Errorf("a native room with no seats refused: %v", err)
+	}
+	if err := requireRoomAndSeats(root, "r", []string{"lead"}); err == nil || !strings.Contains(err.Error(), "no such seat: lead in r") {
+		t.Errorf("a seat the room does not hold: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "rooms", "r", "seats", "lead"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireRoomAndSeats(root, "r", []string{"lead"}); err != nil {
+		t.Errorf("a native seat refused: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "old", "lead"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireRoomAndSeats(root, "old", nil); err == nil || !strings.Contains(err.Error(), "no such room: old") {
+		t.Errorf("a room in the seat-store layout counted as a native room: %v", err)
 	}
 }

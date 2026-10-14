@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"io"
 	"os"
 	"path/filepath"
@@ -226,7 +227,7 @@ func PolicyKeysMatch(want, have string) bool {
 
 // ConfigPath is config_path: a seat's own config, under the machine-level state root.
 func ConfigPath(stateRoot, rig, seat string) string {
-	return filepath.Join(stateRoot, rig+"-"+seat+"@"+rig, "agent", "config.yml")
+	return filepath.Join(clientruntime.SeatDir(stateRoot, rig, seat), "config.yml")
 }
 
 // Commands is what the dispatcher registers from this package.

@@ -60,10 +60,10 @@ func TestReviveRestartsOnlyTheStoppedSeats(t *testing.T) {
 		switch {
 		case strings.Contains(line, `"GetRoomStatus"`):
 			return `{"ok":true,"data":[` +
-				`{"room":"lab","seat":"dev","session_name":"lab-dev@lab","runtime":"omp","state":"running"},` +
-				`{"room":"lab","seat":"qa","session_name":"lab-qa@lab","runtime":"omp","state":"stopped"}]}` + "\n"
+				`{"room":"lab","seat":"dev","session_name":"agenthub--lab--dev","runtime":"omp","state":"running"},` +
+				`{"room":"lab","seat":"qa","session_name":"agenthub--lab--qa","runtime":"omp","state":"stopped"}]}` + "\n"
 		case strings.Contains(line, `"RestartSeat"`):
-			return `{"ok":true,"data":{"room":"lab","seat":"qa","session_name":"lab-qa@lab","runtime":"omp","state":"running"}}` + "\n"
+			return `{"ok":true,"data":{"room":"lab","seat":"qa","session_name":"agenthub--lab--qa","runtime":"omp","state":"running"}}` + "\n"
 		}
 		return `{"ok":false,"error":"unexpected"}` + "\n"
 	})
@@ -103,7 +103,7 @@ func TestReviveReturnsTheRuntimesRefusalForAnUnknownRoom(t *testing.T) {
 func TestReviveNamesTheSeatsThatDidNotStart(t *testing.T) {
 	fakeRuntime(t, func(line string) string {
 		if strings.Contains(line, `"GetRoomStatus"`) {
-			return `{"ok":true,"data":[{"room":"lab","seat":"qa","session_name":"lab-qa@lab","runtime":"omp","state":"stopped"}]}` + "\n"
+			return `{"ok":true,"data":[{"room":"lab","seat":"qa","session_name":"agenthub--lab--qa","runtime":"omp","state":"stopped"}]}` + "\n"
 		}
 		return `{"ok":false,"error":"no key"}` + "\n"
 	})

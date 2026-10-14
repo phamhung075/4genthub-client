@@ -41,5 +41,11 @@ func ParseSeatSessionName(name string) (room, seat string, ok bool) {
 // SeatSessionsDir is where a native room's omp seat writes its transcripts under the state root:
 // `<root>/rooms/<room>/seats/<seat>/sessions`.
 func SeatSessionsDir(root, room, seat string) string {
-	return filepath.Join(root, "rooms", room, "seats", seat, "sessions")
+	return filepath.Join(SeatDir(root, room, seat), "sessions")
+}
+
+// SeatDir is a native room's omp seat directory, `<root>/rooms/<room>/seats/<seat>`. It is the seat's cwd and its
+// PI_CODING_AGENT_DIR at once, so its config.yml, skills and sessions all live directly under it.
+func SeatDir(root, room, seat string) string {
+	return filepath.Join(root, "rooms", room, "seats", seat)
 }

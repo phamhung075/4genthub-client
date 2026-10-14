@@ -438,8 +438,8 @@ func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
 
 	rigAbort("room1", "alpha")
 
-	if gotSession != "room1-alpha@room1" {
-		t.Errorf("session = %q, want the room's canonical session name room1-alpha@room1", gotSession)
+	if gotSession != "agenthub--room1--alpha" {
+		t.Errorf("session = %q, want the room's canonical session name agenthub--room1--alpha", gotSession)
 	}
 	if gotText != "/abort" {
 		t.Errorf("barrier text = %q, want the bare /abort: an envelope or any other text arrives as a MESSAGE, "+
@@ -466,8 +466,8 @@ func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
 		t.Fatalf("sends = %d, want 2", len(texts))
 	}
 	for i, session := range sessions {
-		if session != "room1-alpha@room1" {
-			t.Errorf("send %d session = %q, want the room's canonical session name room1-alpha@room1", i, session)
+		if session != "agenthub--room1--alpha" {
+			t.Errorf("send %d session = %q, want the room's canonical session name agenthub--room1--alpha", i, session)
 		}
 	}
 	if want := "From " + saySender + ": context was compacted"; texts[0] != want {

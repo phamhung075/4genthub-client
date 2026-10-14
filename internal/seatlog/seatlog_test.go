@@ -61,7 +61,7 @@ func TestNewestSessionPicksTheMostRecentlyWrittenLog(t *testing.T) {
 
 func TestSeatLogPrefersAnOmpStateDirectoryAndFallsBackToClaude(t *testing.T) {
 	stateRoot := t.TempDir()
-	seatDir := filepath.Join(stateRoot, "my-rig-lead@my-rig")
+	seatDir := filepath.Join(stateRoot, "rooms", "my-rig", "seats", "lead")
 	if err := os.MkdirAll(filepath.Join(seatDir, "sessions"), 0o755); err != nil {
 		t.Fatal(err)
 	}

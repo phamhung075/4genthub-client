@@ -2,6 +2,7 @@ package clientrestore
 
 import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"sort"
 	"strings"
 )
@@ -36,15 +37,12 @@ func sessionNames() []string {
 	return names
 }
 
-// rigSessions is the sessions that belong to one rig. the rig orchestrator names a seat's session
-// `<rig>-<seat>@<rig>`, and the shell matched both ends of that shape; a name that has the rig's name in
-// the middle is another rig's seat and is not counted, which is the bug a plain substring match would
-// introduce.
+// rigSessions is the sessions that belong to one rig. A native seat's session is `agenthub--<room>--<seat>`; a
+// name with the rig's name elsewhere in it is another room's seat and is not counted.
 func rigSessions(rig string, names []string) []string {
-	prefix, suffix := rig+"-", "@"+rig
 	var sessions []string
 	for _, name := range names {
-		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) {
+		if room, _, ok := clientruntime.ParseSeatSessionName(name); ok && room == rig {
 			sessions = append(sessions, name)
 		}
 	}
@@ -54,13 +52,10 @@ func rigSessions(rig string, names []string) []string {
 // rigSeats is those sessions' seat names, sorted: the shell sorted them before it briefed, so the order
 // the log reports is the order the briefs went out.
 func rigSeats(rig string, names []string) []string {
-	prefix, suffix := rig+"-", "@"+rig
 	seats := make([]string, 0, len(names))
 	for _, session := range rigSessions(rig, names) {
-		seat := strings.TrimSuffix(strings.TrimPrefix(session, prefix), suffix)
-		if seat != "" {
-			seats = append(seats, seat)
-		}
+		_, seat, _ := clientruntime.ParseSeatSessionName(session)
+		seats = append(seats, seat)
 	}
 	sort.Strings(seats)
 	return seats

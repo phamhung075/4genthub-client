@@ -117,34 +117,26 @@ func watchRootError(err error) error {
 	return unavailableError(clientenv.StateRootMessage)
 }
 
-// seatStore is where this machine materializes a room's seats: clientenv.DefaultSeatStore(), the
-// account home's .config/4genthub/seats, never $HOME. A seat runs with HOME pointed at its own state
-// directory, so an environment-resolved store would refuse every real room when the client runs from a
-// seat. It is a variable only so a test can point it at a scratch tree.
-var seatStore = clientenv.DefaultSeatStore
-
 // requireRoomAndSeats is the ONE existence check every verb that resolves a room or a seat from --rig
-// goes through, so the refusals cannot disagree with each other: the room must be there in the seat
-// store, and, when --seat is given, each named seat must be one inside it. It checks EXISTENCE and
-// never a count - a real room whose seats are all stopped is still a room, and "following 0 seats" is
-// its correct output, so refusing on a zero count would break a legitimate case.
-func requireRoomAndSeats(rig string, seats []string) error {
-	store := seatStore()
-	if store == "" {
-		return unavailableError(clientenv.SeatStoreMessage)
-	}
-	if !isDir(filepath.Join(store, rig)) {
+// goes through, so the refusals cannot disagree with each other: the room must be a native room under
+// the state root (<root>/rooms/<room>, where `4genteam up` starts it), and, when --seat is given, each
+// named seat must be one inside it (<root>/rooms/<room>/seats/<seat>). It checks EXISTENCE and never a
+// count - a real room whose seats are all stopped is still a room, and "following 0 seats" is its
+// correct output, so refusing on a zero count would break a legitimate case.
+func requireRoomAndSeats(root, rig string, seats []string) error {
+	room := filepath.Join(root, "rooms", rig)
+	if !isDir(room) {
 		return usageError(fmt.Sprintf("no such room: %s", rig))
 	}
 	for _, seat := range seats {
-		if !isDir(filepath.Join(store, rig, seat)) {
+		if !isDir(filepath.Join(room, "seats", seat)) {
 			return usageError(fmt.Sprintf("no such seat: %s in %s", seat, rig))
 		}
 	}
 	return nil
 }
 
-// isDir is the existence test itself: a room or a seat that was never materialized here is not one.
+// isDir is the existence test itself: a room or a seat that was never started here is not one.
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
