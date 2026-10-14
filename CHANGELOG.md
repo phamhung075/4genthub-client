@@ -3,6 +3,57 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the idle readers ask the daemon, not a program found on PATH
+
+### Changed
+- `internal/clientruntime/seatactivity.go` (new) — **one read for both readers**. `ReadSeatActivity` asks the rigs list
+  (`GET /api/ps`) for the rig's id and then that rig's node table (`GET /api/rigs/<rigId>/nodes`), and answers
+  `SeatActivity{Word, Present, Read, Why}`: the word when the report carries one, `Present=false` when the seat has no
+  activity field at all (an explicit diagnostic, not an empty word), and `Read=false` with a sentence naming what could
+  not be asked. The read goes over the client's OWN transport, so nothing resolves a program name any more.
+- `internal/clientseat/sync.go` — `seatActivity` calls it; the `exec.LookPath("rig")` + `rig ps --nodes --rig … --json`
+  shell-out is gone. On this box `rig` on PATH is the compat shim to `4genteam`, whose own `ps` carries `activity` (a
+  log mtime) and no `agentActivity` at all — so the word never arrived and the quiet gate could never open. Its
+  declaration now names the seam and the cutover re-point: when the runtime grows its own producer, the read's body
+  moves and the declaration is DELETED rather than annotated.
+- `internal/clientlifecycle/supervisor.go` — `rigIdleReason` calls the same read; a read that could not answer now
+  returns the read's own sentence instead of one of three locally worded ones, so both readers diagnose a failure the
+  same way and the wording cannot drift from the transport again. The four sentences `idleFromActivityWord` writes (an
+  unrecognized word, no activity field, an empty word) are reachable through it and now tested.
+- `internal/clientruntime/activity.go` — the taxonomy citation corrected (the daemon STORES three values,
+  `working | idle-at-prompt | unknown`, and derives `needs-input`; the old comment listed the human-facing four as
+  stored), and the alias rationale grounded in tonight's measurement: `idle` is what the served field carries and
+  `idle-at-prompt` is the daemon's own stored synonym, kept normalized so a served stored-form cannot silently refuse a
+  genuinely idle seat.
+
+### Verified
+- `TestReadSeatActivityAsksTheDaemonAndRefusesByDefault` (11 cases): only `idle` releases (`running`, `working`,
+  `needs_input`, `unknown`, the empty word, and a word nobody has seen all forbid), the stored synonym releases, a node
+  with no activity field is its own answer, and a table without this seat cannot answer; each case also pins the two
+  routes asked, so WHICH program answered is asserted rather than assumed.
+  `TestReadSeatActivityRefusesWhenNoDaemonIsNamed` and `TestReadSeatActivityRefusesARigTheListDoesNotCarry` pin the two
+  fail-closed paths, each naming the variable or the rig in its sentence.
+- **LIVE, both readers, this box's daemon at 127.0.0.1:7433** (QuietSeconds 0, so the stillness clause cannot mask the
+  activity clause):
+
+  ```
+  clientseat  architect  word="unknown"      read=true  quiet=false unrecognized=""
+  clientseat  lead       word="idle"         read=true  quiet=true  unrecognized=""
+  clientseat  fe-dev     word="unknown"      read=true  quiet=false unrecognized=""
+  clientseat  go-dev     word="running"      read=true  quiet=false unrecognized=""
+  clientseat  reviewer   word="running"      read=true  quiet=false unrecognized=""
+  supervisor  lead       idle=true  why=""    (architect, fe-dev, go-dev, reviewer: idle=false, why="")
+  ```
+
+  The quiet gate OPENS for the genuinely idle seat and refuses every other word, which is the defect this unit was
+  raised with ("the quiet gate cannot open today") measured closed on the running client.
+- `go test ./...` green, `go vet ./...` clean, `gofmt -l` empty on every file touched.
+
+### Not taken, named rather than dropped
+- `QuietWaiter`'s own sentence for a field-absent answer is still silent: `seatActivity` keeps the two-value seam, so
+  the waiter cannot name a cause the supervisor's half now names. Naming it there means widening
+  `QuietWaiter.Activity`'s type, which would churn ten test stubs in the same commit as the behaviour change.
+
 ## 2026-10-14 — queue show and queue transitions refuse a document they cannot read
 
 ### Changed

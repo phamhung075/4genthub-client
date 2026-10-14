@@ -9,8 +9,9 @@ package clientruntime
 // predicate is actually asking ("did the read say idle?") and refuses by default, so a vocabulary growth fails the
 // test that pins this set instead of quietly authorizing a destroyer.
 //
-// WHY ONLY `idle`, grounded rather than chosen: the daemon's own taxonomy carries the human-facing values
-// working | idle | needs-input | unknown (daemon/dist/domain/activity-taxonomy.js). `unknown` is not evidence (the
+// WHY ONLY `idle`, grounded rather than chosen: the daemon's taxonomy (daemon/dist/domain/activity-taxonomy.js)
+// STORES three values - working | idle-at-prompt | unknown - and derives the fourth human-facing one, needs-input,
+// from the seat's own state, so `needs-input` is not a word a producer emits. `unknown` is not evidence (the
 // daemon's own comment says so), `working` is the opposite of the answer, and `needs_input` means the seat sits
 // mid-turn waiting for a person - releasing a reseat there destroys a turn that was about to continue. Stillness may
 // DELAY a destroyer; it must never satisfy one.
@@ -29,12 +30,15 @@ var knownActivityWords = map[string]bool{
 // normalizeActivityWord maps the vocabulary's synonyms onto the word the allow-set is written in.
 //
 // WHICH FORM THIS CONSUMES, named because the alias is exactly where a gate goes silent: activity-taxonomy.js stores
-// `idle-at-prompt` and aliases it to `idle` before the human-facing surface reads it, so the SERVED form is `idle`
-// and the STORED form is not the string the set is written in. Trusting that mapping to stay put would make a
-// one-member set refuse the stored form - and that refusal is SILENT: a genuinely idle seat would read exactly like a
-// dead gate, no quiet, forever, nothing said, which is the failure this row is already living with for the other
-// reason (the read supplies no word at all). So this client normalizes the alias itself, deliberately, and its test
-// asserts the alias RELEASES; a synonym left neither normalized nor refused-on-purpose is how a gate never opens.
+// `idle-at-prompt` and aliases it to `idle` before the human-facing surface reads it (the bridge maps stored -> served
+// at activity-taxonomy.js:48-50), so the SERVED form is `idle` and the STORED form is not the string the set is
+// written in. MEASURED on the served field tonight: `idle` arrives and `idle-at-prompt` does not - the alias is the
+// daemon's own synonym, kept here so a daemon that ever serves the stored word cannot turn a genuinely idle seat into
+// a silent refusal. Trusting that mapping to stay put would make a one-member set refuse the stored form - and that
+// refusal is SILENT: an idle seat would read exactly like a dead gate, no quiet, forever, nothing said, which is the
+// failure this row lived with for the other reason (the read supplying no word at all). So this client normalizes the
+// alias itself, deliberately, and its test asserts the alias RELEASES; a synonym left neither normalized nor
+// refused-on-purpose is how a gate never opens.
 func normalizeActivityWord(word string) string {
 	if word == "idle-at-prompt" {
 		return "idle"

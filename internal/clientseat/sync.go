@@ -2,7 +2,7 @@
 package clientseat
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"io"
 	"math"
@@ -258,40 +258,28 @@ func (w QuietWaiter) quietOnce(rig, seat string) (quiet bool, unrecognized strin
 
 func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
-// seatActivity is seat_activity, and it is the SECOND reader of the same answer rigIdle reads - so it is a DECLARED
-// EXCEPTION for the same reason, with the same retirement: agentActivity is produced outside this client, there is no
-// native activity read on the runtime's surface yet, and that native read is the CUTOVER PRECONDITION the rigIdle
-// declaration names. One read retires both, and both declarations should then be DELETED rather than annotated.
+// seatActivity is seat_activity: the activity word for one seat, and it is the SECOND reader of the same answer
+// rigIdle reads - so it is a DECLARED EXCEPTION with the same retirement. Both readers now call ONE function,
+// clientruntime.ReadSeatActivity, which asks the agent's own activity report over the client's OWN transport: the
+// OpenRig daemon's node table today, the runtime's producer at cutover.
 //
-// ITS CONSUMER IS QuietWaiter, and the direction of failure here is the SAME as rigIdle's, written in the same form:
-// THIS ONE FAILS CLOSED. The seam carries the difference rather than leaving it to be guessed: this function's second
-// value is FALSE whenever it could not read at all, and QuietWaiter keeps waiting on that answer instead of reading it
-// as "not running". The consequence is stated rather than left to be discovered: AFTER THE CUTOVER, with no CLI to
-// read, every call answers false and a reseat waits out its deadline and then does NOT proceed. That indefinite wait
-// is why the native activity read is the cutover PRECONDITION rather than a nicety - not compaction alone - and both
-// declared exceptions are now consistent in direction.
+// WHY THE PROGRAM NAME IS GONE FROM HERE. This used to exec `rig ps --nodes --json`, resolved with
+// exec.LookPath("rig") - and on this box `rig` on PATH is the compat shim to 4genteam, whose own `ps` carries
+// `activity` (a log mtime) and NO `agentActivity` at all. The word therefore never arrived, quietly: a matched node
+// with no field, an empty word, a gate that can never open. Asking the daemon through the client's own transport
+// removes the question of WHICH program answered, and with it the whole class.
+//
+// THE RE-POINT IS THE CUTOVER PRECONDITION, and it is now one function rather than two readers: when the runtime
+// grows its own producer, ReadSeatActivity's body moves and this declaration is DELETED rather than annotated.
+//
+// ITS CONSUMER IS QuietWaiter, and the direction of failure here is the SAME as rigIdle's: THIS ONE FAILS CLOSED. The
+// second value is FALSE whenever nothing could be read at all, and QuietWaiter keeps waiting on that answer instead
+// of reading it as "not running". With no daemon named in the environment and no producer yet on the runtime, every
+// call answers false and a reseat waits out its deadline and does NOT proceed - far better than proceeding past a
+// seat whose agent is mid-turn.
 func seatActivity(rig, seat string) (string, bool) {
-	path, err := exec.LookPath("rig")
-	if err != nil {
-		return "", false
-	}
-	out, err := exec.Command(path, "ps", "--nodes", "--rig", rig, "--json").Output()
-	if err != nil {
-		return "", false
-	}
-	var nodes []map[string]any
-	if json.Unmarshal(out, &nodes) != nil {
-		return "", false
-	}
-	for _, node := range nodes {
-		if node["logicalId"] != rig+"."+seat {
-			continue
-		}
-		activity, _ := node["agentActivity"].(map[string]any)
-		state, _ := activity["state"].(string)
-		return state, true
-	}
-	return "", false
+	read := clientruntime.ReadSeatActivity(context.Background(), rig, seat)
+	return read.Word, read.Read
 }
 
 // secondsSinceLastWrite is seconds_since_last_write: how long the seat's session files have been still.
