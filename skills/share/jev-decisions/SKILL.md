@@ -22,6 +22,15 @@ Run it **before** you message the lead or the owner about a choice (architecture
 4genteam decide --tier seat --summary "<5-8 word subject>" --questions-file q.json
 ```
 
+Put the context in a file, never in `--detail "..."`: a double quote, a `$` or a newline in the text breaks the shell command, and the text after it runs as a command or lands in the log as garbage. Write it with a quoted heredoc and pass the path:
+
+```bash
+cat > detail.txt <<'DETAIL'
+<what you measured, the options and your lean; any characters are safe here>
+DETAIL
+4genteam decide --tier seat --summary "<5-8 word subject>" --detail-file detail.txt --questions-file q.json
+```
+
 Exit `0`: your tier decided, so act on the printed answer and note it in your task. Exit `5`: it escalated, so send the lead the question with the recommended option (the lead repeats the call with `--tier lead`; the lead's escalation goes to the owner). The question format, categories and escalation rules are in `room-decision-request`.
 
 Credentials and spend always go to the owner, with no Jev call. Never decide those yourself.

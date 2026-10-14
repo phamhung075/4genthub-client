@@ -29,7 +29,7 @@ A JSON array, 1 to 4 questions, 2 to 4 options each, labels under 75 characters,
 
 ```bash
 4genteam decide --tier seat --summary "<5-8 word subject>" \
-  --questions-file ask-questions.json [--category <token>] [--detail "<context>"]
+  --questions-file ask-questions.json [--category <token>] [--detail-file <context.txt>]
 ```
 
 Jev answers on your own machine (it needs `TYPESAFE_API_KEY` in `~/.config/4genthub/.env`); the server is not called and `$AGENTHUB_URL` is not needed. It prints the JSON outcome. Exit codes: `0` this tier decided (act on the chosen options), `5` escalated (see `escalate_to`), `1` the Jev log could not be written, `2` usage or a missing key.

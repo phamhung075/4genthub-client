@@ -29,7 +29,7 @@ import (
 // tier, so it is neither a success nor a failure of the call.
 const ExitEscalated = 5
 
-const usage = `usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D]
+const usage = `usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D | --detail-file <path>]
 
 Ask one step of the decision ladder. Jev is asked from this machine; the JSON outcome goes to stdout.
 
@@ -39,6 +39,7 @@ Ask one step of the decision ladder. Jev is asked from this machine; the JSON ou
   --questions-file  The same array read from a file, or "-" for stdin. One of the two is REQUIRED.
   --category        Optional. A free token; credentials, spend and $DECISION_OWNER_ONLY_CATEGORIES always go to the owner.
   --detail          Optional. Context for the evaluator.
+  --detail-file     The same text read from a file: use it for anything with quotes, newlines or a $, which a shell breaks.
 
 Configuration, from ~/.config/4genthub/.env or the environment: TYPESAFE_API_KEY (required), TYPESAFE_BASE_URL,
 JEV_DECISION_MODEL (jev-1.13.0), JEV_DECISION_THRESHOLD (0.8), JEV_DECISION_LOG_PATH. Every outcome is appended
@@ -55,7 +56,7 @@ func (decideCommand) Name() string    { return "decide" }
 func (decideCommand) Summary() string { return "ask one step of the seat/lead/owner decision ladder" }
 
 type options struct {
-	tier, category, summary, detail, questions, questionsFile string
+	tier, category, summary, detail, detailFile, questions, questionsFile string
 }
 
 // questionResult is what one question came to: Jev's pick and confidence, and the option the asker
@@ -89,6 +90,16 @@ func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 	}
 	if opts.tier != "seat" && opts.tier != "lead" {
 		return usageError(stderr, "--tier must be seat or lead")
+	}
+	if opts.detail != "" && opts.detailFile != "" {
+		return usageError(stderr, "give --detail or --detail-file, not both")
+	}
+	if opts.detailFile != "" {
+		data, err := os.ReadFile(opts.detailFile)
+		if err != nil {
+			return usageError(stderr, fmt.Sprintf("cannot read --detail-file: %v", err))
+		}
+		opts.detail = string(data)
 	}
 	summary, detail := strings.TrimSpace(opts.summary), strings.TrimSpace(opts.detail)
 	if summary == "" {
@@ -197,6 +208,8 @@ func parse(args []string) (options, bool, error) {
 			target = &opts.summary
 		case "--detail":
 			target = &opts.detail
+		case "--detail-file":
+			target = &opts.detailFile
 		case "--questions":
 			target = &opts.questions
 		case "--questions-file":
@@ -240,6 +253,6 @@ func readQuestions(opts options) (json.RawMessage, error) {
 
 func usageError(stderr io.Writer, message string) int {
 	fmt.Fprintf(stderr, "4genteam decide: %s\n", message)
-	_, _ = io.WriteString(stderr, "usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D]\n")
+	_, _ = io.WriteString(stderr, "usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D | --detail-file <path>]\n")
 	return clientcmd.ExitUsage
 }

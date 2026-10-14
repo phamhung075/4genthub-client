@@ -196,3 +196,21 @@ func TestHelp(t *testing.T) {
 		t.Errorf("exit %d out %q", code, out)
 	}
 }
+
+func TestDetailFileCarriesTextAShellWouldBreak(t *testing.T) {
+	_, logPath := jev(t, 200, `{"answers":{"q1":{"choice":"pg","confidence":0.9}}}`)
+	detail := "line one has \"quotes\" and $HOME\nline two; echo \"EXIT=$?\""
+	path := filepath.Join(t.TempDir(), "detail.txt")
+	if err := os.WriteFile(path, []byte(detail+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errs := run("--tier", "seat", "--summary", "s", "--detail-file", path, "--questions", questions); code != clientcmd.ExitOK {
+		t.Fatalf("exit %d stderr %q", code, errs)
+	}
+	if entries := readLog(t, logPath); len(entries) != 1 || entries[0]["detail"] != detail {
+		t.Errorf("logged detail = %v, want %q", entries, detail)
+	}
+	if code, _, _ := run("--tier", "seat", "--summary", "s", "--detail", "x", "--detail-file", path, "--questions", questions); code != clientcmd.ExitUsage {
+		t.Errorf("both --detail and --detail-file: exit %d, want usage", code)
+	}
+}
