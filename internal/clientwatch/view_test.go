@@ -83,6 +83,9 @@ func TestAChangeOfToolKindGetsALabelledRule(t *testing.T) {
 	if !ok || read.kind != "read" {
 		t.Fatalf("read call not recognised: %v %v", read, ok)
 	}
+	if think, ok := callKind(bold + fg(183) + "~ think " + reset + "text"); !ok || think.kind != "think" {
+		t.Errorf("reasoning not recognised: %v %v", think, ok)
+	}
 	if _, ok := callKind(fg(249) + "← read" + reset); ok {
 		t.Error("a result was taken for a call")
 	}

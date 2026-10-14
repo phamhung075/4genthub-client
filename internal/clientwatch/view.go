@@ -343,11 +343,17 @@ func (v *seatView) meter(tag string, pct int) string {
 
 func visibleLen(text string) int { return len([]rune(ansiSequence.ReplaceAllString(text, ""))) }
 
-// callStyles are the styles a tool call can wear, found again by the glyph that heads its first line.
-var callStyles = []toolStyle{readStyle, searchStyle, writeStyle, shellStyle, webStyle, delegateStyle, askStyle, mcpStyle, otherStyle}
+// callStyles are the styles a step can wear - a tool call, reasoning, a reply, an incoming message -, found again by the glyph that heads its first line.
+var (
+	thinkStyle = toolStyle{"~", 183, "think"}
+	sayStyle   = toolStyle{"▸", 255, "say"}
+	inStyle    = toolStyle{"◂", 87, "in"}
+)
 
-// callKind is the style of an event that is a tool call, judged by its first glyph; ok is false for a
-// result, a hook, a thought or a message.
+var callStyles = []toolStyle{thinkStyle, sayStyle, inStyle, readStyle, searchStyle, writeStyle, shellStyle, webStyle, delegateStyle, askStyle, mcpStyle, otherStyle}
+
+// callKind is the style of an event that starts a step, judged by its first glyph; ok is false for a
+// result or a hook.
 func callKind(text string) (toolStyle, bool) {
 	head := strings.TrimSpace(ansiSequence.ReplaceAllString(strings.SplitN(text, "\n", 2)[0], ""))
 	for _, style := range callStyles {

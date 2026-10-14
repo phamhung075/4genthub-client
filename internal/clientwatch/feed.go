@@ -80,9 +80,6 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 				view.repeated = 0
 			}
 			view.last = text
-			if opts.detail && strings.HasPrefix(ansiSequence.ReplaceAllString(text, ""), "◂ in") {
-				fmt.Fprintf(out, "%s%s%s\n", fg(stampColor), strings.Repeat("─", min(opts.width, 60)), reset)
-			}
 			if style, isCall := callKind(text); isCall {
 				fmt.Fprintln(out, kindRule(style, opts.width))
 			}
