@@ -2,6 +2,7 @@ package clientlifecycle
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,7 +66,7 @@ func supervisorFor(path, runtime string, working bool, sent *[]string, interrupt
 	// The off-peak gate is OFF for every other test in this file: they are about the compaction logic,
 	// so the resume path must behave exactly as it did before the gate existed. The gate's own tests set
 	// both seams themselves.
-	supervisor.Nodes = func(string) []map[string]any { return nil }
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
 	supervisor.Getenv = func(key string) string {
 		if key == clientoffpeak.ModeEnv {
 			return clientoffpeak.ValueOff
@@ -347,7 +348,7 @@ func gatedSupervisor(t *testing.T, mode, pin string, nodes []map[string]any) (*S
 	var sent, interrupted, logged []string
 	supervisor := supervisorFor(path, "omp", false, &sent, &interrupted)
 	supervisor.Log = func(text string) { logged = append(logged, text) }
-	supervisor.Nodes = func(string) []map[string]any { return nodes }
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) { return nodes, true, nil }
 	supervisor.Getenv = func(key string) string {
 		switch key {
 		case clientoffpeak.ModeEnv:
@@ -385,6 +386,29 @@ func TestAnOffPeakResumeIsSentExactlyAsBefore(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(*logged, "|"), "told to resume") {
 		t.Errorf("the resume was not logged: %v", *logged)
+	}
+}
+
+// TestAFailedRoomReadHoldsTheResume: the automatic resume IS a seat action, so a room read that FAILED must
+// hold it back. Collapsed into an empty fleet, the failed read reached the gate as no seats to refuse over
+// and the seat was told to resume with the peak gate never having seen it - failing open on the one path
+// here that starts a seat. Same off-peak clock as the test above, so the failed read is the only thing that
+// can hold this resume.
+func TestAFailedRoomReadHoldsTheResume(t *testing.T) {
+	supervisor, sent, logged := gatedSupervisor(t, "", "2026-10-09 05:00", deepSeekRoomNode())
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) {
+		return nil, false, errors.New("the node read asked /api/ps and got HTTP 500")
+	}
+	supervisor.Step()
+	if len(*sent) != 0 {
+		t.Fatalf("a resume went out over a room read that failed: %v", *sent)
+	}
+	joined := strings.Join(*logged, "|")
+	if !strings.Contains(joined, "resume held, the room's node records could not be read") {
+		t.Errorf("the held resume was not logged with its reason: %v", *logged)
+	}
+	if strings.Contains(joined, "told to resume") {
+		t.Errorf("the log claims a resume that was held: %v", *logged)
 	}
 }
 

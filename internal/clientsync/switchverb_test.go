@@ -387,8 +387,8 @@ func TestSwitchSeatNotInRigPsExitsZero(t *testing.T) {
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
 	}
-	if !strings.Contains(errOut, "not in `rig ps`") {
-		t.Errorf("stderr = %q, want the note about rig ps", errOut)
+	if !strings.Contains(errOut, "not in the room's records") {
+		t.Errorf("stderr = %q, want the note that the room's records do not list the seat", errOut)
 	}
 	if got := stub.seatCalls(); len(got) != 0 {
 		t.Errorf("rig seat was called for an absent seat: %v", got)

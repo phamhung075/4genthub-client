@@ -168,12 +168,16 @@ func liveSeats(rigName string) int {
 }
 
 // expectedSeats is the shell's expected_seats(): the rig's running seats as the client's own reading reports
-// them. The shell piped JSON through python3; the parsing half is countRunningSeats and this half takes the
-// reading. A read that failed is counted as zero, exactly as the shell's pipe left it - an unreadable
-// expectation is not evidence that seats are up.
-func expectedSeats(rigName string) int {
-	out, _ := watchdogNodesJSON(rigName)
-	return countRunningSeats(out)
+// them. The shell piped JSON through python3 and could not tell a read that FAILED from a room with no seats;
+// the client can, so the error travels to the caller instead of being counted as zero. A zero from a failed
+// read is not a reading of the room - it is the sentence "the daemon expects no running seats" said about a
+// room nobody read, which is the one sentence the caller must not print.
+func expectedSeats(rigName string) (int, error) {
+	out, err := watchdogNodesJSON(rigName)
+	if err != nil {
+		return 0, err
+	}
+	return countRunningSeats(out), nil
 }
 
 // countRunningSeats is the shell's one-liner python: rows whose lifecycleState is "running". Unreadable or
@@ -263,7 +267,14 @@ func newWatcher(rig *clientcmd.Rig, restore *restorer, log *teeLog, allowPeak bo
 // (action == "restore") and only then.
 func (w *watcher) check(rigName, action string) int {
 	noteServerIdentity(w.log)
-	exp := expectedSeats(rigName)
+	exp, err := expectedSeats(rigName)
+	if err != nil {
+		// No verdict from a reading that failed. Both of the sentences below are facts about the room - "no
+		// running seats" and "DEAD" - and this pass has no fact about the room to state, so it says so and
+		// touches nothing: inaction, which is what counting the failed read as zero produced as well.
+		w.log.printf("%s: the room's node records could not be read; no action (%v)", rigName, err)
+		return clientcmd.ExitOK
+	}
 	live := liveSeats(rigName)
 	switch verdict(exp, live) {
 	case verdictStopped:
@@ -304,25 +315,31 @@ func (w *watcher) watch(rigName string, interval time.Duration, beat int) {
 	misses, polls := 0, 0
 	for watchPollLimit == 0 || polls < watchPollLimit {
 		noteServerIdentity(w.log)
-		exp := expectedSeats(rigName)
-		live := liveSeats(rigName)
-		if verdict(exp, live) == verdictDead {
-			misses++
-			w.log.printf("%s: MISS %d/2 (daemon expects %d, tmux has 0)", rigName, misses, exp)
-			if misses >= 2 {
-				w.check(rigName, "restore")
+		exp, err := expectedSeats(rigName)
+		if err != nil {
+			// A reading that FAILED is not a MISS. This counter is for seats that vanished, and treating the
+			// unreadable as zero would count a room nobody read as gone - twice - and then restore it.
+			w.log.printf("%s: the room's node records could not be read; not counted as a miss (%v)", rigName, err)
+		} else {
+			live := liveSeats(rigName)
+			if verdict(exp, live) == verdictDead {
+				misses++
+				w.log.printf("%s: MISS %d/2 (daemon expects %d, tmux has 0)", rigName, misses, exp)
+				if misses >= 2 {
+					w.check(rigName, "restore")
+					misses = 0
+				}
+			} else {
+				if misses > 0 {
+					w.log.printf("%s: live again before acting (live=%d); counter reset", rigName, live)
+				}
 				misses = 0
 			}
-		} else {
-			if misses > 0 {
-				w.log.printf("%s: live again before acting (live=%d); counter reset", rigName, live)
+			if beat > 0 && polls%beat == 0 {
+				w.log.printf("%s: heartbeat — alive, daemon expects %d, tmux has %d, no misses", rigName, exp, live)
 			}
-			misses = 0
 		}
 		polls++
-		if beat > 0 && polls%beat == 0 {
-			w.log.printf("%s: heartbeat — alive, daemon expects %d, tmux has %d, no misses", rigName, exp, live)
-		}
 		// Every poll beats, not only every `beat` polls: a stopped watchdog and a quiet rig must not
 		// look the same, and the operator's log line above is not a heartbeat file. A failed write is
 		// reported through the same log rather than swallowed, one line per poll that failed.

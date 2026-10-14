@@ -3,6 +3,33 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — a room read that failed holds the automatic resume, and is not reported as a stopped room
+
+### Fixed
+- `internal/clientlifecycle/supervisor.go` — the compaction supervisor's node seam carries the reading's three
+  answers (`Nodes func(rig string) ([]map[string]any, bool, error)`), and the AUTOMATIC resume refuses when
+  `err != nil`. It used to proceed: the unreadable reading was discarded at the wiring and arrived at the
+  off-peak gate as an empty fleet, `SeatsFromNodes(nil)` is empty, `Decide` refuses nothing at zero DeepSeek
+  seats, so the seat was told to resume with the peak gate never having seen a seat — fail-open on the one path
+  in that file that starts a seat, and against `lifecycle.go`'s own rule that an unreadable reading is never
+  read as this room is safe. A room ANSWERED WITH NO RECORDS still proceeds, said plainly in the log, because
+  there are no seats there to bill. The two are distinguishable now, which is the point of the seam.
+- `internal/clientrestore/watchdog.go` — `expectedSeats` returns the seam's error instead of counting it as
+  zero. Both callers then stated a fact about a room nobody had read: `--check` printed "daemon reports no
+  running seats (expected 0 …) — deliberate stop or already handled", and `--watch` counted the pair (0, 0) as
+  a MISS, twice, and restored. A failed read is now named in the log, is not a miss, is not a heartbeat, and
+  starts nothing — the same inaction the shell's zero produced, without the false sentence.
+- `internal/clientsync/switchverb.go` — the absent-seat note said the seat "is not in `rig ps`", naming a
+  command this verb no longer runs; it now names the reading itself (`the room's records`), and the assertion in
+  its test moved with it.
+
+### Tests
+- Added `TestAFailedRoomReadHoldsTheResume` (clientlifecycle), `TestAnUnreadableRoomIsNotReportedAsStopped` and
+  `TestWatchDoesNotCountAnUnreadableRoomAsAMiss` (clientrestore), and extended
+  `TestExpectedSeatsUsesTheNodeSeam` to pin a failed read as an error rather than as a zero. Each was shown
+  FAILING with its fix reverted — the resume text really goes out over a failed read, and the watchdog really
+  prints the stopped-room sentence — and passing with the fixes restored, files byte-identical afterwards.
+
 ## 2026-10-14 — sync switch and sync respawn read a seat without rig
 
 ### Changed

@@ -157,18 +157,67 @@ func TestCountRunningSeats(t *testing.T) {
 	}
 }
 
-// TestExpectedSeatsUsesTheNodeSeam: the count flows through the node seam, and a malformed answer is 0.
+// TestExpectedSeatsUsesTheNodeSeam: the count flows through the node seam, a malformed answer is 0, and a
+// reading that FAILED comes back as an error rather than as a zero the caller would print as a fact.
 func TestExpectedSeatsUsesTheNodeSeam(t *testing.T) {
 	isolate(t)
 	watchdogNodesJSON = func(string) (string, error) {
 		return `[{"lifecycleState":"running"},{"lifecycleState":"stopped"}]`, nil
 	}
-	if got := expectedSeats("demo"); got != 1 {
-		t.Errorf("expectedSeats = %d, want 1", got)
+	if got, err := expectedSeats("demo"); got != 1 || err != nil {
+		t.Errorf("expectedSeats = %d, %v, want 1 and no error", got, err)
 	}
 	watchdogNodesJSON = func(string) (string, error) { return "garbage", nil }
-	if got := expectedSeats("demo"); got != 0 {
-		t.Errorf("expectedSeats on malformed input = %d, want 0", got)
+	if got, err := expectedSeats("demo"); got != 0 || err != nil {
+		t.Errorf("expectedSeats on malformed input = %d, %v, want 0 and no error", got, err)
+	}
+	watchdogNodesJSON = func(string) (string, error) { return "", errors.New("HTTP 500 from /api/ps") }
+	if got, err := expectedSeats("demo"); err == nil {
+		t.Errorf("expectedSeats = %d, nil: a reading that failed was reported as an answer", got)
+	}
+}
+
+// TestAnUnreadableRoomIsNotReportedAsStopped: the sentence "daemon reports no running seats" is a fact about
+// the room, and a read that FAILED does not have it. The pass says what happened and touches nothing - the
+// same inaction the shell's zero produced, without the false sentence.
+func TestAnUnreadableRoomIsNotReportedAsStopped(t *testing.T) {
+	isolate(t)
+	watchdogNodesJSON = func(string) (string, error) { return "", errors.New("HTTP 500 from /api/ps") }
+	buf := &bytes.Buffer{}
+	w := testWatcher(buf)
+	if code := w.check("demo", "report"); code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d: an unreadable room is not a dead one", code, clientcmd.ExitOK)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "the room's node records could not be read; no action") {
+		t.Errorf("the failed read was not named:\n%s", out)
+	}
+	if strings.Contains(out, "daemon reports no running seats") || strings.Contains(out, "DEAD —") {
+		t.Errorf("a reading that failed was reported as a fact about the room:\n%s", out)
+	}
+}
+
+// TestWatchDoesNotCountAnUnreadableRoomAsAMiss: the miss counter is for seats that vanished. Two unreadable
+// polls must not add up to a restore of a room this watcher never read.
+func TestWatchDoesNotCountAnUnreadableRoomAsAMiss(t *testing.T) {
+	isolate(t)
+	watchdogNodesJSON = func(string) (string, error) { return "", errors.New("HTTP 500 from /api/ps") }
+	watchPollLimit = 2
+	buf := &bytes.Buffer{}
+	w := testWatcher(buf)
+	restores := 0
+	w.restore = func(string, string) bool { restores++; return true }
+	w.watch("demo", time.Minute, defaultWatchBeat)
+
+	if restores != 0 {
+		t.Errorf("restores = %d, want 0: an unreadable reading is not a miss", restores)
+	}
+	out := buf.String()
+	if strings.Contains(out, "MISS ") {
+		t.Errorf("an unreadable reading was counted as a miss:\n%s", out)
+	}
+	if !strings.Contains(out, "the room's node records could not be read; not counted as a miss") {
+		t.Errorf("the failed read was not named:\n%s", out)
 	}
 }
 

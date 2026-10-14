@@ -70,9 +70,14 @@ type Supervisor struct {
 	// letting "the seat is working" and "nothing ever answered" print the same way - as nothing. Empty means the
 	// refusal was a deliberate one and there is nothing to say. nil means the wiring says nothing, as in tests.
 	IdleWhy func(rig, seat string) string
-	// Nodes is the room's node records - the reading the off-peak gate decides over, the same one the
-	// gated verbs take. Getenv is the environment the gate resolves its setting and its clock from.
-	Nodes  func(rig string) []map[string]any
+	// Nodes is the room's node records - the reading the off-peak gate decides over, the same one the gated
+	// verbs take - and it carries the three answers the reading itself has, because the resume below is an
+	// AUTOMATIC seat action: a read that FAILED must hold the resume back rather than arrive at the gate as an
+	// empty fleet (no DeepSeek seats, nothing to refuse, the seat told to resume with the gate never having
+	// seen a seat). Answered-with-no-records still proceeds - a room with no seats has nothing to bill - so
+	// the two must stay distinguishable here. Getenv is the environment the gate resolves its setting and its
+	// clock from.
+	Nodes  func(rig string) ([]map[string]any, bool, error)
 	Getenv func(string) string
 
 	State map[string]*seatState
@@ -98,14 +103,14 @@ func New(rig string, quiet int, stateRoot, forcecompact string, out io.Writer) *
 	supervisor.RPCCompact = func(r, seat string) string { return supervisor.rpcCompact(r, seat) }
 	supervisor.Abort = rigAbort
 	supervisor.Interrupt = tmuxInterrupt
-	// The gate's reading is the room's node records, the ONE reading this package already takes for its
-	// other gate (rigNodes), reached here without resolving a rig tool: the reading is the client's own.
-	// The callback's type is the supervisor's and carries no error channel, so a read that FAILED and a room
-	// with no records are the same thing to it - no nodes. Neither starts seats, so neither is safety-relevant
-	// here; the peaked decision that must refuse is PeakGate's above, which does see the error.
-	supervisor.Nodes = func(rig string) []map[string]any {
-		nodes, _, _ := rigNodes(rig)
-		return nodes
+	// The gate's reading is the room's node records, the ONE reading this package already takes for its other
+	// gate (rigNodes), reached here without resolving a rig tool: the reading is the client's own. The seam
+	// carries all three of that reading's answers, so the resume path below can tell a read that FAILED from a
+	// room with no seats; the peaked decision that must refuse is still PeakGate's above, which sees its own.
+	supervisor.Nodes = func(rig string) ([]map[string]any, bool, error) {
+		// rigNodes is read at CALL time rather than captured at wiring time, so a test that replaces the
+		// reading after the supervisor is built still reaches the gate.
+		return rigNodes(rig)
 	}
 	supervisor.Getenv = os.Getenv
 	supervisor.Log = func(text string) {
@@ -150,10 +155,20 @@ func (s *Supervisor) Step() {
 				if done {
 					// The resume is an AUTOMATIC wake, so it passes the same gate every other automatic
 					// wake passes. --allow-peak is never automatic on this path: allowPeak is false, so
-					// the gate is ON unless the setting itself turns it off. A refusal (or a schedule the
-					// gate cannot read) holds the resume back and says why in this log, so a held-back
-					// resume is observable rather than silent.
-					if proceed, message, err := clientoffpeak.Check(false, s.Nodes(s.Rig), s.Getenv); err != nil {
+					// the gate is ON unless the setting itself turns it off. A refusal, a schedule the
+					// gate cannot read, or a room whose records could not be read at all holds the resume
+					// back and says why in this log, so a held-back resume is observable rather than silent.
+					nodes, ok, err := s.Nodes(s.Rig)
+					if err != nil {
+						// FAILING OPEN WOULD BE THE BUG HERE: an unreadable reading is not an empty room, and a
+						// resume that proceeded on one would be the gate deciding over no seats at all.
+						s.Log(fmt.Sprintf("%s: resume held, the room's node records could not be read: %v", seat, err))
+					} else if !ok {
+						// NO RECORDS is not a failure: there are no seats here to bill, so the gate has nothing
+						// to hold back and the resume proceeds - said plainly rather than implied by silence.
+						s.Say(s.Rig, seat, resumeText, false)
+						s.Log(seat + ": told to resume (the room's records list no seats)")
+					} else if proceed, message, err := clientoffpeak.Check(false, nodes, s.Getenv); err != nil {
 						s.Log(fmt.Sprintf("%s: resume held, off-peak gate: %v", seat, err))
 					} else if !proceed {
 						s.Log(fmt.Sprintf("%s: resume held, %s", seat, message))

@@ -303,7 +303,7 @@ func switchApplyToRig(ctx context.Context, room, seat, model string, restart boo
 		return "", err
 	}
 	if session == "" {
-		fmt.Fprintf(stderr, "note: seat %s/%s is not in `rig ps`; the cloud change is recorded only\n", room, seat)
+		fmt.Fprintf(stderr, "note: seat %s/%s is not in the room's records; the cloud change is recorded only\n", room, seat)
 		return "none", nil
 	}
 
