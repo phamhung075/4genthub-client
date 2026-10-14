@@ -180,8 +180,7 @@ func (upCommand) Summary() string {
 // from OpenRig. Requiring one is what made the native start path depend on the CLI exec it replaces.
 //
 // The dispatcher therefore hands this verb a NIL rig, and the two places that still reach for one must
-// take nil: the peak gate's fail-closed activity read already does, and openUIImpl resolves the tool
-// itself now. A third that dereferenced it would panic on every `up`.
+// take nil: the peak gate's fail-closed activity read already does. A second that dereferenced it would panic on every `up`.
 func (upCommand) NeedsRig() bool { return false }
 
 func (upCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
@@ -363,7 +362,7 @@ func runUp(rig *clientcmd.Rig, name, teamDir, stateDir string, allowPeak, roomOn
 	}
 
 	runWatchView(name, stderr)
-	openUI(rig, stderr)
+	openUI(stderr)
 	if os.Getenv("HERDR_ENV") == "" {
 		return runHerdr(stdout, stderr)
 	}
@@ -657,20 +656,35 @@ func ensureForcecompactImpl(stderr io.Writer) {
 	fmt.Fprintf(stderr, "4genteam: run once: sudo setcap cap_sys_ptrace+ep %s\n", helper)
 }
 
-func openUIImpl(rig *clientcmd.Rig, stderr io.Writer) {
-	// `up` no longer needs a resolved rig (NeedsRig is false), so this is reached with nil and resolves the
-	// tool itself, exactly as the peak gate's own nil branch does. Reaching for `ui open` and failing is not
-	// this verb's verdict, so an unresolvable tool is a line of stderr and nothing else.
-	if rig == nil {
-		tool, err := clientcmd.RequireRig()
-		if err != nil {
-			fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: 4genteam doctor)")
-			return
+// uiURLEnv names the 4genthub web UI to open; the default is the frontend this repository serves in development.
+const (
+	uiURLEnv  = "AGENTHUB_UI_URL"
+	defaultUI = "http://localhost:3800"
+)
+
+// openURL hands a URL to the desktop's opener. It is a seam so a test opens nothing.
+var openURL = openURLImpl
+
+// openURLImpl uses the first opener the machine has: wslview (WSL), xdg-open (Linux), open (macOS). The opener
+// is started and not waited on, because a browser that outlives this verb is the point.
+func openURLImpl(url string) error {
+	for _, opener := range []string{"wslview", "xdg-open", "open"} {
+		if path, err := exec.LookPath(opener); err == nil {
+			return exec.Command(path, url).Start()
 		}
-		rig = tool
 	}
-	if _, err := rig.Run(context.Background(), "ui", "open"); err != nil {
-		fmt.Fprintln(stderr, "4genteam: could not open the OpenRig UI (see: 4genteam doctor)")
+	return errors.New("none of wslview, xdg-open or open is on PATH")
+}
+
+// openUIImpl opens the 4genthub web UI. A failure is a line of stderr and nothing else: reaching for the UI and
+// missing is not `up`'s verdict.
+func openUIImpl(stderr io.Writer) {
+	url := os.Getenv(uiURLEnv)
+	if url == "" {
+		url = defaultUI
+	}
+	if err := openURL(url); err != nil {
+		fmt.Fprintf(stderr, "4genteam: could not open the 4genthub UI at %s: %v\n", url, err)
 	}
 }
 
@@ -857,15 +871,15 @@ func (logCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout
 type uiCommand struct{}
 
 func (uiCommand) Name() string    { return "ui" }
-func (uiCommand) Summary() string { return "open the OpenRig web UI" }
-func (uiCommand) NeedsRig() bool  { return true }
+func (uiCommand) Summary() string { return "open the 4genthub web UI" }
+func (uiCommand) NeedsRig() bool  { return false }
 
 func (uiCommand) Run(_ context.Context, rig *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		printHelp(stdout, uiUsage, "Open the OpenRig web UI.")
+		printHelp(stdout, uiUsage, "Open the 4genthub web UI (AGENTHUB_UI_URL, default http://localhost:3800).")
 		return clientcmd.ExitOK
 	}
-	openUI(rig, stderr)
+	openUI(stderr)
 	return clientcmd.ExitOK
 }
 

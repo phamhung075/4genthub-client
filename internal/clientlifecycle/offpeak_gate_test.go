@@ -64,7 +64,7 @@ func stubWholeUp(t *testing.T) *[]string {
 	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
 	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
 	runWatchView = func(string, io.Writer) { *ran = append(*ran, "watch") }
-	openUI = func(*clientcmd.Rig, io.Writer) {}
+	openUI = func(io.Writer) {}
 	runHerdr = func(io.Writer, io.Writer) int { return clientcmd.ExitOK }
 	SupervisorStartGrace = time.Millisecond
 	t.Setenv("HERDR_ENV", "1")

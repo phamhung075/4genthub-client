@@ -131,7 +131,7 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `status` | the safeguard rows (--json too) and the supervisor's last log lines |
 | `ps` | the seats of a room read from tmux and the seat transcripts: summary, `--nodes`, `--compact`, `--grid`, `--json`; a seat whose transcript shows a quota or credit message is `quota` and counts as needing attention |
 | `log` | follow the supervisor's log |
-| `ui` | open the OpenRig web UI |
+| `ui` | open the 4genthub web UI |
 | `offpeak` | is DeepSeek billing at off-peak right now: exit 0 off-peak, 1 peak, so it works as a gate; `status` prints the setting, `set on\|off` writes it |
 | `seat` | status, sync and watch of a room's seats |
 | `send` | send one signed message to one seat |

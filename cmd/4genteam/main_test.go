@@ -136,22 +136,17 @@ func TestUsageAndVersionAreTheOnlyFreeCommands(t *testing.T) {
 		t.Errorf("no arguments: stderr = %q, want up's missing-definition error", errOut.String())
 	}
 
-	// THE OTHER HALF: a machine that has never had OpenRig. It is pinned on a verb that STILL needs the
-	// platform matrix (`ui`), NOT on `up`: `up` no longer consults the matrix at all, because the point of
-	// the native start path is that it needs no OpenRig process - NeedsRig is false and its seats come from
-	// a local definition. `status` is deliberately not used here either: it reports this machine's own
-	// safeguard rows and answers without a rig by design.
+	// THE OTHER HALF: a machine that has never had OpenRig. No verb consults the platform matrix any more -
+	// the room's start, the restore, the bridge and `ui` all go through the runtime or the browser - so with no
+	// rig on PATH `up` still reaches its own argument check and answers exactly as it did with one.
 	out.Reset()
 	errOut.Reset()
 	rigMissing(t)
-	if code := run([]string{"ui"}, &out, &errOut); code != clientcmd.ExitUnavailable {
-		t.Errorf("ui with no rig on PATH: exit code = %d, want %d", code, clientcmd.ExitUnavailable)
+	if code := run(nil, &out, &errOut); code != clientcmd.ExitRoomRefused {
+		t.Errorf("no arguments, no rig on PATH: exit code = %d, want %d", code, clientcmd.ExitRoomRefused)
 	}
-	if !strings.Contains(errOut.String(), "rig is not on PATH") {
-		t.Errorf("ui with no rig on PATH: stderr = %q, want the platform matrix's reason", errOut.String())
-	}
-	if out.Len() != 0 {
-		t.Errorf("ui with no rig on PATH: stdout = %q, want nothing", out.String())
+	if strings.Contains(errOut.String(), "rig is not on PATH") || !strings.Contains(errOut.String(), "--team") {
+		t.Errorf("no arguments, no rig on PATH: stderr = %q, want up's own error and no matrix reason", errOut.String())
 	}
 
 	out.Reset()
@@ -243,28 +238,5 @@ func TestHelpIsAnsweredBeforeThePlatformMatrix(t *testing.T) {
 	}
 	if !strings.HasPrefix(out.String(), "4genteam bridge <subcommand>") || strings.Contains(out.String(), "[Unit]") {
 		t.Errorf("bridge install-service --help printed %q, want the bridge's usage and not the unit", out.String())
-	}
-
-	// The refusal is NOT softened: the same verbs without --help still fail on the matrix, naming the
-	// missing tool and printing nothing on stdout.
-	//
-	// `up` is NOT in this list anymore, and that is the cutover rather than a softening: it is room-scoped
-	// (NeedsRig false) and starts a room from a LOCAL definition, so it deliberately does not consult the
-	// matrix at all. TestUsageAndVersionAreTheOnlyFreeCommands pins that from the other side by using `ui`
-	// for the matrix half.
-	for _, args := range [][]string{
-		{"ui"},
-	} {
-		out.Reset()
-		errOut.Reset()
-		if code := run(args, &out, &errOut); code != clientcmd.ExitUnavailable {
-			t.Errorf("%v: exit code = %d, want %d (the matrix still governs)", args, code, clientcmd.ExitUnavailable)
-		}
-		if !strings.Contains(errOut.String(), "rig") {
-			t.Errorf("%v: stderr = %q, want the missing tool named", args, errOut.String())
-		}
-		if out.Len() != 0 {
-			t.Errorf("%v: stdout = %q, want nothing: a refused verb does no partial work", args, out.String())
-		}
 	}
 }

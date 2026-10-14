@@ -132,7 +132,7 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
-	openUI = func(*clientcmd.Rig, io.Writer) {}
+	openUI = func(io.Writer) {}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
@@ -175,7 +175,7 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 		return []clientservices.Health{{Safeguard: clientservices.Rigd, State: clientservices.Running}}, true
 	}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
-	openUI = func(*clientcmd.Rig, io.Writer) { ran = append(ran, "openUI") }
+	openUI = func(io.Writer) { ran = append(ran, "openUI") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 	t.Setenv("HERDR_ENV", "")
 
@@ -261,7 +261,7 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 				return nil, true
 			}
 			runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
-			openUI = func(*clientcmd.Rig, io.Writer) { ran = append(ran, "openUI") }
+			openUI = func(io.Writer) { ran = append(ran, "openUI") }
 			runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
 			var out, errOut bytes.Buffer
