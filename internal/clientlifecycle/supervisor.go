@@ -343,7 +343,10 @@ func rigIdle(rig, seat string) bool {
 			continue
 		}
 		activity, _ := node["agentActivity"].(map[string]any)
-		return activity["state"] == "idle"
+		word, _ := activity["state"].(string)
+		// The SAME predicate the quiet waiter uses: one home for the rule, so a vocabulary change is made once. A
+		// missing or non-string state reads as the empty word, which the set does not contain - refusal, not release.
+		return clientruntime.ActivityReleasesTheWait(word)
 	}
 	return false
 }

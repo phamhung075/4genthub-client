@@ -93,10 +93,11 @@ func TestWaitUntilQuietDoesNotProceedOnAWordlessReading(t *testing.T) {
 	}
 }
 
-// AND THE OTHER SIDE OF THE SAME RULE, so that the fix is not over-tightened into requiring the word "idle": a
-// POSITIVE reading that is not "running" is quiet when the session has been still - a seat waiting for input is not
-// mid-turn either.
-func TestWaitUntilQuietProceedsOnANonRunningReadingItDidRead(t *testing.T) {
+// AND THE ARM THAT WAS WRONG, kept as the test that fails if anyone re-tightens or re-loosens this: a word that is
+// not "running" is NOT therefore quiet. `needs_input` means the seat is mid-turn waiting for a person, and the old
+// `!= "running"` test released a reseat there - destroying a turn that was about to continue. A stale-looking
+// session mtime and a positive reading are both satisfied here, so the word alone decides.
+func TestWaitUntilQuietDoesNotProceedOnAWordThatIsNotIdle(t *testing.T) {
 	now := 0.0
 	waiter := QuietWaiter{
 		Activity:     func(string, string) (string, bool) { return "needs_input", true },
@@ -105,8 +106,23 @@ func TestWaitUntilQuietProceedsOnANonRunningReadingItDidRead(t *testing.T) {
 		Clock:        func() float64 { return now },
 		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
 	}
+	if waiter.Wait("rig", "s") {
+		t.Error("needs_input released the wait: stillness was allowed to satisfy a destroyer")
+	}
+}
+
+// AND THE WORD THAT MAY: idle, read positively, with the session still - the only combination that proceeds.
+func TestWaitUntilQuietProceedsOnIdleWithinTheQuietWindow(t *testing.T) {
+	now := 0.0
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "idle", true },
+		Since:        func(string, string) float64 { return 99 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
 	if !waiter.Wait("rig", "s") {
-		t.Error("a seat that is not running (needs_input) and has been still was not reported quiet")
+		t.Error("an idle seat whose session has been still was not reported quiet")
 	}
 }
 

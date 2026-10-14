@@ -213,19 +213,18 @@ func (w QuietWaiter) Wait(rig, seat string) bool {
 }
 
 // quietOnce is ONE reading of the two clauses - the seat is not running AND its session has been still for the quiet
-// window - and the only place the activity comparison is written.
+// window - and the activity comparison is NOT written here: it is clientruntime's one allow-set, shared with rigIdle,
+// so a vocabulary change is decided once instead of being found twice.
 //
 // AN UNREADABLE ACTIVITY IS NOT "NOT RUNNING", and the seam says which is which: Activity's second answer is false
 // when no activity could be read at all (no `rig` on PATH, the ps call failed, the seat missing from the node table),
-// and that false KEEPS THE WAIT GOING rather than releasing it. The empty word is refused even when the read DID
-// happen, because a wordless reading is still not the answer "not running". Testing `!= "running"` alone accepted
-// both, which left the stillness clause - the seat's own session mtime - deciding by itself: a reseat could proceed
-// past a seat that is actually mid-turn. So the clause needs a POSITIVE answer: a read that happened, a word, and
-// not "running". Any other word it did read (idle, needs_input) counts, because a seat waiting for input is not
-// mid-turn either.
+// and that false KEEPS THE WAIT GOING rather than releasing it. The word itself is then tested against the allow-set
+// instead of against one forbidden value: `!= "running"` ACCEPTED every word this client had never seen - `working`,
+// `needs_input`, and any word the daemon adds later - so the stillness clause decided by itself and a reseat could
+// proceed past a seat that was mid-turn. Stillness may DELAY a destroyer; only the allow-set's word releases one.
 func (w QuietWaiter) quietOnce(rig, seat string) bool {
 	activity, read := w.Activity(rig, seat)
-	if !read || activity == "" || activity == "running" {
+	if !read || !clientruntime.ActivityReleasesTheWait(activity) {
 		return false
 	}
 	return w.Since(rig, seat) >= w.QuietSeconds

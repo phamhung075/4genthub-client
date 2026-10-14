@@ -3,6 +3,33 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-14 — the quiet gate releases on one word, and the rule lives in one place
+
+### Changed
+- `internal/clientruntime/activity.go` — **the allow-set that decides whether an activity word may release a wait
+  whose failure destroys a turn.** The waiter compared against a word it expected rather than against the answer it
+  needed: `!= "running"` accepted `working`, `needs_input` and every word the daemon adds later, so the stillness
+  clause decided by itself and a reseat could proceed past a seat that was mid-turn. The set is grounded rather than
+  chosen: the daemon's own taxonomy carries working | idle | needs-input | unknown and aliases its stored
+  `idle-at-prompt` to `idle`, which is the word that reaches this client in `agentActivity.state`. Stillness may
+  delay a destroyer; only `idle` releases one.
+- `internal/clientseat/sync.go`, `internal/clientlifecycle/supervisor.go` — the waiter and the supervisor's `rigIdle`
+  both call that one predicate, so a vocabulary change is decided once instead of being found twice, and a missing or
+  non-string `state` reads as the empty word — refusal, not release.
+
+### Verified
+- `internal/clientseat` — `TestWaitUntilQuietDoesNotProceedOnAWordThatIsNotIdle` FAILS against the previous
+  predicate (`needs_input released the wait: stillness was allowed to satisfy a destroyer`) and passes after; the two
+  unreadable-reading arms and the `idle` arm are green beside it. `internal/clientruntime` drives the set with
+  `idle`, `working`, `needs_input`, `unknown`, `running`, the empty word, `idle-at-prompt` and a word nobody defines.
+- `go vet` clean; `internal/clientruntime`, `internal/clientseat` and `internal/clientlifecycle` all green.
+
+### Open, named rather than implied
+- The read's own single home is NOT in this commit. The client's `ps` computes `activity` locally and never carries
+  `agentActivity` (measured: `rig ps --nodes --json` supplies it only through the daemon), so one home for read and
+  predicate needs the daemon-served read — `agentActivity` on `GET /api/rigs/:id/graph` enriches inventory with it —
+  which is the second half of this row and the same seam the runtime-vocabulary unit later re-points.
+
 ## 2026-10-14 — the grid's input loop delivers a typed line in process, and reads the name from the record
 
 ### Changed
