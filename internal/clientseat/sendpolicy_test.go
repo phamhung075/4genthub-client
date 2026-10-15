@@ -178,7 +178,7 @@ func TestASendNoLinkAuthorizesIsRefusedAndNotDelivered(t *testing.T) {
 	if code == clientcmd.ExitOK {
 		t.Fatalf("a send with no link authorizing it exited 0; stdout %q", out.String())
 	}
-	for _, want := range []string{auditSender, auditPeer, "notice", "no link", "nothing was sent"} {
+	for _, want := range []string{auditSender, auditPeer, "notice", "no link", "collaborates_with", "declares no link to", "nothing was sent"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("stderr = %q, want it to name %q", errOut.String(), want)
 		}
@@ -280,7 +280,12 @@ func TestASendWithoutAnIntentIsDecidedAsANotice(t *testing.T) {
 // `--intent task`. So a pair declared delegates_to REFUSES the traffic it exists to license - which is exactly
 // what the reviewer measured on 2026-10-15 in the live room, where `reviewer -> go-dev` and `reviewer ->
 // fe-dev` were declared delegates_to while every verdict row the reviewer sends carries no intent at all.
-// The fix is the declaration's kind (collaborates_with), never the sender and never the documented default.
+//
+// AND THE REFUSAL SAID `no link`, WHICH IS NOT THE STATE: the pair declares one. The room read the words as
+// they were written and changed the declaration, which is the lesson that message taught; the lead therefore
+// ruled the refusal must name the kind that WOULD license the send (qitem-20261015055946-cb7e92b5d2b2,
+// 2026-10-15). This case pins the remedy as well as the refusal: the kind for the intent that was sent, and
+// the intent this pair's declaration does license. It fails on the words that came before it.
 func TestASendWithNoIntentIsRefusedByADelegatesToLink(t *testing.T) {
 	harness := newAuditHarness(t, linkDoc(auditSender, auditPeer, "delegates_to"))
 
@@ -291,8 +296,10 @@ func TestASendWithNoIntentIsRefusedByADelegatesToLink(t *testing.T) {
 	if code == clientcmd.ExitOK {
 		t.Fatalf("a default-intent send over a delegates_to link exited 0; stdout %q", out.String())
 	}
-	if !strings.Contains(errOut.String(), "no link") {
-		t.Errorf("stderr = %q, want the denial's own reason", errOut.String())
+	for _, want := range []string{"no link", "collaborates_with", "task (delegates_to)"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr = %q, want it to name %q", errOut.String(), want)
+		}
 	}
 	if harness.sent() {
 		t.Fatalf("the message was delivered anyway; frames %v", harness.frames)

@@ -172,14 +172,70 @@ func authorizeSend(socket, targetRoom, senderRoom, from, to string, intent commp
 		}
 	}
 	if !decision.Allowed {
+		message := fmt.Sprintf("refused by %s's communication policy: %s may not send a %s to %s (%s)",
+			targetRoom, from, intent, to, decision.Reason)
+		if hint := licenseHint(decision, links, from, to); hint != "" {
+			message += "; " + hint
+		}
 		return sendHandle{}, &clientcmd.CodedError{
-			Code: clientcmd.ExitUsage,
-			Message: fmt.Sprintf("refused by %s's communication policy: %s may not send a %s to %s (%s). The "+
-				"room's own declared links are what license a send; nothing was sent",
-				targetRoom, from, intent, to, decision.Reason),
+			Code:    clientcmd.ExitUsage,
+			Message: message + ". The room's own declared links are what license a send; nothing was sent",
 		}
 	}
 	return handle, nil
+}
+
+// licenseHint says what a refusal leaves the sender to change, in the two halves a reader needs: the kinds
+// that license the intent that was sent, and what this pair's declaration licenses instead. The refusal
+// that named neither read as "declare a link", and the room followed it - `reviewer -> go-dev` and
+// `reviewer -> fe-dev` were declared `delegates_to` while every verdict row the reviewer sends carries no
+// intent at all (the default notice), so the pair refused the traffic it exists to license and the message
+// pointed at a declaration that was not the obstacle.
+//
+// Both halves come from commpolicy's own tables - the kinds for the intent out of the decision that refused
+// the send, the intents for a declared kind out of LicensedIntents - so the hint cannot drift from the rule
+// that refused it. Empty means there is nothing to add: a self message, an unknown intent and an explicit
+// deny are all decided with no would-license kinds, and each of those already names its own cause.
+func licenseHint(decision commpolicy.Decision, links []clientruntime.SeatLink, from, to string) string {
+	if len(decision.WouldLicense) == 0 {
+		return ""
+	}
+	kinds := make([]string, 0, len(decision.WouldLicense))
+	for _, kind := range decision.WouldLicense {
+		kinds = append(kinds, string(kind))
+	}
+	declared := make([]string, 0, len(links))
+	seen := make(map[commpolicy.LinkKind]bool, len(links))
+	for _, link := range links {
+		if link.From != from || link.To != to {
+			continue
+		}
+		kind := commpolicy.LinkKind(link.Kind)
+		if seen[kind] {
+			continue
+		}
+		seen[kind] = true
+		if intents := commpolicy.LicensedIntents(kind); len(intents) > 0 {
+			declared = append(declared, fmt.Sprintf("%s (%s)", joinIntents(intents), kind))
+		} else {
+			declared = append(declared, fmt.Sprintf("%s, which licenses no send", kind))
+		}
+	}
+	if len(declared) == 0 {
+		return fmt.Sprintf("a %s link would license it, and %s declares no link to %s",
+			strings.Join(kinds, " or "), from, to)
+	}
+	return fmt.Sprintf("a %s link would license it, and %s -> %s declares %s",
+		strings.Join(kinds, " or "), from, to, strings.Join(declared, " and "))
+}
+
+// joinIntents renders an intent list for a message: "task", "escalation or report".
+func joinIntents(intents []commpolicy.Intent) string {
+	out := make([]string, 0, len(intents))
+	for _, intent := range intents {
+		out = append(out, string(intent))
+	}
+	return strings.Join(out, " or ")
 }
 
 // authorizeToSeat authorizes a send whose recipient the caller NAMED as a seat key.

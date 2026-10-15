@@ -58,6 +58,18 @@ type Decision struct {
 	Allowed bool
 	Reason  string
 	Link    *Link
+	// WouldLicense names the link kinds that authorize the Intent this decision was asked about, and is
+	// set on the no-link refusal only: that is the one refusal whose cause is a link that is not there,
+	// and it is also the only one where naming the missing kind is the right instruction. It is set
+	// here rather than looked up by a caller because "which kinds would have licensed this intent" is
+	// this package's own table, and a caller keeping its own copy is a second rule to drift.
+	//
+	// WHY IT EXISTS, measured 2026-10-15: the refusal read `no link` for a pair that DID declare one,
+	// when only the intent was unlicensed, and the room took the instruction the words gave it - it
+	// changed the DECLARATION. The pair was `reviewer -> go-dev`, declared `delegates_to` while every
+	// verdict row the reviewer sends carries no intent at all and is decided as the default notice; the
+	// declaration licensed an explicit `--intent task` the whole time.
+	WouldLicense []LinkKind
 }
 
 const (
@@ -100,6 +112,25 @@ var allowedKinds = map[Intent][]LinkKind{
 	IntentQuestion:   {KindCollaboratesWith},
 	IntentNotice:     {KindCollaboratesWith},
 }
+
+// LicensedIntents names the intents a link kind authorizes, in Intent declaration order: the inverse of
+// allowedKinds. It answers the second half of a refusal - "and what does this pair's declaration license
+// instead" - which is the fact that tells a sender which knob to turn. A kind that licenses nothing (see
+// allowedKinds) answers empty, and the order is this slice's and never a map's, so a message built from
+// it reads the same twice.
+func LicensedIntents(kind LinkKind) []Intent {
+	var out []Intent
+	for _, intent := range intentsInOrder {
+		if kindAllowed(allowedKinds[intent], kind) {
+			out = append(out, intent)
+		}
+	}
+	return out
+}
+
+// intentsInOrder is Intent's declaration order, and the order anything derived from allowedKinds is
+// reported in: allowedKinds is a map, so iteration order cannot be the answer a refusal prints.
+var intentsInOrder = []Intent{IntentTask, IntentEscalation, IntentReport, IntentQuestion, IntentNotice}
 
 // ValidKind reports whether kind is one of the five the rig orchestrator edge kinds.
 func ValidKind(kind LinkKind) bool {
@@ -144,7 +175,9 @@ func Decide(policy Policy, to string, intent Intent) Decision {
 		}
 	}
 	if allow == nil {
-		return Decision{Reason: reasonNoLink}
+		// The kinds are copied, not shared: they are allowedKinds' own slice and a Decision outlives
+		// the call, so a caller appending to it would edit the table for every later decision.
+		return Decision{Reason: reasonNoLink, WouldLicense: append([]LinkKind(nil), kinds...)}
 	}
 	return Decision{Allowed: true, Reason: reasonAllowed, Link: allow}
 }

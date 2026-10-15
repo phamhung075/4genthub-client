@@ -1,6 +1,7 @@
 package commpolicy
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -16,13 +17,18 @@ func TestDecide(t *testing.T) {
 		intent      Intent
 		wantAllowed bool
 		wantReason  string
+		// wantLicense is what the refusal must name as the kind that would have licensed this intent.
+		// Only the no-link refusals carry it: the other causes are not a missing link, and naming a kind
+		// there would send the sender to a declaration that is not the obstacle.
+		wantLicense []LinkKind
 	}{
 		{
-			name:       "default deny with no links",
-			policy:     Policy{Seat: "a"},
-			to:         "b",
-			intent:     IntentTask,
-			wantReason: reasonNoLink,
+			name:        "default deny with no links",
+			policy:      Policy{Seat: "a"},
+			to:          "b",
+			intent:      IntentTask,
+			wantReason:  reasonNoLink,
+			wantLicense: []LinkKind{KindDelegatesTo},
 		},
 		{
 			name:        "allow delegates to",
@@ -54,25 +60,28 @@ func TestDecide(t *testing.T) {
 			wantReason: reasonExplicitDeny,
 		},
 		{
-			name:       "wrong kind",
-			policy:     Policy{Seat: "a", Links: []Link{{From: "a", To: "b", Kind: KindCollaboratesWith, Allow: true}}},
-			to:         "b",
-			intent:     IntentTask,
-			wantReason: reasonNoLink,
+			name:        "wrong kind",
+			policy:      Policy{Seat: "a", Links: []Link{{From: "a", To: "b", Kind: KindCollaboratesWith, Allow: true}}},
+			to:          "b",
+			intent:      IntentTask,
+			wantReason:  reasonNoLink,
+			wantLicense: []LinkKind{KindDelegatesTo},
 		},
 		{
-			name:       "other seat's links ignored",
-			policy:     Policy{Seat: "a", Links: []Link{{From: "x", To: "b", Kind: KindDelegatesTo, Allow: true}}},
-			to:         "b",
-			intent:     IntentTask,
-			wantReason: reasonNoLink,
+			name:        "other seat's links ignored",
+			policy:      Policy{Seat: "a", Links: []Link{{From: "x", To: "b", Kind: KindDelegatesTo, Allow: true}}},
+			to:          "b",
+			intent:      IntentTask,
+			wantReason:  reasonNoLink,
+			wantLicense: []LinkKind{KindDelegatesTo},
 		},
 		{
-			name:       "link to another recipient ignored",
-			policy:     Policy{Seat: "a", Links: []Link{taskAllow}},
-			to:         "c",
-			intent:     IntentTask,
-			wantReason: reasonNoLink,
+			name:        "link to another recipient ignored",
+			policy:      Policy{Seat: "a", Links: []Link{taskAllow}},
+			to:          "c",
+			intent:      IntentTask,
+			wantReason:  reasonNoLink,
+			wantLicense: []LinkKind{KindDelegatesTo},
 		},
 		{
 			name:       "self message denied",
@@ -99,7 +108,33 @@ func TestDecide(t *testing.T) {
 			if got.Reason != tc.wantReason {
 				t.Fatalf("Reason = %q, want %q", got.Reason, tc.wantReason)
 			}
+			if !slices.Equal(got.WouldLicense, tc.wantLicense) {
+				t.Errorf("WouldLicense = %v, want %v", got.WouldLicense, tc.wantLicense)
+			}
 		})
+	}
+}
+
+// TestLicensedIntents pins the inverse table, which is what a refusal says a pair's declaration DOES
+// license. It is written as expectations rather than as a round trip through Decide: the two agree by
+// construction, and what a reader needs pinned is the meaning, not the agreement.
+func TestLicensedIntents(t *testing.T) {
+	cases := []struct {
+		kind LinkKind
+		want []Intent
+	}{
+		{KindDelegatesTo, []Intent{IntentTask}},
+		{KindEscalatesTo, []Intent{IntentEscalation, IntentReport}},
+		{KindCollaboratesWith, []Intent{IntentQuestion, IntentNotice}},
+		{KindSpawnedBy, nil},
+		{KindCanObserve, nil},
+		{LinkKind("invented"), nil},
+	}
+	for _, tc := range cases {
+		got := LicensedIntents(tc.kind)
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("LicensedIntents(%q) = %v, want %v", tc.kind, got, tc.want)
+		}
 	}
 }
 
