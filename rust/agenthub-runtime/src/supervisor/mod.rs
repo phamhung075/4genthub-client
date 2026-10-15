@@ -190,6 +190,11 @@ fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
     })
 }
 
+/// The seat's MCP config, which omp reads from its agent dir. It names the variables, never their values: the
+/// URL and the token come from the `.env` that `seat_env` hands every seat, so this file holds no secret.
+const SEAT_MCP_CONFIG: &str = r#"{"mcpServers":{"agenthub_http":{"type":"http","url":"${AGENTHUB_URL}/mcp","headers":{"Accept":"application/json, text/event-stream","Authorization":"Bearer ${AGENTHUB_TOKEN}"}}}}
+"#;
+
 /// The variables of `<state_dir>/.env`: `KEY=VALUE` lines, an optional `export ` prefix, one pair of matching
 /// quotes stripped, `#` comment and blank lines skipped. A missing or unreadable file is no variables. Values
 /// are never logged: the file holds credentials.
@@ -429,6 +434,8 @@ impl RoomSupervisor {
         let room_dir = self.room_dir(room);
         let seat_dir = room_dir.join("seats").join(&seat.seat_key);
         fs::create_dir_all(&seat_dir).map_err(|e| format!("cannot create seat dir: {e}"))?;
+        fs::write(seat_dir.join("mcp.json"), SEAT_MCP_CONFIG)
+            .map_err(|e| format!("cannot write the seat's mcp.json: {e}"))?;
 
         // Determine working directory
         let cwd_str = seat.cwd.as_deref().or(spec.cwd.as_deref()).unwrap_or(".");
@@ -2430,6 +2437,16 @@ mod tests {
         assert!(!env.contains_key("bad key"));
         let none = seat_env(&seat, "demo", "s", Path::new("/s"), Path::new("/r.sock"), Path::new("/nonexistent-state-root"));
         assert!(!none.contains_key("AGENTHUB_MCP_URL"), "no file, no variables");
+    }
+
+    /// The MCP config a seat is started with carries variable references only, so it is safe to leave in the
+    /// seat dir and holds no credential.
+    #[test]
+    fn the_seat_mcp_config_names_variables_and_no_secret() {
+        let parsed: serde_json::Value = serde_json::from_str(SEAT_MCP_CONFIG).expect("valid json");
+        let server = &parsed["mcpServers"]["agenthub_http"];
+        assert_eq!(server["url"], "${AGENTHUB_URL}/mcp");
+        assert_eq!(server["headers"]["Authorization"], "Bearer ${AGENTHUB_TOKEN}");
     }
 
     /// The nudge pass enumerates the rooms that are on disk. With no tmux session behind any seat, no seat
