@@ -36,6 +36,12 @@ function describe(tool: string, input: Record<string, unknown>): string {
   return String(input.path ?? input.pattern ?? "");
 }
 
+// The command a bash rule judges: the text a seat typed, minus heredoc bodies. A body is data (a note, a queue
+// reason, a script fed to a tool) and its lines are not commands, yet the rules below split on newlines, so a body
+// line that began with `tmux` or `git push` blocked an unrelated call (fe-dev's `queue close`, 2026-10-15).
+const commandOf = (input: Record<string, unknown>): string =>
+  String(input.command ?? "").replace(/(<<-?\s*(['"]?)(\w+)\2[^\n]*)\n[\s\S]*?\n[ \t]*\3[ \t]*(?=\n|$)/g, "$1");
+
 // A .env FILE NAME: `.env` or `.env.<suffix>` standing alone as a path segment, not `import.meta.env` and not a
 // template (`.env.sample`, `.env.example`), which hold no secret.
 const ENV_FILE = /(^|[\s/"'=])\.env(?!\.(sample|example|template)\b)(\.[\w-]+)?(?=$|[\s"'|;&)])/;
@@ -53,7 +59,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
       if (tool === "read" && /(^|\/)\.env[^/]*$/.test(String(input.path ?? "")))
         return "reading a .env file prints its secrets; check a name with `grep -c NAME FILE` instead";
       if (tool !== "bash") return "";
-      const cmd = String(input.command ?? "");
+      const cmd = commandOf(input);
       // A command that names a .env file and prints from it. `grep -c/-q/-l/-o` and `source` print no value.
       for (const part of cmd.split(/&&|\|\||;|\n/)) {
         if (!ENV_FILE.test(part)) continue;
@@ -69,7 +75,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
   {
     rule: "docker",
     check: (tool, input) =>
-      tool === "bash" && /(^|[;&|(]\s*|\n\s*)(sudo\s+)?docker(-compose)?\b/.test(String(input.command ?? ""))
+      tool === "bash" && /(^|[;&|(]\s*|\n\s*)(sudo\s+)?docker(-compose)?\b/.test(commandOf(input))
         ? "Docker is not run from a seat; production updates by a push the owner approves"
         : "",
   },
@@ -82,7 +88,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     rule: "tmux-mutate",
     check: (tool, input) =>
       tool === "bash" &&
-      String(input.command ?? "")
+      commandOf(input)
         .split(/&&|\|\||;|\n|\|/)
         .some((part) => {
           const call = part.match(TMUX_CALL);
@@ -96,7 +102,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
   {
     rule: "push",
     check: (tool, input) =>
-      tool === "bash" && /\bgit\s+(-C\s+\S+\s+)?push\b/.test(String(input.command ?? ""))
+      tool === "bash" && /\bgit\s+(-C\s+\S+\s+)?push\b/.test(commandOf(input))
         ? "a seat does not push: a push to main deploys production and the owner approves every one. Report the commit to the lead"
         : "",
   },
