@@ -18,7 +18,7 @@ func TestTheRigSeatMessageShapeNeverShellsOutToRig(t *testing.T) {
 	noRuntimeSocket(t)
 
 	var out, errOut bytes.Buffer
-	code := sendCommand{}.Run(context.Background(), []string{"nosuchpod", "nosuchseat", "probe"}, &out, &errOut)
+	code := sendCommand{}.Run(context.Background(), []string{"nosuchpod", "nosuchseat", "probe", "--intent", "notice"}, &out, &errOut)
 
 	if strings.Contains(errOut.String(), "is not on PATH") || strings.Contains(out.String(), "is not on PATH") {
 		t.Fatalf("the verb shelled out to `rig`: stdout %q stderr %q", out.String(), errOut.String())

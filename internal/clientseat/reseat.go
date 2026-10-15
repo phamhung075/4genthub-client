@@ -18,6 +18,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
+	"github.com/phamhung075/4genthub-client/internal/commpolicy"
 )
 
 // reseatDeps is what reseat touches outside its arguments, as fields so the suite needs no rig and no wait.
@@ -199,6 +200,11 @@ const defaultSender = "owner session"
 //     message text.
 var sendFlagSpecs = []clientruntime.FlagSpec{
 	{Name: "from", Value: true},
+	// --intent is OPTIONAL AND DEFAULTED TO `notice`, and the usage line below names that default: the intent
+	// picks the link kind that can authorize the send, so it is recorded on the decision line the send writes
+	// (which intent was used, not which the sender had in mind) and a default nobody was told about would be
+	// the silent guess this flag exists to prevent.
+	{Name: "intent", Value: true},
 	{Name: "raw"},
 	{Name: "json"},
 	{Name: "socket", Value: true},
@@ -240,6 +246,11 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		fmt.Fprintln(stdout, "record. A session no record lists keeps the string you typed, and the runtime's refusal for it names")
 		fmt.Fprintln(stdout, "what it expected.")
 		fmt.Fprintln(stdout, "\nOptions, wherever they appear on the line:")
+		fmt.Fprintln(stdout, "  --intent <"+commpolicy.IntentNames+">")
+		fmt.Fprintln(stdout, "           what the message IS. It picks the link kind that can authorize the send (task ->")
+		fmt.Fprintln(stdout, "           delegates_to, escalation/report -> escalates_to, question/notice -> collaborates_with), the")
+		fmt.Fprintln(stdout, "           room's declared links are what decide, and the intent actually used is recorded on the")
+		fmt.Fprintln(stdout, "           decision line. DEFAULT: "+string(commpolicy.IntentNotice)+".")
 		fmt.Fprintln(stdout, "  --raw    send the text exactly, with no From/To/Sent envelope")
 		fmt.Fprintln(stdout, "  --json   print the runtime's answer as JSON")
 		fmt.Fprintln(stdout, "  --socket PATH  the runtime daemon's Unix socket: the flag, else $"+clientruntime.RuntimeSocketEnv+", else")
@@ -271,13 +282,32 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	// only be right by luck.
 	socket := sendSocket(opts)
 
-	// `send SESSION MESSAGE`: the message goes through the runtime socket.
-	if len(positional) == 2 {
-		return sendToSession(positional[0], positional[1], opts, socket, stdout, stderr)
-	}
-	if len(positional) < 3 {
+	// THE SHAPES ARE CHECKED BEFORE ANYTHING IS DECIDED, so a caller error stays a caller error rather than
+	// being reported as a policy refusal.
+	if len(positional) < 2 {
 		fmt.Fprintln(stderr, "4genteam send: SESSION and MESSAGE, or RIG SEAT and MESSAGE, are required")
 		return clientcmd.ExitUsage
+	}
+
+	// THE INTENT IS PART OF THE SEND, and its DEFAULT IS DOCUMENTED AND PRINTED (the architect's ruling,
+	// 2026-10-15): `notice`, which authorizes under `collaborates_with`. It is not silently guessed - the
+	// usage line names the default, and the DECISION LINE records the intent actually used - so a sender who
+	// meant `task` and sent a `notice` is visible in the audit rather than invisible. The flag is not
+	// required at once because every existing caller (the skills, the seats, the lead's loops) would break
+	// the moment the gate turns on.
+	intentWord := opts["intent"]
+	if intentWord == "" {
+		intentWord = string(commpolicy.IntentNotice)
+	}
+	intent, known := commpolicy.ParseIntent(intentWord)
+	if !known {
+		fmt.Fprintf(stderr, "4genteam send: unknown intent %q (one of %s); nothing was sent\n", intentWord, commpolicy.IntentNames)
+		return clientcmd.ExitUsage
+	}
+
+	// `send SESSION MESSAGE`: the message goes through the runtime socket.
+	if len(positional) == 2 {
+		return sendToSession(positional[0], positional[1], opts, socket, intent, stdout, stderr)
 	}
 	rig, seat := positional[0], positional[1]
 	from := opts["from"]
@@ -297,7 +327,13 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	if opts["raw"] == "true" {
 		text = strings.Join(positional[2:], " ")
 	}
-	return runtimeSend(address.SessionName, text, opts, socket, stdout, stderr)
+	// THE DECISION COMES BEFORE THE DELIVERY. On this shape the seat key the caller typed IS the key the
+	// policy speaks in, so no lookup stands between them.
+	handle, err := authorizeToSeat(socket, rig, seat, intent)
+	if err != nil {
+		return report(stderr, err)
+	}
+	return runtimeSend(address.SessionName, text, opts, socket, handle, stdout, stderr)
 }
 
 // sendSocket is the socket this send is aimed at: the flag, else this shell's own resolution. It is named in
@@ -318,24 +354,60 @@ func sendSocket(opts map[string]string) string {
 // room's runtime record resolves the pair. A pair no record lists is left ALONE, deliberately: the caller's
 // own string then goes to the runtime as typed, and its refusal is the honest answer for a session that
 // does not exist.
-func sendToSession(session, text string, opts map[string]string, socket string, stdout, stderr io.Writer) int {
-	if rig, seat, ok := clientruntime.CanonicalRigSeat(session); ok {
-		if address, err := clientruntime.ResolveSeatAddressOn(socket, rig, seat); err == nil {
-			session = address.SessionName
+func sendToSession(session, text string, opts map[string]string, socket string, intent commpolicy.Intent, stdout, stderr io.Writer) int {
+	// THE CANONICAL FORM CARRIES ITS OWN SPLIT, so the seat key is the caller's, not something to read back:
+	// only the address is resolved through the seat's record.
+	room, seat := "", ""
+	if rig, key, ok := clientruntime.CanonicalRigSeat(session); ok {
+		if address, err := clientruntime.ResolveSeatAddressOn(socket, rig, key); err == nil {
+			session, room, seat = address.SessionName, rig, key
 		}
 	}
-	return runtimeSend(session, text, opts, socket, stdout, stderr)
+	// A NATIVE SESSION NAME CARRIES NO SPLIT RULE THIS VERB MAY INVENT, so the daemon the delivery goes to is
+	// asked which seat that session is - the room's links name seat keys, and a session that cannot be read
+	// back to one cannot be authorized. It is refused in words rather than delivered on a guess.
+	if room == "" {
+		var ok bool
+		room, seat, ok = recipientSeat(socket, session)
+		if !ok {
+			return report(stderr, &clientcmd.CodedError{
+				Code: clientcmd.ExitUsage,
+				Message: fmt.Sprintf("the runtime at %s lists no session %q, so the seat key a send is decided "+
+					"by cannot be read for it; nothing was sent", socket, session),
+			})
+		}
+	}
+	handle, err := authorizeToSeat(socket, room, seat, intent)
+	if err != nil {
+		return report(stderr, err)
+	}
+	return runtimeSend(session, text, opts, socket, handle, stdout, stderr)
 }
 
 // runtimeSend sends through the socket, wrapped in the From/To/Sent envelope unless --raw. `--json` prints
 // the runtime's own answer document.
-func runtimeSend(session, text string, opts map[string]string, socket string, stdout, stderr io.Writer) int {
+//
+// IT ALSO CLOSES THE PAIR: the decision line is already on disk when this runs, and the outcome line is
+// written here whatever the delivery did. That is the half the checker could never write, because the
+// delivery was another process's.
+func runtimeSend(session, text string, opts map[string]string, socket string, handle sendHandle, stdout, stderr io.Writer) int {
 	raw, err := clientruntime.RuntimeSendTextOn(socket, session, text, clientruntime.SendOptions{
 		Raw: opts["raw"] == "true",
 	})
 	if err != nil {
+		if auditErr := handle.outcome(commpolicy.OutcomeDeliveryFailed); auditErr != nil {
+			fmt.Fprintf(stderr, "4genteam send: the outcome of the failed delivery could not be audited in %s: %v\n",
+				handle.path, auditErr)
+		}
 		fmt.Fprintf(stderr, "4genteam send: the runtime at %s refused it: %v; nothing was sent\n", socket, err)
 		return clientcmd.ExitRemote
+	}
+	// A delivery whose outcome cannot be recorded is reported as a failure even though the message arrived: an
+	// unrecorded outcome is exactly what the pair exists to rule out.
+	if auditErr := handle.outcome(commpolicy.OutcomeDelivered); auditErr != nil {
+		fmt.Fprintf(stderr, "4genteam send: the message was delivered, but its outcome line could not be written "+
+			"to %s: %v\n", handle.path, auditErr)
+		return ExitFailed
 	}
 	if opts["json"] == "true" {
 		_, _ = stdout.Write(append(raw, '\n'))

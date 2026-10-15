@@ -23,6 +23,22 @@ func noRuntimeSocket(t *testing.T) {
 	t.Setenv(clientruntime.RuntimeSocketEnv, filepath.Join(t.TempDir(), "no-runtime.sock"))
 }
 
+// THE SEND PATH DECIDES BEFORE IT DELIVERS, so every case that wants a delivery has to declare who may send to
+// whom, and every case at all needs a store to write its audit lines into. These two keep that out of the
+// assertions: the links are what a room declares, the store is a temp directory so no test writes the
+// operator's own audit lines.
+func roomLinksDoc(from, to string) string {
+	return `{"ok":true,"data":[{"from":"` + from + `","to":"` + to + `","kind":"collaborates_with"}]}` + "\n"
+}
+
+func auditStoreUnder(t *testing.T) {
+	t.Helper()
+	previous := sendStore
+	store := t.TempDir()
+	sendStore = func() (string, error) { return store, nil }
+	t.Cleanup(func() { sendStore = previous })
+}
+
 // fakeRuntime answers the runtime socket the way the daemon does. It accepts connections for the life of the
 // test, IGNORES the probe dial ResolveTransport makes (that connection is dialled and closed with no line),
 // and answers each request LINE with handler(line). It returns the socket path and a channel of the lines it
@@ -67,8 +83,18 @@ func fakeRuntime(t *testing.T, handler func(line string) string) (string, <-chan
 // TestSendGoesThroughTheRuntimeSocket: the runtime carries the message in a From/To/Sent envelope.
 func TestSendGoesThroughTheRuntimeSocket(t *testing.T) {
 	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+	auditStoreUnder(t)
 
 	sock, requests := fakeRuntime(t, func(line string) string {
+		if strings.Contains(line, `"GetRoomLinks"`) {
+			return roomLinksDoc("go-dev", "fe-dev")
+		}
+		if strings.Contains(line, `"Whoami"`) {
+			// THE SENDER'S OWN IDENTITY IS ASKED OF THE RUNTIME FIRST, so a fake daemon has to answer it the
+			// way a daemon does: this shell is go-dev of 4genthub-min.
+			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
+		}
 		if strings.Contains(line, `"GetRoomStatus"`) {
 			// The canonical name the caller typed is resolved through the seat's own record before the send -
 			// the runtime is the transport that cannot address the canonical form (F-B). This record names the
@@ -82,7 +108,7 @@ func TestSendGoesThroughTheRuntimeSocket(t *testing.T) {
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := sendCommand{}.Run(context.Background(), []string{"4genthub-min-fe-dev@4genthub-min", "probe"}, &out, &errOut)
+	code := sendCommand{}.Run(context.Background(), []string{"4genthub-min-fe-dev@4genthub-min", "probe", "--intent", "notice"}, &out, &errOut)
 
 	if code != 0 {
 		t.Fatalf("send exit = %d, stderr = %q", code, errOut.String())
@@ -146,7 +172,17 @@ func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
 	})
 	t.Setenv(clientruntime.RuntimeSocketEnv, other)
 
+	auditStoreUnder(t)
 	aimed, aimedSeen := fakeRuntime(t, func(line string) string {
+		if strings.Contains(line, `"GetRoomLinks"`) {
+			return roomLinksDoc("go-dev", "dev")
+		}
+		if strings.Contains(line, `"Whoami"`) {
+			// THE SENDER'S OWN IDENTITY IS ASKED OF THE RUNTIME FIRST, so a fake daemon has to answer it the
+			// way a daemon does: this shell is go-dev of 4genthub-min.
+			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
+		}
 		if strings.Contains(line, `"GetRoomStatus"`) {
 			// THIS daemon's record, and its own session name for the seat: the name the verb sends with has to
 			// be the one the daemon it writes to uses.
@@ -158,7 +194,7 @@ func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	code := sendCommand{}.Run(context.Background(),
-		[]string{"isolated-dev@isolated", "probe", "--socket", aimed}, &out, &errOut)
+		[]string{"isolated-dev@isolated", "probe", "--intent", "notice", "--socket", aimed}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("send exit = %d, stderr = %q", code, errOut.String())
 	}
@@ -166,9 +202,11 @@ func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
 		t.Errorf("stdout = %q, want the delivery confirmed by the name the AIMED daemon's record carries", out.String())
 	}
 
+	// FOUR questions, in this order: the seat's record (the name to write to), the room's declared links (the
+	// decision's source), and the send itself. The identity question is NOT one of them - see below.
 	var actions []string
 	timeout := time.After(5 * time.Second)
-	for len(actions) < 2 {
+	for len(actions) < 3 {
 		select {
 		case line := <-aimedSeen:
 			var frame struct {
@@ -179,16 +217,26 @@ func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
 			}
 			actions = append(actions, frame.Action)
 		case <-timeout:
-			t.Fatalf("the aimed socket saw %v, want the record and then the send", actions)
+			t.Fatalf("the aimed socket saw %v, want the record, the links and then the send", actions)
 		}
 	}
-	if actions[0] != "GetRoomStatus" || actions[1] != "SendText" {
-		t.Errorf("the aimed daemon was asked for %v, want the room's record and then the send", actions)
+	want := "GetRoomStatus,GetRoomLinks,SendText"
+	if strings.Join(actions, ",") != want {
+		t.Errorf("the aimed daemon was asked for %v, want %s: the decision and the delivery travel the SAME socket", actions, want)
 	}
-	select {
-	case line := <-otherSeen:
-		t.Errorf("the environment's daemon was asked %q: --socket has to aim the WHOLE verb at one daemon", line)
-	default:
+	// THE ENVIRONMENT'S DAEMON IS ASKED ONE QUESTION, AND ONLY ONE: this shell's own identity. Which seat is
+	// sending is a fact about this shell rather than about the daemon the message is aimed at, so the resolver
+	// asks this shell's own transport - and nothing of the decision or the delivery may leak there.
+	drained := false
+	for !drained {
+		select {
+		case line := <-otherSeen:
+			if !strings.Contains(line, `"Whoami"`) {
+				t.Errorf("the environment's daemon was asked %q: only this shell's identity may go there", line)
+			}
+		default:
+			drained = true
+		}
 	}
 }
 
@@ -197,13 +245,23 @@ func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
 func TestSendJsonPrintsTheRuntimesOwnAnswer(t *testing.T) {
 	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
 
-	sock, _ := fakeRuntime(t, func(string) string {
+	auditStoreUnder(t)
+	sock, _ := fakeRuntime(t, func(line string) string {
+		if strings.Contains(line, `"GetRoomLinks"`) {
+			return roomLinksDoc("go-dev", "peer")
+		}
+		if strings.Contains(line, `"Whoami"`) {
+			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev"}}}` + "\n"
+		}
+		if strings.Contains(line, `"ListSessions"`) {
+			return `{"ok":true,"data":[{"rigName":"r","logicalId":"r.peer","sessionName":"peer@r"}]}` + "\n"
+		}
 		return `{"ok":true,"data":{"delivered":"peer@r","outcome":"submitted"}}` + "\n"
 	})
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := sendCommand{}.Run(context.Background(), []string{"peer@r", "probe", "--json"}, &out, &errOut)
+	code := sendCommand{}.Run(context.Background(), []string{"peer@r", "probe", "--json", "--intent", "notice"}, &out, &errOut)
 
 	if code != 0 {
 		t.Fatalf("send --json exit = %d, stderr = %q", code, errOut.String())
@@ -221,7 +279,7 @@ func TestSendNamesTheRuntimeWhenNoTransportAnswers(t *testing.T) {
 	noRuntimeSocket(t)
 
 	var out, errOut bytes.Buffer
-	code := sendCommand{}.Run(context.Background(), []string{"peer@r", "probe"}, &out, &errOut)
+	code := sendCommand{}.Run(context.Background(), []string{"peer@r", "probe", "--intent", "notice"}, &out, &errOut)
 
 	if code == 0 {
 		t.Fatalf("send exited 0 with no transport; stdout = %q", out.String())
@@ -229,7 +287,10 @@ func TestSendNamesTheRuntimeWhenNoTransportAnswers(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("a send that never happened reported %q", out.String())
 	}
-	for _, want := range []string{"the runtime at ", "no-runtime.sock", "cannot connect", "nothing was sent"} {
+	// The first thing a send now needs is the RECIPIENT's seat key, read back from the daemon the delivery is
+	// aimed at: with no daemon answering, that read is what fails, and the refusal names the runtime and the
+	// socket it could not read rather than the sentence about a rig daemon.
+	for _, want := range []string{"the runtime at ", "no-runtime.sock", "nothing was sent"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
 		}
@@ -239,7 +300,15 @@ func TestSendNamesTheRuntimeWhenNoTransportAnswers(t *testing.T) {
 // TestSendRigSeatShapeRawSendsTheTextExactly: --raw on the RIG SEAT shape drops the shape's own
 // "From NAME:" attribution and the envelope, so the runtime receives the text exactly.
 func TestSendRigSeatShapeRawSendsTheTextExactly(t *testing.T) {
+	auditStoreUnder(t)
 	sock, requests := fakeRuntime(t, func(line string) string {
+		if strings.Contains(line, `"GetRoomLinks"`) {
+			return roomLinksDoc("go-dev", "dev")
+		}
+		if strings.Contains(line, `"Whoami"`) {
+			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
+		}
 		if strings.Contains(line, `"GetRoomStatus"`) {
 			return `{"ok":true,"data":[{"room":"lab","seat":"dev","session_name":"agenthub--lab--dev",` +
 				`"runtime":"omp","state":"Running"}]}` + "\n"
@@ -249,7 +318,7 @@ func TestSendRigSeatShapeRawSendsTheTextExactly(t *testing.T) {
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := sendCommand{}.Run(context.Background(), []string{"lab", "dev", "gate text", "--raw"}, &out, &errOut)
+	code := sendCommand{}.Run(context.Background(), []string{"lab", "dev", "gate text", "--raw", "--intent", "notice"}, &out, &errOut)
 	if code != 0 {
 		t.Fatalf("send RIG SEAT --raw exit = %d, stderr = %q", code, errOut.String())
 	}
@@ -293,10 +362,26 @@ func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *te
 
 		var mu sync.Mutex
 		var lines []string
+		auditStoreUnder(t)
 		sock, _ := fakeRuntime(t, func(line string) string {
 			mu.Lock()
 			lines = append(lines, line)
 			mu.Unlock()
+			if strings.Contains(line, `"GetRoomLinks"`) {
+				return roomLinksDoc("go-dev", "solo")
+			}
+		if strings.Contains(line, `"Whoami"`) {
+			// THE SENDER'S OWN IDENTITY IS ASKED OF THE RUNTIME FIRST, so a fake daemon has to answer it the
+			// way a daemon does: this shell is go-dev of 4genthub-min.
+			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
+		}
+			if strings.Contains(line, `"ListSessions"`) {
+				// The native name is read back to its seat key here: the room's links name seat keys, so the
+				// daemon the delivery goes to is asked which seat that session is.
+				return `{"ok":true,"data":[{"rigName":"leg-solo","logicalId":"leg-solo.solo","sessionName":"` +
+					native + `","canonicalSessionName":"leg-solo-solo@leg-solo"}]}` + "\n"
+			}
 			if strings.Contains(line, `"GetRoomStatus"`) {
 				return `{"ok":true,"data":[{"room":"leg-solo","seat":"solo","session_name":"` + native +
 					`","runtime":"omp","state":"Running"}]}` + "\n"
@@ -306,7 +391,7 @@ func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *te
 		t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
 		var out, errOut bytes.Buffer
-		code := sendCommand{}.Run(context.Background(), []string{target, "LEG CHECK ONE"}, &out, &errOut)
+		code := sendCommand{}.Run(context.Background(), []string{target, "LEG CHECK ONE", "--intent", "notice"}, &out, &errOut)
 		mu.Lock()
 		defer mu.Unlock()
 		return code, out.String(), errOut.String(), append([]string(nil), lines...)

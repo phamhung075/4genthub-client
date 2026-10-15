@@ -8,7 +8,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -70,14 +69,6 @@ func helpOrUsageError(err error, usage string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-var intents = map[string]commpolicy.Intent{
-	"task":       commpolicy.IntentTask,
-	"escalation": commpolicy.IntentEscalation,
-	"report":     commpolicy.IntentReport,
-	"question":   commpolicy.IntentQuestion,
-	"notice":     commpolicy.IntentNotice,
-}
-
 // Exit codes of send, besides 0 (delivered) and the usage/policy error 2.
 const (
 	exitAuditFailed    = 1
@@ -117,7 +108,7 @@ func defaultPins() (string, error) {
 }
 
 // sendUsage is what `seatcheck send` prints: help when help was asked for, the usage error otherwise.
-const sendUsage = "usage: seatcheck send --to <seat> --intent <task|escalation|report|question|notice> -- <message words...>"
+var sendUsage = "usage: seatcheck send --to <seat> --intent <" + commpolicy.IntentNames + "> -- <message words...>"
 
 func runSend(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
@@ -136,7 +127,7 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "seatcheck send: --to, --intent and a message are required")
 		return 2
 	}
-	intent, ok := intents[*intentName]
+	intent, ok := commpolicy.ParseIntent(*intentName)
 	if !ok {
 		fmt.Fprintf(stderr, "seatcheck send: unknown intent %q\n", *intentName)
 		return 2
@@ -181,7 +172,7 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 			Allowed: false,
 			Reason:  reason,
 		}
-		if err := appendAudit(auditPath, record); err != nil {
+		if err := commpolicy.AppendAudit(auditPath, record); err != nil {
 			fmt.Fprintf(stderr, "seatcheck send: audit: %v\n", err)
 			return exitAuditFailed
 		}
@@ -219,7 +210,7 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 		Reason:     decision.Reason,
 		PolicyHash: commpolicy.PolicyHash(policy),
 	}
-	if err := appendAudit(auditPath, record); err != nil {
+	if err := commpolicy.AppendAudit(auditPath, record); err != nil {
 		fmt.Fprintf(stderr, "seatcheck send: audit: %v\n", err)
 		return exitAuditFailed
 	}
@@ -241,7 +232,7 @@ func runSend(args []string, stdout, stderr io.Writer) int {
 	}
 	// A failed outcome line must not change the exit code: after a delivery that succeeded, a
 	// non-zero exit would make a retrying caller send the message twice.
-	if err := appendAudit(auditPath, record); err != nil {
+	if err := commpolicy.AppendAudit(auditPath, record); err != nil {
 		fmt.Fprintf(stderr, "seatcheck send: warning: the message was handled (%s) but its outcome could not be audited: %v\n", record.Outcome, err)
 	}
 	if code != 0 {
@@ -372,35 +363,6 @@ func identityFromDocument(who *clientruntime.WhoamiResponse) (identity, error) {
 		peers[name] = append(peers[name], p.SessionName)
 	}
 	return identity{Rig: rig, Member: member, Peers: peers}, nil
-}
-
-// appendAudit appends one JSON line and syncs it to disk, so a line written before delivery
-// survives a crash. The file must not be readable or writable by others.
-func appendAudit(path string, record commpolicy.AuditRecord) (err error) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := f.Close(); err == nil {
-			err = closeErr
-		}
-	}()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s has mode %v, want 0600", path, info.Mode().Perm())
-	}
-	line, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	if _, err = f.Write(append(line, '\n')); err != nil {
-		return err
-	}
-	return f.Sync()
 }
 
 // seatDelivery delivers text to the session target through the CLIENT's own one-session delivery
