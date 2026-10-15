@@ -471,26 +471,29 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                         *pending_reader.lock() = None;
                                         match text {
                                             Some(text) => {
-                                                mirror(&format!(
-                                                    "held for the next turn: {reason} :: {err}"
-                                                ));
                                                 let refused_id = id.to_string();
                                                 let waiting = hold_text(&held_reader, &refused_id, text);
-                                                if waiting > 1 {
-                                                    // The second refusal must be visible as a queue, not
-                                                    // as a replacement: the text in front of it is still
-                                                    // waiting and will be delivered first.
-                                                    mirror(&format!(
-                                                        "the text {refused_id} waits behind {} held text(s); they are delivered in the order they were refused",
-                                                        waiting - 1
-                                                    ));
+                                                let sentence = publish_hold(&state_path, waiting, attempts);
+                                                match waiting {
+                                                    Ok(depth) => {
+                                                        mirror(&format!(
+                                                            "held for the next turn: {reason} :: {err}"
+                                                        ));
+                                                        if depth > 1 {
+                                                            // The second refusal must be visible as a queue, not
+                                                            // as a replacement: the text in front of it is still
+                                                            // waiting and will be delivered first.
+                                                            mirror(&format!(
+                                                                "the text {refused_id} waits behind {} held text(s); they are delivered in the order they were refused",
+                                                                depth - 1
+                                                            ));
+                                                        }
+                                                    }
+                                                    // A full queue drops NOTHING silently: the text the agent
+                                                    // refused is named as refused by the runner too, with the
+                                                    // depth the bound was reached at.
+                                                    Err(_) => mirror(&format!("refused, not held: {sentence}")),
                                                 }
-                                                let _ = write_state(
-                                                    &state_path,
-                                                    "working",
-                                                    "held: the agent refused this prompt while its turn was running",
-                                                    attempts,
-                                                );
                                             }
                                             None => mirror(&format!(
                                                 "rpc error, nothing to hold: {reason}"
@@ -1154,6 +1157,15 @@ pub fn classify_failure(error: &str) -> Failure {
 /// How many times this runner re-sends a turn that died retryably, and how long it waits between tries.
 pub const MAX_RESUME_ATTEMPTS: u32 = 3;
 
+/// How many refused texts this runner keeps for the seat's next free turn.
+///
+/// EIGHT, and the number is the point rather than a round figure: the queue exists for a burst (a sender's
+/// few messages landing inside one long turn), not for a backlog. A seat whose agent refuses prompt after
+/// prompt is not going to get to the ninth either, and every held text is a message the seat has not seen -
+/// so the bound turns an unbounded memory growth with an invisible cause into a published, named refusal
+/// (`publish_hold`) that a reader can act on.
+pub const MAX_HELD: usize = 8;
+
 pub fn resume_delay(attempt: u32) -> Duration {
     // 1s, 2s, 4s — bounded, and the same shape for every retryable class.
     Duration::from_secs(1u64 << attempt.min(3).saturating_sub(1).min(3))
@@ -1440,15 +1452,56 @@ pub fn decide_resume(
     }
 }
 
-/// Hold `text` for the next free turn, behind whatever is already held, and return the queue's length.
+/// Hold `text` for the next free turn, behind whatever is already held, and answer the queue's length.
 ///
 /// The queue is the required edit on `c0ffbe8` (reviewer, 2026-10-15): the hold was a single slot and the
 /// second refusal inside one turn overwrote the first silently, so the first text appeared in no surface.
 /// A text is appended here and leaves only through `deliver_held`, in the order it was refused.
-fn hold_text(held: &Arc<Mutex<VecDeque<(String, String)>>>, refused_id: &str, text: String) -> usize {
+///
+/// IT IS BOUNDED, and the bound is the lead's second required edit: every entry is a message the seat has not
+/// seen and the queue lives in this process's memory, so a seat whose agent refuses every prompt (a turn that
+/// never ends, an agent that answers each frame with the same refusal) would grow it for as long as the room
+/// lives and never say so. `Err(depth)` is the refusal, and it carries the depth so the caller can name it -
+/// a runner that will not keep the text says that out loud instead of dropping it, which is the defect class
+/// this whole cutover removes.
+fn hold_text(
+    held: &Arc<Mutex<VecDeque<(String, String)>>>,
+    refused_id: &str,
+    text: String,
+) -> Result<usize, usize> {
     let mut queue = held.lock();
+    if queue.len() >= MAX_HELD {
+        return Err(queue.len());
+    }
     queue.push_back((refused_id.to_string(), text));
-    queue.len()
+    Ok(queue.len())
+}
+
+/// Publish what became of a refused text where the seat's readers look, and answer the sentence it published.
+///
+/// THE COUNT GOES WHERE THE STATE GOES (the lead's second required edit). The state file's classification is
+/// the surface this runner already uses for a held text, and a sentence that reads the same at one held text
+/// and at eight is a fact with no size: `4genteam ps` and the daemon's `status` serve it, so the number of
+/// texts waiting for a free turn is published with the word. A FULL QUEUE IS PUBLISHED AS `blocked`, because
+/// a runner that cannot keep the text it was asked to keep is not healthy and a reader must not find `working`
+/// and conclude the seat will get to it.
+fn publish_hold(state_path: &Path, held: Result<usize, usize>, attempts: u32) -> String {
+    match held {
+        Ok(depth) => {
+            let sentence = format!(
+                "held: the agent refused this prompt while its turn was running ({depth} of {MAX_HELD} held for the next turn)"
+            );
+            let _ = write_state(state_path, "working", &sentence, attempts);
+            sentence
+        }
+        Err(depth) => {
+            let sentence = format!(
+                "the held queue is full ({depth} of {MAX_HELD}): the agent refused this prompt and the runner could NOT hold it"
+            );
+            let _ = write_state(state_path, "blocked", &sentence, attempts);
+            sentence
+        }
+    }
 }
 
 /// Deliver the text a refused prompt left held, when the seat is free again.
@@ -2110,7 +2163,8 @@ mod tests {
         let mut attempts: u32 = 0;
         assert_eq!(
             hold_text(&held, "send-1-1", "the text the agent refused".to_string()),
-            1
+            Ok(1),
+            "a refused text is queued and the queue answers its depth"
         );
         deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
         let line = from_threads
@@ -2127,9 +2181,37 @@ mod tests {
         assert_eq!(published["state"], "working");
         assert_eq!(published["activity"], "working");
 
+        // THE COUNT IS PUBLISHED WITH THE WORD (the lead's second required edit): the state file's own
+        // classification carries the depth, so `4genteam ps` and the daemon's status show a queue and its
+        // size rather than "held", a fact with no size that read the same at one text and at twenty.
+        let sentence = publish_hold(&state_path, Ok(2), 0);
+        assert!(
+            sentence.contains("2 of 8"),
+            "the count is named in the sentence the state publishes: {sentence}"
+        );
+        let published: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+        assert_eq!(published["classification"], sentence);
+        assert_eq!(published["state"], "working");
+        // AND A FULL QUEUE IS A REFUSAL THE RUNNER NAMES. The text is not kept and not silently dropped: the
+        // depth the bound was reached at is published, and the seat is `blocked` because a runner that cannot
+        // keep what it was asked to keep will not get to it by waiting.
+        let full = publish_hold(&state_path, Err(MAX_HELD), 0);
+        assert!(
+            full.contains("full (8 of 8)"),
+            "the queue names the bound it reached: {full}"
+        );
+        let published: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+        assert_eq!(published["state"], "blocked");
+        assert_eq!(published["classification"], full);
+
         // Bounded, like the resume ladder: past the bound the seat is `blocked` with the reason and nothing
         // more is sent.
-        hold_text(&held, "send-1-2", "refused again".to_string());
+        assert!(
+            hold_text(&held, "send-1-2", "refused again".to_string()).is_ok(),
+            "the queue still has room"
+        );
         attempts = MAX_RESUME_ATTEMPTS;
         deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
         assert_eq!(attempts, MAX_RESUME_ATTEMPTS + 1);
@@ -2141,6 +2223,37 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
         assert_eq!(published["state"], "blocked");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE QUEUE IS BOUNDED (the lead's required edit on c0ffbe8, 2026-10-15): a seat whose agent refuses
+    /// prompt after prompt must not grow this process's memory for the room's lifetime without anyone being
+    /// told. The bound refuses the text that does not fit, states the depth, and EVICTS NOTHING - a held text
+    /// still waits, and the count in front of it is unchanged.
+    #[test]
+    fn the_held_queue_is_bounded_and_names_the_depth_it_refused() {
+        let held: Arc<Mutex<VecDeque<(String, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
+        for i in 1..=MAX_HELD {
+            assert_eq!(
+                hold_text(&held, &format!("send-1-{i}"), format!("text {i}")),
+                Ok(i),
+                "the queue takes MAX_HELD texts and says how many it holds"
+            );
+        }
+        assert_eq!(
+            hold_text(&held, "send-1-over", "one too many".to_string()),
+            Err(MAX_HELD),
+            "the text that does not fit is refused with the depth, not queued"
+        );
+        assert_eq!(
+            held.lock().len(),
+            MAX_HELD,
+            "the refusal evicts nothing: every held text is still waiting, in order"
+        );
+        assert_eq!(
+            held.lock().front().map(|(id, _)| id.clone()),
+            Some("send-1-1".to_string()),
+            "the text refused first is still in front"
+        );
     }
 
     /// THE REQUIRED EDIT, pinned (reviewer, 2026-10-15, `GATE-c0ffbe8-refused-send`): the hold is a QUEUE,
@@ -2159,11 +2272,11 @@ mod tests {
 
         assert_eq!(
             hold_text(&held, "send-1-1", "the first refused text".to_string()),
-            1
+            Ok(1)
         );
         assert_eq!(
             hold_text(&held, "send-1-2", "the second refused text".to_string()),
-            2
+            Ok(2)
         );
         assert_eq!(
             held.lock().len(),
