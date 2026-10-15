@@ -17,6 +17,8 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 const seat = process.env.AGENTHUB_SEAT ?? "";
 const logPath = join(process.env.PI_CODING_AGENT_DIR ?? ".", "tool-calls.jsonl");
 const MAX_TARGET = 240;
+// A refused command is kept whole: the rule that blocked it is judged by reading what it blocked.
+const MAX_BLOCKED = 2000;
 
 // A secret never reaches the log: a token or key assignment keeps its name and loses its value.
 const SECRET = /\b([A-Za-z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Za-z0-9_]*\s*[=:]\s*)\S+|(Bearer\s+)\S+/gi;
@@ -85,11 +87,12 @@ export default function hook(pi: ExtensionAPI): void {
   pi.on("tool_call", async (event) => {
     const input = (event.input ?? {}) as Record<string, unknown>;
     const tool = event.toolName;
-    const target = redact(describe(tool, input)).slice(0, MAX_TARGET);
+    const full = redact(describe(tool, input));
+    const target = full.slice(0, MAX_TARGET);
     for (const { rule, check } of RULES) {
       const reason = check(tool, input);
       if (reason) {
-        record({ tool, target, outcome: "blocked", rule, error: reason });
+        record({ tool, target: full.slice(0, MAX_BLOCKED), outcome: "blocked", rule, error: reason });
         return { block: true, reason: `blocked by seat guard (${rule}): ${reason}` };
       }
     }
