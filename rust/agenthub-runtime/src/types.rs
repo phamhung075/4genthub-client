@@ -450,7 +450,7 @@ pub enum IpcRequest {
     /// The session list this daemon can answer for: every seat of every room it hosts, in the CLI's own
     /// keys (`SessionEntry`). A `room` narrows it to one room; `None` means every room this daemon hosts.
     ///
-    /// It exists so the connector and rigd stop exec-ing `rig ps --json`: the client's own session-list
+    /// It exists so the connector and agent stop exec-ing `rig ps --json`: the client's own session-list
     /// parser reads this answer unchanged, which is what makes the CLI and the runtime comparable in one
     /// test instead of described in two.
     ListSessions {

@@ -123,7 +123,7 @@ func (r *restorer) restore(rigName, brief string) bool {
 	}
 	r.openWatch(rigName)
 	// The pointer names the CLIENT's own read - `4genteam ps <RIG> --nodes`, which reads the node table through
-	// the runtime (RoomNodes) - and not `rig ps --nodes --rig RIG`, which is the tool this cutover removes and
+	// the runtime (RoomNodes) - and not `rig ps --nodes --room RIG`, which is the tool this cutover removes and
 	// which an operator following the old line would find missing (the gate's nit at bb4f412).
 	r.log.printf("%s: done — verify with: 4genteam ps %s --nodes", rigName, rigName)
 	return true
@@ -187,7 +187,7 @@ func (r *restorer) openWatch(rigName string) {
 const wallNoTerminal = "no terminal host"
 
 // watchWall starts this same binary's watch view, which is what the shell ran (`4genteam watch watch
-// --rig RIG`: the Python's group and its `watch` sub-verb are one verb here). herdr hosts the wall, so a
+// --room RIG`: the Python's group and its `watch` sub-verb are one verb here). herdr hosts the wall, so a
 // machine without it is a skip with a reason; the wall's own output goes to this verb's log, where the
 // shell redirected it too.
 func watchWall(rigName string) (bool, string) {
@@ -207,7 +207,7 @@ func watchWall(rigName string) (bool, string) {
 		return false, "see log"
 	}
 	defer func() { _ = out.Close() }()
-	cmd := execCommand(self, "watch", "--rig", rigName)
+	cmd := execCommand(self, "watch", "--room", rigName)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, out, out
 	if err := cmd.Run(); err != nil {
 		return false, "see log"

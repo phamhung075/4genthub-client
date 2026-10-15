@@ -7,7 +7,7 @@
 //
 // THE ROLE TABLE IS NOT IN THIS BINARY. The Python carried the owner's rig, its seats and their roles as
 // a compiled table (SEAT_ROLES); a client that ships somebody's team definition cannot be used by anyone
-// else, so the roles come from the rig's own team file, passed with --team, and --rig must name the rig
+// else, so the roles come from the rig's own team file, passed with --team, and --room must name the rig
 // that file defines.
 package clientpolicy
 
@@ -236,9 +236,9 @@ func Commands() []clientcmd.Command {
 }
 
 const (
-	policyUsage = "usage: 4genteam policy (show SEAT --rig RIG --team FILE | apply --rig RIG --team FILE [--state-root DIR] [--check])"
-	showUsage   = "usage: 4genteam policy show SEAT --rig RIG --team FILE"
-	applyUsage  = "usage: 4genteam policy apply --rig RIG --team FILE [--state-root DIR] [--check]"
+	policyUsage = "usage: 4genteam policy (show SEAT --room RIG --team FILE | apply --room RIG --team FILE [--state-root DIR] [--check])"
+	showUsage   = "usage: 4genteam policy show SEAT --room RIG --team FILE"
+	applyUsage  = "usage: 4genteam policy apply --room RIG --team FILE [--state-root DIR] [--check]"
 )
 
 type policyCommand struct{}
@@ -252,7 +252,7 @@ func (policyCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 		return clientcmd.ExitUsage
 	}
 	if args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintf(stdout, "%s\n\nPer-seat permission policy. The roles come from the rig's own team file, so there is no\ncompiled role table: --team names it and --rig must be the rig it defines.\n", policyUsage)
+		fmt.Fprintf(stdout, "%s\n\nPer-seat permission policy. The roles come from the rig's own team file, so there is no\ncompiled role table: --team names it and --room must be the rig it defines.\n", policyUsage)
 		return clientcmd.ExitOK
 	}
 	switch args[0] {
@@ -275,19 +275,19 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam policy show: %v. %s\n", err, showUsage)
 		return clientcmd.ExitUsage
 	}
-	if err := rejectUnknown(values, "rig", "team"); err != nil {
+	if err := rejectUnknown(values, "room", "team"); err != nil {
 		fmt.Fprintf(stderr, "4genteam policy show: %v. %s\n", err, showUsage)
 		return clientcmd.ExitUsage
 	}
-	if values["rig"] == "" || values["team"] == "" || len(positional) < 1 {
-		fmt.Fprintf(stderr, "4genteam policy show: a SEAT, --rig and --team are required. %s\n", showUsage)
+	if values["room"] == "" || values["team"] == "" || len(positional) < 1 {
+		fmt.Fprintf(stderr, "4genteam policy show: a SEAT, --room and --team are required. %s\n", showUsage)
 		return clientcmd.ExitUsage
 	}
 	team, err := ReadTeam(values["team"])
 	if err != nil {
 		return exitFor(stderr, err)
 	}
-	entry, err := RoleFor(team, values["rig"], positional[0])
+	entry, err := RoleFor(team, values["room"], positional[0])
 	if err != nil {
 		return exitFor(stderr, err)
 	}
@@ -305,11 +305,11 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam policy apply: %v. %s\n", err, applyUsage)
 		return clientcmd.ExitUsage
 	}
-	if err := rejectUnknown(values, "rig", "team", "state-root", "check"); err != nil {
+	if err := rejectUnknown(values, "room", "team", "state-root", "check"); err != nil {
 		fmt.Fprintf(stderr, "4genteam policy apply: %v. %s\n", err, applyUsage)
 		return clientcmd.ExitUsage
 	}
-	rig := values["rig"]
+	rig := values["room"]
 	teamPath := values["team"]
 	stateRoot, resolveErr := clientenv.ResolveStateRoot(values["state-root"])
 	if resolveErr != nil {
@@ -318,7 +318,7 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 	}
 	check := values["check"] == "true"
 	if rig == "" || teamPath == "" {
-		fmt.Fprintf(stderr, "4genteam policy apply: --rig and --team are required. %s\n", applyUsage)
+		fmt.Fprintf(stderr, "4genteam policy apply: --room and --team are required. %s\n", applyUsage)
 		return clientcmd.ExitUsage
 	}
 	team, err := ReadTeam(teamPath)
@@ -386,7 +386,7 @@ func runApply(args []string, stdout, stderr io.Writer) int {
 }
 
 // parseArgs splits a command line into --name value pairs and bare words. It is hand-rolled because the
-// standard flag package STOPS at the first bare word, so `policy show SEAT --rig R --team F` - the
+// standard flag package STOPS at the first bare word, so `policy show SEAT --room R --team F` - the
 // documented order, and one argparse accepted - would parse no flags at all. `--check` is boolean, so it
 // takes no value.
 func parseArgs(args []string) (map[string]string, []string, error) {

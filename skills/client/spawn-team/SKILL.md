@@ -7,18 +7,18 @@ description: Continue or spawn an agent team with 4genteam, or spawn an in-sessi
 
 Two ways to run a team, and the two are not exclusive:
 
-- **A team room** — the durable form: seats in tmux supervised by 4genteam, survives restarts and resumes each seat's own session. **ALWAYS launch or restore using `4genteam up <rig> --team <DIR> [--allow-peak]` or `4genteam continue <rig>`** (`--team DIR` is required: the room's seats come from the local team definition that directory holds, and there is no default). **NEVER launch or resume with the predecessor orchestrator's `rig up`**: it bypasses this client's whole lifecycle — `rigd`, the compaction supervisor (`auto compact`), the `watchdog`, the status `bridge`, and the styled `watch` grid — and its daemon is not running (measured 2026-10-14: `rig whoami` answers `daemon unreachable`). See the sections below.
+- **A team room** — the durable form: seats in tmux supervised by 4genteam, survives restarts and resumes each seat's own session. **ALWAYS launch or restore using `4genteam up <rig> --team <DIR> [--allow-peak]` or `4genteam continue <rig>`** (`--team DIR` is required: the room's seats come from the local team definition that directory holds, and there is no default). **NEVER launch or resume with the predecessor orchestrator's `rig up`**: it bypasses this client's whole lifecycle — `agent`, the compaction supervisor (`auto compact`), the `watchdog`, the status `bridge`, and the styled `watch` grid — and its daemon is not running (measured 2026-10-14: `rig whoami` answers `daemon unreachable`). See the sections below.
 - **An in-session Claude Code team** — the Proxy Pattern below: teammates spawned from the current session, sharing its terminal.
 
 **Only the in-session team below needs the lead to fetch each agent's configuration and inject it into the teammate's prompt** — a Claude Code teammate spawned by the `Task` tool does not inherit MCP connections. **A rig is the other case and needs none of that**: 4genteam renders each seat's own `agent.yaml` and guidance at launch, and a seat has its own MCP whenever its render carries mcp blocks — measured 2026-10-10 on `<RIG>`, where a seat resolves `mcp__agenthub_http__*` and `mcp__deepseek__*`. That is why a seat's own `AGENTS.md` tells it to drive `manage_task` itself instead of waiting for a lead to hand it configuration.
 
 ## Start or continue a team — always via `4genteam`
 
-### 1. Start full stack (seats + rigd + auto-compact + watchdog + bridge + watch wall):
+### 1. Start full stack (seats + agent + auto-compact + watchdog + bridge + watch wall):
 ```bash
 4genteam up <rig> --team <DIR> [--allow-peak]
 ```
-`4genteam up` starts the entire supervisor stack in order: seat sessions, `rigd` (which supervises the `compact` loop and `watchdog`), status `bridge`, and automatically opens `4genteam watch`.
+`4genteam up` starts the entire supervisor stack in order: seat sessions, `agent` (which supervises the `compact` loop and `watchdog`), status `bridge`, and automatically opens `4genteam watch`.
 
 ### 2. Continue / restore an existing team with brief:
 ```bash
@@ -45,8 +45,8 @@ One file per rig: `~/.config/4genthub/briefs/<rig>.txt`. It is sent verbatim to 
 ### Spawning a new team (new project, new rig)
 
 1. Write the room's team definition: a `team.json` in a directory of your choice, holding `room{slug,name}`, `modules[]`, `seats[]` (`seat_key`, `seat_type`, `runtime`, `model`, `permission_policy`, `cwd`, `env`), `links[]` (`delegates_to`, `collaborates_with`, `escalates_to`) and `overlays{}`. Working examples in this repository: `scripts/team/<room>/team.json` and `~/.config/4genthub/rooms/<room>/team/team.json`.
-2. `4genteam up <room> --team <that directory>` — the room and its seats come from the definition it holds, and the daemon starts with them. This client has no `rig create` and no `rig up <spec>.yaml`: a room is created from its local definition, or materialized from the cloud with `4genteam sync rig <room>` then started the same way.
-3. **Resizing a live room has no verb on this client.** The predecessor CLI's `grow`/`add`/`shrink`/`remove` are gone: a room's seats are its definition, so a change means editing `team.json`, then `4genteam sync rig <room> --update` (writes the definition and each seat's pinned snapshot) and `4genteam seat reseat <rig> --seat <name>` for the seats that must reload it.
+2. `4genteam up <room> --team <that directory>` — the room and its seats come from the definition it holds, and the daemon starts with them. This client has no `rig create` and no `rig up <spec>.yaml`: a room is created from its local definition, or materialized from the cloud with `4genteam sync room <room>` then started the same way.
+3. **Resizing a live room has no verb on this client.** The predecessor CLI's `grow`/`add`/`shrink`/`remove` are gone: a room's seats are its definition, so a change means editing `team.json`, then `4genteam sync room <room> --update` (writes the definition and each seat's pinned snapshot) and `4genteam seat reseat <rig> --seat <name>` for the seats that must reload it.
 4. **Every seat starts with `~/.config/4genthub/.env` in its environment** (the runtime reads it when it starts the seat), so `AGENTHUB_URL`, `AGENTHUB_TOKEN` and the provider keys need no per-seat copy. A key a seat's `env` names wins over the file, and the runtime's own `AGENTHUB_*` keys win over both. The runtime also writes `<seat dir>/mcp.json` with the `agenthub_http` server (`${AGENTHUB_URL}/mcp`, `Bearer ${AGENTHUB_TOKEN}`; variable names only, no secret), so a started seat mounts the nine MCP tools. A running seat never re-reads its environment: after changing the file, `4genteam room reseat <rig> <seat>`. Never print or read the token to check it; test for presence, or have the seat call `manage_project` with `action: list`.
 5. Write `~/.config/4genthub/briefs/<rig>.txt` and run `4genteam continue <rig>` to brief it — the same command as continuing an existing team.
 
@@ -55,7 +55,7 @@ One file per rig: `~/.config/4genthub/briefs/<rig>.txt`. It is sent verbatim to 
 Always watch an omp seat team with the grid script, not with bare tiles:
 
 ```bash
-4genteam watch --rig <rig>
+4genteam watch --room <rig>
 ```
 
 - `4genteam` is this repository's Go binary (`go build -o ~/.local/bin/4genteam ./cmd/4genteam`), so it runs from anywhere once it is on `PATH`; `4genteam up <rig>` opens this wall as part of the full lifecycle. `4genteam continue` logs `watch wall skipped (herdr or 4genteam missing)` and carries on when either is absent; `RIG_CONTINUE_WATCH=0` turns the wall off for a headless run.

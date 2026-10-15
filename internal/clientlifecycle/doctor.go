@@ -5,7 +5,7 @@
 // why this verb and `up` share the computation rather than the action: `doctor` observes, `up` repairs,
 // and they agree on what "alive" means because they run the same rows.
 //
-// THE ROWS ARE COMPUTED HERE, NOT READ FROM RIGD (7.2). A dead rigd must still be reported, so the reader
+// THE ROWS ARE COMPUTED HERE, NOT READ FROM AGENT (7.2). A dead agent must still be reported, so the reader
 // cannot depend on the process it is checking: the files and pgrep are the sources, and clientservices is
 // where that computation lives.
 package clientlifecycle
@@ -31,7 +31,7 @@ type doctorCommand struct{}
 
 func (doctorCommand) Name() string { return "doctor" }
 func (doctorCommand) Summary() string {
-	return "report every safeguard (compact, watchdog, messages, bridge, rigd); read-only"
+	return "report every safeguard (compact, watchdog, messages, bridge, agent); read-only"
 }
 
 func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
@@ -72,19 +72,19 @@ func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 // verb's decision without producing processes or heartbeat files.
 var rowsFor = safeguardRows
 
-// safeguardRows is the ONE computation doctor, `status --json`, `compact`, `rigd status` and `up`'s check
+// safeguardRows is the ONE computation doctor, `status --json`, `compact`, `agent status` and `up`'s check
 // share.
 //
 // A named rig is reported on its own (with the two machine-scoped rows); no rig means EVERY rig in
-// rigd.json's list, because that list is what "meant to run" means (7.9). A machine whose rigd has never
-// run has an empty list and still gets the bridge and rigd rows, which is the point: rigd's own absence
+// agent.json's list, because that list is what "meant to run" means (7.9). A machine whose agent has never
+// run has an empty list and still gets the bridge and agent rows, which is the point: agent's own absence
 // is the loudest row there is.
 func safeguardRows(rig string) []clientservices.Health {
 	// A REPORT SURFACE MAY GO ON WITHOUT THE LIST. The rigs list decides WHICH rooms get rows; a failed read
-	// leaves it empty exactly as a machine whose rigd never ran does, and this verb neither writes nor acts,
-	// so the rows for the two machine-scoped safeguards still print. `rigd status` says in words when the
+	// leaves it empty exactly as a machine whose agent never ran does, and this verb neither writes nor acts,
+	// so the rows for the two machine-scoped safeguards still print. `agent status` says in words when the
 	// read failed; naming it here needs an error shape in the report seam, which is its own unit.
-	state, _ := clientservices.ReadRigdState()
+	state, _ := clientservices.ReadAgentState()
 	rigs := state.Rigs
 	if rig != "" {
 		rigs = []string{rig}
@@ -159,7 +159,7 @@ func waitForSafeguardsImpl(rig string) ([]clientservices.Health, bool) {
 
 // missingCloudEnv names the credentials this machine cannot report without, and NEVER their values. 7.5
 // makes a bridge refused for a missing AGENTHUB_URL or AGENTHUB_TOKEN a FAILED `up`, so the check runs
-// before rigd is started rather than surfacing as a bridge that died at once.
+// before agent is started rather than surfacing as a bridge that died at once.
 var missingCloudEnv = func() []string {
 	var missing []string
 	for _, name := range []string{"AGENTHUB_URL", "AGENTHUB_TOKEN"} {

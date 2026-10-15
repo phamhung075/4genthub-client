@@ -360,7 +360,7 @@ func TestRoomCompactReportsARuntimeRefusalVerbatim(t *testing.T) {
 // names no tmux command and no supervision process - neither of which this verb has any business starting,
 // stopping or mentioning.
 func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
-	useTempRigdState(t, "other")
+	useTempAgentState(t, "other")
 	daemon := newFakeDaemon(t, map[string]string{"StopRoom": okData("null")})
 
 	code, stdout, stderr := runRoom(t, daemon.args("stop", testRoom)...)
@@ -370,7 +370,7 @@ func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
 	assertRequests(t, daemon, `{"action":"StopRoom","payload":{"room":"room-a"}}`)
 
 	rendered := stdout + stderr
-	for _, forbidden := range []string{"tmux", "rigd", "kill-session", "compact-run", "watchdog", "bridge"} {
+	for _, forbidden := range []string{"tmux", "agent", "kill-session", "compact-run", "watchdog", "bridge"} {
 		if strings.Contains(rendered, forbidden) {
 			t.Errorf("the stop reported %q, which names %q: StopRoom is the whole of this verb", rendered, forbidden)
 		}
@@ -386,65 +386,65 @@ func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
 	}
 }
 
-// useTempRigdState points the rooms-meant-to-run file at a temp store holding `rooms`, so a stop under test
+// useTempAgentState points the rooms-meant-to-run file at a temp store holding `rooms`, so a stop under test
 // never rewrites the machine's own list.
-func useTempRigdState(t *testing.T, rooms ...string) string {
+func useTempAgentState(t *testing.T, rooms ...string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "rigd.json")
-	previous := clientservices.RigdStatePath
-	clientservices.RigdStatePath = func() (string, error) { return path, nil }
-	t.Cleanup(func() { clientservices.RigdStatePath = previous })
-	if err := clientservices.WriteRigdState(clientservices.RigdState{Rigs: rooms}); err != nil {
+	path := filepath.Join(t.TempDir(), "agent.json")
+	previous := clientservices.AgentStatePath
+	clientservices.AgentStatePath = func() (string, error) { return path, nil }
+	t.Cleanup(func() { clientservices.AgentStatePath = previous })
+	if err := clientservices.WriteAgentState(clientservices.AgentState{Rigs: rooms}); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-// rigdRigs is the rooms-meant-to-run list for tests whose subject is not the read itself.
-func rigdRigs(t *testing.T) []string {
+// agentRigs is the rooms-meant-to-run list for tests whose subject is not the read itself.
+func agentRigs(t *testing.T) []string {
 	t.Helper()
-	state, err := clientservices.ReadRigdState()
+	state, err := clientservices.ReadAgentState()
 	if err != nil {
-		t.Fatalf("ReadRigdState: %v", err)
+		t.Fatalf("ReadAgentState: %v", err)
 	}
 	return state.Rigs
 }
 
-// TestRoomStopDropsTheRoomFromTheRoomsMeantToRun pins the fix for a stopped room that rigd kept supervising:
+// TestRoomStopDropsTheRoomFromTheRoomsMeantToRun pins the fix for a stopped room that agent kept supervising:
 // the stop removes exactly that room from the list and leaves the others.
 func TestRoomStopDropsTheRoomFromTheRoomsMeantToRun(t *testing.T) {
-	useTempRigdState(t, testRoom, "other")
+	useTempAgentState(t, testRoom, "other")
 	daemon := newFakeDaemon(t, map[string]string{"StopRoom": okData("null")})
 
 	if code, _, stderr := runRoom(t, daemon.args("stop", testRoom)...); code != clientcmd.ExitOK {
 		t.Fatalf("exit %d (stderr %q)", code, stderr)
 	}
-	if got := strings.Join(rigdRigs(t), ","); got != "other" {
+	if got := strings.Join(agentRigs(t), ","); got != "other" {
 		t.Errorf("rooms meant to run = %q, want only %q", got, "other")
 	}
 }
 
 // A room the runtime no longer knows is still dropped, so a stale entry can be cleared.
 func TestRoomStopDropsTheRoomEvenWhenTheRuntimeRefusesTheStop(t *testing.T) {
-	useTempRigdState(t, testRoom)
+	useTempAgentState(t, testRoom)
 	daemon := newFakeDaemon(t, map[string]string{"StopRoom": daemonError("no such room")})
 
 	if code, _, _ := runRoom(t, daemon.args("stop", testRoom)...); code == clientcmd.ExitOK {
 		t.Fatal("a refused StopRoom must not exit 0")
 	}
-	if rooms := rigdRigs(t); len(rooms) != 0 {
+	if rooms := agentRigs(t); len(rooms) != 0 {
 		t.Errorf("rooms meant to run = %v, want none", rooms)
 	}
 }
 
 // TestRoomStopRefusesToWriteAListItCouldNotRead pins the destructive half of the failed-read class this pod
 // has been closing all day. `stop` rewrites the rooms-meant-to-run list with what it read, so ONE unreadable
-// rigd.json turned the machine's list into the empty one and dropped every OTHER room from rigd's view - the
+// agent.json turned the machine's list into the empty one and dropped every OTHER room from agent's view - the
 // rooms it is there to keep running. Measured before the fix: with `not json{` written over a two-room list,
 // the file came back as the empty state and `other` was gone. A read that failed is not the answer "nothing
 // is meant to run", and a verb must not write the answer it could not read.
 func TestRoomStopRefusesToWriteAListItCouldNotRead(t *testing.T) {
-	path := useTempRigdState(t, testRoom, "other")
+	path := useTempAgentState(t, testRoom, "other")
 	unreadable := "not json{ into the file\n"
 	if err := os.WriteFile(path, []byte(unreadable), 0o644); err != nil {
 		t.Fatal(err)
@@ -462,6 +462,6 @@ func TestRoomStopRefusesToWriteAListItCouldNotRead(t *testing.T) {
 		t.Errorf("the file that could not be read was rewritten to %q (err %v); nothing may be written over it", got, err)
 	}
 	// The room is not stopped either: with the room still in a list that could not be read, stopping it would
-	// have rigd bring it straight back, which is the lie the ordering in `runStop` exists to prevent.
+	// have agent bring it straight back, which is the lie the ordering in `runStop` exists to prevent.
 	assertRequests(t, daemon)
 }

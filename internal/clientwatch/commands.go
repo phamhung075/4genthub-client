@@ -64,24 +64,24 @@ type verbUsage struct {
 
 var verbUsages = map[string]verbUsage{
 	"watch": {
-		line: "usage: 4genteam watch --rig RIG [--cols N] [--back N] [--width N] [--lines N] [--detail]",
+		line: "usage: 4genteam watch --room RIG [--cols N] [--back N] [--width N] [--lines N] [--detail]",
 		notes: "the seat grid, plus the lead window with its feed and an input pane.\n" +
 			"`4genteam watch <feed|grid|inputs|input> ...` runs that verb.",
 	},
 	"grid": {
-		line:  "usage: 4genteam grid --rig RIG [--cols N] [--back N] [--width N] [--lines N] [--detail]",
+		line:  "usage: 4genteam grid --room RIG [--cols N] [--back N] [--width N] [--lines N] [--detail]",
 		notes: "one pane per live seat, each running that seat's own feed.",
 	},
 	"feed": {
-		line:  "usage: 4genteam feed --rig RIG [--seat SEAT ...] [--back N] [--width N] [--lines N] [--detail]",
+		line:  "usage: 4genteam feed --room RIG [--seat SEAT ...] [--back N] [--width N] [--lines N] [--detail]",
 		notes: "one merged, READ-ONLY stream for a plain terminal or ssh.",
 	},
 	"inputs": {
-		line:  "usage: 4genteam inputs <open|hide> --rig RIG [--seat SEAT ...]",
+		line:  "usage: 4genteam inputs <open|hide> --room RIG [--seat SEAT ...]",
 		notes: "an input pane under each seat pane; a line typed there is sent to that seat through this client's own transport.",
 	},
 	"input": {
-		line:  "usage: 4genteam input --rig RIG --seat SEAT",
+		line:  "usage: 4genteam input --room RIG --seat SEAT",
 		notes: "one seat's input pane: read lines and send each to that seat through this client's own transport. /hide or Ctrl-D leaves.",
 	},
 }
@@ -102,7 +102,7 @@ const stateRootInHelp = "~/.config/4genthub"
 func commonFlags() string {
 	return `
 options:
-  --rig RIG       the room to watch; required, there is no default room
+  --room RIG       the room to watch; required, there is no default room
   --back N        events replayed per seat when a pane starts (default 3 for feed, 40 otherwise)
   --width N       characters kept of each line (default 170 for feed, 200 otherwise)
   --lines N       lines shown of each call, result or message (default 60)
@@ -130,7 +130,7 @@ func printVerbUsage(w io.Writer, verb string) {
 		fmt.Fprint(w, "  action          open or hide\n")
 	}
 	if verb == "input" {
-		fmt.Fprint(w, "\noptions:\n  --rig RIG       the room to watch; required\n  --seat SEAT     the seat to talk to; required\n")
+		fmt.Fprint(w, "\noptions:\n  --room RIG       the room to watch; required\n  --seat SEAT     the seat to talk to; required\n")
 	}
 }
 
@@ -150,7 +150,7 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 		return clientcmd.ExitOK
 	}
 	state := shared{}
-	flags.StringVar(&state.rig, "rig", "", "the room to watch")
+	flags.StringVar(&state.rig, "room", "", "the room to watch")
 	flags.StringVar(&state.stateRoot, "state-root", "", "the omp state root")
 	seats := stringList{}
 	switch verb {
@@ -200,7 +200,7 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 	}
 
 	if state.rig == "" {
-		fmt.Fprintf(stderr, "4genteam %s: --rig RIG is required (there is no default room)\n", verb)
+		fmt.Fprintf(stderr, "4genteam %s: --room RIG is required (there is no default room)\n", verb)
 		return clientcmd.ExitUsage
 	}
 	state.cols = max(1, state.cols)

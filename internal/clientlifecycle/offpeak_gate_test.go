@@ -58,7 +58,7 @@ func stubWholeUp(t *testing.T) *[]string {
 	recordRigFor = func(string, io.Writer) bool { return true }
 	startAuthority = func(io.Writer, io.Writer) bool { return true }
 	waitSafeguards = func(string) ([]clientservices.Health, bool) {
-		return []clientservices.Health{{Safeguard: clientservices.Rigd, State: clientservices.Running}}, true
+		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
 	}
 	// The gate passes only for a `up` that may report, so the credentials the missing-env refusal would
 	// otherwise catch are set here and never printed.
@@ -240,7 +240,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 				return diedChild{}, nil
 			}
 			SupervisorStartGrace = time.Millisecond
-			rigdRunning = func() int { return 4242 }
+			agentRunning = func() int { return 4242 }
 			rowsFor = func(string) []clientservices.Health {
 				return []clientservices.Health{{Rig: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}
 			}
@@ -254,7 +254,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 				t.Fatalf("exit %d, want 0 (stderr %q)", code, errOut.String())
 			}
 			if spawned {
-				t.Error("compact spawned a supervisor, and rigd is the only restart authority")
+				t.Error("compact spawned a supervisor, and agent is the only restart authority")
 			}
 		})
 	}

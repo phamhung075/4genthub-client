@@ -7,7 +7,7 @@
 //
 // Four deliberate departures from the Python, all recorded in the phase report:
 //
-//   - `--rig` is REQUIRED. The Python defaulted it to the owner's own rig name, and the mission
+//   - `--room` is REQUIRED. The Python defaulted it to the owner's own rig name, and the mission
 //     forbids an owner default; the doc already says "there is no default room".
 //   - the state root is `--state-root`, else the machine's own
 //     ~/.config/4genthub (clientenv.DefaultStateRoot) - and a machine where that root is not there, or is without herdr, exits non-zero with ONE
@@ -61,7 +61,7 @@ var lookPath = exec.LookPath
 // because the fallback below it used to be a NAME, and the pin on that refusal needs to drive the failure.
 var executable = os.Executable
 
-// shared are the flags every reading verb takes. `--rig` has NO default: the doc says there is no
+// shared are the flags every reading verb takes. `--room` has NO default: the doc says there is no
 // default room, and an owner's rig name must never be baked in.
 type shared struct {
 	rig       string
@@ -154,7 +154,7 @@ func watchRootError(err error) error {
 	return unavailableError(clientenv.StateRootMessage)
 }
 
-// requireRoomAndSeats is the ONE existence check every verb that resolves a room or a seat from --rig
+// requireRoomAndSeats is the ONE existence check every verb that resolves a room or a seat from --room
 // goes through, so the refusals cannot disagree with each other: the room must be a native room under
 // the state root (<root>/rooms/<room>, where `4genteam up` starts it), and, when --seat is given, each
 // named seat must be one inside it (<root>/rooms/<room>/seats/<seat>). It checks EXISTENCE and never a

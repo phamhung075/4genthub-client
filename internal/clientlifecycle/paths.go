@@ -15,7 +15,7 @@ import (
 // SupervisorPattern is the argv fragment that identifies this client's compaction supervisor, read from
 // the ONE pattern table the health report also uses (clientservices.Pattern): `status` and the report must
 // never be able to disagree about which process is the supervisor, which two definitions of the same
-// command line eventually would. The Python matched "agenthub_client.compact --rig <rig>", a Python module
+// command line eventually would. The Python matched "agenthub_client.compact --room <rig>", a Python module
 // name; the Go supervisor is this binary's own `compact-run`.
 func SupervisorPattern(rig string) string {
 	return clientservices.Pattern(clientservices.Compact, rig)

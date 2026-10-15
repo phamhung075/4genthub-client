@@ -1,7 +1,7 @@
 // This file owns the redaction boundary: the pattern redactor Redact - kept compatible with the
 // version it replaces in connector.go, same signature and same `[redacted]` marker - and Event, the
-// per-event gate the rigd upload loop puts every transcript line through. It implements
-// rigd-boundaries.md 4.3 (what is redacted) and 4.4 (fail closed, per event).
+// per-event gate the agent upload loop puts every transcript line through. It implements
+// agent-boundaries.md 4.3 (what is redacted) and 4.4 (fail closed, per event).
 //
 // THE ORDER OF THE CHECKS IN Event IS THE DOC'S ORDER, and it is load-bearing: a line that is both a
 // JSON array and oversized is withheld as bad_shape, and a line the redactor cannot handle is

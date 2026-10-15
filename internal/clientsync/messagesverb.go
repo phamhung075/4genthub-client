@@ -16,11 +16,11 @@
 // prompt is worse than not delivering it, because the wrong prompt is somebody else's. THE MACHINE-WIDE
 // FALLBACK IS DELETED RATHER THAN REPAIRED: asking `rig ps --json` which sessions this machine runs was
 // an exec of the CLI this cutover removes, so it could not survive it in any world. The rig shape
-// (`--rig R`) reads each session from the RUNTIME's own room status instead (`GetRoomStatus`, the source
+// (`--room R`) reads each session from the RUNTIME's own room status instead (`GetRoomStatus`, the source
 // `roomSeats` documents): it names every seat of the rig and the canonical session that seat answers to, and
 // a seat that is not running is skipped rather than typed into.
 //
-// THE RIG SHAPE IS THE SUPERVISED ONE. `sync messages --rig R --watch` is a child of rigd, so it runs
+// THE RIG SHAPE IS THE SUPERVISED ONE. `sync messages --room R --watch` is a child of agent, so it runs
 // one pass over every seat, writes a heartbeat per pass, and never exits on a transient failure: the
 // next pass retries whatever the cloud, the rig or one seat's session refused.
 //
@@ -50,7 +50,7 @@ const messagesPath = "/api/v2/openrig/rooms/%s/seats/%s/messages"
 
 // messagesUsage is the verb's whole surface.
 const messagesUsage = `usage: 4genteam sync messages <room> <seat> [--session <name>] [--limit <n>] [--dry-run] [--out <dir>]
-       4genteam sync messages --rig <rig> [--watch] [--limit <n>] [--dry-run] [--out <dir>]
+       4genteam sync messages --room <rig> [--watch] [--limit <n>] [--dry-run] [--out <dir>]
 
 Pulls the text addressed to a seat — or to every seat of a rig — and puts it into that seat's own
 session, one message at a time, acknowledging each ONLY after the text landed. An unacknowledged
@@ -63,14 +63,14 @@ which client typed the message.
 In the room-and-seat shape the session is --session <name>; the verb refuses without it rather than
 guessing which prompt to type into.
 
-In the --rig shape the room is the rig itself and every seat's own session is read from the runtime's room
+In the --room shape the room is the rig itself and every seat's own session is read from the runtime's room
 status (the same read the room status verb makes), which names the canonical session each running seat
-answers to; a seat that is not running is skipped, and its messages stay pending until it is back. rigd
+answers to; a seat that is not running is skipped, and its messages stay pending until it is back. agent
 supervises this shape with --watch: one pass every 10 s, one heartbeat per pass, and a transient failure
 waits for the next pass instead of ending the child.
 
   --limit <n>  the page size asked of the cloud (the cloud's own default and clamp apply)
-  --dry-run    pull and print, send and acknowledge nothing (a --rig read is one pass; refused with --watch)
+  --dry-run    pull and print, send and acknowledge nothing (a --room read is one pass; refused with --watch)
   --out <dir>  where the delivered ledger lives (default ` + "`~/.config/4genthub/seats`" + `)`
 
 // HTTPTimeout is not redefined here: RequestJSON owns the timeout this package uses.
@@ -152,13 +152,13 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 	// convenience it existed for is what the rig shape above already answers. THE MESSAGE IS THE INTERFACE HERE: this
 	// is a contract change, so the refusal names BOTH ways to say where a message goes and what each one takes.
 	//
-	// THE !dryRun HALF IS AN ORDERING DEPENDENCY, not a second rule: the `--rig` branch above RETURNS for a
+	// THE !dryRun HALF IS AN ORDERING DEPENDENCY, not a second rule: the `--room` branch above RETURNS for a
 	// rig-shaped call, so this guard is only ever reached in the room-and-seat shape. A dry run needs no session
-	// because it types nothing. Move this block above the rig branch and a valid `--rig` call starts being refused;
+	// because it types nothing. Move this block above the rig branch and a valid `--room` call starts being refused;
 	// TestMessagesVerbRigPassDeliversEveryRunningSeat pins that.
 	session := parsed.session
 	if !parsed.dryRun && session == "" {
-		fmt.Fprintf(stderr, "4genteam sync messages: name the prompt this message goes to — --rig <room> delivers to every running seat of that room, or --session <name> types into one session\n")
+		fmt.Fprintf(stderr, "4genteam sync messages: name the prompt this message goes to — --room <room> delivers to every running seat of that room, or --session <name> types into one session\n")
 		return clientcmd.ExitUsage
 	}
 	done, err := syncSeatMessages(ctx, baseURL, token, parsed.room, parsed.seat, session, parsed.out, parsed.limit, parsed.dryRun, stdout, stderr)
@@ -254,7 +254,7 @@ func syncSeatMessages(ctx context.Context, baseURL, token, room, seat, session, 
 }
 
 // messagesArgs is one invocation of `sync messages`. The two shapes are exclusive: a room and a seat
-// (one prompt), or --rig (every running seat the rig reports).
+// (one prompt), or --room (every running seat the rig reports).
 type messagesArgs struct {
 	room, seat, session string
 	rig                 string
@@ -263,13 +263,13 @@ type messagesArgs struct {
 	dryRun, watch       bool
 }
 
-// parseMessagesArgs is the verb's argument grammar: two positionals or --rig, then the flags. The
+// parseMessagesArgs is the verb's argument grammar: two positionals or --room, then the flags. The
 // shape mirrors `sync pull`'s parser, including where it refuses rather than defaulting.
 func parseMessagesArgs(args []string) (messagesArgs, error) {
 	var parsed messagesArgs
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; {
-		case arg == "--session" || arg == "--out" || arg == "--limit" || arg == "--rig":
+		case arg == "--session" || arg == "--out" || arg == "--limit" || arg == "--room":
 			if i+1 >= len(args) {
 				return messagesArgs{}, fmt.Errorf("%s needs a value", arg)
 			}
@@ -279,7 +279,7 @@ func parseMessagesArgs(args []string) (messagesArgs, error) {
 				parsed.session = args[i]
 			case "--out":
 				parsed.out = args[i]
-			case "--rig":
+			case "--room":
 				parsed.rig = args[i]
 			case "--limit":
 				n, convErr := strconv.Atoi(args[i])
@@ -307,15 +307,15 @@ func parseMessagesArgs(args []string) (messagesArgs, error) {
 	}
 	switch {
 	case parsed.rig != "" && (parsed.room != "" || parsed.seat != ""):
-		return messagesArgs{}, fmt.Errorf("name a room and a seat, or --rig <rig> — not both")
+		return messagesArgs{}, fmt.Errorf("name a room and a seat, or --room <rig> — not both")
 	case parsed.rig != "" && parsed.session != "":
-		return messagesArgs{}, fmt.Errorf("--session names one seat's session; with --rig each seat's own session is resolved from the rig")
+		return messagesArgs{}, fmt.Errorf("--session names one seat's session; with --room each seat's own session is resolved from the rig")
 	case parsed.watch && parsed.rig == "":
-		return messagesArgs{}, fmt.Errorf("--watch delivers for a rig's seats; it needs --rig <rig>")
+		return messagesArgs{}, fmt.Errorf("--watch delivers for a rig's seats; it needs --room <rig>")
 	case parsed.watch && parsed.dryRun:
 		return messagesArgs{}, fmt.Errorf("--dry-run reads once and exits; it cannot watch")
 	case parsed.rig == "" && (parsed.room == "" || parsed.seat == ""):
-		return messagesArgs{}, fmt.Errorf("messages needs a room and a seat, or --rig <rig>")
+		return messagesArgs{}, fmt.Errorf("messages needs a room and a seat, or --room <rig>")
 	}
 	out, err := resolveSeatStore(parsed.out)
 	if err != nil {
@@ -437,7 +437,7 @@ type seatSession struct {
 // variable for the same reason sendToSession is: the real one talks to the runtime, and a test must be able to answer
 // without one.
 //
-// IT REPLACES `rig ps --nodes --rig R --json`, which is where this verb failed in the field: the node table it read
+// IT REPLACES `rig ps --nodes --room R --json`, which is where this verb failed in the field: the node table it read
 // carried logicalId/canonicalSessionName/sessionStatus, and the runtime's own room status carries the same three facts
 // (Seat, SessionName, State). The room IS the rig slug - the panel writes to the room named in the seat's address.
 var roomSeats = func(room string) ([]seatSession, error) {
@@ -499,9 +499,9 @@ func messagesPass(ctx context.Context, baseURL, token string, parsed messagesArg
 	return failed
 }
 
-// runMessagesWatch is the shape rigd supervises: deliver for every running seat of one rig, forever.
+// runMessagesWatch is the shape agent supervises: deliver for every running seat of one rig, forever.
 // One pass, then one heartbeat, then one sleep. A pass never exits the process on a transient failure
-// — a stopped cloud, a missing rig or one seat's refusal must not end the child, and rigd restarts a
+// — a stopped cloud, a missing rig or one seat's refusal must not end the child, and agent restarts a
 // child that dies — and the heartbeat is written on EVERY pass, because a beat that only accompanies
 // activity cannot tell a hung deliverer from a quiet one.
 func runMessagesWatch(ctx context.Context, baseURL, token string, parsed messagesArgs, stdout, stderr io.Writer) int {

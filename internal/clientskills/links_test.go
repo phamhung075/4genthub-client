@@ -2,7 +2,7 @@ package clientskills
 
 // The check this file exists for: every LOCAL link in every shipped skill document resolves against
 // the directory that carries the document. `team publish-skills` pushes this tree to the cloud
-// catalog and `sync rig` delivers it, so a link that does not resolve is delivered to every seat
+// catalog and `sync room` delivers it, so a link that does not resolve is delivered to every seat
 // that receives the skill. The class is the reviewer's finding of 2026-10-10 (ten dead links in
 // `skills/share/agent-browser/SKILL.md`, finding 5 of GATE-49e8d433-post-hoc-six): before the fix
 // this test fails on exactly those ten and on nothing else, and after it there are none.

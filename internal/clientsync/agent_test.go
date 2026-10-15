@@ -1,4 +1,4 @@
-// The rigd socket daemon's own tests, driven entirely through the seams rigd.go exposes: a scripted
+// The agent socket daemon's own tests, driven entirely through the seams agent.go exposes: a scripted
 // ConnectorSocket, the injected local reads (Sessions, Transcript, Capture, Now), the `dialConnector`
 // and `sleep` package variables, and the daemon's own unexported methods. NO test in this file touches
 // the machine: nothing shells out, and the one test that withholds an event points `seatStore` at a
@@ -109,7 +109,7 @@ func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 // harness wires one daemon to a fake socket, a fake clock, a captured log and no local reads.
 type harness struct {
 	t     *testing.T
-	d     *RigDaemon
+	d     *AgentDaemon
 	sock  *fakeSocket
 	clock *fakeClock
 	logs  []string
@@ -122,7 +122,7 @@ func newHarness(t *testing.T) *harness {
 		sock:  &fakeSocket{},
 		clock: &fakeClock{t: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)},
 	}
-	d := NewRigDaemon(RigDaemonOptions{
+	d := NewAgentDaemon(AgentDaemonOptions{
 		ConnectorID: "connector-1",
 		Log:         func(line string) { h.logs = append(h.logs, line) },
 	})
@@ -420,7 +420,7 @@ func TestWithheldEventsStillAdvanceTheCursor(t *testing.T) {
 	}
 
 	// The raw event is surfaced locally, under the temp store, and nowhere else.
-	dir := filepath.Join(store, "rigd-withheld", safeFileName("dev-alice@room-a"))
+	dir := filepath.Join(store, "agent-withheld", safeFileName("dev-alice@room-a"))
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("the withheld raw copy directory: %v", err)
@@ -430,9 +430,9 @@ func TestWithheldEventsStillAdvanceTheCursor(t *testing.T) {
 	}
 }
 
-// The withheld copy's two promises, which nothing held before this test (the rigd gate's coverage gap,
+// The withheld copy's two promises, which nothing held before this test (the agent gate's coverage gap,
 // qitem-20261010234730). 4.4 says the raw event may exist in exactly one place once it is withheld -
-// <seat store>/rigd-withheld/<session>/<ts>.json, mode 0600, under a directory only its owner may enter -
+// <seat store>/agent-withheld/<session>/<ts>.json, mode 0600, under a directory only its owner may enter -
 // and that it is kept seven days. Both belong to the write path, and neither was asserted: the case above
 // checks that the directory is not empty and stops there. The mode is the promise that the raw bytes are
 // not readable by anyone else on the machine; the window is the promise that a redactor which has started
@@ -446,7 +446,7 @@ func TestTheWithheldCopyIsPrivateAndKeptSevenDays(t *testing.T) {
 
 	h := newHarness(t)
 	stream := &sessionStream{key: "dev-alice@room-a"}
-	dir := filepath.Join(store, "rigd-withheld", safeFileName(stream.key))
+	dir := filepath.Join(store, "agent-withheld", safeFileName(stream.key))
 
 	// A withheld event writes the copy, in a directory this user alone can enter.
 	h.d.writeWithheld(stream, `{"type":"tool_result","id":"tu1"}`)
@@ -535,7 +535,7 @@ func TestTheBackstopNeedsEveryEventWithheld(t *testing.T) {
 		t.Fatal("a session whose every event was withheld for five minutes was not stopped")
 	}
 	if got := h.logsContaining("every event has been withheld"); got != 1 {
-		t.Errorf("rigd reported the stopped session %d times, want exactly once: %v", got, h.logs)
+		t.Errorf("agent reported the stopped session %d times, want exactly once: %v", got, h.logs)
 	}
 
 	// A batch that could be uploaded again clears the window: the clock restarts for the next stretch.

@@ -346,7 +346,7 @@ func TestMessagesVerbDeliversThroughTheRuntimeWithTheClientEnvelope(t *testing.T
 	fakeRoom(t, seatSession{seat: "lead", session: "4genthub-min-lead@4genthub-min"})
 
 	var stdout, stderr strings.Builder
-	if code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr); code != 0 {
+	if code := RunMessagesVerb(context.Background(), []string{"--room", "4genthub-min", "--out", out}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
 	}
 	if got.Payload.Session != "4genthub-min-lead@4genthub-min" {
@@ -423,14 +423,14 @@ func TestMessagesVerbRequiresAFlagAndSaysSoWithoutShellingOut(t *testing.T) {
 	if calls := cloud.seen(); len(calls) != 0 {
 		t.Fatalf("calls = %v, want the cloud untouched: the refusal happens before the pull", calls)
 	}
-	for _, want := range []string{"--rig <room>", "--session <name>"} {
+	for _, want := range []string{"--room <room>", "--session <name>"} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("stderr = %q, want it to name %q and what it takes", stderr.String(), want)
 		}
 	}
 }
 
-// THE SUPERVISED SHAPE: `--rig` passes over every RUNNING seat of the rig, types each seat's mail into
+// THE SUPERVISED SHAPE: `--room` passes over every RUNNING seat of the rig, types each seat's mail into
 // that seat's OWN canonical session, and skips a stopped seat - or a node with no session - rather than
 // acknowledging text that no prompt will ever read.
 func TestMessagesVerbRigPassDeliversEveryRunningSeat(t *testing.T) {
@@ -446,7 +446,7 @@ func TestMessagesVerbRigPassDeliversEveryRunningSeat(t *testing.T) {
 	)
 
 	var stdout, stderr strings.Builder
-	code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr)
+	code := RunMessagesVerb(context.Background(), []string{"--room", "4genthub-min", "--out", out}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
 	}
@@ -505,7 +505,7 @@ func TestMessagesVerbRigPassIsolatesOneSeatFailure(t *testing.T) {
 	)
 
 	var stdout, stderr strings.Builder
-	code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr)
+	code := RunMessagesVerb(context.Background(), []string{"--room", "4genthub-min", "--out", out}, &stdout, &stderr)
 	if code != clientcmd.ExitRemote {
 		t.Fatalf("exit = %d, want ExitRemote: %s", code, stderr.String())
 	}
@@ -530,7 +530,7 @@ func TestMessagesVerbRigPassIsolatesOneSeatFailure(t *testing.T) {
 }
 
 // THE SUPERVISED WATCH: one pass, then a heartbeat, then a sleep - and a cancelled context ends the
-// loop cleanly with exit 0, which is how rigd stops it. The heartbeat is the row doctor reads, so it
+// loop cleanly with exit 0, which is how agent stops it. The heartbeat is the row doctor reads, so it
 // must be written on a pass that delivered nothing every bit as much as on one that did.
 func TestMessagesVerbWatchBeatsEachPassAndExitsOnCancel(t *testing.T) {
 	cloud := &messageCloud{bySeat: map[string][]map[string]any{
@@ -550,7 +550,7 @@ func TestMessagesVerbWatchBeatsEachPassAndExitsOnCancel(t *testing.T) {
 	t.Cleanup(func() { clientservices.WriteHeartbeat = previousBeat })
 
 	var stdout, stderr strings.Builder
-	code := RunMessagesVerb(ctx, []string{"--rig", "4genthub-min", "--watch", "--out", out}, &stdout, &stderr)
+	code := RunMessagesVerb(ctx, []string{"--room", "4genthub-min", "--watch", "--out", out}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0 after a cancelled watch: %s", code, stderr.String())
 	}
@@ -570,10 +570,10 @@ func TestMessagesVerbWatchBeatsEachPassAndExitsOnCancel(t *testing.T) {
 func TestMessagesVerbRigShapeRefusals(t *testing.T) {
 	t.Run("the mixtures", func(t *testing.T) {
 		for _, args := range [][]string{
-			{"dev", "coder", "--rig", "4genthub-min"},
-			{"--rig", "4genthub-min", "--session", "rig-seat"},
+			{"dev", "coder", "--room", "4genthub-min"},
+			{"--room", "4genthub-min", "--session", "rig-seat"},
 			{"--watch"},
-			{"--rig", "4genthub-min", "--watch", "--dry-run"},
+			{"--room", "4genthub-min", "--watch", "--dry-run"},
 		} {
 			var stdout, stderr strings.Builder
 			if code := RunMessagesVerb(context.Background(), args, &stdout, &stderr); code != clientcmd.ExitUsage {
@@ -591,7 +591,7 @@ func TestMessagesVerbRigShapeRefusals(t *testing.T) {
 		fakeRoom(t)
 
 		var stdout, stderr strings.Builder
-		if code := RunMessagesVerb(context.Background(), []string{"--rig", "4genthub-min", "--out", out}, &stdout, &stderr); code != clientcmd.ExitRemote {
+		if code := RunMessagesVerb(context.Background(), []string{"--room", "4genthub-min", "--out", out}, &stdout, &stderr); code != clientcmd.ExitRemote {
 			t.Fatalf("exit = %d, want ExitRemote: %s", code, stderr.String())
 		}
 		if !strings.Contains(stderr.String(), "reports no running seat") {

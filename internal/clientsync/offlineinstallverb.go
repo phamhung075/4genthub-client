@@ -165,7 +165,7 @@ func offlineInstall(target, home string, stdout, stderr io.Writer) int {
 	if len(installed) == 0 {
 		fmt.Fprintf(stderr,
 			"4genteam sync offline-install: no pinned policy found under %s/agents; build the bundle "+
-				"from a rig root that carries it (4genteam sync rig / bundle does since 2026-10-05)\n",
+				"from a rig root that carries it (4genteam sync room / bundle does since 2026-10-05)\n",
 			root)
 		return clientcmd.ExitUsage
 	}

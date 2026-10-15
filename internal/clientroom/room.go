@@ -12,7 +12,7 @@
 //     absent they come from this machine's own environment, where the caller's HOME decides them. So every
 //     run PRINTS `<room>@<state-dir>` and the socket it used, and the room's own lines are read against it.
 //   - `stop` IS NOT "STOP SUPERVISING". It is StopRoom and nothing else: that room's own
-//     `agenthub--<room>--<seat>` sessions, and nothing under the rig orchestrator's state home - never rigd, never its children
+//     `agenthub--<room>--<seat>` sessions, and nothing under the rig orchestrator's state home - never agent, never its children
 //     (compact-run, watchdog, sync messages), never the bridge, never another room (design §3).
 //   - A SUB-VERB THAT DID NOT DO THE THING SAYS SO. `compact` refuses a seat that is not running BY NAME
 //     instead of printing a success line over it, and a runtime that refuses the compaction is reported in
@@ -318,7 +318,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 //
 // One request is the whole contract, and the reason is the must-not list (design §3): StopRoom kills exactly
 // the sessions of the room's own spec.json - `agenthub--<room>--<seat>`, one by one - so this verb must not
-// reach for tmux itself, must not stop rigd or any of its children, and must not touch the bridge or
+// reach for tmux itself, must not stop agent or any of its children, and must not touch the bridge or
 // another room. the rig orchestrator's state home is never a path in this function's world at all.
 //
 // The room's directory is left in place and the report says so: spec.json, seats/ and logs/ are what makes
@@ -333,15 +333,15 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 	// never brings a safeguard back for it, even when the runtime cannot be reached to stop the seats.
 	//
 	// AND THE LIST IS NOT REWRITTEN WHEN IT COULD NOT BE READ: writing back the empty state would drop every
-	// OTHER room from the rooms meant to run - rigd would stop restarting them - and stopping this room with
-	// its row still unreadable would have rigd bring it straight back. Both are refusals, and the message
+	// OTHER room from the rooms meant to run - agent would stop restarting them - and stopping this room with
+	// its row still unreadable would have agent bring it straight back. Both are refusals, and the message
 	// names which one happened.
-	state, err := clientservices.ReadRigdState()
+	state, err := clientservices.ReadAgentState()
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam room stop: the rooms meant to run could not be read, so %s was NOT dropped from them and was not stopped: %v\n", inv.room, err)
 		return clientcmd.ExitRoomRefused
 	}
-	if err := clientservices.WriteRigdState(clientservices.RemoveRig(state, inv.room)); err != nil {
+	if err := clientservices.WriteAgentState(clientservices.RemoveRig(state, inv.room)); err != nil {
 		fmt.Fprintf(stderr, "4genteam room stop: could not drop %s from the rooms meant to run: %v\n", inv.room, err)
 		return clientcmd.ExitRoomRefused
 	}

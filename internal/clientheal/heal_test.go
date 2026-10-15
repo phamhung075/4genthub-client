@@ -42,9 +42,9 @@ func (r *room) deps(t *testing.T, fix bool) Deps {
 		ProcEnv: func(_, seat string) (map[string]bool, bool) { keys, ok := r.env[seat]; return keys, ok },
 		Rows: func(string) []clientservices.Health {
 			if r.down {
-				return []clientservices.Health{{Rig: "r", Safeguard: "rigd", State: "stopped"}}
+				return []clientservices.Health{{Rig: "r", Safeguard: "agent", State: "stopped"}}
 			}
-			return []clientservices.Health{{Rig: "r", Safeguard: "rigd", State: "running"}}
+			return []clientservices.Health{{Rig: "r", Safeguard: "agent", State: "running"}}
 		},
 		Up: func(string) error {
 			r.upCalls++

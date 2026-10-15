@@ -136,7 +136,7 @@ func TestTheScannerTellsACommandFromProse(t *testing.T) {
 		want []string
 	}{
 		{"rig up <spec.yaml> --target <dir>", []string{"rig up"}},
-		{"$ rig ps --nodes --rig <RIG>", []string{"rig ps"}},
+		{"$ rig ps --nodes --room <RIG>", []string{"rig ps"}},
 		{"A line typed there is sent to the seat with `rig send`, so it goes through the same route", []string{"rig send"}},
 		{"`pi-runner.js` is retired", []string{"pi-runner.js"}},
 		{"the daemon said the rig up the tree was stale", nil},

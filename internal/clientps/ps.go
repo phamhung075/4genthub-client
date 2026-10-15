@@ -31,7 +31,7 @@ type Seat struct {
 	Rig     string `json:"rig"`
 	Member  string `json:"member"`
 	Session string `json:"session"`
-	// The node-record keys every other verb reads from `ps --nodes --rig R --json`: a tmux session
+	// The node-record keys every other verb reads from `ps --nodes --room R --json`: a tmux session
 	// that exists is a running session, whatever the seat's own state (Status) says about its provider.
 	RigName       string `json:"rigName"`
 	LogicalID     string `json:"logicalId"`
@@ -89,7 +89,7 @@ func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer)
 			view = "grid"
 		case "--json":
 			asJSON = true
-		case "--rig":
+		case "--room":
 			wantRig = true
 		default:
 			if wantRig {

@@ -248,7 +248,7 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 		applied = "manual"
 		// NOTHING IN THIS BRANCH IS A PROCEDURE ANY MORE. The three lines it printed were the rig orchestrator
 		// CLI's own sequence; the middle one was measured on this box to stop the MACHINE's safeguards
-		// rather than the room's (rigd reaped with its children, for every rig), and the last could not
+		// rather than the room's (agent reaped with its children, for every rig), and the last could not
 		// run at all (`--team DIR is required`), so a reader who followed it took the supervisors down
 		// and could not start the room again from it. A reader cannot tell those two vocabularies apart
 		// by name, so the branch names only what this client itself owns and documents, and prints no
@@ -258,7 +258,7 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 		fmt.Fprintf(stderr,
 			"runtime changed: the rig orchestrator cannot switch a runtime in place, and this client prints no "+
 				"sequence that completes the switch (it has none that can be run):\n"+
-				"  4genteam sync rig %s --update writes the room's definition and each seat's pinned "+
+				"  4genteam sync room %s --update writes the room's definition and each seat's pinned "+
 				"snapshot.\n"+
 				"  4genteam seat reseat <rig> --seat <name> stops and restarts a seat so it loads the "+
 				"configuration it now has.\n"+

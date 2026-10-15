@@ -24,7 +24,7 @@ which omp || which claude || which codex
 ```
 
 ### Expected `doctor` Safeguards Status
-- **`rigd`**: running (the always-on client supervisor)
+- **`agent`**: running (the always-on client supervisor)
 - **`RIG compact`**: running (compaction supervisor loop)
 - **`RIG watchdog`**: running (restores dropped seats)
 - **`bridge`**: running / syncing to cloud
@@ -93,7 +93,7 @@ For seats using `omp` with `deepseek/deepseek-flash` or `deepseek-chat`:
    ```
 
 ### C. Launch Directory Symlinks: `<store>/<rig>/.env`
-When materializing a rig via `4genteam sync rig <room>`, verify that the launch directory has `.env` linked to a file that contains the necessary provider credentials:
+When materializing a rig via `4genteam sync room <room>`, verify that the launch directory has `.env` linked to a file that contains the necessary provider credentials:
 ```bash
 # Check link
 ls -la "$HOME_REAL/.config/4genthub/seats/<rig>/.env"
@@ -147,7 +147,7 @@ echo "=== 4. Running Safeguards Doctor ==="
 | Symptom | Cause | Remedy |
 |---|---|---|
 | `[omp-runner] ERROR rpc: No API key found for deepseek` | `DEEPSEEK_API_KEY` missing from tmux environment or launch `.env` | Ensure key is in `~/.config/deepseek/env`, `~/.config/4genthub/.env`, and set in tmux with `tmux set-environment -g DEEPSEEK_API_KEY <key>` |
-| `seat <seat> has no skills to deliver` | Rig was not synchronized with client skills tree | Run `AGENTHUB_CLIENT_SKILLS=/path/to/skills 4genteam sync rig <room>` |
+| `seat <seat> has no skills to deliver` | Rig was not synchronized with client skills tree | Run `AGENTHUB_CLIENT_SKILLS=/path/to/skills 4genteam sync room <room>` |
 | `Cannot determine identity. Run inside an managed seat session` | Running `4genteam whoami` from host shell instead of inside a seat pane | Use `4genteam whoami --session <session-name> --json` or run from inside a tmux seat pane |
 | `bridge: silent, age unknown` | Client background bridge is stopped or unauthenticated | Start client bridge with `4genteam bridge` or check `AGENTHUB_TOKEN` in `~/.config/4genthub/.env` |
 | `Exit 3: at PEAK` | Attempted to start DeepSeek seats during peak pricing | Run `4genteam offpeak` to check window, or use `4genteam up <rig> --allow-peak` if authorized |

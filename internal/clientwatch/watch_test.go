@@ -43,7 +43,7 @@ func TestInputsOpenSplitsASmallInputPaneUnderEachSeatPane(t *testing.T) {
 	fake.seatsFromTmux("r", []string{"lead", "go-dev"})
 	withSeatStore(t, "r", "lead", "go-dev")
 
-	code, out, errOut := runVerbT(t, "inputs", "open", "--rig", "r")
+	code, out, errOut := runVerbT(t, "inputs", "open", "--room", "r")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -79,7 +79,7 @@ func TestInputsOpenTwiceAddsNothingTheSecondTime(t *testing.T) {
 	fake.seatsFromTmux("r", []string{"lead"})
 	withSeatStore(t, "r", "lead")
 
-	code, out, errOut := runVerbT(t, "inputs", "open", "--rig", "r")
+	code, out, errOut := runVerbT(t, "inputs", "open", "--room", "r")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -100,7 +100,7 @@ func TestInputsHideClosesTheInputPanes(t *testing.T) {
 	fake.seatsFromTmux("r", []string{"lead"})
 	withSeatStore(t, "r", "lead")
 
-	code, out, errOut := runVerbT(t, "inputs", "hide", "--rig", "r")
+	code, out, errOut := runVerbT(t, "inputs", "hide", "--room", "r")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -124,7 +124,7 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	fake.on("rig send r-lead@r hello there", "sent\n")
 	withSeatStore(t, "r", "lead")
 
-	code, out, errOut := runVerbT(t, "input", "--rig", "r", "--seat", "lead")
+	code, out, errOut := runVerbT(t, "input", "--room", "r", "--seat", "lead")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -184,7 +184,7 @@ var testStateRoot string
 
 // withSeatStore gives the verb a native room holding these seats, under the test's state root
 // (<root>/rooms/<room>/seats/<seat>, the layout `4genteam up` leaves), so a verb that resolves a room from
-// --rig has a machine to resolve it on. It is what the existence check reads and not the live sessions: a
+// --room has a machine to resolve it on. It is what the existence check reads and not the live sessions: a
 // room whose seats are all stopped is still a room.
 func withSeatStore(t *testing.T, rig string, seats ...string) string {
 	t.Helper()
@@ -208,7 +208,7 @@ func TestGridPrintsTheSeatAndColumnCount(t *testing.T) {
 	withSeatStore(t, "r", "lead", "go-dev")
 	root := withStateRoot(t)
 
-	code, out, errOut := runVerbT(t, "grid", "--rig", "r", "--state-root", root)
+	code, out, errOut := runVerbT(t, "grid", "--room", "r", "--state-root", root)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -225,7 +225,7 @@ func TestGridReadsSeatsFromTheRuntimesTmuxServer(t *testing.T) {
 	fake.seatsFromTmux("r", []string{"lead"})
 	withSeatStore(t, "r", "lead")
 	root := withStateRoot(t)
-	if code, _, errOut := runVerbT(t, "grid", "--rig", "r", "--state-root", root); code != 0 {
+	if code, _, errOut := runVerbT(t, "grid", "--room", "r", "--state-root", root); code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 	if len(fake.tmuxRoots) == 0 {
@@ -248,7 +248,7 @@ func TestARelaunchedGridReplacesTheOldOneAndKeepsTheSameLayout(t *testing.T) {
 
 	layout := func() []string {
 		before := len(fake.callsOf("herdr"))
-		if code, _, errOut := runVerbT(t, "grid", "--rig", "r", "--state-root", root); code != 0 {
+		if code, _, errOut := runVerbT(t, "grid", "--room", "r", "--state-root", root); code != 0 {
 			t.Fatalf("grid exit %d, stderr %q", code, errOut)
 		}
 		shape := []string{}
@@ -293,7 +293,7 @@ func TestWatchOpensTheGridAndALeadWindowWithItsInput(t *testing.T) {
 		`{"result": {"pane": {"pane_id": "w25:lead2"}}}`)
 	root := withStateRoot(t)
 
-	code, out, errOut := runVerbT(t, "watch", "--rig", "r", "--state-root", root)
+	code, out, errOut := runVerbT(t, "watch", "--room", "r", "--state-root", root)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
@@ -308,10 +308,10 @@ func TestWatchOpensTheGridAndALeadWindowWithItsInput(t *testing.T) {
 	}
 	sawLeadFeed, sawLeadInput := false, false
 	for _, text := range typed {
-		if strings.Contains(text, "feed --rig r --seat lead --back 40 --width 0 --lines 25 --detail") {
+		if strings.Contains(text, "feed --room r --seat lead --back 40 --width 0 --lines 25 --detail") {
 			sawLeadFeed = true
 		}
-		if strings.Contains(text, "input --rig r --seat lead") {
+		if strings.Contains(text, "input --room r --seat lead") {
 			sawLeadInput = true
 		}
 	}
@@ -327,14 +327,14 @@ func TestWatchOpensTheGridAndALeadWindowWithItsInput(t *testing.T) {
 
 // The reviewer's OBSERVATION, as a test: a verb that cannot do the work must refuse by name and
 // non-zero - never print a prompt and exit 0, and never stream nothing forever. All five verbs that
-// take --rig go through the ONE check, which is how grid, watch and inputs are covered here: they drive
+// take --room go through the ONE check, which is how grid, watch and inputs are covered here: they drive
 // herdr, and herdr must not be opened from a seat's terminal, so they are covered by construction
 // rather than by a live probe.
 func TestAnUnknownRoomRefusesEveryVerbThatTakesRig(t *testing.T) {
 	for _, verb := range []string{"feed", "grid", "watch", "inputs", "input"} {
 		t.Run(verb, func(t *testing.T) {
 			fake := newFakeExec(t)
-			args := []string{"--rig", "zz-no-such-room"}
+			args := []string{"--room", "zz-no-such-room"}
 			switch verb {
 			case "inputs":
 				args = append([]string{"open"}, args...)
@@ -362,7 +362,7 @@ func TestAnUnknownSeatInARealRoomRefuses(t *testing.T) {
 			fake := newFakeExec(t)
 			withSeatStore(t, "r", "lead")
 
-			code, _, errOut := runVerbT(t, verb, "--rig", "r", "--seat", "zz-no-such-seat")
+			code, _, errOut := runVerbT(t, verb, "--room", "r", "--seat", "zz-no-such-seat")
 			if code != 2 {
 				t.Errorf("exit %d, want 2: %q", code, errOut)
 			}
@@ -387,7 +387,7 @@ func TestARealRoomWithNoLiveSeatsStillStreams(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	stdout, stderr := &strings.Builder{}, &strings.Builder{}
-	code := runVerb(ctx, "feed", []string{"--rig", "r", "--state-root", root}, stdout, stderr)
+	code := runVerb(ctx, "feed", []string{"--room", "r", "--state-root", root}, stdout, stderr)
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, stderr.String())
 	}
@@ -396,23 +396,23 @@ func TestARealRoomWithNoLiveSeatsStillStreams(t *testing.T) {
 	}
 }
 
-// The doc says "Always pass --rig; there is no default room" - so every verb refuses without one.
+// The doc says "Always pass --room; there is no default room" - so every verb refuses without one.
 func TestRigIsRequiredForEveryVerb(t *testing.T) {
 	installBareSeam(t)
 	for _, args := range [][]string{
 		{},
-		{"grid", "--rig", ""},
-		{"feed", "--rig", ""},
-		{"inputs", "open", "--rig", ""},
-		{"input", "--rig", "", "--seat", "lead"},
-		{"watch", "--rig", ""},
+		{"grid", "--room", ""},
+		{"feed", "--room", ""},
+		{"inputs", "open", "--room", ""},
+		{"input", "--room", "", "--seat", "lead"},
+		{"watch", "--room", ""},
 	} {
 		code, _, errOut := runWatchT(t, args...)
 		if code != 2 {
 			t.Errorf("%v exited %d, want 2", args, code)
 		}
-		if !strings.Contains(errOut, "--rig") {
-			t.Errorf("%v did not name --rig: %q", args, errOut)
+		if !strings.Contains(errOut, "--room") {
+			t.Errorf("%v did not name --room: %q", args, errOut)
 		}
 	}
 }
@@ -421,7 +421,7 @@ func TestRigIsRequiredForEveryVerb(t *testing.T) {
 func TestAMachineWithoutHerdrRefusesByName(t *testing.T) {
 	newFakeExec(t) // nothing is on PATH
 	withSeatStore(t, "r")
-	code, _, errOut := runVerbT(t, "grid", "--rig", "r")
+	code, _, errOut := runVerbT(t, "grid", "--room", "r")
 	if code == 0 {
 		t.Fatal("grid succeeded without herdr")
 	}
@@ -497,7 +497,7 @@ func TestAMissingStateRootIsRefusedByItsPath(t *testing.T) {
 	withSeatStore(t, "r")
 	missing := filepath.Join(t.TempDir(), "absent")
 
-	code, _, errOut := runVerbT(t, "feed", "--rig", "r", "--state-root", missing)
+	code, _, errOut := runVerbT(t, "feed", "--room", "r", "--state-root", missing)
 	if code != 3 || !strings.Contains(errOut, missing) {
 		t.Errorf("a missing root named %q at exit %d, want the path and 3", errOut, code)
 	}
@@ -551,7 +551,7 @@ func TestTheUmbrellaDispatchesToItsVerbs(t *testing.T) {
 	withSeatStore(t, "r", "lead")
 	root := withStateRoot(t)
 
-	code, out, errOut := runWatchT(t, "grid", "--rig", "r", "--state-root", root)
+	code, out, errOut := runWatchT(t, "grid", "--room", "r", "--state-root", root)
 	if code != 0 {
 		t.Fatalf("watch grid exit %d, stderr %q", code, errOut)
 	}
@@ -679,7 +679,7 @@ func TestAPaneIsNeverGivenABareNameForItsShellToResolve(t *testing.T) {
 	executable = func() (string, error) { return "", errors.New("/proc/self/exe: permission denied") }
 	defer func() { executable = prev }()
 
-	command, err := paneCommand("watch --rig r")
+	command, err := paneCommand("watch --room r")
 	if err == nil {
 		t.Fatalf("paneCommand = %q, want a refusal: a bare name would run whatever PATH resolves", command)
 	}
@@ -691,11 +691,11 @@ func TestAPaneIsNeverGivenABareNameForItsShellToResolve(t *testing.T) {
 	}
 
 	executable = func() (string, error) { return "/opt/4genthub/4genteam", nil }
-	command, err = paneCommand("watch --rig r")
+	command, err = paneCommand("watch --room r")
 	if err != nil {
 		t.Fatalf("paneCommand with a readable self path: %v", err)
 	}
-	if command != "clear; exec /opt/4genthub/4genteam watch --rig r" {
+	if command != "clear; exec /opt/4genthub/4genteam watch --room r" {
 		t.Errorf("command = %q, want the absolute path of THIS binary and the verb", command)
 	}
 }

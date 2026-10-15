@@ -126,8 +126,8 @@ func main() {
 		_ = clientenv.Load(path)
 	}
 	// NO VERB STARTS A SAFEGUARD AS A SIDE EFFECT. `EnsureBridge` used to start the status bridge from any
-	// cloud-reading verb; 7.1 made rigd the SINGLE RESTART AUTHORITY, so the bridge is rigd's child and a
-	// second start path would be a second mechanism - and a bridge rigd does not supervise.
+	// cloud-reading verb; 7.1 made agent the SINGLE RESTART AUTHORITY, so the bridge is agent's child and a
+	// second start path would be a second mechanism - and a bridge agent does not supervise.
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 

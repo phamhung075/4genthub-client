@@ -75,7 +75,7 @@ func rigSeats(ctx context.Context, rig string) ([]string, error) {
 
 // seatCommand is the line a grid pane runs: this seat's own feed.
 func seatCommand(rig, seat, feedArgs string) string {
-	return fmt.Sprintf("feed --rig %s --seat %s %s", rig, seat, feedArgs)
+	return fmt.Sprintf("feed --room %s --seat %s %s", rig, seat, feedArgs)
 }
 
 // closeWorkspaces closes every workspace with this label, so a relaunch leaves one wall, not a stack.
@@ -288,7 +288,7 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 		if _, err := herdr(ctx, "pane", "rename", created, seat+inputSuffix); err != nil {
 			return err
 		}
-		command, err := paneCommand(fmt.Sprintf("input --rig %s --seat %s", s.rig, seat))
+		command, err := paneCommand(fmt.Sprintf("input --room %s --seat %s", s.rig, seat))
 		if err != nil {
 			return err
 		}
@@ -376,8 +376,8 @@ func runLeadWindow(ctx context.Context, s shared) error {
 		pane string
 		verb string
 	}{
-		{root, fmt.Sprintf("feed --rig %s --seat lead --back 40 --width 0 --lines 25 --detail", s.rig)},
-		{below, fmt.Sprintf("input --rig %s --seat lead", s.rig)},
+		{root, fmt.Sprintf("feed --room %s --seat lead --back 40 --width 0 --lines 25 --detail", s.rig)},
+		{below, fmt.Sprintf("input --room %s --seat lead", s.rig)},
 	}
 	for _, entry := range commands {
 		command, err := paneCommand(entry.verb)

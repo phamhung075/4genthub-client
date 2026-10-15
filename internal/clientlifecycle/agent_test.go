@@ -1,4 +1,4 @@
-// rigd's supervision of its children, and the two refusals `up` owes the operator.
+// agent's supervision of its children, and the two refusals `up` owes the operator.
 //
 // THE CLOCK AND THE PROCESS TABLE ARE SEAMS, so every case here advances time by hand and answers pgrep
 // with a map: no case waits a backoff out, and none may start, signal or read anything of this machine's.
@@ -24,14 +24,14 @@ type childrenFixture struct {
 	*healthFixture
 	spawned  [][]string
 	children []chan struct{}
-	manager  *rigdManager
+	manager  *agentManager
 	logged   []string
 }
 
 func newChildrenFixture(t *testing.T, rigs ...string) *childrenFixture {
 	t.Helper()
 	fixture := &childrenFixture{healthFixture: newHealthFixture(t, rigs)}
-	fixture.manager = newRigdManager(func(line string) { fixture.logged = append(fixture.logged, line) })
+	fixture.manager = newAgentManager(func(line string) { fixture.logged = append(fixture.logged, line) })
 	// The inherited lifecycle test seams: the spawn is a recorder, the start grace is short, and nothing
 	// signals anything.
 	restoreAll(t)
@@ -80,40 +80,40 @@ func (f *childrenFixture) startsOf(needle string) int {
 
 // compactStarts is the compaction supervisor of the fixture's one listed room.
 func (f *childrenFixture) compactStarts() int {
-	return f.startsOf("compact-run --rig demo")
+	return f.startsOf("compact-run --room demo")
 }
 
-// TestEverySupervisionPassWritesRigdOwnHeartbeat: rigd's own row is what a machine with no systemd has
+// TestEverySupervisionPassWritesAgentOwnHeartbeat: agent's own row is what a machine with no systemd has
 // instead of a supervisor, and it must stay fresh while the cloud is unreachable - so the beat is written by
 // the supervision pass and not by the socket.
-func TestEverySupervisionPassWritesRigdOwnHeartbeat(t *testing.T) {
+func TestEverySupervisionPassWritesAgentOwnHeartbeat(t *testing.T) {
 	// The lifecycle tests replace the heartbeat writer with a recorder; THIS case is about the real write,
 	// so the writer is put back while the clock, the process table and the log directory stay faked.
 	writer := clientservices.WriteHeartbeat
 	f := newChildrenFixture(t, "demo")
 	clientservices.WriteHeartbeat = writer
 	f.survives()
-	// The process table answers for rigd itself: this process, at the pid the real writer stamped.
-	f.live[clientservices.Pattern(clientservices.Rigd, "")] = []int{os.Getpid()}
+	// The process table answers for agent itself: this process, at the pid the real writer stamped.
+	f.live[clientservices.Pattern(clientservices.Agent, "")] = []int{os.Getpid()}
 	f.manager.pass()
 	f.manager.pass()
 
-	beat, ok := clientservices.ReadHeartbeat(clientservices.Rigd, "")
+	beat, ok := clientservices.ReadHeartbeat(clientservices.Agent, "")
 	if !ok {
-		t.Fatal("rigd wrote no heartbeat for itself")
+		t.Fatal("agent wrote no heartbeat for itself")
 	}
 	if beat.PID != os.Getpid() {
 		t.Errorf("beat = %+v, want this process", beat)
 	}
-	if got := row(t, f.manager.rows(), clientservices.Rigd, ""); got.State != clientservices.Running {
-		t.Errorf("row = %+v, want rigd running in its own report", got)
+	if got := row(t, f.manager.rows(), clientservices.Agent, ""); got.State != clientservices.Running {
+		t.Errorf("row = %+v, want agent running in its own report", got)
 	}
 }
 
 // TestTheChildListIsSevenOne: a compaction supervisor, a watchdog and a seat-message deliverer per
 // listed rig, and ONE bridge per machine, each with the arguments and the derived threshold 7.4 gives it.
 func TestTheChildListIsSevenOne(t *testing.T) {
-	specs, err := rigdSpecs([]string{"demo", "other"})
+	specs, err := agentSpecs([]string{"demo", "other"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,14 +122,14 @@ func TestTheChildListIsSevenOne(t *testing.T) {
 		described = append(described, strings.Join(spec.argv, " ")+" @"+spec.threshold.String())
 	}
 	want := []string{
-		"compact-run --rig demo @30s",
+		"compact-run --room demo @30s",
 		"watchdog demo --watch @3m0s",
-		"sync messages --rig demo --watch @30s",
-		"idle-run --rig demo @1m30s",
-		"compact-run --rig other @30s",
+		"sync messages --room demo --watch @30s",
+		"idle-run --room demo @1m30s",
+		"compact-run --room other @30s",
 		"watchdog other --watch @3m0s",
-		"sync messages --rig other --watch @30s",
-		"idle-run --rig other @1m30s",
+		"sync messages --room other --watch @30s",
+		"idle-run --room other @1m30s",
 		"bridge run @6m0s",
 	}
 	if strings.Join(described, "|") != strings.Join(want, "|") {
@@ -171,14 +171,14 @@ func TestAChildThatDiesIsRestartedWithBackoffFromOneSecond(t *testing.T) {
 	// Only the children of the ONE listed rig, plus the single bridge: nothing else is ever started.
 	for _, argv := range f.spawned {
 		joined := strings.Join(argv, " ")
-		if !strings.HasSuffix(joined, " demo") && joined != "bridge run" && joined != "watchdog demo --watch" && joined != "sync messages --rig demo --watch" {
+		if !strings.HasSuffix(joined, " demo") && joined != "bridge run" && joined != "watchdog demo --watch" && joined != "sync messages --room demo --watch" {
 			t.Errorf("spawned %v, which belongs to no listed rig", argv)
 		}
 	}
 }
 
 // TestThreeDeathsInsideTenMinutesIsFailingAndRetriesAtTheCap is 7.1's last sentence, in both directions:
-// the state becomes failing, and rigd KEEPS retrying - at 120 s.
+// the state becomes failing, and agent KEEPS retrying - at 120 s.
 func TestThreeDeathsInsideTenMinutesIsFailingAndRetriesAtTheCap(t *testing.T) {
 	f := newChildrenFixture(t, "demo")
 	f.diesAlways()
@@ -216,16 +216,16 @@ func TestThreeDeathsInsideTenMinutesIsFailingAndRetriesAtTheCap(t *testing.T) {
 	if got := f.compactStarts(); got != 3 {
 		t.Errorf("compact starts = %d, want no retry before the 120 s cap", got)
 	}
-	f.advance(rigdRestartCap)
+	f.advance(agentRestartCap)
 	f.manager.pass()
 	if got := f.compactStarts(); got != 4 {
 		t.Errorf("compact starts = %d, want the retry at the cap", got)
 	}
 }
 
-// TestALiveChildIsAdoptedNotDuplicated: a detached child can outlive a rigd that was killed, and two
+// TestALiveChildIsAdoptedNotDuplicated: a detached child can outlive an agent that was killed, and two
 // supervisors on one rig would be worse than none. Liveness is read from the same pgrep the report uses, so
-// rigd and `doctor` cannot disagree.
+// agent and `doctor` cannot disagree.
 func TestALiveChildIsAdoptedNotDuplicated(t *testing.T) {
 	f := newChildrenFixture(t, "demo")
 	f.survives()
@@ -234,7 +234,7 @@ func TestALiveChildIsAdoptedNotDuplicated(t *testing.T) {
 	f.manager.pass()
 	for _, argv := range f.spawned {
 		if strings.Contains(strings.Join(argv, " "), "compact-run") {
-			t.Errorf("rigd spawned a second compaction supervisor: %v", argv)
+			t.Errorf("agent spawned a second compaction supervisor: %v", argv)
 		}
 	}
 	if got := row(t, f.manager.rows(), clientservices.Compact, "demo"); got.State != clientservices.Running || got.PID != 5150 {
@@ -290,16 +290,16 @@ func TestATransitionIsPublishedToTheSocketAndTheAlertLog(t *testing.T) {
 }
 
 // TestTheSupervisionFactsArePersistedForDoctor: restarts and started_at cannot be read from a heartbeat or
-// from pgrep, so rigd records them in rigd.json - while the process and the heartbeat stay the source for
+// from pgrep, so agent records them in agent.json - while the process and the heartbeat stay the source for
 // the state.
 func TestTheSupervisionFactsArePersistedForDoctor(t *testing.T) {
 	f := newChildrenFixture(t, "demo")
 	f.survives()
 
 	f.manager.pass()
-	stored, err := clientservices.ReadRigdState()
+	stored, err := clientservices.ReadAgentState()
 	if err != nil {
-		t.Fatalf("ReadRigdState: %v", err)
+		t.Fatalf("ReadAgentState: %v", err)
 	}
 	if len(stored.Rigs) != 1 || stored.Rigs[0] != "demo" {
 		t.Fatalf("rigs = %v, want the listed room kept", stored.Rigs)
@@ -317,9 +317,9 @@ func TestTheSupervisionFactsArePersistedForDoctor(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("rigd.json carries no compact row: %+v", stored.Safeguards)
+		t.Errorf("agent.json carries no compact row: %+v", stored.Safeguards)
 	}
-	// The heartbeat of a child rigd spawned is the CHILD's to write, so rigd's own state must not pretend
+	// The heartbeat of a child agent spawned is the CHILD's to write, so agent's own state must not pretend
 	// to have one: no beat was written by the fake child.
 	if _, ok := clientservices.ReadHeartbeat(clientservices.Compact, "demo"); ok {
 		t.Error("a heartbeat appeared that no child wrote")
@@ -364,7 +364,7 @@ func TestUpRefusesWhenACredentialIsMissingWithoutPrintingItsValue(t *testing.T) 
 		return clientcmd.ExitOK
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
+	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	openUI = func(io.Writer) { ran = append(ran, "ui") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
@@ -381,13 +381,13 @@ func TestUpRefusesWhenACredentialIsMissingWithoutPrintingItsValue(t *testing.T) 
 		t.Errorf("the credential was printed: stdout %q stderr %q", out.String(), errOut.String())
 	}
 	for _, step := range ran {
-		if step == "record" || step == "rigd" || step == "watch" || step == "ui" || step == "herdr" {
+		if step == "record" || step == "agent" || step == "watch" || step == "ui" || step == "herdr" {
 			t.Errorf("up ran %q after a refused credential: %v", step, ran)
 		}
 	}
 }
 
-// TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp is the verify-before-success step: rigd starts, a
+// TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp is the verify-before-success step: agent starts, a
 // safeguard does not come up, and `up` exits 3 naming it BEFORE the watch view, the UI and herdr.
 func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 	restoreAll(t)
@@ -404,12 +404,12 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 		return clientcmd.ExitOK
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
+	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 	waitSafeguards = func(string) ([]clientservices.Health, bool) {
 		ran = append(ran, "wait")
 		return []clientservices.Health{
 			{Rig: "demo", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
-			{Rig: "demo", Safeguard: clientservices.Rigd, State: clientservices.Running, AgeS: 1},
+			{Rig: "demo", Safeguard: clientservices.Agent, State: clientservices.Running, AgeS: 1},
 		}, false
 	}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
@@ -424,8 +424,8 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 	if !strings.Contains(errOut.String(), "demo compact: stopped, age 31s") {
 		t.Errorf("stderr = %q, want the down row named in doctor's own words", errOut.String())
 	}
-	if strings.Contains(errOut.String(), "rigd: running") {
-		t.Errorf("stderr named the rigd row, which is running: %q", errOut.String())
+	if strings.Contains(errOut.String(), "agent: running") {
+		t.Errorf("stderr named the agent row, which is running: %q", errOut.String())
 	}
 	for _, step := range ran {
 		if step == "watch" || step == "ui" || step == "herdr" {
@@ -437,26 +437,26 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 	}
 }
 
-// TestStartRigdLeavesARunningAuthorityAlone: `up` is the idempotent repair verb, and two rigds would be two
+// TestStartAgentLeavesARunningAuthorityAlone: `up` is the idempotent repair verb, and two agents would be two
 // restart authorities.
-func TestStartRigdLeavesARunningAuthorityAlone(t *testing.T) {
+func TestStartAgentLeavesARunningAuthorityAlone(t *testing.T) {
 	restoreAll(t)
 	var spawned int
 	spawnChild = func([]string, string) (supervisorChild, error) {
 		spawned++
 		return diedChild{}, nil
 	}
-	rigdRunning = func() int { return 4242 }
+	agentRunning = func() int { return 4242 }
 
 	var out, errOut bytes.Buffer
-	if !startRigd(&out, &errOut) {
-		t.Fatalf("startRigd refused a running rigd: %q", errOut.String())
+	if !startAgent(&out, &errOut) {
+		t.Fatalf("startAgent refused a running agent: %q", errOut.String())
 	}
 	if spawned != 0 {
-		t.Errorf("a running rigd was started again (%d spawns)", spawned)
+		t.Errorf("a running agent was started again (%d spawns)", spawned)
 	}
 	if !strings.Contains(out.String(), "already running") {
-		t.Errorf("stdout = %q, want it to say rigd was already running", out.String())
+		t.Errorf("stdout = %q, want it to say agent was already running", out.String())
 	}
 	if !strings.Contains(out.String(), "4242") {
 		t.Errorf("stdout = %q, want the pid it found", out.String())

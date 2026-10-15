@@ -1,15 +1,15 @@
 // Package clientservices is the client's health report: ONE row per safeguard per rig, computed from
 // the heartbeat files and the process table, exactly as section 7.2 of
-// ai_docs/core-architecture/rigd-boundaries.md rules.
+// ai_docs/core-architecture/agent-boundaries.md rules.
 //
 // WHY THE ROWS ARE COMPUTED HERE AND NOWHERE ELSE. `status --json` and `doctor` compute them
-// THEMSELVES and do not read a report from rigd, because a DEAD rigd must still be reported - a report
-// rigd wrote about itself would be missing exactly when it is needed. So the computation is one
+// THEMSELVES and do not read a report from agent, because a DEAD agent must still be reported - a report
+// agent wrote about itself would be missing exactly when it is needed. So the computation is one
 // function, Verify, and every reader is a caller of it.
 //
 // THE PRECEDENCE IS THE RULING'S, in this order:
 //
-//  1. PROCESS. A live process (pgrep, or rigd's own Wait while it supervises) decides running against
+//  1. PROCESS. A live process (pgrep, or agent's own Wait while it supervises) decides running against
 //     stopped. A dead process is stopped whatever its heartbeat says.
 //  2. HEARTBEAT. A live process whose heartbeat is older than its threshold (7.4), or whose heartbeat
 //     pid is not the live pid, is silent.
@@ -17,7 +17,7 @@
 //     quiet rig a healthy supervisor writes nothing and its log age proves nothing.
 //
 // The package also owns the two file conventions the report stands on - the heartbeat files
-// (<LogDir>/heartbeat/<safeguard>-<rig>.json) and rigd's local state file (rigd.json) - and the log
+// (<LogDir>/heartbeat/<safeguard>-<rig>.json) and agent's local state file (agent.json) - and the log
 // directory itself, so a child in any other package can write a beat without copying the XDG rule.
 package clientservices
 
@@ -43,7 +43,7 @@ const (
 	// RoomGuard is the idle-room guard: it asks Jev when every seat is idle and nudges a stuck seat.
 	RoomGuard = "roomguard"
 	Bridge    = "bridge"
-	Rigd      = "rigd"
+	Agent      = "agent"
 )
 
 // The four states of 7.2. There is no fifth, and `running` is the ONLY state doctor accepts.
@@ -55,28 +55,28 @@ const (
 )
 
 // The longest legitimate sleep of each safeguard, from 7.4. 7.4's silence threshold is three times
-// these, the same 3x the socket heartbeat uses, and rigd derives each child's threshold from the flags
+// these, the same 3x the socket heartbeat uses, and agent derives each child's threshold from the flags
 // it launched that child with - these are the values those flags default to.
 const (
 	// CompactEvery is the compaction supervisor's `--every`, 10 s.
 	CompactEvery = 10 * time.Second
-	// WatchdogInterval is the watchdog's watch interval, 60 s: rigd launches `watchdog R --watch` with no
+	// WatchdogInterval is the watchdog's watch interval, 60 s: agent launches `watchdog R --watch` with no
 	// SECONDS, which is the documented default.
 	WatchdogInterval = 60 * time.Second
 	// MessagesEvery is the seat deliverer's pass interval, 10 s: one pass over every running seat of one
-	// rig, then one heartbeat, then this sleep - the cast of `sync messages --rig R --watch`.
+	// rig, then one heartbeat, then this sleep - the cast of `sync messages --room R --watch`.
 	MessagesEvery = 10 * time.Second
 	// RoomGuardEvery is the idle guard's pass interval, 30 s.
 	RoomGuardEvery = 30 * time.Second
 	// BridgeBackoffCap is the bridge's own retry cap, 120 s (clientbridge.MaxBackoffSecs).
 	BridgeBackoffCap = 120 * time.Second
-	// RigdHeartbeat is the socket heartbeat rigd answers to, 25 s (the server's ready.heartbeat_s).
-	RigdHeartbeat = 25 * time.Second
+	// AgentHeartbeat is the socket heartbeat agent answers to, 25 s (the server's ready.heartbeat_s).
+	AgentHeartbeat = 25 * time.Second
 )
 
 // Safeguards is the list a report walks: the rig-scoped rows first, then the two machine-scoped rows.
-// One bridge per machine and one rigd per machine, which is why those two carry no rig.
-func Safeguards() []string { return []string{Compact, Watchdog, Messages, RoomGuard, Bridge, Rigd} }
+// One bridge per machine and one agent per machine, which is why those two carry no rig.
+func Safeguards() []string { return []string{Compact, Watchdog, Messages, RoomGuard, Bridge, Agent} }
 
 // RigScoped reports whether a safeguard runs once per rig rather than once per machine. It decides both
 // the heartbeat file's name and whether the row carries a rig at all.
@@ -89,8 +89,8 @@ func RigScoped(safeguard string) bool {
 func SilentAfter(longestSleep time.Duration) time.Duration { return 3 * longestSleep }
 
 // DefaultSilentAfter is 7.4's table - 30 s for the supervisor, 180 s for the watchdog, 30 s for the seat
-// deliverer, 360 s for the bridge and 75 s for rigd. `doctor` has no launch flags, so it uses these;
-// rigd computes each child's from the flags it launched it with, through SilentAfter.
+// deliverer, 360 s for the bridge and 75 s for agent. `doctor` has no launch flags, so it uses these;
+// agent computes each child's from the flags it launched it with, through SilentAfter.
 func DefaultSilentAfter(safeguard string) time.Duration {
 	switch safeguard {
 	case Compact:
@@ -103,8 +103,8 @@ func DefaultSilentAfter(safeguard string) time.Duration {
 		return SilentAfter(RoomGuardEvery)
 	case Bridge:
 		return SilentAfter(BridgeBackoffCap)
-	case Rigd:
-		return SilentAfter(RigdHeartbeat)
+	case Agent:
+		return SilentAfter(AgentHeartbeat)
 	}
 	return 0
 }
@@ -116,17 +116,17 @@ func DefaultSilentAfter(safeguard string) time.Duration {
 func Pattern(safeguard, rig string) string {
 	switch safeguard {
 	case Compact:
-		return "compact-run --rig " + rig
+		return "compact-run --room " + rig
 	case Watchdog:
 		return "^[^ ]*4genteam watchdog " + rig + " --watch"
 	case RoomGuard:
-		return "^[^ ]*4genteam idle-run --rig " + rig
+		return "^[^ ]*4genteam idle-run --room " + rig
 	case Messages:
-		return "^[^ ]*4genteam sync messages --rig " + rig + " --watch"
+		return "^[^ ]*4genteam sync messages --room " + rig + " --watch"
 	case Bridge:
 		return "^[^ ]*4genteam bridge run"
-	case Rigd:
-		return "^[^ ]*4genteam rigd( |$)"
+	case Agent:
+		return "^[^ ]*4genteam agent( |$)"
 	}
 	return ""
 }
@@ -169,7 +169,7 @@ func HeartbeatDir() (string, error) {
 }
 
 // HeartbeatPath is one child's heartbeat file: <LogDir>/heartbeat/<safeguard>-<rig>.json, and
-// <safeguard>.json for the two machine-scoped safeguards - 7.2 names rigd's own file `rigd.json`.
+// <safeguard>.json for the two machine-scoped safeguards - 7.2 names agent's own file `agent.json`.
 func HeartbeatPath(safeguard, rig string) (string, error) {
 	dir, err := HeartbeatDir()
 	if err != nil {
@@ -192,7 +192,7 @@ type Heartbeat struct {
 
 // WriteHeartbeat stamps the caller's own process into its heartbeat file. It is called on EVERY pass of
 // every child - the supervisor per Step, the watchdog per poll, the seat deliverer per pass, the bridge
-// per Cycle, rigd per tick - because a heartbeat that is written only when something happens cannot
+// per Cycle, agent per tick - because a heartbeat that is written only when something happens cannot
 // tell a stopped child from a quiet one, which is the incident this report exists for.
 //
 // It is a variable so ONE test seam covers every child and no test needs the machine's own log
@@ -297,18 +297,18 @@ type Health struct {
 // UnknownAge is the age_s of a row whose safeguard has no heartbeat file to measure.
 const UnknownAge = -1
 
-// Env is what a caller supplies to Verify: the rigs rigd supervises, what rigd recorded about them, and
+// Env is what a caller supplies to Verify: the rigs agent supervises, what agent recorded about them, and
 // the silence thresholds to judge with. Everything else the report needs it reads itself - the heartbeat
 // files, the process table and the clock - because those are the three sources the ruling names.
 type Env struct {
-	// Rigs are the rigs of rigd.json's `rigs` list: the rooms that are meant to run. A rig not in the
+	// Rigs are the rigs of agent.json's `rigs` list: the rooms that are meant to run. A rig not in the
 	// list is stopped on purpose and has no report.
 	Rigs []string
-	// Supervised is rigd's own record, from rigd.json: the fields pgrep and a heartbeat CANNOT know -
+	// Supervised is agent's own record, from agent.json: the fields pgrep and a heartbeat CANNOT know -
 	// restarts, started_at, and the failing state a restart loop decides. A row is matched by
 	// (safeguard, rig).
 	Supervised []Health
-	// Thresholds overrides 7.4's per-safeguard defaults. rigd fills it from the flags it launched each
+	// Thresholds overrides 7.4's per-safeguard defaults. agent fills it from the flags it launched each
 	// child with; `doctor`, which has no launch flags, leaves it empty and gets the defaults.
 	Thresholds map[string]time.Duration
 }
@@ -341,7 +341,7 @@ func Verify(ctx context.Context, env Env) []Health {
 		rows = append(rows, verifyRow(env, Messages, rig))
 		rows = append(rows, verifyRow(env, RoomGuard, rig))
 	}
-	rows = append(rows, verifyRow(env, Bridge, ""), verifyRow(env, Rigd, ""))
+	rows = append(rows, verifyRow(env, Bridge, ""), verifyRow(env, Agent, ""))
 	return rows
 }
 
@@ -361,8 +361,8 @@ func verifyRow(env Env, safeguard, rig string) Health {
 	}
 	live := Live(Pattern(safeguard, rig))
 	// 7.2, as ruled 2026-10-11 (architect 3fa2125d): the precedence is stopped -> failing -> silent ->
-	// running, and `failing` BEATS A LIVE PROCESS. rigd counted the deaths inside its window, and a fresh
-	// heartbeat does not undo a crash loop - so a child rigd calls failing is reported failing here even
+	// running, and `failing` BEATS A LIVE PROCESS. agent counted the deaths inside its window, and a fresh
+	// heartbeat does not undo a crash loop - so a child agent calls failing is reported failing here even
 	// while it is momentarily alive, rather than reading `running` until the next death. The dead case
 	// keeps its own branch below, where a dead-and-failing row still reads failing.
 	if len(live) > 0 {
@@ -375,7 +375,7 @@ func verifyRow(env Env, safeguard, rig string) Health {
 	switch {
 	case len(live) == 0:
 		// The PROCESS decides, and a dead process is stopped whatever its heartbeat says. `failing` is
-		// the one state only rigd can decide: it counted the deaths.
+		// the one state only agent can decide: it counted the deaths.
 		row.State = Stopped
 		if recorded, ok := env.recorded(safeguard, rig); ok && recorded.State == Failing {
 			row.State = Failing

@@ -16,7 +16,7 @@ func TestInputsOpenForOneSeatLeavesTheOthersWithoutOne(t *testing.T) {
 	fake.answerHerdr([]map[string]any{paneEntry("lead"), paneEntry("go-dev")})
 	withSeatStore(t, "r", "lead", "go-dev")
 
-	code, out, errOut := runVerbT(t, "inputs", "open", "--rig", "r", "--seat", "lead")
+	code, out, errOut := runVerbT(t, "inputs", "open", "--room", "r", "--seat", "lead")
 	if code != 0 {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}

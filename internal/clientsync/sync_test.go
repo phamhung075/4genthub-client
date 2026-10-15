@@ -90,9 +90,9 @@ func TestUsageErrorsNameTheOffendingArgument(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"rig with no room", []string{"rig"}, "room"},
-		{"rig with an unknown flag", []string{"rig", "room1", "--nope"}, "--nope"},
-		{"rig with a flag and no value", []string{"rig", "room1", "--out"}, "--out"},
+		{"room verb with no room name", []string{"room"}, "room"},
+		{"room verb with an unknown flag", []string{"room", "room1", "--nope"}, "--nope"},
+		{"room verb with a flag and no value", []string{"room", "room1", "--out"}, "--out"},
 		{"bundle with one positional", []string{"bundle", "room1"}, "room, seat"},
 		{"bundle with an unknown flag",
 			[]string{"bundle", "room1", "seat1", "--rig-yaml", "y", "--rig-root", "r", "--nope"}, "--nope"},

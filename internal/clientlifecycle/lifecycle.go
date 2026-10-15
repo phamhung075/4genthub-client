@@ -66,7 +66,7 @@ const (
 	statusUsage     = "usage: 4genteam status RIG"
 	logUsage        = "usage: 4genteam log RIG"
 	uiUsage         = "usage: 4genteam ui"
-	compactRunUsage = "usage: 4genteam compact-run --rig RIG [--quiet SECONDS] [--every SECONDS] [--once][--state-root DIR]"
+	compactRunUsage = "usage: 4genteam compact-run --room RIG [--quiet SECONDS] [--every SECONDS] [--once][--state-root DIR]"
 )
 
 // ChildError carries a started child's exit status, so a start that failed can be named without
@@ -102,7 +102,7 @@ func Commands() []clientcmd.Command {
 		compactRunCommand{},
 		idleRunCommand{},
 		doctorCommand{},
-		rigdCommand{},
+		agentCommand{},
 	}
 }
 
@@ -152,7 +152,7 @@ func requireRig(verb string, args []string, stderr io.Writer) (string, bool) {
 // The steps `up` runs, in order. Each is a variable so a test can assert the order without a daemon, a
 // rig, herdr or a UI: the Python test replaces the same functions.
 //
-// startBridge IS GONE FROM THIS LIST, and that is 7.1's removed path: `up` starts rigd, and rigd starts
+// startBridge IS GONE FROM THIS LIST, and that is 7.1's removed path: `up` starts agent, and agent starts
 // the bridge. Two start paths for one safeguard would be two mechanisms.
 // ensureDaemon returns the log file the runtime daemon writes its own output to, and ensureRig returns the
 // room's verdict as this verb's exit code. Their signatures carry the state dir and the definition for one
@@ -161,7 +161,7 @@ var (
 	ensureDaemon   = ensureDaemonImpl
 	ensureRig      = ensureRigImpl
 	recordRigFor   = recordRig
-	startAuthority = startRigd
+	startAuthority = startAgent
 	waitSafeguards = waitForSafeguards
 	openUI         = openUIImpl
 	runWatchView   = runWatchViewImpl
@@ -172,19 +172,19 @@ type upCommand struct{}
 
 func (upCommand) Name() string { return "up" }
 func (upCommand) Summary() string {
-	return "start the local stack for a rig: daemon, seats, rigd (which starts the bridge and the supervisor), UI"
+	return "start the local stack for a rig: daemon, seats, agent (which starts the bridge and the supervisor), UI"
 }
 
 func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, upUsage,
-			"The runtime daemon, this rig's room and its seats, and then the safeguards: rigd,\n"+
+			"The runtime daemon, this rig's room and its seats, and then the safeguards: agent,\n"+
 				"which owns the compaction supervisor, the watchdog, the seat-message deliverer and the status\n"+
 				"bridge, and finally the watch view and the UI.\n"+
 				"The room's seats come from the LOCAL team definition: --team names the directory that holds\n"+
 				"team.json, and there is no default, so starting a room needs no cloud round trip.\n"+
 				"--room-only stops after the room: it starts the daemon, starts the room from the definition and\n"+
-				"prints one line per seat. It EXCLUDES rigd, the bridge, the watch view, the UI and herdr, whose\n"+
+				"prints one line per seat. It EXCLUDES agent, the bridge, the watch view, the UI and herdr, whose\n"+
 				"failures are not this verb's verdict - and it must not be used to make a red go away.\n"+
 				"The acceptance invocation, so a reader re-reads the signature instead of remembering it:\n"+
 				"  4genteam up RIG --team DIR [--state-dir DIR] --room-only\n"+
@@ -208,7 +208,7 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 	flags.SetOutput(stderr)
 	teamDir := flags.String("team", "", "the team definition directory that holds team.json (required)")
 	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else ~/.config/4genthub")
-	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before rigd, the bridge, the watch view and the UI")
+	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before agent, the bridge, the watch view and the UI")
 	flagArgs, positional := splitFlagsAndPositional(rest)
 	for _, arg := range flagArgs {
 		if name := flagName(arg); name != "" && !upTakesFlag(name) {
@@ -293,7 +293,7 @@ func upTakesFlag(name string) bool {
 func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, stderr io.Writer) int {
 	// The definition is read FIRST: a --team typo is a caller error, and it must be reported before a daemon
 	// is started or a seat is touched. The room name must be the room the file defines, which is the same
-	// rule clientpolicy applies to its own --rig.
+	// rule clientpolicy applies to its own --room.
 	// A bad invocation is 3 for this verb, not the CLI-wide ExitUsage (2): 2 is what a PARTIAL START is here
 	// (design §2.5), and one number cannot mean both things to a caller reading an exit code.
 	spec, err := clientteam.LoadRoomSpec(teamDir)
@@ -302,7 +302,7 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 		return clientcmd.ExitRoomRefused
 	}
 	if spec.Room != name {
-		fmt.Fprintf(stderr, "4genteam up: %s defines the room %q, not %q - --rig must name the room the definition defines. %s\n",
+		fmt.Fprintf(stderr, "4genteam up: %s defines the room %q, not %q - --room must name the room the definition defines. %s\n",
 			teamDir, spec.Room, name, upUsage)
 		return clientcmd.ExitRoomRefused
 	}
@@ -326,14 +326,14 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 		return clientcmd.ExitOK
 	}
 	// 7.5: a bridge refused for a missing AGENTHUB_URL or AGENTHUB_TOKEN is a FAILED `up`. The check runs
-	// HERE, before rigd is started, because the alternative is a bridge that dies at once and a message
+	// HERE, before agent is started, because the alternative is a bridge that dies at once and a message
 	// about a process instead of about the variable that is missing. The value is never printed.
 	if missing := missingCloudEnv(); len(missing) > 0 {
 		return refuseMissingCloudEnv("up", missing, stderr)
 	}
 
 	// The room is recorded as one that is meant to run (7.1), and then the single restart authority is
-	// started. From here on rigd owns the compaction supervisor, the watchdog and the bridge; `up` starts
+	// started. From here on agent owns the compaction supervisor, the watchdog and the bridge; `up` starts
 	// nothing else for them.
 	if !recordRigFor(name, stderr) {
 		return clientcmd.ExitUnavailable
@@ -342,7 +342,7 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 		return ExitStartFailed
 	}
 
-	// 7.5: the SAME check `doctor` makes, run after rigd's start grace and BEFORE the watch view, the UI
+	// 7.5: the SAME check `doctor` makes, run after agent's start grace and BEFORE the watch view, the UI
 	// and herdr. A safeguard that did not come up is named here, with the line a reader will see in
 	// `doctor`, rather than discovered hours later on a quiet rig.
 	rows, ok := waitSafeguards(name)
@@ -698,7 +698,7 @@ func runWatchViewImpl(name string, stderr io.Writer) {
 	}
 	// This same binary, with the watch arguments - the Python called its own module here. The exit code
 	// is deliberately ignored: `up`'s job is the stack, and the watch view's failure was never `up`'s.
-	cmd := exec.Command(self, "watch", "--rig", name)
+	cmd := exec.Command(self, "watch", "--room", name)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	_ = cmd.Run()
 }
@@ -721,14 +721,14 @@ type compactCommand struct{}
 
 func (compactCommand) Name() string { return "compact" }
 func (compactCommand) Summary() string {
-	return "record a rig as one meant to run and report its compaction supervisor's row (rigd owns the restart)"
+	return "record a rig as one meant to run and report its compaction supervisor's row (agent owns the restart)"
 }
 
 func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, compactUsage,
 			"Record RIG as a room that is meant to run, and report its compaction supervisor's row.\n"+
-				"7.1 made rigd the single restart authority, so this verb SPAWNS NOTHING: the supervisor is rigd's\n"+
+				"7.1 made agent the single restart authority, so this verb SPAWNS NOTHING: the supervisor is agent's\n"+
 				"child, it is restarted with backoff when it dies, and the repair verb is `up`.\n"+
 				"The DeepSeek peak gate still applies here, unchanged: with "+
 				clientoffpeak.ModeEnv+" on (the default) a room whose seats run a deepseek/ model is refused at peak, and "+
@@ -750,8 +750,8 @@ func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 	}
 	// WITH NO AUTHORITY THERE IS NO SUPERVISOR, and saying so is this verb's whole job now: it is exactly
 	// the silence the owner's incident was made of.
-	if rigdRunning() == 0 {
-		fmt.Fprintf(stderr, "4genteam compact: rigd is not running, and the compaction supervisor is rigd's child now - start it with `4genteam up %s`, or compact the room's seats through the runtime with `4genteam room compact %s`.\n", name, name)
+	if agentRunning() == 0 {
+		fmt.Fprintf(stderr, "4genteam compact: agent is not running, and the compaction supervisor is agent's child now - start it with `4genteam up %s`, or compact the room's seats through the runtime with `4genteam room compact %s`.\n", name, name)
 		return clientcmd.ExitUnavailable
 	}
 	rows := clientservices.NotRunning(rowsFor(name))
@@ -761,7 +761,7 @@ func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 			return clientcmd.ExitUnavailable
 		}
 	}
-	fmt.Fprintln(stdout, "compact supervisor: running (supervised by rigd)")
+	fmt.Fprintln(stdout, "compact supervisor: running (supervised by agent)")
 	return clientcmd.ExitOK
 }
 
@@ -769,22 +769,22 @@ type stopCommand struct{}
 
 func (stopCommand) Name() string { return "stop" }
 func (stopCommand) Summary() string {
-	return "stop rigd and its children (a machine-wide stop: compact, watchdog, messages, bridge)"
+	return "stop agent and its children (a machine-wide stop: compact, watchdog, messages, bridge)"
 }
 
 func (stopCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, stopUsage,
-			"Stop rigd. Its children - the compaction supervisors, the watchdogs and the bridge - stop with it,\n"+
-				"because rigd is the single restart authority and a killed rigd must not leave orphans behind.\n"+
-				"The stop is MACHINE-WIDE: it is not room intent, and the room stays in rigd.json's list.")
+			"Stop agent. Its children - the compaction supervisors, the watchdogs and the bridge - stop with it,\n"+
+				"because agent is the single restart authority and a killed agent must not leave orphans behind.\n"+
+				"The stop is MACHINE-WIDE: it is not room intent, and the room stays in agent.json's list.")
 		return clientcmd.ExitOK
 	}
 	name, ok := requireRig("stop", args, stderr)
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	stopRigd(name, stdout)
+	stopAgent(name, stdout)
 	return clientcmd.ExitOK
 }
 
@@ -945,7 +945,7 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 	}
 	flags := flag.NewFlagSet("compact-run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	rig := flags.String("rig", "", "the rig to supervise (required)")
+	rig := flags.String("room", "", "the rig to supervise (required)")
 	quietFlag := flags.Int("quiet", quiet, "seconds of log silence that mean the job is finished")
 	every := flags.Int("every", 10, "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
@@ -954,7 +954,7 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 		return options, false
 	}
 	if strings.TrimSpace(*rig) == "" {
-		fmt.Fprintf(stderr, "4genteam compact-run: --rig is required - there is no default rig. %s\n", compactRunUsage)
+		fmt.Fprintf(stderr, "4genteam compact-run: --room is required - there is no default rig. %s\n", compactRunUsage)
 		return options, false
 	}
 	root, err := clientenv.ResolveStateRoot(*stateRoot)

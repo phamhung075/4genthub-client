@@ -1,12 +1,12 @@
 ---
 name: watch-team
-description: Open or reopen the live view of a room — a herdr grid with one pane per seat plus a lead window with an input pane. Use whenever the user asks to "spawn grid", "give watch grid", "show me grid", "open the grid", "reopen grid watch", "watch the team", "show me the agents", "watch session", or after any restore, relaunch, resume, runtime switch or script change. ALWAYS use `4genteam watch --rig <RIG>` instead of manual terminal/tmux panes.
+description: Open or reopen the live view of a room — a herdr grid with one pane per seat plus a lead window with an input pane. Use whenever the user asks to "spawn grid", "give watch grid", "show me grid", "open the grid", "reopen grid watch", "watch the team", "show me the agents", "watch session", or after any restore, relaunch, resume, runtime switch or script change. ALWAYS use `4genteam watch --room <RIG>` instead of manual terminal/tmux panes.
 ---
 
 # Watch a room
 
 The live view of a running room: every seat's tool calls, results, reasoning and incoming
-messages, read-only. **NEVER use raw terminal tiles or `tmux attach` when asked for the grid/watch view** — always run `4genteam watch --rig <RIG>`. It reads the seats' session logs, displays compaction token gauges (`used/150k to compact`), colors reasoning and tool calls, and provides a proper input pane. It needs `herdr` (the terminal provider the panes live in) and the room's
+messages, read-only. **NEVER use raw terminal tiles or `tmux attach` when asked for the grid/watch view** — always run `4genteam watch --room <RIG>`. It reads the seats' session logs, displays compaction token gauges (`used/150k to compact`), colors reasoning and tool calls, and provides a proper input pane. It needs `herdr` (the terminal provider the panes live in) and the room's
 seats running in tmux.
 
 Full reference: `docs/WATCH.md` in the `4genthub-client` repository.
@@ -14,7 +14,7 @@ Full reference: `docs/WATCH.md` in the `4genthub-client` repository.
 ## Open it
 
 ```bash
-4genteam watch --rig <RIG>
+4genteam watch --room <RIG>
 ```
 
 `4genteam` is that repository's Go binary (`cmd/4genteam`). Every workspace and pane it opens is
@@ -30,14 +30,14 @@ That opens both workspaces:
 - `<RIG> lead`: the lead's detailed feed on top, a `lead > input` pane below it (ratio 0.8) — a line
   typed there is sent to the lead.
 
-`4genteam grid --rig <RIG>` opens the grid alone, and `4genteam feed --rig <RIG> [--seat <SEAT> ...]`
+`4genteam grid --room <RIG>` opens the grid alone, and `4genteam feed --room <RIG> [--seat <SEAT> ...]`
 gives one merged stream in the terminal you are already in.
 
 Expected output: `grid: <n> seats in <cols> columns`. Only a seat whose runtime the client can read
 session logs for shows events; a runtime it has no log reader for keeps its pane and header and
 shows nothing.
 
-Always pass `--rig`: there is no default room.
+Always pass `--room`: there is no default room.
 
 The verb is idempotent. It closes the `<RIG> grid` and `<RIG> lead` workspaces it owns and
 rebuilds them, so run it again whenever the user asks for the grid — and after every restore,
@@ -63,7 +63,7 @@ pane and header with no events, and a stopped seat has no pane at all.
 
 | Option | Effect |
 |---|---|
-| `--rig <RIG>` | the room to watch |
+| `--room <RIG>` | the room to watch |
 | `--state-root DIR` | the omp state root the session logs are read from: the flag, else `~/.config/4genthub` |
 | `--seat SEAT` | which seat: for `feed` and `inputs`, limit the view to this seat, repeatable; for `input`, the seat to send to, required |
 | `--cols N` | grid columns (default 2); `grid` and `watch` only |
@@ -75,9 +75,9 @@ pane and header with no events, and a stopped seat has no pane at all.
 ## Type to a seat
 
 ```bash
-4genteam inputs open --rig <RIG>                # a "<SEAT> > input" pane under every seat pane
-4genteam inputs open --rig <RIG> --seat <SEAT>  # only that seat
-4genteam inputs hide --rig <RIG>
+4genteam inputs open --room <RIG>                # a "<SEAT> > input" pane under every seat pane
+4genteam inputs open --room <RIG> --seat <SEAT>  # only that seat
+4genteam inputs hide --room <RIG>
 ```
 
 A line typed there is sent with `4genteam send`, so it takes the same route as any other message.
@@ -128,7 +128,7 @@ back watched; skip that with `RIG_CONTINUE_WATCH=0`.
 - Each pane runs the client with `exec`, so the pane closes when that client exits. Reopen the view
   with the verb instead of expecting a dead pane to come back.
 - A running pane never picks up a code change: each pane runs the binary it started with. After
-  editing the client — or changing a `COMPACT_*` value in its env file — run `4genteam watch --rig
+  editing the client — or changing a `COMPACT_*` value in its env file — run `4genteam watch --room
   <RIG>` again: it closes and rebuilds both workspaces, which is the only way the panes pick up the
   new value. The supervisor has the same property, so restart it as above.
 - Keep backticks, apostrophes and `$` out of any message sent with `4genteam send`: **your own shell

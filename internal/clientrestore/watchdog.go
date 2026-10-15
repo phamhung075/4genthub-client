@@ -72,7 +72,7 @@ var (
 		return "none"
 	}
 	// watchdogNodesJSON is the ONE node read in this verb: a room's node records in the CLI's own JSON keys,
-	// read over the runtime socket (clientruntime.RoomNodes) instead of by exec-ing `rig ps --nodes --rig RIG --json`.
+	// read over the runtime socket (clientruntime.RoomNodes) instead of by exec-ing `rig ps --nodes --room RIG --json`.
 	// It is a seam so a test counts seats with no runtime. A read that FAILED comes back as an error rather than as an
 	// empty table: the caller counts zero either way, but only one of those is a fact about the room.
 	watchdogNodesJSON = func(rigName string) (string, error) {

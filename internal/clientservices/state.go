@@ -1,4 +1,4 @@
-// The two files rigd keeps that are NOT heartbeats: its local state file, rigd.json, and the alert log
+// The two files agent keeps that are NOT heartbeats: its local state file, agent.json, and the alert log
 // the operator reads with `doctor`.
 package clientservices
 
@@ -12,34 +12,34 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// RigdState is rigd's local state file, `<seat store>/rigd.json`, mode 0600. 7.1 rules its `rigs` list -
+// AgentState is agent's local state file, `<seat store>/agent.json`, mode 0600. 7.1 rules its `rigs` list -
 // the rooms that are meant to run, which `up` appends to and `down` removes from - and 7.2's row carries
-// two fields no external observer can compute, so rigd records its supervision of each safeguard here
+// two fields no external observer can compute, so agent records its supervision of each safeguard here
 // too. `doctor` and `status --json` read them and compute everything else themselves; a row whose
-// safeguard rigd never started simply carries no restarts and no started_at.
-type RigdState struct {
+// safeguard agent never started simply carries no restarts and no started_at.
+type AgentState struct {
 	// Rigs is the list a report walks: one compaction supervisor and one watchdog per rig.
 	Rigs []string `json:"rigs"`
-	// Safeguards are the rows rigd recorded as it supervised its children. Only the fields pgrep and a
+	// Safeguards are the rows agent recorded as it supervised its children. Only the fields pgrep and a
 	// heartbeat cannot answer are read back from here (restarts, started_at, failing).
 	Safeguards []Health `json:"safeguards"`
 }
 
-// RigdStatePath is the state file's location. It is a variable so a test drives a temp store instead of
+// AgentStatePath is the state file's location. It is a variable so a test drives a temp store instead of
 // the machine's own seat store.
-var RigdStatePath = defaultRigdStatePath
+var AgentStatePath = defaultAgentStatePath
 
-// defaultRigdStatePath is `<seat store>/rigd.json`, the path 7.1 and 3.2 name.
-func defaultRigdStatePath() (string, error) {
+// defaultAgentStatePath is `<seat store>/agent.json`, the path 7.1 and 3.2 name.
+func defaultAgentStatePath() (string, error) {
 	store, err := clientenv.ResolveSeatStore("")
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(store, "rigd.json"), nil
+	return filepath.Join(store, "agent.json"), nil
 }
 
-// ReadRigdState reads the rooms that are meant to run and answers TWO things: the state, and the error a
-// read that FAILED made. A file that is not there is NOT an error - a machine whose rigd has never run has
+// ReadAgentState reads the rooms that are meant to run and answers TWO things: the state, and the error a
+// read that FAILED made. A file that is not there is NOT an error - a machine whose agent has never run has
 // no rooms, and `doctor` must be able to say so - while a file that is there and could not be read or
 // parsed is exactly an error. That difference is the whole point of the second answer: three callers
 // REWRITE this list with what they read (`room stop` removes a room, `up` records one, the supervisor's own
@@ -48,29 +48,29 @@ func defaultRigdStatePath() (string, error) {
 // Measured 2026-10-14: `not json{` written over a two-room list, then a stop, left the empty state behind
 // and dropped the other room with it. A caller that writes MUST refuse on an error; a caller that only
 // reports may go on, because "no rooms are meant to run" is then still what the file says.
-func ReadRigdState() (RigdState, error) {
-	path, err := RigdStatePath()
+func ReadAgentState() (AgentState, error) {
+	path, err := AgentStatePath()
 	if err != nil {
-		return RigdState{}, fmt.Errorf("the rooms meant to run live at a path this machine cannot resolve: %w", err)
+		return AgentState{}, fmt.Errorf("the rooms meant to run live at a path this machine cannot resolve: %w", err)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return RigdState{}, nil
+			return AgentState{}, nil
 		}
-		return RigdState{}, fmt.Errorf("cannot read %s: %w", path, err)
+		return AgentState{}, fmt.Errorf("cannot read %s: %w", path, err)
 	}
-	var state RigdState
+	var state AgentState
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return RigdState{}, fmt.Errorf("%s is not readable as the rooms meant to run: %w", path, err)
+		return AgentState{}, fmt.Errorf("%s is not readable as the rooms meant to run: %w", path, err)
 	}
 	return state, nil
 }
 
-// WriteRigdState writes the state file atomically and with mode 0600, because this is the file a later
+// WriteAgentState writes the state file atomically and with mode 0600, because this is the file a later
 // phase will carry the machine's command consent in (3.2) and a world-readable consent file is not one.
-func WriteRigdState(state RigdState) error {
-	path, err := RigdStatePath()
+func WriteAgentState(state AgentState) error {
+	path, err := AgentStatePath()
 	if err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func WriteRigdState(state RigdState) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".rigd.json-*")
+	temp, err := os.CreateTemp(filepath.Dir(path), ".agent.json-*")
 	if err != nil {
 		return err
 	}
@@ -101,9 +101,9 @@ func WriteRigdState(state RigdState) error {
 	return os.Rename(temp.Name(), path)
 }
 
-// AddRig records a room as one rigd supervises, once: `up` is idempotent, and a rig listed twice would
+// AddRig records a room as one agent supervises, once: `up` is idempotent, and a rig listed twice would
 // be reported twice.
-func AddRig(state RigdState, rig string) RigdState {
+func AddRig(state AgentState, rig string) AgentState {
 	if strings.TrimSpace(rig) == "" {
 		return state
 	}
@@ -118,7 +118,7 @@ func AddRig(state RigdState, rig string) RigdState {
 
 // RemoveRig drops a room from the list. A room that is not listed is stopped on purpose (7.9), so this
 // is what `down` does to it.
-func RemoveRig(state RigdState, rig string) RigdState {
+func RemoveRig(state AgentState, rig string) AgentState {
 	kept := make([]string, 0, len(state.Rigs))
 	for _, listed := range state.Rigs {
 		if listed != rig {
@@ -144,7 +144,7 @@ func AlertsLogPath() (string, error) {
 	return filepath.Join(dir, "alerts.log"), nil
 }
 
-// AppendAlert adds one line to alerts.log. A failure to write is returned rather than swallowed: rigd
+// AppendAlert adds one line to alerts.log. A failure to write is returned rather than swallowed: agent
 // reports it in its own log, because an alert that silently failed to land is the incident again.
 func AppendAlert(line string) error {
 	path, err := AlertsLogPath()

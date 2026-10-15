@@ -530,7 +530,7 @@ func (c *connectorConn) RegisterSession(reg SessionRegistration) (SessionAck, er
 // sessionFrame is the session frame's body: the key and the name always, the seat identity only when
 // BOTH halves are known, and the state and the source 2.2 adds. A transport that names no state leaves
 // the field out rather than asserting one the client does not know: `seat_state` on the Sessions page
-// distinguishes "no rigd has reported a state" (null) from a state, and a guess would erase that.
+// distinguishes "no agent has reported a state" (null) from a state, and a guess would erase that.
 func sessionFrame(reg SessionRegistration) map[string]any {
 	frame := map[string]any{"type": "session", "session_key": reg.Key, "name": reg.Name}
 	if reg.Room != "" && reg.Seat != "" {

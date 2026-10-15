@@ -1,4 +1,4 @@
-// The `sync rig` verb: materialize a whole room in one command.
+// The `sync room` verb: materialize a whole room in one command.
 //
 // PORTED FROM agenthub_client/src/agenthub_client/seat_sync.py's cmd_rig and the helpers it uses
 // (pull_seat, swap_dir, materialize_agent, launch_spec, link_provider_key, omp_agent_dir,
@@ -17,7 +17,7 @@
 //     the seam a governed rig is supplied through; with no table a rig is left alone silently, which
 //     is exactly what the Python does for a rig outside its table.
 //
-// THE CLIENT'S OWN SKILL TREE IS DELIVERED BY THIS VERB. `sync rig` is the step that writes each
+// THE CLIENT'S OWN SKILL TREE IS DELIVERED BY THIS VERB. `sync room` is the step that writes each
 // seat's agent directory, so it is also the step that gives a seat the skills this client owns: the
 // tree is found at --skills-root, else $AGENTHUB_CLIENT_SKILLS, else skills/ beside this binary, and a
 // tree that is not there is REFUSED by name rather than skipped, because delivering it is the reason
@@ -72,8 +72,8 @@ const (
 	rigAgentsMDInstallName  = "AGENTS.md"
 )
 
-// rigUsage is what `4genteam sync rig --help` prints.
-const rigUsage = `usage: 4genteam sync rig ROOM [--out DIR] [--update] [--state-root DIR] [--skills-root DIR]
+// rigUsage is what `4genteam sync room --help` prints.
+const rigUsage = `usage: 4genteam sync room ROOM [--out DIR] [--update] [--state-root DIR] [--skills-root DIR]
 
 Materialize a whole room: fetch the room's rigspec, pull every listed seat with the same pinning
 rules as ` + "`sync pull`" + `, then build:
@@ -262,7 +262,7 @@ func rigDeliverSkills(tree clientskills.Tree, room, seat, agentDir string) (bool
 
 // --- the verb ---------------------------------------------------------------------------------------
 
-// RunRigVerb is `sync rig ROOM`: validate, fetch the rigspec, pull every seat, build the rig in a
+// RunRigVerb is `sync room ROOM`: validate, fetch the rigspec, pull every seat, build the rig in a
 // staging directory and swap it in, then install the render's omp documents and the per-seat policy.
 // The build also delivers the skills this client owns, which is why the tree is resolved before the
 // first fetch.
@@ -275,7 +275,7 @@ func RunRigVerb(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	}
 	parsed, err := rigParseArgs(args)
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam sync rig: %v\n", err)
+		fmt.Fprintf(stderr, "4genteam sync room: %v\n", err)
 		return clientcmd.ExitUsage
 	}
 	if err := rigRun(ctx, parsed, stdout, stderr); err != nil {

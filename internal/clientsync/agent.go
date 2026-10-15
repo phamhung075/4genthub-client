@@ -1,8 +1,8 @@
-// The long-running half of rigd: ONE outbound /ws/connector socket that registers every local session,
+// The long-running half of agent: ONE outbound /ws/connector socket that registers every local session,
 // uploads its redacted events stop-and-wait, publishes safeguard transitions, and reconnects with
 // backoff. It extends the connector in connector.go - it is not a second wire.
 //
-// THE RULES THIS FILE EXISTS TO KEEP, each from ai_docs/core-architecture/rigd-boundaries.md:
+// THE RULES THIS FILE EXISTS TO KEEP, each from ai_docs/core-architecture/agent-boundaries.md:
 //
 //   - 2.2 STOP-AND-WAIT. Exactly one `events` frame per session is outstanding at a time, and its
 //     `events_ack` is read before the next one is built. That ordering is what makes the cursor exact:
@@ -40,19 +40,19 @@ import (
 )
 
 const (
-	// rigdTick is one pass of the socket loop: publish what changed, register what appeared, send what is
+	// agentTick is one pass of the socket loop: publish what changed, register what appeared, send what is
 	// new. It is small because the tail's cost is one transcript read per session.
-	rigdTick = time.Second
-	// rigdAckTimeout is how long one stop-and-wait acknowledgement may take before the socket is declared
+	agentTick = time.Second
+	// agentAckTimeout is how long one stop-and-wait acknowledgement may take before the socket is declared
 	// dead. It is not a retry: a socket that cannot answer one frame inside this window is one the
 	// heartbeat's 3x rule would close in the same breath.
-	rigdAckTimeout = 30 * time.Second
-	// rigdBackoffStart, rigdBackoffCap and rigdConnectedReset are 2.2's reconnect curve.
-	rigdBackoffStart   = time.Second
-	rigdBackoffCap     = 60 * time.Second
-	rigdConnectedReset = 60 * time.Second
-	// rigdJitter is the +/-20 % of 2.2.
-	rigdJitter = 0.2
+	agentAckTimeout = 30 * time.Second
+	// agentBackoffStart, agentBackoffCap and agentConnectedReset are 2.2's reconnect curve.
+	agentBackoffStart   = time.Second
+	agentBackoffCap     = 60 * time.Second
+	agentConnectedReset = 60 * time.Second
+	// agentJitter is the +/-20 % of 2.2.
+	agentJitter = 0.2
 
 	// transcriptTail is the client's own backfill window: the lines a tail read returns. It is the source
 	// of the cursor's coordinate, so it is one constant and not a per-call number.
@@ -75,12 +75,12 @@ const (
 // clientrestore uses for its poll interval.
 var sleep = time.Sleep
 
-// RigDaemonOptions is one rigd run, as the process's other half supplies it.
-type RigDaemonOptions struct {
+// AgentDaemonOptions is one agent run, as the process's other half supplies it.
+type AgentDaemonOptions struct {
 	BaseURL     string
 	Token       string
 	ConnectorID string
-	// Log is where rigd's own lines go. It is one line per event, never a secret: redaction runs before
+	// Log is where agent's own lines go. It is one line per event, never a secret: redaction runs before
 	// anything is logged from an event.
 	Log func(string)
 	// Rows is every row the supervision half currently reports, for the re-send after each `ready` (7.3).
@@ -115,10 +115,10 @@ type sessionStream struct {
 	withheldSince time.Time
 }
 
-// RigDaemon is the socket half of rigd. Every external read is a field so a test drives the whole loop
+// AgentDaemon is the socket half of agent. Every external read is a field so a test drives the whole loop
 // with a scripted socket and no rig, no cloud and no waiting.
-type RigDaemon struct {
-	opts RigDaemonOptions
+type AgentDaemon struct {
+	opts AgentDaemonOptions
 
 	// The local reads, injected so a test never shells out.
 	Sessions   func(ctx context.Context) ([]sessionCandidate, error)
@@ -140,10 +140,10 @@ type RigDaemon struct {
 	connected  time.Time
 }
 
-// NewRigDaemon wires the real world: the daemon reads the rig tool and the clock, and holds one redactor
+// NewAgentDaemon wires the real world: the daemon reads the rig tool and the clock, and holds one redactor
 // for the whole stream, because the .env rule pairs a tool call with its result ACROSS events.
-func NewRigDaemon(opts RigDaemonOptions) *RigDaemon {
-	daemon := &RigDaemon{
+func NewAgentDaemon(opts AgentDaemonOptions) *AgentDaemon {
+	daemon := &AgentDaemon{
 		opts:       opts,
 		Now:        time.Now,
 		redactor:   NewEventRedactor(),
@@ -162,7 +162,7 @@ func NewRigDaemon(opts RigDaemonOptions) *RigDaemon {
 	}
 	// THE THREE LOCAL READS GO THROUGH THE RUNTIME'S OWN SOCKET. They were execs of `rig ps --json`,
 	// `rig transcript` and `rig capture`; the last two are not verbs the installed client has at all
-	// ("4genteam: unknown command transcript"), so wherever `rig` resolved to that client rigd could not
+	// ("4genteam: unknown command transcript"), so wherever `rig` resolved to that client agent could not
 	// read a transcript or a pane. The session list is the runtime's, which answers one entry per seat of
 	// every room it hosts - the same set `--nodes --all-rigs` was asked for, from the daemon that owns it.
 	daemon.Sessions = rigSessionCandidates
@@ -185,8 +185,8 @@ func NewRigDaemon(opts RigDaemonOptions) *RigDaemon {
 
 // Run keeps the socket up until the context ends, and returns the process's exit code. A refused
 // credential is ExitUnavailable: the verb ran, and this machine cannot do it with this token.
-func (d *RigDaemon) Run(ctx context.Context) int {
-	backoff := rigdBackoffStart
+func (d *AgentDaemon) Run(ctx context.Context) int {
+	backoff := agentBackoffStart
 	for {
 		if ctx.Err() != nil {
 			return clientcmd.ExitOK
@@ -197,34 +197,34 @@ func (d *RigDaemon) Run(ctx context.Context) int {
 		}
 		var closed *ConnectorClosed
 		if errors.As(err, &closed) && closed.Refused() {
-			d.opts.Log(fmt.Sprintf("the connector refused this credential (%s): rigd is NOT retrying. Check the token's scope and value, then run `4genteam up` again", closed.Error()))
+			d.opts.Log(fmt.Sprintf("the connector refused this credential (%s): agent is NOT retrying. Check the token's scope and value, then run `4genteam up` again", closed.Error()))
 			return clientcmd.ExitUnavailable
 		}
 		d.opts.Log(fmt.Sprintf("the connector socket ended: %v", err))
 
 		// 2.2: the backoff resets after 60 s connected. A socket that stayed up is a working credential
 		// and a working network, so the next failure starts the curve over rather than at its cap.
-		if !d.connected.IsZero() && d.Now().Sub(d.connected) >= rigdConnectedReset {
-			backoff = rigdBackoffStart
+		if !d.connected.IsZero() && d.Now().Sub(d.connected) >= agentConnectedReset {
+			backoff = agentBackoffStart
 		}
 		wait := jitter(backoff)
 		d.opts.Log(fmt.Sprintf("reconnecting in %s", wait.Round(time.Millisecond)))
 		sleep(wait)
 		backoff *= 2
-		if backoff > rigdBackoffCap {
-			backoff = rigdBackoffCap
+		if backoff > agentBackoffCap {
+			backoff = agentBackoffCap
 		}
 	}
 }
 
 // jitter is 2.2's +/-20 %, so a fleet returning after an outage does not arrive in one wave.
 func jitter(d time.Duration) time.Duration {
-	spread := float64(d) * rigdJitter
+	spread := float64(d) * agentJitter
 	return time.Duration(float64(d) - spread + rand.Float64()*2*spread)
 }
 
 // connectAndServe opens one socket and serves it until it fails or the context ends.
-func (d *RigDaemon) connectAndServe(ctx context.Context) error {
+func (d *AgentDaemon) connectAndServe(ctx context.Context) error {
 	sock, err := dialConnector(ctx, d.opts.BaseURL, d.opts.Token)
 	if err != nil {
 		return err
@@ -262,7 +262,7 @@ func (d *RigDaemon) connectAndServe(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(rigdTick):
+		case <-time.After(agentTick):
 		}
 	}
 }
@@ -270,7 +270,7 @@ func (d *RigDaemon) connectAndServe(ctx context.Context) error {
 // hello is the first exchange: 2.2's protocol, version and capabilities, and the server's ready. It goes
 // through the socket interface rather than the concrete type, so a scripted socket exercises the same
 // frame the real one writes.
-func (d *RigDaemon) hello() (Ready, error) {
+func (d *AgentDaemon) hello() (Ready, error) {
 	caps := []string{CapabilityIngest, CapabilitySafeguards}
 	if d.opts.AllowRemoteCommands {
 		caps = append(caps, CapabilityCommands)
@@ -290,7 +290,7 @@ func (d *RigDaemon) hello() (Ready, error) {
 
 // resendAll is what happens after EVERY ready: the sessions are registered again and every safeguard row
 // is sent, because a transition that happened while the socket was down still has to arrive (7.3).
-func (d *RigDaemon) resendAll(ctx context.Context) error {
+func (d *AgentDaemon) resendAll(ctx context.Context) error {
 	candidates, err := d.Sessions(ctx)
 	if err != nil {
 		// A rig that cannot be read is not a dead socket: the socket is what the credential wants, and
@@ -308,7 +308,7 @@ func (d *RigDaemon) resendAll(ctx context.Context) error {
 
 // pass is one tick: drain what the server sent, keep the heartbeat, publish what changed, then register
 // and tail the local sessions.
-func (d *RigDaemon) pass(ctx context.Context) error {
+func (d *AgentDaemon) pass(ctx context.Context) error {
 	if err := d.drain(); err != nil {
 		return err
 	}
@@ -354,7 +354,7 @@ func (d *RigDaemon) pass(ctx context.Context) error {
 
 // streamFor is the per-session state, created on first sight. Its source starts as the transcript: the
 // capture fallback is decided by what the transcript read returns, per session.
-func (d *RigDaemon) streamFor(candidate sessionCandidate) *sessionStream {
+func (d *AgentDaemon) streamFor(candidate sessionCandidate) *sessionStream {
 	stream := d.sessions[candidate.name]
 	if stream == nil {
 		stream = &sessionStream{
@@ -369,7 +369,7 @@ func (d *RigDaemon) streamFor(candidate sessionCandidate) *sessionStream {
 
 // register sends one `session` frame and takes the server's stored cursor, which is the ONLY position
 // this client may resume from (2.1).
-func (d *RigDaemon) register(stream *sessionStream, state string) error {
+func (d *AgentDaemon) register(stream *sessionStream, state string) error {
 	frame := sessionFrame(SessionRegistration{
 		Key: stream.key, Name: stream.name, Room: stream.room, Seat: stream.seat,
 		State: state, Source: stream.source,
@@ -399,7 +399,7 @@ func (d *RigDaemon) register(stream *sessionStream, state string) error {
 // stored cursor - the transcript grew past the tail between two reads, so the window slid - is reported
 // and restarted from the window's start: an unanswered resume is a gap, and a gap this client CHOOSES to
 // re-send is visible in the stream, while one it hides is not.
-func (d *RigDaemon) ingest(ctx context.Context, stream *sessionStream) error {
+func (d *AgentDaemon) ingest(ctx context.Context, stream *sessionStream) error {
 	if stream.suspended {
 		return nil
 	}
@@ -455,7 +455,7 @@ func (d *RigDaemon) ingest(ctx context.Context, stream *sessionStream) error {
 
 // buildEvents redacts every line of one batch. It returns the events and how many of them were withheld,
 // and it is the ONLY place an event is built, so no path can put an unredacted byte into a frame (4.1).
-func (d *RigDaemon) buildEvents(stream *sessionStream, batch []string) ([]map[string]any, int) {
+func (d *AgentDaemon) buildEvents(stream *sessionStream, batch []string) ([]map[string]any, int) {
 	events := make([]map[string]any, 0, len(batch))
 	withheldCount := 0
 	for _, line := range batch {
@@ -476,13 +476,13 @@ func (d *RigDaemon) buildEvents(stream *sessionStream, batch []string) ([]map[st
 }
 
 // noteWithheld is 4.4's backstop: a session whose EVERY event is withheld for five minutes is a broken
-// redactor rather than one bad line, so its upload stops and rigd says so locally.
+// redactor rather than one bad line, so its upload stops and agent says so locally.
 //
 // THE COMPARISON IS THE RULE. A batch with ONE withheld line among many is the ordinary case the per-event
 // rule exists for - the gap is uploaded as a placeholder and the stream continues - so the window only
 // starts, and only keeps running, while NOTHING in the batch could be uploaded. A single bad line repeated
 // for five minutes must not take a healthy session's stream down.
-func (d *RigDaemon) noteWithheld(stream *sessionStream, withheld, total int) {
+func (d *AgentDaemon) noteWithheld(stream *sessionStream, withheld, total int) {
 	if total == 0 || withheld < total {
 		stream.withheldSince = time.Time{}
 		return
@@ -500,15 +500,15 @@ func (d *RigDaemon) noteWithheld(stream *sessionStream, withheld, total int) {
 }
 
 // writeWithheld keeps the raw event locally, which is the ONLY place it may exist once it is withheld:
-// <seat store>/rigd-withheld/<session>/<ts>.json, mode 0600, kept seven days (4.4). The store is the
+// <seat store>/agent-withheld/<session>/<ts>.json, mode 0600, kept seven days (4.4). The store is the
 // package's existing `seatStore` seam (statusverb.go), so a test withholds into a scratch tree rather than
 // into the machine's own store.
-func (d *RigDaemon) writeWithheld(stream *sessionStream, line string) {
+func (d *AgentDaemon) writeWithheld(stream *sessionStream, line string) {
 	store, err := seatStore("")
 	if err != nil {
 		return
 	}
-	dir := filepath.Join(store, "rigd-withheld", safeFileName(stream.key))
+	dir := filepath.Join(store, "agent-withheld", safeFileName(stream.key))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
@@ -521,7 +521,7 @@ func (d *RigDaemon) writeWithheld(stream *sessionStream, line string) {
 
 // pruneWithheld drops the raw copies past their seven days. It runs on the write path, because that is
 // the only moment this process touches the directory.
-func (d *RigDaemon) pruneWithheld(dir string) {
+func (d *AgentDaemon) pruneWithheld(dir string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -561,7 +561,7 @@ func safeFileName(key string) string {
 // publishRows sends one `safeguard` frame per row, and ONLY after ready echoed the capability (7.6): a
 // server without it would answer `unknown_type` and keep the socket open, so sending would be noise at
 // best and, on a later server, a frame with a meaning this client cannot know.
-func (d *RigDaemon) publishRows(rows []clientservices.Health) error {
+func (d *AgentDaemon) publishRows(rows []clientservices.Health) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -592,7 +592,7 @@ func (d *RigDaemon) publishRows(rows []clientservices.Health) error {
 
 // keepAlive is 2.2's heartbeat in both directions: ping every heartbeat_s, and close when three
 // heartbeats pass with no frame at all.
-func (d *RigDaemon) keepAlive() error {
+func (d *AgentDaemon) keepAlive() error {
 	now := d.Now()
 	interval := time.Duration(d.heartbeatS) * time.Second
 	if now.Sub(d.lastFrame) > 3*interval {
@@ -602,7 +602,7 @@ func (d *RigDaemon) keepAlive() error {
 		return nil
 	}
 	d.lastPing = now
-	// The ping's pong is also the server's dead-man on rigd (7.3): three of these without an answer, or
+	// The ping's pong is also the server's dead-man on agent (7.3): three of these without an answer, or
 	// any frame at all, and this socket is replaced.
 	return d.sock.WriteFrame(map[string]any{"type": "ping", "t": now.UnixMilli()})
 }
@@ -610,7 +610,7 @@ func (d *RigDaemon) keepAlive() error {
 // drain reads every frame already waiting, with a deadline so it never blocks the tick. It handles the
 // three kinds a client must: `pong` (the heartbeat), `error` (which may be fatal), and an unknown kind,
 // which is logged once and otherwise ignored (2.3).
-func (d *RigDaemon) drain() error {
+func (d *AgentDaemon) drain() error {
 	for {
 		_ = d.sock.SetDeadline(d.Now().Add(time.Millisecond))
 		frame, err := d.sock.ReadFrame()
@@ -631,8 +631,8 @@ func (d *RigDaemon) drain() error {
 // expect reads frames until the wanted kind arrives, tolerating pongs and unknown kinds in between. One
 // `events` frame is outstanding at a time, so the frame this returns is the acks one - and the deadline
 // is what stops a silent server from freezing the loop.
-func (d *RigDaemon) expect(kind string) (map[string]any, error) {
-	deadline := d.Now().Add(rigdAckTimeout)
+func (d *AgentDaemon) expect(kind string) (map[string]any, error) {
+	deadline := d.Now().Add(agentAckTimeout)
 	for {
 		_ = d.sock.SetDeadline(deadline)
 		frame, err := d.sock.ReadFrame()
@@ -653,7 +653,7 @@ func (d *RigDaemon) expect(kind string) (map[string]any, error) {
 }
 
 // handle is what a frame that is NOT the one being waited for means.
-func (d *RigDaemon) handle(frame map[string]any) error {
+func (d *AgentDaemon) handle(frame map[string]any) error {
 	kind, _ := frame["type"].(string)
 	switch kind {
 	case "pong":
@@ -686,7 +686,7 @@ func (d *RigDaemon) handle(frame map[string]any) error {
 }
 
 // handleRemoteCommand evaluates security guardrails and executes opt-in remote commands (D4/F5).
-func (d *RigDaemon) handleRemoteCommand(frame map[string]any) error {
+func (d *AgentDaemon) handleRemoteCommand(frame map[string]any) error {
 	cmdID, _ := frame["command_id"].(string)
 	issuerKind, _ := frame["issuer_kind"].(string)
 	scope, _ := frame["token_scope"].(string)

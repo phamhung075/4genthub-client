@@ -636,7 +636,7 @@ func TestTheWallIsSkippedWithoutATerminalHost(t *testing.T) {
 }
 
 // TestTheWallIsThisSameBinaryWithTheWatchArguments pins the wall's own contract: herdr must be there, and
-// the wall is `4genteam watch --rig RIG` - the shell ran `4genteam watch watch --rig RIG`, whose group and
+// the wall is `4genteam watch --room RIG` - the shell ran `4genteam watch watch --room RIG`, whose group and
 // sub-verb are one verb here.
 func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 	var started []string
@@ -660,8 +660,8 @@ func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 	if !opened {
 		t.Fatalf("watchWall = (false, %q), want it opened", why)
 	}
-	if len(started) != 1 || started[0] != "/stub/4genteam watch --rig rig-a" {
-		t.Errorf("started %v, want `/stub/4genteam watch --rig rig-a`", started)
+	if len(started) != 1 || started[0] != "/stub/4genteam watch --room rig-a" {
+		t.Errorf("started %v, want `/stub/4genteam watch --room rig-a`", started)
 	}
 }
 

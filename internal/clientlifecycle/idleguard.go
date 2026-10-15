@@ -27,7 +27,7 @@ const (
 	stallNudges = 3
 	// verdictQuestion is the one question the room is asked when it has gone quiet.
 	verdictQuestion = "go"
-	idleRunUsage    = "usage: 4genteam idle-run --rig RIG [--lead SEAT] [--quiet SECONDS] [--stall SECONDS] [--every SECONDS] [--once] [--state-root DIR]"
+	idleRunUsage    = "usage: 4genteam idle-run --room RIG [--lead SEAT] [--quiet SECONDS] [--stall SECONDS] [--every SECONDS] [--once] [--state-root DIR]"
 )
 
 const stallText = "You went quiet in the middle of a job. Continue where you stopped: check the working tree for what " +
@@ -273,7 +273,7 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 	}
 	flags := flag.NewFlagSet("idle-run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	rig := flags.String("rig", "", "the rig to guard (required)")
+	rig := flags.String("room", "", "the rig to guard (required)")
 	lead := flags.String("lead", "lead", "the seat told what Jev decided")
 	quiet := flags.Int("quiet", 300, "seconds every seat must be idle before Jev is asked")
 	stall := flags.Int("stall", 900, "seconds a working seat may log nothing before it is told to continue")
@@ -284,7 +284,7 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 		return clientcmd.ExitUsage
 	}
 	if strings.TrimSpace(*rig) == "" {
-		fmt.Fprintf(stderr, "4genteam idle-run: --rig is required - there is no default rig. %s\n", idleRunUsage)
+		fmt.Fprintf(stderr, "4genteam idle-run: --room is required - there is no default rig. %s\n", idleRunUsage)
 		return clientcmd.ExitUsage
 	}
 	root, err := clientenv.ResolveStateRoot(*stateRoot)

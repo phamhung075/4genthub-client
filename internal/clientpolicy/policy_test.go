@@ -233,7 +233,7 @@ func TestAnUnlistedRigOrSeatHasNoPermissiveDefault(t *testing.T) {
 		t.Error("an unknown rig was accepted")
 	}
 	var out, errOut bytes.Buffer
-	code := runShow([]string{"nobody", "--rig", "my-rig", "--team", writeTeam(t)}, &out, &errOut)
+	code := runShow([]string{"nobody", "--room", "my-rig", "--team", writeTeam(t)}, &out, &errOut)
 	if code != clientcmd.ExitUsage {
 		t.Errorf("an unlisted seat exited %d, want %d (stderr: %q)", code, clientcmd.ExitUsage, errOut.String())
 	}
@@ -253,7 +253,7 @@ func TestApplyWritesEverySeatIsIdempotentAndCheckReportsDrift(t *testing.T) {
 	root := t.TempDir()
 	seedState(t, root, team)
 	teamPath := writeTeam(t)
-	args := []string{"--rig", "my-rig", "--team", teamPath, "--state-root", root}
+	args := []string{"--room", "my-rig", "--team", teamPath, "--state-root", root}
 
 	var out, errOut bytes.Buffer
 	if code := runApply(append(append([]string{}, args...), "--check"), &out, &errOut); code != ExitDrift {
@@ -299,7 +299,7 @@ func TestApplyWritesUnderTheStateRootFlag(t *testing.T) {
 	seedState(t, root, team)
 
 	var out, errOut bytes.Buffer
-	if code := runApply([]string{"--rig", "my-rig", "--team", writeTeam(t), "--state-root", root}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := runApply([]string{"--room", "my-rig", "--team", writeTeam(t), "--state-root", root}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("apply = %d\nstderr: %s", code, errOut.String())
 	}
 	if _, err := os.Stat(ConfigPath(root, "my-rig", "writer")); err != nil {
@@ -309,7 +309,7 @@ func TestApplyWritesUnderTheStateRootFlag(t *testing.T) {
 
 func TestApplyRefusesASeatThatWasNeverLaunched(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := runApply([]string{"--rig", "my-rig", "--team", writeTeam(t), "--state-root", t.TempDir()}, &out, &errOut)
+	code := runApply([]string{"--room", "my-rig", "--team", writeTeam(t), "--state-root", t.TempDir()}, &out, &errOut)
 	if code != clientcmd.ExitUsage {
 		t.Errorf("apply on an unseeded state root = %d, want %d", code, clientcmd.ExitUsage)
 	}
@@ -341,7 +341,7 @@ func TestApplyRefusesASeatOfAnotherRuntimeBeforeWritingAnything(t *testing.T) {
 	seedState(t, root, team)
 
 	var out, errOut bytes.Buffer
-	code := runApply([]string{"--rig", "my-rig", "--team", teamPath, "--state-root", root}, &out, &errOut)
+	code := runApply([]string{"--room", "my-rig", "--team", teamPath, "--state-root", root}, &out, &errOut)
 	if code != clientcmd.ExitUsage {
 		t.Errorf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
 	}
@@ -363,7 +363,7 @@ func TestCheckToleratesKeysThePolicyDoesNotDefineAndStillCatchesABrokenRule(t *t
 	root := t.TempDir()
 	seedState(t, root, team)
 	teamPath := writeTeam(t)
-	args := []string{"--rig", "my-rig", "--team", teamPath, "--state-root", root}
+	args := []string{"--room", "my-rig", "--team", teamPath, "--state-root", root}
 
 	var out, errOut bytes.Buffer
 	if code := runApply(args, &out, &errOut); code != clientcmd.ExitOK {
@@ -394,7 +394,7 @@ func TestCheckToleratesKeysThePolicyDoesNotDefineAndStillCatchesABrokenRule(t *t
 
 func TestShowPrintsTheSeatsConfigAndRefusesAnUnknownRig(t *testing.T) {
 	var out, errOut bytes.Buffer
-	if code := runShow([]string{"writer", "--rig", "my-rig", "--team", writeTeam(t)}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := runShow([]string{"writer", "--room", "my-rig", "--team", writeTeam(t)}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("show = %d (stderr %q)", code, errOut.String())
 	}
 	if !strings.Contains(out.String(), "defaultThinkingLevel: medium") {
@@ -403,7 +403,7 @@ func TestShowPrintsTheSeatsConfigAndRefusesAnUnknownRig(t *testing.T) {
 
 	out.Reset()
 	errOut.Reset()
-	if code := runShow([]string{"lead", "--rig", "other-rig", "--team", writeTeam(t)}, &out, &errOut); code != clientcmd.ExitUsage {
+	if code := runShow([]string{"lead", "--room", "other-rig", "--team", writeTeam(t)}, &out, &errOut); code != clientcmd.ExitUsage {
 		t.Errorf("show for an unknown rig = %d, want %d", code, clientcmd.ExitUsage)
 	}
 	if !strings.Contains(errOut.String(), "no policy table for rig") {

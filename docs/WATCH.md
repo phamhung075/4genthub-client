@@ -9,12 +9,12 @@ It needs `herdr` (the terminal provider the panes live in) and the room's seats 
 ## Open it
 
 ```bash
-4genteam watch --rig <RIG>                        # the seat grid, plus the lead window
-4genteam grid  --rig <RIG>                        # only the grid
-4genteam feed  --rig <RIG> [--seat <SEAT> ...]    # one merged stream, for a plain terminal or ssh
+4genteam watch --room <RIG>                        # the seat grid, plus the lead window
+4genteam grid  --room <RIG>                        # only the grid
+4genteam feed  --room <RIG> [--seat <SEAT> ...]    # one merged stream, for a plain terminal or ssh
 ```
 
-Always pass `--rig`; there is no default room. `4genteam up <RIG>` opens the same wall as part of
+Always pass `--room`; there is no default room. `4genteam up <RIG>` opens the same wall as part of
 the lifecycle, so the view is there whenever the room is brought back up.
 
 Run the verb again for a fresh view. Each one closes the workspaces it owns and rebuilds them, so
@@ -77,7 +77,7 @@ time on a line is the seat's own record time, so replayed lines keep their real 
 
 | Option | Effect |
 |---|---|
-| `--rig <RIG>` | the room to watch; always pass it |
+| `--room <RIG>` | the room to watch; always pass it |
 | `--state-root DIR` | the omp state root the session logs are read from: the flag, else `~/.config/4genthub` |
 | `--seat SEAT` | which seat: for `feed` and `inputs`, limit the view to this seat, repeatable; for `input`, the seat to send to, required |
 | `--cols N` | grid columns (default 2); `grid` and `watch` only |
@@ -95,9 +95,9 @@ time on a line is the seat's own record time, so replayed lines keep their real 
 The grid panes are read-only. An input pane is the way to talk to a seat from the grid:
 
 ```bash
-4genteam inputs open --rig <RIG>                # one "<SEAT> > input" pane under every seat pane
-4genteam inputs open --rig <RIG> --seat <SEAT>  # only that seat gets one
-4genteam inputs hide --rig <RIG>                # close them again
+4genteam inputs open --room <RIG>                # one "<SEAT> > input" pane under every seat pane
+4genteam inputs open --room <RIG> --seat <SEAT>  # only that seat gets one
+4genteam inputs hide --room <RIG>                # close them again
 ```
 
 A line typed there is sent to the seat with `4genteam send <session> 'message'`, so it goes through the

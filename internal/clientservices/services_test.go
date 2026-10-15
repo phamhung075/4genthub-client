@@ -1,5 +1,5 @@
 // The report's own rules, tested where they live: 7.4's thresholds, 7.2's precedence, the heartbeat file
-// layout, rigd's state file and the alert log.
+// layout, agent's state file and the alert log.
 //
 // EVERY TEST HERE FROZEN-CLOCKS THE SEAM and answers the process table through the seam: nothing in this
 // file reads wall time or pgrep, and nothing writes outside a temp directory.
@@ -31,15 +31,15 @@ func newReportFixture(t *testing.T) *reportFixture {
 	fixture := &reportFixture{t: t, at: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), dir: dir, live: map[string][]int{}}
 
 	previousLogDir, previousNow, previousLive := LogDir, Now, Live
-	previousStatePath := RigdStatePath
+	previousStatePath := AgentStatePath
 	t.Cleanup(func() {
 		LogDir, Now, Live = previousLogDir, previousNow, previousLive
-		RigdStatePath = previousStatePath
+		AgentStatePath = previousStatePath
 	})
 	LogDir = func() (string, error) { return dir, nil }
 	Now = func() time.Time { return fixture.at }
 	Live = func(pattern string) []int { return fixture.live[pattern] }
-	RigdStatePath = func() (string, error) { return filepath.Join(stateDir, "rigd.json"), nil }
+	AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
 	return fixture
 }
 
@@ -83,7 +83,7 @@ func TestTheSilenceThresholdsAreSevenFour(t *testing.T) {
 		Messages:  30 * time.Second,
 		RoomGuard: 90 * time.Second,
 		Bridge:    360 * time.Second,
-		Rigd:      75 * time.Second,
+		Agent:      75 * time.Second,
 	}
 	for _, safeguard := range Safeguards() {
 		if got := DefaultSilentAfter(safeguard); got != want[safeguard] {
@@ -172,25 +172,25 @@ func TestSilentIsStrictlyPastTheThreshold(t *testing.T) {
 	}
 }
 
-// TestRigdComputesTheThresholdFromTheFlagsItLaunchedWith: 7.4's owner is rigd, and the thresholds it
+// TestAgentComputesTheThresholdFromTheFlagsItLaunchedWith: 7.4's owner is agent, and the thresholds it
 // supplies override the defaults - the same child with a 60 s `--every` must be silent only past 180 s.
-func TestRigdComputesTheThresholdFromTheFlagsItLaunchedWith(t *testing.T) {
+func TestAgentComputesTheThresholdFromTheFlagsItLaunchedWith(t *testing.T) {
 	f := newReportFixture(t)
 	f.live[Pattern(Compact, "demo")] = []int{77}
 	f.beat(Compact, "demo", 60*time.Second, 77)
 
 	slow := Env{Rigs: []string{"demo"}, Thresholds: map[string]time.Duration{Compact: SilentAfter(60 * time.Second)}}
 	if got := f.row(Compact, "demo", slow); got.State != Running {
-		t.Errorf("row = %+v, want running: rigd launched it with a 60 s pass", got)
+		t.Errorf("row = %+v, want running: agent launched it with a 60 s pass", got)
 	}
 	if got := f.row(Compact, "demo", Env{Rigs: []string{"demo"}}); got.State != Silent {
 		t.Errorf("row = %+v, want silent under the 30 s default", got)
 	}
 }
 
-// TestFailingIsDecidableOnlyByRigd: pgrep cannot count deaths, so the state comes from rigd's own record -
+// TestFailingIsDecidableOnlyByAgent: pgrep cannot count deaths, so the state comes from agent's own record -
 // and `running` rows take their restarts and started_at from it without their state being overridden.
-func TestFailingIsDecidableOnlyByRigd(t *testing.T) {
+func TestFailingIsDecidableOnlyByAgent(t *testing.T) {
 	f := newReportFixture(t)
 	env := Env{
 		Rigs: []string{"demo"},
@@ -201,34 +201,34 @@ func TestFailingIsDecidableOnlyByRigd(t *testing.T) {
 	}
 	got := f.row(Compact, "demo", env)
 	if got.State != Failing || got.Restarts != 3 || got.StartedAt != "2026-10-11T11:00:00Z" {
-		t.Errorf("row = %+v, want the failing state and rigd's own fields", got)
+		t.Errorf("row = %+v, want the failing state and agent's own fields", got)
 	}
 
 	// THE RULING OF 2026-10-11 (architect 3fa2125d, board row 72dac9f9, wired as qitem-20261010234706):
 	// `failing` BEATS a live process, so the precedence is stopped -> failing -> silent -> running. A child
-	// rigd has counted three deaths for inside the window reads failing even while its heartbeat is fresh:
-	// it is in a crash loop, and rigd is the only seat that can count that. The expectation that stood here
-	// before - a live, beating child is RUNNING even while rigd records it as having failed - was RETIRED
+	// agent has counted three deaths for inside the window reads failing even while its heartbeat is fresh:
+	// it is in a crash loop, and agent is the only seat that can count that. The expectation that stood here
+	// before - a live, beating child is RUNNING even while agent records it as having failed - was RETIRED
 	// with the ruling that changed it, not re-pinned to keep a green run.
 	f.live[Pattern(Compact, "demo")] = []int{77}
 	f.beat(Compact, "demo", time.Second, 77)
 	got = f.row(Compact, "demo", env)
 	if got.State != Failing {
-		t.Errorf("row = %+v, want failing: rigd counted the deaths, and failing beats a live process", got)
+		t.Errorf("row = %+v, want failing: agent counted the deaths, and failing beats a live process", got)
 	}
 	if got.Restarts != 3 {
 		t.Errorf("row = %+v, want the restart count kept", got)
 	}
 }
 
-// TestTheHeartbeatFileLayoutIsSevenTwo: <LogDir>/heartbeat/<safeguard>-<rig>.json, and `rigd.json` for the
+// TestTheHeartbeatFileLayoutIsSevenTwo: <LogDir>/heartbeat/<safeguard>-<rig>.json, and `agent.json` for the
 // machine-scoped writer, holding {pid, at} and nothing else.
 func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	f := newReportFixture(t)
 	if err := WriteHeartbeat(Compact, "demo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteHeartbeat(Rigd, ""); err != nil {
+	if err := WriteHeartbeat(Agent, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -236,9 +236,9 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	if _, err := os.Stat(rigScoped); err != nil {
 		t.Errorf("the rig-scoped beat is not at %s: %v", rigScoped, err)
 	}
-	machine := filepath.Join(f.dir, "heartbeat", "rigd.json")
+	machine := filepath.Join(f.dir, "heartbeat", "agent.json")
 	if _, err := os.Stat(machine); err != nil {
-		t.Errorf("rigd's own beat is not at %s: %v", machine, err)
+		t.Errorf("agent's own beat is not at %s: %v", machine, err)
 	}
 	if err := WriteHeartbeat(Bridge, ""); err != nil {
 		t.Fatal(err)
@@ -276,19 +276,19 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	}
 }
 
-// TestRigdStateIsPrivateAndAddsARigOnce is 7.1's `rigs` list and 3.2's mode: the file is a consent file in a
+// TestAgentStateIsPrivateAndAddsARigOnce is 7.1's `rigs` list and 3.2's mode: the file is a consent file in a
 // later phase, so it is 0600, and `up` may run twice.
-func TestRigdStateIsPrivateAndAddsARigOnce(t *testing.T) {
+func TestAgentStateIsPrivateAndAddsARigOnce(t *testing.T) {
 	newReportFixture(t)
-	state := AddRig(AddRig(RigdState{}, "demo"), "demo")
+	state := AddRig(AddRig(AgentState{}, "demo"), "demo")
 	state = AddRig(state, "other")
 	if strings.Join(state.Rigs, ",") != "demo,other" {
 		t.Fatalf("rigs = %v, want the name added once", state.Rigs)
 	}
-	if err := WriteRigdState(state); err != nil {
+	if err := WriteAgentState(state); err != nil {
 		t.Fatal(err)
 	}
-	path, err := RigdStatePath()
+	path, err := AgentStatePath()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,12 +300,12 @@ func TestRigdStateIsPrivateAndAddsARigOnce(t *testing.T) {
 		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
 	}
 
-	read, err := ReadRigdState()
+	read, err := ReadAgentState()
 	if err != nil {
-		t.Fatalf("ReadRigdState: %v", err)
+		t.Fatalf("ReadAgentState: %v", err)
 	}
 	if strings.Join(read.Rigs, ",") != "demo,other" {
-		t.Errorf("ReadRigdState = %+v, want the two rigs", read)
+		t.Errorf("ReadAgentState = %+v, want the two rigs", read)
 	}
 	if got := RemoveRig(read, "demo"); strings.Join(got.Rigs, ",") != "other" {
 		t.Errorf("RemoveRig = %+v, want demo gone", got.Rigs)
@@ -315,14 +315,14 @@ func TestRigdStateIsPrivateAndAddsARigOnce(t *testing.T) {
 	}
 	// A FILE THAT IS THERE AND COULD NOT BE READ IS AN ERROR, not the empty state: the difference decides
 	// whether the three callers that WRITE this list back may write at all.
-	if _, err := ReadRigdState(); err == nil {
+	if _, err := ReadAgentState(); err == nil {
 		t.Error("an unreadable state file answered no error; a writer would take the empty list for the truth")
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	// A MISSING FILE IS NOT AN ERROR: a machine whose rigd has never run has no rooms to name.
-	if got, err := ReadRigdState(); err != nil || len(got.Rigs) != 0 {
+	// A MISSING FILE IS NOT AN ERROR: a machine whose agent has never run has no rooms to name.
+	if got, err := ReadAgentState(); err != nil || len(got.Rigs) != 0 {
 		t.Errorf("a missing state file answered %+v (err %v), want the empty state and no error", got, err)
 	}
 }
@@ -356,7 +356,7 @@ func TestStateLineIsTheLineSevenFiveRequires(t *testing.T) {
 		{Health{Rig: "demo", Safeguard: Compact, State: Stopped, AgeS: 31}, "demo compact: stopped, age 31s"},
 		{Health{Rig: "demo", Safeguard: Watchdog, State: Silent, AgeS: 400}, "demo watchdog: silent, age 400s"},
 		{Health{Rig: "", Safeguard: Bridge, State: Stopped, AgeS: 0}, "bridge: stopped, age 0s"},
-		{Health{Rig: "", Safeguard: Rigd, State: Running, AgeS: 1}, "rigd: running, age 1s"},
+		{Health{Rig: "", Safeguard: Agent, State: Running, AgeS: 1}, "agent: running, age 1s"},
 		{Health{Rig: "demo", Safeguard: Compact, State: Stopped, AgeS: UnknownAge}, "demo compact: stopped, age unknown"},
 	}
 	for _, c := range cases {
@@ -367,7 +367,7 @@ func TestStateLineIsTheLineSevenFiveRequires(t *testing.T) {
 }
 
 // TestTheReportWalksTheListedRigsAndTheTwoMachineRows: one supervisor, one watchdog and one seat
-// deliverer per listed rig, and exactly one bridge and one rigd, in a stable order.
+// deliverer per listed rig, and exactly one bridge and one agent, in a stable order.
 func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 	newReportFixture(t)
 	rows := Verify(context.Background(), Env{Rigs: []string{"demo", "other"}})
@@ -375,7 +375,7 @@ func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 	for _, row := range rows {
 		order = append(order, strings.TrimSpace(row.Rig+" "+row.Safeguard))
 	}
-	want := "demo compact,demo watchdog,demo messages,demo roomguard,other compact,other watchdog,other messages,other roomguard,bridge,rigd"
+	want := "demo compact,demo watchdog,demo messages,demo roomguard,other compact,other watchdog,other messages,other roomguard,bridge,agent"
 	if strings.Join(order, ",") != want {
 		t.Errorf("order = %v, want %v", order, want)
 	}

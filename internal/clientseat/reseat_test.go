@@ -8,7 +8,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-// THE ELEVEN-SITE CLASS, PINNED FOR THE READING. rigNodes used to shell out to `rig ps --nodes --rig RIG
+// THE ELEVEN-SITE CLASS, PINNED FOR THE READING. rigNodes used to shell out to `rig ps --nodes --room RIG
 // --json`, and after this client's rename that name resolves to this binary. PATH is emptied here so the
 // assertion is about the ABSENCE of the call rather than about a message: with the exec in place the
 // function answers "rig is not on PATH" (an exec.LookPath failure), and without it the only possible

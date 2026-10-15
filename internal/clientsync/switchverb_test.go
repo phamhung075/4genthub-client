@@ -186,7 +186,7 @@ func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsTheLimit(t *testing.T) {
 	if strings.Contains(errOut, "rig down") || strings.Contains(errOut, "rig up") {
 		t.Errorf("stderr = %q, want no rig CLI lifecycle verb in the notice", errOut)
 	}
-	if !strings.Contains(errOut, "4genteam sync rig room1 --update") {
+	if !strings.Contains(errOut, "4genteam sync room room1 --update") {
 		t.Errorf("stderr = %q, want the client's own read of the room's definition", errOut)
 	}
 	if want := "switched:room1/seat1 runtime=codex model=old-model applied=manual\n"; out != want {
@@ -258,7 +258,7 @@ func TestSwitchRuntimeChangePrintsTheLimitAndSkipsTheSeat(t *testing.T) {
 	if len(stub.calls) != 0 {
 		t.Errorf("a runtime change touched a seat: %v", stub.calls)
 	}
-	for _, want := range []string{"4genteam sync rig room1 --update", "4genteam seat reseat", "owner's call"} {
+	for _, want := range []string{"4genteam sync room room1 --update", "4genteam seat reseat", "owner's call"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("stderr does not say %q:\n%s", want, errOut)
 		}
@@ -269,7 +269,7 @@ func TestSwitchRuntimeChangePrintsTheLimitAndSkipsTheSeat(t *testing.T) {
 }
 
 // THE PIN THE 06:0xZ INCIDENT EARNED. The runtime-change notice used to print the rig CLI's own
-// three-line sequence. Its middle line was measured on this box to stop the MACHINE's safeguards (rigd
+// three-line sequence. Its middle line was measured on this box to stop the MACHINE's safeguards (agent
 // reaped with its children, for every rig) and its last line could not run at all, so a reader who
 // followed it took every rig's supervisors down and could not start the room again from it. A reader
 // cannot tell the two vocabularies apart by name - `down` and `stop` read alike - so the notice may
@@ -284,9 +284,9 @@ func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 	printed := out + errOut
 
 	machineWide := []struct{ needle, why string }{
-		{"rig down", "measured: a machine-wide safeguard stop - rigd reaped with its children, for every rig"},
+		{"rig down", "measured: a machine-wide safeguard stop - agent reaped with its children, for every rig"},
 		{"rig up", "measured: fails with `--team DIR is required`, so the sequence cannot be finished"},
-		{"4genteam stop", "a machine-wide stop of rigd and its children"},
+		{"4genteam stop", "a machine-wide stop of agent and its children"},
 		{"rig launch", "a seat launch: lifecycle stays in the lead's hands"},
 		{"seat launch", "the same launch, spelled the client's own way"},
 		{"tmux kill-server", "it takes every pane on the machine with it"},

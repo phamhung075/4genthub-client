@@ -48,7 +48,7 @@ install -m 0755 4genteam ~/.local/bin/     # or any directory that is already on
 4genteam version                           # the binary's own version
 ```
 
-A binary installed on its own has no `skills/` tree beside it, and `sync rig` refuses until it finds
+A binary installed on its own has no `skills/` tree beside it, and `sync room` refuses until it finds
 the tree it delivers to the seats: set `AGENTHUB_CLIENT_SKILLS=/path/to/4genthub-client/skills`, or
 pass `--skills-root DIR` to that verb. A checkout has it at `skills/`.
 
@@ -126,9 +126,9 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `up` | start the local stack for a rig: daemon, seats, bridge, supervisor, UI |
 | `compact` | (re)start the compaction supervisor for a rig, detached |
 | `compact-run` | the compaction supervisor loop, in the foreground (what `compact` starts) |
-| `doctor` | report every safeguard (compact, watchdog, bridge, rigd); read-only |
-| `rigd` | the always-on client: stream local sessions, supervise the safeguards |
-| `stop` | stop rigd and its children (a machine-wide stop: compact, watchdog, bridge) |
+| `doctor` | report every safeguard (compact, watchdog, bridge, agent); read-only |
+| `agent` | the always-on client: stream local sessions, supervise the safeguards |
+| `stop` | stop agent and its children (a machine-wide stop: compact, watchdog, bridge) |
 | `status` | the safeguard rows (--json too) and the supervisor's last log lines |
 | `ps` | the seats of a room read from tmux and the seat transcripts: summary, `--nodes`, `--compact`, `--grid`, `--json`; a seat whose transcript shows a quota or credit message is `quota` and counts as needing attention |
 | `log` | follow the supervisor's log |
@@ -248,11 +248,11 @@ shows only `supervising` is not broken: no seat has reached the limit yet.
 Run from the project's directory. `ROOM` is the room's name on the server.
 
 ```bash
-4genteam sync rig ROOM      # writes ~/.config/4genthub/seats/ROOM/rig/rig.yaml and the seat files
+4genteam sync room ROOM      # writes ~/.config/4genthub/seats/ROOM/rig/rig.yaml and the seat files
 4genteam up ROOM            # starts the full lifecycle: daemon, seats, supervisor, bridge and watch view
 ```
 
-`sync rig` does everything a new room needs in one step: when a member's model names a provider
+`sync room` does everything a new room needs in one step: when a member's model names a provider
 (`provider/model`), it links this client's own env file, `~/.config/4genthub/.env`, to the room's
 `.env`, and refuses naming that path when the file does not exist (omp reads the key from the launch
 directory's `.env`); it sets every seat's working directory to the room directory, sets the
@@ -294,7 +294,7 @@ the agent's MCP status view.
 
 ## Watch a running room
 
-`4genteam watch --rig ROOM` opens a herdr grid with one pane per live seat plus a lead window with an
+`4genteam watch --room ROOM` opens a herdr grid with one pane per live seat plus a lead window with an
 input pane; `4genteam grid`, `feed`, `inputs open` and `input` are the pieces of it. The procedure,
 the options and the rules are in [docs/WATCH.md](docs/WATCH.md), which is also the skill
 [skills/client/watch-team/SKILL.md](skills/client/watch-team/SKILL.md).
@@ -320,7 +320,7 @@ what it is scoped to.
 
 ### The skills for the LLM that runs the client
 
-`skills/client/` is read by the LLM that operates `4genteam` and the rig, not by a seat, so `sync rig`
+`skills/client/` is read by the LLM that operates `4genteam` and the rig, not by a seat, so `sync room`
 never delivers it:
 
 | Skill | Use it to |
@@ -335,9 +335,9 @@ never delivers it:
 ### Using this tree from another project
 
 This tree is the one source of skills. A project does not keep its own copy.
-- **Seats:** `4genteam sync rig` delivers `share/` and the room's skills into each seat. A seat gets nothing from a project-local skills folder.
+- **Seats:** `4genteam sync room` delivers `share/` and the room's skills into each seat. A seat gets nothing from a project-local skills folder.
 - **An LLM outside a seat** (your own session, an operator): copy or link the `skills/client/` folders it needs into the path its runtime reads, or point it at this directory.
-- **Tell the project's agents:** add one line to the project's `AGENTS.md`, for example: `Project skills: <path to this repository>/skills/ (share/ and rooms/<room>/ are delivered to seats by 4genteam sync rig; client/ is for the LLM running the client)`.
+- **Tell the project's agents:** add one line to the project's `AGENTS.md`, for example: `Project skills: <path to this repository>/skills/ (share/ and rooms/<room>/ are delivered to seats by 4genteam sync room; client/ is for the LLM running the client)`.
 
 ## Failure map
 
@@ -347,13 +347,13 @@ This tree is the one source of skills. A project does not keep its own copy.
 | `a ROOM is required` | the verb needs a room and none was given | pass the room: `4genteam seat status ROOM` |
 | `error: team apply: --team DIR is required (the directory that holds team.json)` | no default team exists | pass the team directory |
 | `error: team publish-skills: --inventory FILE is required (the skill library inventory JSON)` | no default inventory exists | pass the inventory file |
-| `the room has a provider/model seat and … does not exist: omp reads the key from the launch directory's .env` | this client's env file is missing, so the room's `.env` has nothing to link to | create `~/.config/4genthub/.env`, then run `sync rig` again |
-| `the client's skill tree is not at … (no share/ directory)` | `sync rig` writes the skills this client owns into each seat, and could not find that tree | pass `--skills-root DIR`, or set `AGENTHUB_CLIENT_SKILLS` to a tree that holds `share/` |
+| `the room has a provider/model seat and … does not exist: omp reads the key from the launch directory's .env` | this client's env file is missing, so the room's `.env` has nothing to link to | create `~/.config/4genthub/.env`, then run `sync room` again |
+| `the client's skill tree is not at … (no share/ directory)` | `sync room` writes the skills this client owns into each seat, and could not find that tree | pass `--skills-root DIR`, or set `AGENTHUB_CLIENT_SKILLS` to a tree that holds `share/` |
 | `seatcheck does not resolve to … on PATH` | the seat checker is not where the seats will look for it | run `4genteam sync install-checker --go-dir .` and put that directory on `PATH` |
-| a seat's working directory shows `(deleted)` | the room was built by an older client | run `sync rig`, then relaunch the seat |
-| a seat waits at an approval prompt | the room was not synced by this client | run `sync rig` and `rig up` again |
+| a seat's working directory shows `(deleted)` | the room was built by an older client | run `sync room`, then relaunch the seat |
+| a seat waits at an approval prompt | the room was not synced by this client | run `sync room` and `rig up` again |
 | `… is not a symlink: refusing to replace a file this client did not create` | a real `.env` sits in the room directory | move it aside or point it at the key file |
-| a supervisor is still running after `4genteam stop ROOM` | `stop` and `status` find one by the argv fragment `compact-run --rig ROOM`, and this one was started by an older client whose argv does not carry it | stop it where it was started, and do not run `4genteam compact ROOM` beside it, which would start a second supervisor for that room |
+| a supervisor is still running after `4genteam stop ROOM` | `stop` and `status` find one by the argv fragment `compact-run --room ROOM`, and this one was started by an older client whose argv does not carry it | stop it where it was started, and do not run `4genteam compact ROOM` beside it, which would start a second supervisor for that room |
 | the supervisor never compacts | the runtime reports no context size | give those seats a short-session rule instead |
 | `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `up`, `compact`, `continue`, `watchdog` or `sync respawn` | the room holds a `deepseek/` seat and `OFFPEAK_ONLY` is on (the default), so the client refuses to start or resume it inside a peak window | nothing is broken: pass `--allow-peak` to run it now at the peak rate, set `OFFPEAK_ONLY=0` in the env file to allow it from now on, or wait for the next off-peak window the message names |
 | `4genteam: unknown command <name>` | the verb does not exist | run `4genteam --help` for the list |

@@ -59,7 +59,7 @@ func TestSendRefusesTheFlagsItCannotHonour(t *testing.T) {
 		{"peer@r", "text", "--dangerously-interact", "--reason", "x"},
 		{"peer@r", "text", "--to", "a@r,b@r"},
 		{"peer@r", "text", "--pod", "p"},
-		{"peer@r", "text", "--rig", "r"},
+		{"peer@r", "text", "--room", "r"},
 		{"peer@r", "text", "--host", "h"},
 		{"peer@r", "text", "--context", "c"},
 		{"lab", "dev", "text", "--verify"},

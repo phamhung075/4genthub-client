@@ -106,7 +106,7 @@ func machineDeps(root string, client *clientruntime.Client, fix bool) Deps {
 		},
 		ProcEnv: procEnv,
 		Rows: func(room string) []clientservices.Health {
-			state, _ := clientservices.ReadRigdState()
+			state, _ := clientservices.ReadAgentState()
 			return clientservices.Verify(context.Background(), clientservices.Env{Rigs: []string{room}, Supervised: state.Safeguards})
 		},
 		Up: func(room string) error {

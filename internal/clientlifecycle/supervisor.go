@@ -523,7 +523,7 @@ func (c *execChild) Wait() error {
 // awaitStart waits out the start grace: true when the child is still running, false with the child's
 // own error when it exited inside the window.
 //
-// IT IS THE START OF EVERY DETACHED CHILD THIS CLIENT STARTS - rigd itself from `up`, and rigd's own
+// IT IS THE START OF EVERY DETACHED CHILD THIS CLIENT STARTS - agent itself from `up`, and agent's own
 // children from the supervision loop - which is why it takes any supervisorChild rather than a specific
 // caller's child.
 func awaitStart(child supervisorChild) (bool, error) {

@@ -2,7 +2,7 @@
 //
 // The cloud owns what a seat is and resolves it into a snapshot named by a hash. This package compares
 // the hash each local seat is pinned to with the cloud's current one, adopts the newer snapshot THROUGH
-// this client's own `sync rig` verb (so the pinning rules stay in one place), and optionally restarts
+// this client's own `sync room` verb (so the pinning rules stay in one place), and optionally restarts
 // the affected seat so it loads it.
 //
 // Three deliberate departures from the Python, all recorded in the phase report:
@@ -10,7 +10,7 @@
 //     with HOME pointed at its own state directory (seat_policy's real_home() exists for the same
 //     reason);
 //   - adoption spawns this binary rather than a Python interpreter;
-//   - `seat sync` therefore needs `sync rig`, which is not ported yet, so it refuses loudly until it is.
+//   - `seat sync` therefore needs `sync room`, which is not ported yet, so it refuses loudly until it is.
 package clientseat
 
 import (
@@ -66,7 +66,7 @@ func (seatCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 	if args[0] == "-h" || args[0] == "--help" {
 		fmt.Fprintln(stdout, "usage: 4genteam seat (status ROOM | sync ROOM | watch ROOM) [--out DIR] [--seat NAME]...\n       4genteam seat reseat RIG --seat NAME [--seat NAME]...")
 		fmt.Fprintln(stdout, "\nstatus compares each seat's local pin with the cloud's hash; sync adopts the newer snapshot")
-		fmt.Fprintln(stdout, "through this client's own `sync rig` and, with --relaunch quiet, restarts what changed; watch")
+		fmt.Fprintln(stdout, "through this client's own `sync room` and, with --relaunch quiet, restarts what changed; watch")
 		fmt.Fprintln(stdout, "repeats sync until you stop it. Every sub-verb answers --help.")
 		return clientcmd.ExitOK
 	}
@@ -140,7 +140,7 @@ func parseOptions(verb string, args []string, withRig, withInterval bool, stdout
 	out := flags.String("out", "", "where the adopted snapshots and their pins live")
 	var seats repeatedFlag
 	flags.Var(&seats, "seat", "limit the work to this seat (repeatable)")
-	rig := flags.String("rig", "", "rig name when it differs from the room")
+	rig := flags.String("room", "", "rig name when it differs from the room")
 	relaunch := flags.String("relaunch", "none", "also restart changed seats: none or quiet")
 	interval := flags.Int("interval", 60, "seconds between passes")
 	if err := flags.Parse(args); err != nil {
@@ -170,7 +170,7 @@ func parseOptions(verb string, args []string, withRig, withInterval bool, stdout
 
 func rigSuffix(withRig bool) string {
 	if withRig {
-		return " [--rig RIG] [--relaunch none|quiet]"
+		return " [--room RIG] [--relaunch none|quiet]"
 	}
 	return ""
 }

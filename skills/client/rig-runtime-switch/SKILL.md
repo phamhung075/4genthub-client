@@ -15,12 +15,12 @@ read (task e7c7d763).
 
 `4genteam` is this client's own binary: it answers no `rig` verb, and its `stop` is machine-wide, not a room teardown. **It cannot switch a runtime in place, and it prints no sequence that completes the switch** — `4genteam sync switch` says exactly that and names the two steps that do exist:
 
-- `4genteam sync rig <room> --update` writes the room's definition and each seat's pinned snapshot.
+- `4genteam sync room <room> --update` writes the room's definition and each seat's pinned snapshot.
 - `4genteam seat reseat <rig> --seat <name>` stops and restarts a seat so it loads the configuration it now has.
 
 Neither runs inside `sync switch` (both write, and a restart is peak-gated for a DeepSeek seat), and **whether a restart carries a changed RUNTIME is not established**. The switch is the owner's call.
 
-The spec- and node-level verbs the predecessor CLI had (`down --delete`, `up <spec>.yaml`, `launch`, `remove`, `parked`, `provider signals`) have no `4genteam` counterpart, and **this skill no longer prints the teardown sequence**: measured on this box, its middle line stopped the MACHINE's safeguards (`rigd` reaped with its children, for every room) and its last could not run at all (`--team DIR is required`). That CLI's daemon is not running either — it answers `daemon unreachable ... Resolved: partial via session name`.
+The spec- and node-level verbs the predecessor CLI had (`down --delete`, `up <spec>.yaml`, `launch`, `remove`, `parked`, `provider signals`) have no `4genteam` counterpart, and **this skill no longer prints the teardown sequence**: measured on this box, its middle line stopped the MACHINE's safeguards (`agent` reaped with its children, for every room) and its last could not run at all (`--team DIR is required`). That CLI's daemon is not running either — it answers `daemon unreachable ... Resolved: partial via session name`.
 
 The reads are native:
 
@@ -31,7 +31,7 @@ The reads are native:
 4genteam status <rig>                   # the safeguard rows
 ```
 
-`4genteam ps <rig> [--nodes|--compact|--grid|--json]` reads tmux and the seat transcripts, marks a seat `quota` when its transcript tail shows a quota or credit message, and prints this client's own JSON — not the predecessor's `rig ps --nodes --rig R --json` shape.
+`4genteam ps <rig> [--nodes|--compact|--grid|--json]` reads tmux and the seat transcripts, marks a seat `quota` when its transcript tail shows a quota or credit message, and prints this client's own JSON — not the predecessor's `rig ps --nodes --room R --json` shape.
 
 ## When to use
 
@@ -47,7 +47,7 @@ The reads are native:
 ## Why it is safe
 
 - **A room's seats are its definition**: `~/.config/4genthub/rooms/<room>/spec.json` holds each seat's
-  `runtime`, `model`, `permission_policy` and `cwd`, and `4genteam sync rig <room> --update` rewrites
+  `runtime`, `model`, `permission_policy` and `cwd`, and `4genteam sync room <room> --update` rewrites
   it from the cloud. (The predecessor kept `rig*.yaml` variants under
   `~/.config/4genthub/seats/<rig>/rig/`, a path this client does not use.)
 - Stable seat keys ⇒ canonical session names (`<rig>-<seat>@<rig>`) survive the rebuild, so
@@ -64,15 +64,15 @@ The reads are native:
    ```
    This ONLY records the occupant in 4genthub cloud; it never changes a running seat. **Do not use `4genteam seat reseat` to change a runtime**: it restarts a seat so that it reloads the skills, guide and cwd it is now configured with — its own help claims no runtime change — and it kills the seat's tmux session, so a seat in the middle of a turn loses that turn.
 2. **Author or select the variant spec**:
-   In `~/.config/4genthub/rooms/<room>/spec.json` (written by `4genteam sync rig <room> --update`):
+   In `~/.config/4genthub/rooms/<room>/spec.json` (written by `4genteam sync room <room> --update`):
    set per seat `runtime: omp` + `model: deepseek/deepseek-flash`, keep `permission_policy`.
    Check the definition's seats equal the live seats — `4genteam ps <rig> --nodes` lists the live ones — since a definition can carry a seat the room does not run.
 3. **DeepSeek key**:
    Ensure `~/.config/4genthub/.env` and `~/.config/deepseek/.env` contain `DEEPSEEK_API_KEY`.
-4. **Read both sides before restarting anything**: `4genteam room status <room>` prints one line per seat (SEAT RUNTIME STATE SESSION) as the runtime sees it, and `4genteam sync rig <rig> --update` writes the definition it will load next. A definition that disagrees with the live room is visible here, before a seat is touched.
+4. **Read both sides before restarting anything**: `4genteam room status <room>` prints one line per seat (SEAT RUNTIME STATE SESSION) as the runtime sees it, and `4genteam sync room <rig> --update` writes the definition it will load next. A definition that disagrees with the live room is visible here, before a seat is touched.
 5. **Apply it** — the two native steps, neither of which `sync switch` runs for you (both write, and a restart is peak-gated for a DeepSeek seat):
    ```bash
-   4genteam sync rig <rig> --update                           # the room's definition and pinned snapshots
+   4genteam sync room <rig> --update                           # the room's definition and pinned snapshots
    4genteam seat reseat <rig> --seat <seat> [--allow-peak]     # stop and restart one seat, once it is quiet
    ```
    `seat reseat` waits for the seat to be quiet; `--force` skips that wait and a seat mid-turn loses the turn. **Whether the restart carries a changed RUNTIME is not established — measure it after the restart** (`4genteam ps <rig> --nodes --json` per seat) rather than assuming it. The predecessor CLI's teardown/relaunch sequence is deliberately not printed here: measured, its middle line stopped the machine's safeguards rather than the room's, and its last could not run at all.
@@ -82,7 +82,7 @@ The reads are native:
    ```
    `--team DIR` is required — the room's seats come from the local team definition that directory holds, and there is no default. For a room that is stopped rather than new, `4genteam continue <rig>` restores it and briefs its seats.
 7. **Verify & watch**:
-   `4genteam watch --rig <rig>` opens the styled 2-column live monitor.
+   `4genteam watch --room <rig>` opens the styled 2-column live monitor.
    `4genteam ps <rig> --nodes --json` must show `runtime: omp`, `model: deepseek/deepseek-flash`, `startupStatus: ready` for every seat; `4genteam ps <rig>` must show 0 needing attention.
    `4genteam status <rig>` verifies compaction supervisor and safeguards are running.
 

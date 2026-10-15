@@ -154,7 +154,7 @@ func DeepSeekSeats(seats []Seat) []Seat {
 	return deepseek
 }
 
-// SeatsFromNodes reads the seat name and the model out of ONE `rig ps --json --nodes --rig ROOM`
+// SeatsFromNodes reads the seat name and the model out of ONE `rig ps --json --nodes --room ROOM`
 // reading, which is the reading every gated verb already takes for its own reasons: the models are in
 // the node records the rig orchestrator reports, so the gate costs no extra call and no cloud round trip.
 //

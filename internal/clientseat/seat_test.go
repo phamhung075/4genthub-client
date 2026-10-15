@@ -249,8 +249,8 @@ func TestSyncAdoptsThroughTheSyncCommandAndLeavesARunningSeatAlone(t *testing.T)
 	if err != nil || code != clientcmd.ExitOK {
 		t.Fatalf("code = %d, err = %v, want ok", code, err)
 	}
-	if len(runs) != 1 || !strings.Contains(runs[0], "rig") || !strings.Contains(runs[0], "--update") {
-		t.Errorf("the adopt step was %v, want one `sync rig ... --update`", runs)
+	if len(runs) != 1 || !strings.Contains(runs[0], "sync room") || !strings.Contains(runs[0], "--update") {
+		t.Errorf("the adopt step was %v, want one `sync room ... --update`", runs)
 	}
 	if len(relaunched) != 0 {
 		t.Errorf("--relaunch none restarted %v", relaunched)

@@ -10,7 +10,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// deliverSkills makes an omp seat's own skill directory exactly the skills `sync rig` built for it.
+// deliverSkills makes an omp seat's own skill directory exactly the skills `sync room` built for it.
 //
 // An omp seat reads skills from <stateRoot>/rooms/<room>/seats/<seat>/skills (its PI_CODING_AGENT_DIR), and
 // nothing else copies `<store>/<rig>/rig/agents/<seat>/skills` there: measured 2026-10-11, a restarted
@@ -26,7 +26,7 @@ func deliverSkills(store, stateRoot, rig, seat string) error {
 	source := filepath.Join(store, rig, "rig", "agents", seat, "skills")
 	if info, err := os.Stat(source); err != nil || !info.IsDir() {
 		return &clientcmd.CodedError{
-			Message: fmt.Sprintf("seat %s has no skills to deliver: %s is missing; run `4genteam sync rig %s` first", seat, source, rig),
+			Message: fmt.Sprintf("seat %s has no skills to deliver: %s is missing; run `4genteam sync room %s` first", seat, source, rig),
 			Code:    ExitFailed,
 		}
 	}

@@ -31,7 +31,7 @@ func Commands() []clientcmd.Command {
 // top-level view of a room - so no such verb is declared here either.
 var syncVerbs = []string{
 	"status", "pull", "messages", "connector",
-	"rig", "bundle", "switch",
+	"room", "bundle", "switch",
 	"install-checker", "offline-install", "respawn",
 }
 
@@ -74,7 +74,7 @@ func (syncCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		return RunBundleVerb(ctx, args[1:], stdout, stderr)
 	case "switch":
 		return RunSwitchVerb(ctx, args[1:], stdout, stderr)
-	case "rig":
+	case "room":
 		return RunRigVerb(ctx, args[1:], stdout, stderr)
 	}
 	// Every verb this group declares has a case above, so a name that reaches here is not a verb of

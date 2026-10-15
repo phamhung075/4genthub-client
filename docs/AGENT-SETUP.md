@@ -33,7 +33,7 @@ is `https://www.4genthub.com/`) and for the account's key. Both are theirs to gi
 
 ```bash
 4genteam --help            # the client; prints the verb list
-4genteam doctor            # reports safeguard stack health (rigd, compact, watchdog, roomguard, bridge)
+4genteam doctor            # reports safeguard stack health (agent, compact, watchdog, roomguard, bridge)
 tmux -V
 herdr --version
 curl -fsS <SERVER-URL>/health
@@ -112,7 +112,7 @@ fix: ask for a key, and never paste one into a message.
 | `403 Not authenticated` from `<SERVER-URL>` or the MCP endpoint | no bearer token reached the server | ask the user for a key; never paste one into a message |
 | `401 Invalid authentication credentials` | a token arrived and is invalid or expired | ask the user for a new key; nothing else in the client or `.mcp.json` needs to change |
 | `4genteam doctor` reports a safeguard row that is not running | the runtime daemon or that safeguard is stopped | `4genteam up <RIG> --team <DIR>`; `doctor` itself is read-only and starts nothing |
-| `4genteam ps <RIG> --nodes` shows no seat for the room | the room was never materialized on this machine | `4genteam sync rig <ROOM>`, then `4genteam up <RIG> --team <DIR>` (step 2.5) |
+| `4genteam ps <RIG> --nodes` shows no seat for the room | the room was never materialized on this machine | `4genteam sync room <ROOM>`, then `4genteam up <RIG> --team <DIR>` (step 2.5) |
 | the watch view does not open | herdr or tmux is missing | `herdr --version`, `tmux -V`; stop and tell the user |
 | `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `4genteam up`, `compact`, `continue`, `watchdog` or `sync respawn` | the room holds a seat on a `deepseek/` model, and `OFFPEAK_ONLY` is on (the default) so the client will not start or resume it inside a peak window (01:00-04:00 and 06:00-10:00 UTC, Monday-Friday) | not a fault. Start it at the peak rate with `--allow-peak`, or `4genteam offpeak set off` to allow it from now on, or wait for the off-peak instant the message names. `4genteam offpeak` reports the state, `4genteam offpeak status` the setting |
 | a seat exits at once after launch | its runtime is not installed, or its runtime and model disagree | read the seat's log and report the missing piece to the user; do not switch the model to make it start |
@@ -123,7 +123,7 @@ fix: ask for a key, and never paste one into a message.
 A room is the cloud record: the seats, what each seat is told, who may message whom, and which
 skills each seat carries. A room's seats are hosted locally by `agenthub-runtime` and supervised by
 this client (`4genteam`). The two share
-a name unless the user wants them different (`--rig` says otherwise).
+a name unless the user wants them different (`--room` says otherwise).
 
 ### 2.1 Ask first
 
@@ -145,7 +145,7 @@ choices the software accepts. Do not answer any of them yourself.
 - whether it **pins a version** (`pinned_version`, a concrete `x.y.z`) or **follows the latest**.
 
 **(b) The permission policy, one answer per seat.** Read the five choices to the user and get an
-explicit answer for each seat. `4genteam policy show <SEAT> --rig <RIG> --team <FILE>` prints one
+explicit answer for each seat. `4genteam policy show <SEAT> --room <RIG> --team <FILE>` prints one
 seat's rendered policy:
 
 | Policy | Means | Stored as |
@@ -156,7 +156,7 @@ seat's rendered policy:
 | `yolo` | the operator/no-guardrails posture — everything the harness allows; the launch posture is **full bypass** | `builtin:yolo` |
 | `none` | the reserved deliberate-none choice: the posture is the floor, the same as naming nothing, but the choice is visible | `none` |
 
-This client has no `policy list`: `4genteam policy show <SEAT> --rig <RIG> --team <FILE>` prints one
+This client has no `policy list`: `4genteam policy show <SEAT> --room <RIG> --team <FILE>` prints one
 seat's rendered policy, and the five postures above are the choices a 4genthub
 seat may record.
 
@@ -216,7 +216,7 @@ without one is a seat folder.** So `skills/rooms/<room>/<name>` is a room-level 
 `SKILL.md` and the seat folder `<name>` when it does not. A shared or client skill stays generic — no
 rig, seat, host or personal path in it.
 
-**The client also delivers this tree itself.** `4genteam sync rig ROOM` is the step that writes each
+**The client also delivers this tree itself.** `4genteam sync room ROOM` is the step that writes each
 seat's agent directory, so it is also the step that gives a seat the skills it resolves to: it copies
 them into that seat's skills path (`<out>/<room>/rig/agents/<seat>/skills/<skill>/`) and declares the
 ids in that seat's `agent.yaml` — `resources.skills[]` and each profile's `uses.skills` — because the
@@ -322,7 +322,7 @@ The cloud now knows the room; this machine has no seats yet. Ask the user which 
 use (the room name by default), then:
 
 ```bash
-4genteam sync rig <ROOM>         # writes the room's definition and the seat files
+4genteam sync room <ROOM>         # writes the room's definition and the seat files
 4genteam up <RIG> --team <DIR>   # launches daemon, seats, supervisor, bridge and watch wall
 4genteam ps <RIG> --nodes        # one row per seat of the room, with its lifecycle and activity
 ```
@@ -343,7 +343,7 @@ room with no such seat, or an unreadable room, is never refused. See
 To watch the room work — the seat grid and the lead's own window — see
 [docs/WATCH.md](WATCH.md).
 
-`sync rig` refuses to replace a real `.env` that sits in the room directory — it names the path
+`sync room` refuses to replace a real `.env` that sits in the room directory — it names the path
 instead. That file is not this client's to overwrite; show the path to the user.
 
 ### 2.6 Brief the lead
@@ -378,7 +378,7 @@ direction gets its own link.
 ]
 ```
 
-Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam sync rig <ROOM>`,
+Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam sync room <ROOM>`,
 `4genteam up <RIG> --team <DIR>`, `4genteam ps <RIG> --nodes`, and the brief
 to the lead (2.6).
 

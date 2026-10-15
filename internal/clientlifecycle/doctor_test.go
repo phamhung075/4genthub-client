@@ -9,7 +9,7 @@
 //	    `running` row. Without (c) the case would only prove that a check ran, not that it discriminates.
 //
 // HOW THE PROCESS IS FAKED, and why. A real `kill` is impractical here: these tests must not signal the
-// machine's own safeguards (this suite runs on a workstation whose rigd may be supervising real rooms), and
+// machine's own safeguards (this suite runs on a workstation whose agent may be supervising real rooms), and
 // a spawned fake process would make the case depend on scheduling. So the case asserts against THE SEAM
 // THE REPORT ACTUALLY READS: clientservices.Live is the process table (pgrep in production, a map here),
 // and the heartbeat files are REAL files written through the real reader path. The clock is the other seam,
@@ -31,7 +31,7 @@ import (
 )
 
 // healthFixture is one machine's report inputs: a temp log directory holding the heartbeat files, a temp
-// rigd.json holding the listed room, a frozen clock, and the process table.
+// agent.json holding the listed room, a frozen clock, and the process table.
 type healthFixture struct {
 	t  *testing.T
 	at time.Time
@@ -47,28 +47,28 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 	logDir := t.TempDir()
 	stateDir := t.TempDir()
 
-	previousLogDir, previousStatePath := clientservices.LogDir, clientservices.RigdStatePath
+	previousLogDir, previousStatePath := clientservices.LogDir, clientservices.AgentStatePath
 	previousNow, previousLive := clientservices.Now, clientservices.Live
 	t.Cleanup(func() {
-		clientservices.LogDir, clientservices.RigdStatePath = previousLogDir, previousStatePath
+		clientservices.LogDir, clientservices.AgentStatePath = previousLogDir, previousStatePath
 		clientservices.Now, clientservices.Live = previousNow, previousLive
 	})
 
 	clientservices.LogDir = func() (string, error) { return logDir, nil }
-	clientservices.RigdStatePath = func() (string, error) { return filepath.Join(stateDir, "rigd.json"), nil }
+	clientservices.AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
 
 	fixture := &healthFixture{t: t, at: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), live: map[string][]int{}}
 	clientservices.Now = func() time.Time { return fixture.at }
 	clientservices.Live = func(pattern string) []int { return fixture.live[pattern] }
 
-	state := clientservices.RigdState{}
+	state := clientservices.AgentState{}
 	for _, rig := range listedRigs {
 		state = clientservices.AddRig(state, rig)
 	}
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := clientservices.WriteRigdState(state); err != nil {
+	if err := clientservices.WriteAgentState(state); err != nil {
 		t.Fatal(err)
 	}
 	return fixture
@@ -100,14 +100,14 @@ func (f *healthFixture) running(safeguard, rig string, pid int) {
 	f.beat(safeguard, rig, time.Second, pid)
 }
 
-// everythingRunning is the all-healthy machine: every safeguard the report walks, plus rigd itself.
+// everythingRunning is the all-healthy machine: every safeguard the report walks, plus agent itself.
 func (f *healthFixture) everythingRunning() {
 	f.running(clientservices.Compact, "demo", 4101)
 	f.running(clientservices.Watchdog, "demo", 4102)
 	f.running(clientservices.Messages, "demo", 4105)
 	f.running(clientservices.RoomGuard, "demo", 4106)
 	f.running(clientservices.Bridge, "", 4103)
-	f.running(clientservices.Rigd, "", 4104)
+	f.running(clientservices.Agent, "", 4104)
 }
 
 // row finds one row of the report, so an assertion names the safeguard rather than an index.
@@ -155,8 +155,8 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 			fixture := newHealthFixture(t, []string{"demo"})
 			fixture.everythingRunning()
 
-			// The failure. The last beat is 31 s old: past compact's 30 s threshold, past rigd's 75 s? no -
-			// 31 s is inside rigd's, which is why the target row is the only one that moves.
+			// The failure. The last beat is 31 s old: past compact's 30 s threshold, past agent's 75 s? no -
+			// 31 s is inside agent's, which is why the target row is the only one that moves.
 			fixture.beat(c.safeguard, c.rig, 31*time.Second, 4101)
 			if !c.silent {
 				// The process is gone: pgrep finds nothing for its command line.
@@ -195,18 +195,18 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 }
 
 // TestASafeguardThatIsDownIsNamedNoMatterWhichOneItIs checks the machine-scoped rows too: with only the
-// bridge or only rigd down, both `doctor` and the JSON rows say so.
+// bridge or only agent down, both `doctor` and the JSON rows say so.
 func TestASafeguardThatIsDownIsNamedNoMatterWhichOneItIs(t *testing.T) {
 	fixture := newHealthFixture(t, []string{"demo"})
 	fixture.everythingRunning()
-	fixture.live[clientservices.Pattern(clientservices.Rigd, "")] = nil
+	fixture.live[clientservices.Pattern(clientservices.Agent, "")] = nil
 
 	code, _, stderr := doctor(t, "demo")
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("doctor exited %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, stderr)
 	}
-	if !strings.Contains(stderr, "rigd: stopped, age 1s") {
-		t.Errorf("stderr = %q, want rigd named without a rig", stderr)
+	if !strings.Contains(stderr, "agent: stopped, age 1s") {
+		t.Errorf("stderr = %q, want agent named without a rig", stderr)
 	}
 
 	// --json prints the rows themselves, so a caller reads the same decision the lines carry.
@@ -218,8 +218,8 @@ func TestASafeguardThatIsDownIsNamedNoMatterWhichOneItIs(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &rows); err != nil {
 		t.Fatalf("doctor --json did not print rows: %v\n%s", err, stdout)
 	}
-	if got := row(t, rows, clientservices.Rigd, ""); got.State != clientservices.Stopped {
-		t.Errorf("json row = %+v, want rigd stopped", got)
+	if got := row(t, rows, clientservices.Agent, ""); got.State != clientservices.Stopped {
+		t.Errorf("json row = %+v, want agent stopped", got)
 	}
 }
 
@@ -260,7 +260,7 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 		{clientservices.Compact, "demo"},
 		{clientservices.Watchdog, "demo"},
 		{clientservices.Bridge, ""},
-		{clientservices.Rigd, ""},
+		{clientservices.Agent, ""},
 	} {
 		if got := row(t, rows, want.safeguard, want.rig); got.State != clientservices.Running {
 			t.Errorf("row = %+v, want running", got)
@@ -274,7 +274,7 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("a healthy machine wrote %q to stderr", stderr)
 	}
-	for _, want := range []string{"demo compact: running, age 1s", "demo watchdog: running, age 1s", "bridge: running, age 1s", "rigd: running, age 1s"} {
+	for _, want := range []string{"demo compact: running, age 1s", "demo watchdog: running, age 1s", "bridge: running, age 1s", "agent: running, age 1s"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout = %q, want %q", stdout, want)
 		}
@@ -294,11 +294,11 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	}
 }
 
-// TestDoctorWithoutARigReportsEveryListedRoom: no argument means every room in rigd.json's list, and a
-// room with no rigd row at all still gets its safeguard rows - a machine started by hand must be visible.
+// TestDoctorWithoutARigReportsEveryListedRoom: no argument means every room in agent.json's list, and a
+// room with no agent row at all still gets its safeguard rows - a machine started by hand must be visible.
 func TestDoctorWithoutARigReportsEveryListedRoom(t *testing.T) {
 	fixture := newHealthFixture(t, []string{"demo", "other"})
-	fixture.running(clientservices.Rigd, "", 4104)
+	fixture.running(clientservices.Agent, "", 4104)
 
 	rows := rowsFor("")
 	for _, want := range []struct{ safeguard, rig string }{
@@ -313,10 +313,10 @@ func TestDoctorWithoutARigReportsEveryListedRoom(t *testing.T) {
 			t.Errorf("%s/%s = %+v, want stopped", want.rig, want.safeguard, got)
 		}
 	}
-	// rigd itself is alive in this fixture, and it has no rig: the machine-scoped row is reported without
+	// agent itself is alive in this fixture, and it has no rig: the machine-scoped row is reported without
 	// one.
-	if got := row(t, rows, clientservices.Rigd, ""); got.State != clientservices.Running {
-		t.Errorf("rigd = %+v, want running", got)
+	if got := row(t, rows, clientservices.Agent, ""); got.State != clientservices.Running {
+		t.Errorf("agent = %+v, want running", got)
 	}
 
 	code, _, stderr := doctor(t)
@@ -328,7 +328,7 @@ func TestDoctorWithoutARigReportsEveryListedRoom(t *testing.T) {
 			t.Errorf("stderr = %q, want %q", stderr, want)
 		}
 	}
-	if strings.Contains(stderr, "rigd: running") {
+	if strings.Contains(stderr, "agent: running") {
 		t.Errorf("stderr named a row that is running: %q", stderr)
 	}
 }

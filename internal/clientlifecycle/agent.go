@@ -1,16 +1,16 @@
-// rigd, the always-on local client: it streams every local session to the cloud, and it is the SINGLE
-// RESTART AUTHORITY for the safeguards (rigd-boundaries.md 7.1).
+// agent, the always-on local client: it streams every local session to the cloud, and it is the SINGLE
+// RESTART AUTHORITY for the safeguards (agent-boundaries.md 7.1).
 //
 // WHY SUPERVISION LIVES IN THIS PROCESS AND NOT IN A SECOND ONE. A separate keeper would be a second
-// always-on process that itself needs supervising - two mechanisms where the owner ruled one. So rigd
-// starts `compact-run --rig R`, `watchdog R --watch`, `sync messages --rig R --watch` and `bridge run`
+// always-on process that itself needs supervising - two mechanisms where the owner ruled one. So agent
+// starts `compact-run --room R`, `watchdog R --watch`, `sync messages --room R --watch` and `bridge run`
 // as its own children, through the EXISTING spawnChild/awaitStart pair the supervisor and the bridge
 // already use, and restarts them with backoff from 1 s doubling to 120 s. A child that dies three times
-// inside ten minutes is `failing`, and rigd keeps retrying it at the cap.
+// inside ten minutes is `failing`, and agent keeps retrying it at the cap.
 //
-// WHAT CHANGED AROUND IT, so the reader does not go looking for the old mechanism: `up` starts rigd (one
-// detached child, checked with awaitStart) and records the rig in rigd.json's `rigs` list; `compact` and
-// `stop` no longer spawn or kill a safeguard directly, and `stop` stops rigd, which stops its children.
+// WHAT CHANGED AROUND IT, so the reader does not go looking for the old mechanism: `up` starts agent (one
+// detached child, checked with awaitStart) and records the rig in agent.json's `rigs` list; `compact` and
+// `stop` no longer spawn or kill a safeguard directly, and `stop` stops agent, which stops its children.
 package clientlifecycle
 
 import (
@@ -33,32 +33,32 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
-const rigdUsage = "usage: 4genteam rigd [status [--json]]"
+const agentUsage = "usage: 4genteam agent [status [--json]]"
 
 // 7.1's restart curve and the window that makes a crash loop visible.
 const (
-	// rigdRestartStart is the first retry delay: 1 s, doubling.
-	rigdRestartStart = time.Second
-	// rigdRestartCap is where the doubling stops, and where a `failing` child keeps retrying.
-	rigdRestartCap = 120 * time.Second
-	// rigdFailingWindow and rigdFailingDeaths are 7.1's "dies 3 times inside 10 minutes is failing".
-	rigdFailingWindow = 10 * time.Minute
-	rigdFailingDeaths = 3
-	// rigdPass is one pass of the supervision loop. It is short because a pass is one file read plus one
+	// agentRestartStart is the first retry delay: 1 s, doubling.
+	agentRestartStart = time.Second
+	// agentRestartCap is where the doubling stops, and where a `failing` child keeps retrying.
+	agentRestartCap = 120 * time.Second
+	// agentFailingWindow and agentFailingDeaths are 7.1's "dies 3 times inside 10 minutes is failing".
+	agentFailingWindow = 10 * time.Minute
+	agentFailingDeaths = 3
+	// agentPass is one pass of the supervision loop. It is short because a pass is one file read plus one
 	// pgrep per child.
-	rigdPass = time.Second
+	agentPass = time.Second
 )
 
-// RigdLogPath is rigd's own log, where `up` sends its output.
-func RigdLogPath() (string, error) {
+// AgentLogPath is agent's own log, where `up` sends its output.
+func AgentLogPath() (string, error) {
 	dir, err := LogDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "rigd.log"), nil
+	return filepath.Join(dir, "agent.log"), nil
 }
 
-// WatchdogLogPath is the log of the watchdog CHILD rigd starts. It is deliberately NOT the watchdog's own
+// WatchdogLogPath is the log of the watchdog CHILD agent starts. It is deliberately NOT the watchdog's own
 // ~/.config/4genthub/logs/rig-watchdog.log: that file is written by the watchdog itself through its tee, and
 // pointing its stdout at the same file would append every line twice.
 func WatchdogLogPath(rig string) (string, error) {
@@ -69,53 +69,53 @@ func WatchdogLogPath(rig string) (string, error) {
 	return filepath.Join(dir, "watchdog-"+rig+".log"), nil
 }
 
-type rigdCommand struct{}
+type agentCommand struct{}
 
-func (rigdCommand) Name() string { return "rigd" }
-func (rigdCommand) Summary() string {
+func (agentCommand) Name() string { return "agent" }
+func (agentCommand) Summary() string {
 	return "the always-on client: stream local sessions, supervise the safeguards"
 }
 
-func (rigdCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func (agentCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		printHelp(stdout, rigdUsage,
+		printHelp(stdout, agentUsage,
 			"One outbound /ws/connector socket: every local rig session registered, its transcript tailed and\n"+
 				"uploaded redacted, and every safeguard transition published. It also starts and restarts\n"+
-				"`compact-run --rig R`, `watchdog R --watch`, `sync messages --rig R --watch` and `bridge run`\n"+
-				"for the rigs listed in rigd.json,\n"+
-				"so it is the single restart authority: `stop` stops rigd and its children, and `up` starts it.\n\n"+
+				"`compact-run --room R`, `watchdog R --watch`, `sync messages --room R --watch` and `bridge run`\n"+
+				"for the rigs listed in agent.json,\n"+
+				"so it is the single restart authority: `stop` stops agent and its children, and `up` starts it.\n\n"+
 				"  status [--json]      the safeguard rows and the per-session withheld counts\n\n"+
 				"Requires AGENTHUB_URL and AGENTHUB_TOKEN (the value is never printed).")
 		return clientcmd.ExitOK
 	}
 	if len(args) > 0 && args[0] == "status" {
-		return runRigdStatus(args[1:], stdout, stderr)
+		return runAgentStatus(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 {
-		fmt.Fprintf(stderr, "4genteam rigd: unknown argument %s. %s\n", args[0], rigdUsage)
+		fmt.Fprintf(stderr, "4genteam agent: unknown argument %s. %s\n", args[0], agentUsage)
 		return clientcmd.ExitUsage
 	}
-	return runRigd(ctx, stdout, stderr)
+	return runAgent(ctx, stdout, stderr)
 }
 
-// runRigd is the process: the supervision loop in the background, the socket loop in the foreground.
-func runRigd(ctx context.Context, stdout, stderr io.Writer) int {
+// runAgent is the process: the supervision loop in the background, the socket loop in the foreground.
+func runAgent(ctx context.Context, stdout, stderr io.Writer) int {
 	if missing := missingCloudEnv(); len(missing) > 0 {
-		return refuseMissingCloudEnv("rigd", missing, stderr)
+		return refuseMissingCloudEnv("agent", missing, stderr)
 	}
-	logPath, err := RigdLogPath()
+	logPath, err := AgentLogPath()
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam rigd: %v\n", err)
+		fmt.Fprintf(stderr, "4genteam agent: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
-		fmt.Fprintf(stderr, "4genteam rigd: %v\n", err)
+		fmt.Fprintf(stderr, "4genteam agent: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
-	manager := newRigdManager(func(line string) {
-		fmt.Fprintf(stdout, "%s rigd: %s\n", time.Now().UTC().Format(time.RFC3339), line)
+	manager := newAgentManager(func(line string) {
+		fmt.Fprintf(stdout, "%s agent: %s\n", time.Now().UTC().Format(time.RFC3339), line)
 	})
-	daemon := clientsync.NewRigDaemon(clientsync.RigDaemonOptions{
+	daemon := clientsync.NewAgentDaemon(clientsync.AgentDaemonOptions{
 		BaseURL:     os.Getenv("AGENTHUB_URL"),
 		Token:       os.Getenv("AGENTHUB_TOKEN"),
 		ConnectorID: connectorIdentity(),
@@ -126,7 +126,7 @@ func runRigd(ctx context.Context, stdout, stderr io.Writer) int {
 
 	// SIGTERM and SIGINT both stop the children before this process exits: the children are detached
 	// (their own session), so they would otherwise outlive the process that supervises them and the next
-	// rigd would find orphans. `stop` sends exactly this signal.
+	// agent would find orphans. `stop` sends exactly this signal.
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -156,21 +156,21 @@ func connectorIdentity() string {
 	return host
 }
 
-// rigdSpec is one child rigd must have running.
-type rigdSpec struct {
+// agentSpec is one child agent must have running.
+type agentSpec struct {
 	safeguard string
 	rig       string
 	argv      []string
 	logPath   string
-	// threshold is 7.4's silence threshold, derived from the flags rigd launches this child with - not
+	// threshold is 7.4's silence threshold, derived from the flags agent launches this child with - not
 	// configured anywhere, and not read from the environment.
 	threshold time.Duration
 }
 
-// rigdChild is what rigd knows about one child: how it starts, when it last started, and how it has been
+// agentChild is what agent knows about one child: how it starts, when it last started, and how it has been
 // dying.
-type rigdChild struct {
-	spec rigdSpec
+type agentChild struct {
+	spec agentSpec
 
 	pid       int
 	startedAt time.Time
@@ -182,30 +182,30 @@ type rigdChild struct {
 	starts    int
 }
 
-func (c *rigdChild) key() string { return c.spec.safeguard + " " + c.spec.rig }
+func (c *agentChild) key() string { return c.spec.safeguard + " " + c.spec.rig }
 
-// rigdManager is the supervision half of rigd. Its two mutex-guarded maps are the only shared state: the
+// agentManager is the supervision half of agent. Its two mutex-guarded maps are the only shared state: the
 // children it owns, and the transitions the socket half has not sent yet.
-type rigdManager struct {
+type agentManager struct {
 	log func(string)
 
 	mu       sync.Mutex
-	children map[string]*rigdChild
+	children map[string]*agentChild
 	pending  map[string]clientservices.Health
 	last     []clientservices.Health
 }
 
-func newRigdManager(log func(string)) *rigdManager {
-	return &rigdManager{
+func newAgentManager(log func(string)) *agentManager {
+	return &agentManager{
 		log:      log,
-		children: map[string]*rigdChild{},
+		children: map[string]*agentChild{},
 		pending:  map[string]clientservices.Health{},
 	}
 }
 
-// supervise is the loop: one pass a second, re-reading rigd.json each time so a room `up` adds while rigd
+// supervise is the loop: one pass a second, re-reading agent.json each time so a room `up` adds while agent
 // runs is picked up without restarting anything.
-func (m *rigdManager) supervise(ctx context.Context) {
+func (m *agentManager) supervise(ctx context.Context) {
 	for {
 		if ctx.Err() != nil {
 			return
@@ -214,24 +214,24 @@ func (m *rigdManager) supervise(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(rigdPass):
+		case <-time.After(agentPass):
 		}
 	}
 }
 
 // pass is one turn: bring the children in line with the listed rigs, then report what changed.
-func (m *rigdManager) pass() {
-	// RIGD BEATS ITSELF ON EVERY PASS, and it does so HERE rather than on the socket, because the process
+func (m *agentManager) pass() {
+	// AGENT BEATS ITSELF ON EVERY PASS, and it does so HERE rather than on the socket, because the process
 	// must read `running` while the cloud is unreachable: a beat that needs the network would make an
-	// offline-but-healthy rigd look dead, and 7.3 has a separate dead-man for the socket.
-	if err := clientservices.WriteHeartbeat(clientservices.Rigd, ""); err != nil {
-		m.log(fmt.Sprintf("cannot write rigd's own heartbeat: %v", err))
+	// offline-but-healthy agent look dead, and 7.3 has a separate dead-man for the socket.
+	if err := clientservices.WriteHeartbeat(clientservices.Agent, ""); err != nil {
+		m.log(fmt.Sprintf("cannot write agent's own heartbeat: %v", err))
 	}
-	state, err := clientservices.ReadRigdState()
+	state, err := clientservices.ReadAgentState()
 	if err != nil {
 		m.log(fmt.Sprintf("the rooms meant to run could not be read, so no child is started this pass: %v", err))
 	}
-	specs, err := rigdSpecs(state.Rigs)
+	specs, err := agentSpecs(state.Rigs)
 	if err != nil {
 		m.log(fmt.Sprintf("cannot resolve the log directory, so no child can be started: %v", err))
 		return
@@ -247,10 +247,10 @@ func (m *rigdManager) pass() {
 	m.persist(rows)
 }
 
-// rigdSpecs is the child list of 7.1: a compaction supervisor, a watchdog and a seat-message deliverer
+// agentSpecs is the child list of 7.1: a compaction supervisor, a watchdog and a seat-message deliverer
 // per listed rig, and ONE bridge per machine.
-func rigdSpecs(rigs []string) ([]rigdSpec, error) {
-	var specs []rigdSpec
+func agentSpecs(rigs []string) ([]agentSpec, error) {
+	var specs []agentSpec
 	for _, rig := range rigs {
 		supervisorLog, err := LogPath(rig)
 		if err != nil {
@@ -269,27 +269,27 @@ func rigdSpecs(rigs []string) ([]rigdSpec, error) {
 			return nil, err
 		}
 		specs = append(specs,
-			rigdSpec{
+			agentSpec{
 				safeguard: clientservices.Compact, rig: rig,
-				argv:      []string{"compact-run", "--rig", rig},
+				argv:      []string{"compact-run", "--room", rig},
 				logPath:   supervisorLog,
 				threshold: clientservices.SilentAfter(clientservices.CompactEvery),
 			},
-			rigdSpec{
+			agentSpec{
 				safeguard: clientservices.Watchdog, rig: rig,
 				argv:      []string{"watchdog", rig, "--watch"},
 				logPath:   watchdogLog,
 				threshold: clientservices.SilentAfter(clientservices.WatchdogInterval),
 			},
-			rigdSpec{
+			agentSpec{
 				safeguard: clientservices.Messages, rig: rig,
-				argv:      []string{"sync", "messages", "--rig", rig, "--watch"},
+				argv:      []string{"sync", "messages", "--room", rig, "--watch"},
 				logPath:   messagesLog,
 				threshold: clientservices.SilentAfter(clientservices.MessagesEvery),
 			},
-			rigdSpec{
+			agentSpec{
 				safeguard: clientservices.RoomGuard, rig: rig,
-				argv:      []string{"idle-run", "--rig", rig},
+				argv:      []string{"idle-run", "--room", rig},
 				logPath:   guardLog,
 				threshold: clientservices.SilentAfter(clientservices.RoomGuardEvery),
 			},
@@ -299,7 +299,7 @@ func rigdSpecs(rigs []string) ([]rigdSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	specs = append(specs, rigdSpec{
+	specs = append(specs, agentSpec{
 		safeguard: clientservices.Bridge,
 		argv:      []string{"bridge", "run"},
 		logPath:   bridgeLog,
@@ -310,7 +310,7 @@ func rigdSpecs(rigs []string) ([]rigdSpec, error) {
 
 // reconcile starts what is missing, adopts what is already running, and stops what a rig that left the
 // list no longer needs.
-func (m *rigdManager) reconcile(specs []rigdSpec, now time.Time) {
+func (m *agentManager) reconcile(specs []agentSpec, now time.Time) {
 	wanted := map[string]bool{}
 	for _, spec := range specs {
 		wanted[spec.safeguard+" "+spec.rig] = true
@@ -324,7 +324,7 @@ func (m *rigdManager) reconcile(specs []rigdSpec, now time.Time) {
 		}
 		if child.pid > 0 {
 			if err := signalPID(child.pid, syscall.SIGTERM); err == nil {
-				m.log(fmt.Sprintf("%s: stopped, its rig left rigd.json's list", key))
+				m.log(fmt.Sprintf("%s: stopped, its rig left agent.json's list", key))
 			}
 		}
 		delete(m.children, key)
@@ -333,16 +333,16 @@ func (m *rigdManager) reconcile(specs []rigdSpec, now time.Time) {
 
 // ensure is one child's turn: adopt a live process, restart a dead one when its backoff has elapsed.
 //
-// ADOPTION IS NOT A NICETY. The children are detached processes, so one can outlive a rigd that was
+// ADOPTION IS NOT A NICETY. The children are detached processes, so one can outlive an agent that was
 // SIGKILLed; spawning a second copy would put two supervisors on one rig. A live process matching the
 // child's command line is therefore adopted rather than duplicated, and liveness is read from the SAME
-// pgrep the report uses, so rigd and `doctor` can never disagree about who is running.
-func (m *rigdManager) ensure(spec rigdSpec, now time.Time) {
+// pgrep the report uses, so agent and `doctor` can never disagree about who is running.
+func (m *agentManager) ensure(spec agentSpec, now time.Time) {
 	key := spec.safeguard + " " + spec.rig
 	m.mu.Lock()
 	child := m.children[key]
 	if child == nil {
-		child = &rigdChild{spec: spec, nextTry: now}
+		child = &agentChild{spec: spec, nextTry: now}
 		m.children[key] = child
 	}
 	live := clientservices.Live(clientservices.Pattern(spec.safeguard, spec.rig))
@@ -355,7 +355,7 @@ func (m *rigdManager) ensure(spec rigdSpec, now time.Time) {
 		m.mu.Unlock()
 		return
 	}
-	// Not running. A child rigd believed was alive has just died: that is the death, counted once, on the
+	// Not running. A child agent believed was alive has just died: that is the death, counted once, on the
 	// pass that misses it.
 	if child.pid > 0 {
 		child.died(now)
@@ -365,7 +365,7 @@ func (m *rigdManager) ensure(spec rigdSpec, now time.Time) {
 		m.mu.Unlock()
 		return
 	}
-	child.nextTry = now.Add(rigdRestartCap)
+	child.nextTry = now.Add(agentRestartCap)
 	m.mu.Unlock()
 	m.start(child, now)
 }
@@ -374,8 +374,8 @@ func (m *rigdManager) ensure(spec rigdSpec, now time.Time) {
 // uses: a child that exits at once is a failed start and not a running safeguard.
 //
 // THE ATTEMPT is what `restarts` counts, not the survival: a child in a crash loop was started again every
-// time rigd tried, and a reader watching `restarts` go up is watching exactly that.
-func (m *rigdManager) start(child *rigdChild, now time.Time) {
+// time agent tried, and a reader watching `restarts` go up is watching exactly that.
+func (m *agentManager) start(child *agentChild, now time.Time) {
 	spawned, err := spawnChild(child.spec.argv, child.spec.logPath)
 	m.mu.Lock()
 	if child.starts > 0 {
@@ -402,7 +402,7 @@ func (m *rigdManager) start(child *rigdChild, now time.Time) {
 	child.backoff, child.nextTry = 0, time.Time{}
 	if child.failing {
 		m.log(fmt.Sprintf("%s: started again, pid %d, but it is FAILING (%d deaths inside %s); it will keep being retried every %s",
-			child.key(), child.pid, len(child.deaths), rigdFailingWindow, rigdRestartCap))
+			child.key(), child.pid, len(child.deaths), agentFailingWindow, agentRestartCap))
 		return
 	}
 	m.log(fmt.Sprintf("%s: started, pid %d (log %s)", child.key(), child.pid, child.spec.logPath))
@@ -410,20 +410,20 @@ func (m *rigdManager) start(child *rigdChild, now time.Time) {
 
 // died records one death and schedules the retry: backoff from 1 s doubling to 120 s, and `failing` once
 // three deaths fall inside ten minutes.
-func (c *rigdChild) died(now time.Time) {
+func (c *agentChild) died(now time.Time) {
 	c.deaths = append(c.deaths, now)
 	c.prune(now)
 	switch {
-	case len(c.deaths) >= rigdFailingDeaths:
+	case len(c.deaths) >= agentFailingDeaths:
 		c.failing = true
-		c.nextTry = now.Add(rigdRestartCap)
+		c.nextTry = now.Add(agentRestartCap)
 	case c.backoff == 0:
-		c.backoff = rigdRestartStart
+		c.backoff = agentRestartStart
 		c.nextTry = now.Add(c.backoff)
 	default:
 		c.backoff *= 2
-		if c.backoff > rigdRestartCap {
-			c.backoff = rigdRestartCap
+		if c.backoff > agentRestartCap {
+			c.backoff = agentRestartCap
 		}
 		c.nextTry = now.Add(c.backoff)
 	}
@@ -432,22 +432,22 @@ func (c *rigdChild) died(now time.Time) {
 
 // prune drops the deaths that have left the window, so a child that ran healthily for ten minutes is no
 // longer failing.
-func (c *rigdChild) prune(now time.Time) {
+func (c *agentChild) prune(now time.Time) {
 	kept := c.deaths[:0]
 	for _, at := range c.deaths {
-		if now.Sub(at) <= rigdFailingWindow {
+		if now.Sub(at) <= agentFailingWindow {
 			kept = append(kept, at)
 		}
 	}
 	c.deaths = kept
-	if len(c.deaths) < rigdFailingDeaths {
+	if len(c.deaths) < agentFailingDeaths {
 		c.failing = false
 	}
 }
 
-// recorded is what rigd must persist for a reader: the fields pgrep and a heartbeat CANNOT answer -
+// recorded is what agent must persist for a reader: the fields pgrep and a heartbeat CANNOT answer -
 // restarts, started_at, and the failing state a restart loop decides (7.2).
-func (m *rigdManager) recorded() []clientservices.Health {
+func (m *agentManager) recorded() []clientservices.Health {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	rows := make([]clientservices.Health, 0, len(m.children))
@@ -469,8 +469,8 @@ func (m *rigdManager) recorded() []clientservices.Health {
 	return rows
 }
 
-// thresholds is 7.4's per-child table, computed from the flags rigd launched each child with.
-func (m *rigdManager) thresholds() map[string]time.Duration {
+// thresholds is 7.4's per-child table, computed from the flags agent launched each child with.
+func (m *agentManager) thresholds() map[string]time.Duration {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make(map[string]time.Duration, len(m.children))
@@ -486,7 +486,7 @@ func (m *rigdManager) thresholds() map[string]time.Duration {
 //
 // The first pass publishes every row: a state nobody has seen is a transition, and starting with silence
 // would leave the very first report empty.
-func (m *rigdManager) report(rows []clientservices.Health) {
+func (m *agentManager) report(rows []clientservices.Health) {
 	m.mu.Lock()
 	previous := map[string]clientservices.Health{}
 	for _, row := range m.last {
@@ -512,11 +512,11 @@ func (m *rigdManager) report(rows []clientservices.Health) {
 	}
 }
 
-// persist rewrites rigd.json's `safeguards` list with what rigd knows now. The rigs list is re-read and
+// persist rewrites agent.json's `safeguards` list with what agent knows now. The rigs list is re-read and
 // kept: `up` may have added a room between this pass's read and this write, and dropping it would make up
 // a liar.
-func (m *rigdManager) persist(rows []clientservices.Health) {
-	fresh, err := clientservices.ReadRigdState()
+func (m *agentManager) persist(rows []clientservices.Health) {
+	fresh, err := clientservices.ReadAgentState()
 	if err != nil {
 		// NOTHING IS WRITTEN: this pass rewrites the rigs list from what it read, so persisting over a list
 		// that could not be read would drop every room from the rooms meant to run. The next pass reads again.
@@ -538,8 +538,8 @@ func (m *rigdManager) persist(rows []clientservices.Health) {
 		return
 	}
 	fresh.Safeguards = merged
-	if err := clientservices.WriteRigdState(fresh); err != nil {
-		m.log(fmt.Sprintf("cannot write rigd.json: %v", err))
+	if err := clientservices.WriteAgentState(fresh); err != nil {
+		m.log(fmt.Sprintf("cannot write agent.json: %v", err))
 	}
 }
 
@@ -558,7 +558,7 @@ func sameRows(before, after []clientservices.Health) bool {
 }
 
 // rows is the daemon's re-send source: every row, in report order.
-func (m *rigdManager) rows() []clientservices.Health {
+func (m *agentManager) rows() []clientservices.Health {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]clientservices.Health, len(m.last))
@@ -568,7 +568,7 @@ func (m *rigdManager) rows() []clientservices.Health {
 
 // take drains the transitions the socket half has not sent yet. Latest state wins, so a row is replaced
 // rather than queued twice - which is the frame's own contract (7.3).
-func (m *rigdManager) take() []clientservices.Health {
+func (m *agentManager) take() []clientservices.Health {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.pending) == 0 {
@@ -594,8 +594,8 @@ func sortRows(rows []clientservices.Health) {
 	})
 }
 
-// shutdown stops every child, which is what `stop` means now: rigd stops, and rigd stops its children.
-func (m *rigdManager) shutdown() {
+// shutdown stops every child, which is what `stop` means now: agent stops, and agent stops its children.
+func (m *agentManager) shutdown() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for key, child := range m.children {
@@ -606,7 +606,7 @@ func (m *rigdManager) shutdown() {
 			m.log(fmt.Sprintf("%s: could not be stopped: %v", key, err))
 			continue
 		}
-		m.log(fmt.Sprintf("%s: stopped with rigd", key))
+		m.log(fmt.Sprintf("%s: stopped with agent", key))
 		child.pid = 0
 	}
 }
@@ -621,94 +621,94 @@ var signalPID = func(pid int, signal syscall.Signal) error {
 	return process.Signal(signal)
 }
 
-// recordRig adds a room to rigd.json's list, which is what "meant to run" means: rigd supervises a
+// recordRig adds a room to agent.json's list, which is what "meant to run" means: agent supervises a
 // supervisor and a watchdog for it from its next pass on.
 func recordRig(rig string, stderr io.Writer) bool {
-	state, err := clientservices.ReadRigdState()
+	state, err := clientservices.ReadAgentState()
 	if err != nil {
 		// NOT RECORDED, AND NOTHING WRITTEN: adding this rig to a list that could not be read would record it
 		// into the empty list and drop every OTHER room from the rooms meant to run.
-		fmt.Fprintf(stderr, "4genteam: the rooms meant to run could not be read, so %s was NOT recorded in rigd.json: %v\n", rig, err)
+		fmt.Fprintf(stderr, "4genteam: the rooms meant to run could not be read, so %s was NOT recorded in agent.json: %v\n", rig, err)
 		return false
 	}
 	state = clientservices.AddRig(state, rig)
-	if err := clientservices.WriteRigdState(state); err != nil {
-		fmt.Fprintf(stderr, "4genteam: could not record rig %s in rigd.json: %v\n", rig, err)
+	if err := clientservices.WriteAgentState(state); err != nil {
+		fmt.Fprintf(stderr, "4genteam: could not record rig %s in agent.json: %v\n", rig, err)
 		return false
 	}
 	return true
 }
 
-// rigdRunning is the process half of rigd's own row, through the same pattern the report uses. It is a
+// agentRunning is the process half of agent's own row, through the same pattern the report uses. It is a
 // variable so a test drives a verb's decision without a process on this machine.
-var rigdRunning = func() int {
-	live := clientservices.Live(clientservices.Pattern(clientservices.Rigd, ""))
+var agentRunning = func() int {
+	live := clientservices.Live(clientservices.Pattern(clientservices.Agent, ""))
 	if len(live) == 0 {
 		return 0
 	}
 	return live[0]
 }
 
-// startRigd starts the supervision authority, once: a running rigd is LEFT ALONE, because `up` is the
-// idempotent repair verb (7.5) and a second rigd would be two restart authorities.
-func startRigd(stdout, stderr io.Writer) bool {
-	if pid := rigdRunning(); pid != 0 {
-		fmt.Fprintf(stdout, "rigd: already running, pid %d\n", pid)
+// startAgent starts the supervision authority, once: a running agent is LEFT ALONE, because `up` is the
+// idempotent repair verb (7.5) and a second agent would be two restart authorities.
+func startAgent(stdout, stderr io.Writer) bool {
+	if pid := agentRunning(); pid != 0 {
+		fmt.Fprintf(stdout, "agent: already running, pid %d\n", pid)
 		return true
 	}
-	logPath, err := RigdLogPath()
+	logPath, err := AgentLogPath()
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
 		return false
 	}
-	child, err := spawnChild([]string{"rigd"}, logPath)
+	child, err := spawnChild([]string{"agent"}, logPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "4genteam: could not start rigd: %v\n", err)
+		fmt.Fprintf(stderr, "4genteam: could not start agent: %v\n", err)
 		return false
 	}
 	survived, err := awaitStart(child)
 	if !survived {
-		fmt.Fprintf(stderr, "4genteam: rigd exited immediately (status %d); its output is in %s\n",
+		fmt.Fprintf(stderr, "4genteam: agent exited immediately (status %d); its output is in %s\n",
 			exitStatus(err), logPath)
 		return false
 	}
-	fmt.Fprintf(stdout, "rigd: pid %d, log %s\n", child.Pid(), logPath)
+	fmt.Fprintf(stdout, "agent: pid %d, log %s\n", child.Pid(), logPath)
 	return true
 }
 
-// stopRigd stops the authority and, through its own shutdown, its children. The stop is machine-wide, so
+// stopAgent stops the authority and, through its own shutdown, its children. The stop is machine-wide, so
 // the rig name is named as staying listed rather than used to pick a target: `stop` is not room intent
 // (7.9), and a verb that silently dropped its argument would be worse than one that says why it ignores it.
-func stopRigd(rig string, stdout io.Writer) {
-	if stopPattern(clientservices.Pattern(clientservices.Rigd, "")) {
-		fmt.Fprintf(stdout, "rigd: stopped with its children (a machine-wide stop; rig %s stays listed)\n", rig)
+func stopAgent(rig string, stdout io.Writer) {
+	if stopPattern(clientservices.Pattern(clientservices.Agent, "")) {
+		fmt.Fprintf(stdout, "agent: stopped with its children (a machine-wide stop; rig %s stays listed)\n", rig)
 		return
 	}
-	fmt.Fprintln(stdout, "rigd: was not running")
+	fmt.Fprintln(stdout, "agent: was not running")
 }
 
-// runRigdStatus is `4genteam rigd status`: the safeguard rows, the listed rigs, and the per-session
+// runAgentStatus is `4genteam agent status`: the safeguard rows, the listed rigs, and the per-session
 // withheld counts 4.4 names. It is a reading surface and not a checker - `doctor` exits 3, this exits 0.
-func runRigdStatus(args []string, stdout, stderr io.Writer) int {
+func runAgentStatus(args []string, stdout, stderr io.Writer) int {
 	asJSON := false
 	for _, arg := range args {
 		switch arg {
 		case "--json":
 			asJSON = true
 		case "-h", "--help":
-			printHelp(stdout, "usage: 4genteam rigd status [--json]", "The safeguard rows and the per-session withheld counts.")
+			printHelp(stdout, "usage: 4genteam agent status [--json]", "The safeguard rows and the per-session withheld counts.")
 			return clientcmd.ExitOK
 		default:
-			fmt.Fprintf(stderr, "4genteam rigd status: unknown argument %s\n", arg)
+			fmt.Fprintf(stderr, "4genteam agent status: unknown argument %s\n", arg)
 			return clientcmd.ExitUsage
 		}
 	}
-	state, stateErr := clientservices.ReadRigdState()
+	state, stateErr := clientservices.ReadAgentState()
 	if stateErr != nil {
 		// The rows and the counts below are measured from pgrep and heartbeat files, so they still print; the
 		// rigs list does not, and saying so is the difference between "no rooms are meant to run" and "the list
 		// could not be read".
-		fmt.Fprintf(stderr, "4genteam rigd status: the rooms meant to run could not be read, so the rigs list below is empty for that reason: %v\n", stateErr)
+		fmt.Fprintf(stderr, "4genteam agent status: the rooms meant to run could not be read, so the rigs list below is empty for that reason: %v\n", stateErr)
 	}
 	rows := rowsFor("")
 	withheld := withheldCounts()
@@ -719,7 +719,7 @@ func runRigdStatus(args []string, stdout, stderr io.Writer) int {
 			"withheld":   withheld,
 		}, "", "  ")
 		if err != nil {
-			fmt.Fprintf(stderr, "4genteam rigd status: cannot print the rows: %v\n", err)
+			fmt.Fprintf(stderr, "4genteam agent status: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
 		}
 		fmt.Fprintln(stdout, string(body))
@@ -751,7 +751,7 @@ func withheldCounts() []withheldEntry {
 	if err != nil {
 		return nil
 	}
-	dir := filepath.Join(store, "rigd-withheld")
+	dir := filepath.Join(store, "agent-withheld")
 	sessions, err := os.ReadDir(dir)
 	if err != nil {
 		return nil

@@ -17,11 +17,11 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
-// SyncRigArgs is the adopt step's command: THIS binary's own `sync rig`, so the pinning rules (never
+// SyncRigArgs is the adopt step's command: THIS binary's own `sync room`, so the pinning rules (never
 // fall back to another snapshot; a missing pin is an error) stay in one place. The Python called
-// `python -m agenthub_client.seat_sync rig ROOM --out OUT --update`.
+// `python -m agenthub_client.seat_sync room ROOM --out OUT --update`.
 func SyncRigArgs(self, room, out string) []string {
-	return []string{self, "sync", "rig", room, "--out", out, "--update"}
+	return []string{self, "sync", "room", room, "--out", out, "--update"}
 }
 
 // syncDeps is everything sync_once touches outside the two reads: the adopt step, the quiet wait, the
@@ -109,7 +109,7 @@ func syncOnce(parsed options, deps *syncDeps) (int, error) {
 	deps.logf("%s: behind: %s", parsed.room, strings.Join(behind, ", "))
 	if err := deps.runSyncRig(parsed.room, out); err != nil {
 		return 0, &clientcmd.CodedError{
-			Message: fmt.Sprintf("4genteam sync rig failed: %v", err),
+			Message: fmt.Sprintf("4genteam sync room failed: %v", err),
 			Code:    ExitFailed,
 		}
 	}

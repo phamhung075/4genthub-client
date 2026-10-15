@@ -77,7 +77,7 @@ func restoreAll(t *testing.T) {
 	ui, watch, herdr := openUI, runWatchView, runHerdr
 	spawn, grace := spawnChild, SupervisorStartGrace
 	stop, nodes := stopPattern, rigNodes
-	rows, authorityUp := rowsFor, rigdRunning
+	rows, authorityUp := rowsFor, agentRunning
 	t.Cleanup(func() {
 		ensureDaemon, ensureRig = daemon, rigStep
 		recordRigFor = record
@@ -85,19 +85,19 @@ func restoreAll(t *testing.T) {
 		openUI, runWatchView, runHerdr = ui, watch, herdr
 		spawnChild, SupervisorStartGrace = spawn, grace
 		stopPattern, rigNodes = stop, nodes
-		rowsFor, rigdRunning = rows, authorityUp
+		rowsFor, agentRunning = rows, authorityUp
 	})
 	// A test in this package runs with the peak gate reading NO nodes: the gate then has nothing to
 	// decide, and no test here reaches the machine's own daemon, rig or clock. A test about the gate
 	// replaces rigNodes with the reading it wants to be judged on.
 	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
-	// NO TEST WRITES rigd.json. The seams that would - recording the room and starting the authority -
+	// NO TEST WRITES agent.json. The seams that would - recording the room and starting the authority -
 	// are replaced with recorders here, so a `up` test can assert the ORDER without touching the machine's
 	// own state file.
 	recordRigFor = func(string, io.Writer) bool { return true }
 	startAuthority = func(io.Writer, io.Writer) bool { return true }
 	waitSafeguards = func(string) ([]clientservices.Health, bool) {
-		return []clientservices.Health{{Safeguard: clientservices.Rigd, State: clientservices.Running}}, true
+		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
 	}
 }
 
@@ -128,7 +128,7 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 		return diedChild{}, nil
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "rigd"); return true }
+	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 	openUI = func(io.Writer) {}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
@@ -146,11 +146,11 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 }
 
 // TestUpInitialisesEveryServiceInOrder is the Python test of the same name, restated for 7.1: the daemon,
-// the rig, the room recorded as meant-to-run, rigd (the single restart authority),
+// the rig, the room recorded as meant-to-run, agent (the single restart authority),
 // the same health check `doctor` makes, the watch view, the UI, then herdr.
 //
-// THE BRIDGE AND THE SUPERVISOR ARE NOT IN THIS LIST ANY MORE, and that is the ruling: `up` starts rigd,
-// and rigd starts them. A start path here would be a second mechanism for one safeguard.
+// THE BRIDGE AND THE SUPERVISOR ARE NOT IN THIS LIST ANY MORE, and that is the ruling: `up` starts agent,
+// and agent starts them. A start path here would be a second mechanism for one safeguard.
 func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	var ran []string
 	restoreAll(t)
@@ -165,10 +165,10 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 		return clientcmd.ExitOK
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startRigd"); return true }
+	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
 	waitSafeguards = func(string) ([]clientservices.Health, bool) {
 		ran = append(ran, "waitSafeguards")
-		return []clientservices.Health{{Safeguard: clientservices.Rigd, State: clientservices.Running}}, true
+		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
 	}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	openUI = func(io.Writer) { ran = append(ran, "openUI") }
@@ -179,7 +179,7 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	if code := (upCommand{}).Run(context.Background(), []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up returned %d (stderr: %q)", code, errOut.String())
 	}
-	want := []string{"ensureDaemon", "ensureRig", "recordRig", "startRigd", "waitSafeguards", "watch", "openUI", "herdr"}
+	want := []string{"ensureDaemon", "ensureRig", "recordRig", "startAgent", "waitSafeguards", "watch", "openUI", "herdr"}
 	if strings.Join(ran, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", ran, want)
 	}
@@ -226,7 +226,7 @@ func TestUpRefusesADefinitionThatNamesAnotherRoom(t *testing.T) {
 }
 
 // --room-only is an INSTRUMENT, and this is the property that makes it one: the room's own verdict is the
-// exit code, and nothing after the room runs - no rigd, no bridge wait, no watch
+// exit code, and nothing after the room runs - no agent, no bridge wait, no watch
 // view, no UI, no herdr. A run whose red could come from any of those is not evidence about the room.
 func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 	for _, c := range []struct {
@@ -249,7 +249,7 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 				return c.room
 			}
 			recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
-			startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startRigd"); return true }
+			startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
 			waitSafeguards = func(string) ([]clientservices.Health, bool) {
 				ran = append(ran, "waitSafeguards")
 				return nil, true
@@ -270,11 +270,11 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 	}
 }
 
-// TestStopSignalsRigdAndSaysTheStopIsMachineWide: `stop` is the other half of `up`'s contract, and 7.1
-// makes it stop rigd - which stops its children - rather than picking safeguards out one by one. Asserted
+// TestStopSignalsAgentAndSaysTheStopIsMachineWide: `stop` is the other half of `up`'s contract, and 7.1
+// makes it stop agent - which stops its children - rather than picking safeguards out one by one. Asserted
 // as the PATTERN rather than by signalling it: a test that ran the real thing would stop this machine's
 // services.
-func TestStopSignalsRigdAndSaysTheStopIsMachineWide(t *testing.T) {
+func TestStopSignalsAgentAndSaysTheStopIsMachineWide(t *testing.T) {
 	var patterns []string
 	restoreAll(t)
 	stopPattern = func(pattern string) bool {
@@ -286,12 +286,12 @@ func TestStopSignalsRigdAndSaysTheStopIsMachineWide(t *testing.T) {
 	if code := (stopCommand{}).Run(context.Background(), []string{"my-rig"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("stop returned %d (stderr %q)", code, errOut.String())
 	}
-	want := []string{clientservices.Pattern(clientservices.Rigd, "")}
+	want := []string{clientservices.Pattern(clientservices.Agent, "")}
 	if strings.Join(patterns, "|") != strings.Join(want, "|") {
 		t.Errorf("signalled %v, want %v", patterns, want)
 	}
-	if !strings.Contains(out.String(), "rigd: stopped") {
-		t.Errorf("stdout = %q, want it to report rigd stopped", out.String())
+	if !strings.Contains(out.String(), "agent: stopped") {
+		t.Errorf("stdout = %q, want it to report agent stopped", out.String())
 	}
 
 	// No rig means no guess, and nothing may be signalled while the verb decides that.
@@ -309,7 +309,7 @@ func TestStopSignalsRigdAndSaysTheStopIsMachineWide(t *testing.T) {
 	}
 }
 
-// diedChild is a supervisor that was already dead when the start check ran - what `--rig --help` did.
+// diedChild is a supervisor that was already dead when the start check ran - what `--room --help` did.
 type diedChild struct{}
 
 func (diedChild) Pid() int    { return 4242 }
@@ -327,7 +327,7 @@ func (c survivedChild) Wait() error {
 }
 
 // TestCompactSpawnsNothingAndRefusesWithoutTheAuthority is 7.1's removed path, asserted from both sides:
-// `compact` must not start a supervisor (rigd does), and with no rigd running it must SAY so instead of
+// `compact` must not start a supervisor (agent does), and with no agent running it must SAY so instead of
 // returning 0 - which is exactly the silence the owner's incident was made of.
 func TestCompactSpawnsNothingAndRefusesWithoutTheAuthority(t *testing.T) {
 	var spawned []string
@@ -336,25 +336,25 @@ func TestCompactSpawnsNothingAndRefusesWithoutTheAuthority(t *testing.T) {
 		spawned = append(spawned, strings.Join(args, " "))
 		return diedChild{}, nil
 	}
-	rigdRunning = func() int { return 0 }
+	agentRunning = func() int { return 0 }
 
 	var out, errOut bytes.Buffer
 	code := (compactCommand{}).Run(context.Background(), []string{"some-rig"}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
-		t.Fatalf("compact with no rigd returned %d, want %d", code, clientcmd.ExitUnavailable)
+		t.Fatalf("compact with no agent returned %d, want %d", code, clientcmd.ExitUnavailable)
 	}
 	if len(spawned) != 0 {
-		t.Errorf("compact spawned %v, and rigd is the only restart authority", spawned)
+		t.Errorf("compact spawned %v, and agent is the only restart authority", spawned)
 	}
-	if !strings.Contains(errOut.String(), "rigd is not running") || !strings.Contains(errOut.String(), "4genteam up some-rig") {
-		t.Errorf("the refusal did not name rigd and the repair verb: %q", errOut.String())
+	if !strings.Contains(errOut.String(), "agent is not running") || !strings.Contains(errOut.String(), "4genteam up some-rig") {
+		t.Errorf("the refusal did not name agent and the repair verb: %q", errOut.String())
 	}
 	if !strings.Contains(errOut.String(), "4genteam room compact some-rig") {
 		t.Errorf("the refusal did not name the runtime's own compact verb: %q", errOut.String())
 	}
 }
 
-// TestCompactReportsTheRowWhenTheAuthorityRuns is the control: with rigd alive, `compact` is a read that
+// TestCompactReportsTheRowWhenTheAuthorityRuns is the control: with agent alive, `compact` is a read that
 // reports the supervisor's row rather than a start.
 func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 	var spawned []string
@@ -363,7 +363,7 @@ func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 		spawned = append(spawned, strings.Join(args, " "))
 		return diedChild{}, nil
 	}
-	rigdRunning = func() int { return 4242 }
+	agentRunning = func() int { return 4242 }
 	rowsFor = func(string) []clientservices.Health {
 		return []clientservices.Health{
 			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Running, PID: 99, AgeS: 3},
@@ -377,18 +377,18 @@ func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 		t.Fatalf("compact with a running supervisor returned %d (stderr: %q)", code, errOut.String())
 	}
 	if len(spawned) != 0 {
-		t.Errorf("compact spawned %v, and rigd is the only restart authority", spawned)
+		t.Errorf("compact spawned %v, and agent is the only restart authority", spawned)
 	}
 	if !strings.Contains(out.String(), "compact supervisor: running") {
 		t.Errorf("stdout = %q, want the supervisor reported as running", out.String())
 	}
 }
 
-// TestCompactNamesTheRowWhenTheSupervisorIsNotRunning: rigd alive, its child down - the row is named on
+// TestCompactNamesTheRowWhenTheSupervisorIsNotRunning: agent alive, its child down - the row is named on
 // stderr in the same words `doctor` uses.
 func TestCompactNamesTheRowWhenTheSupervisorIsNotRunning(t *testing.T) {
 	restoreAll(t)
-	rigdRunning = func() int { return 4242 }
+	agentRunning = func() int { return 4242 }
 	rowsFor = func(string) []clientservices.Health {
 		return []clientservices.Health{
 			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
@@ -438,7 +438,7 @@ func TestEveryLifecycleVerbRequiresARig(t *testing.T) {
 func TestABlankQuietValueMeansTheDefaultNotAFailedParse(t *testing.T) {
 	t.Setenv("COMPACT_QUIET_SECONDS", "")
 	var errOut bytes.Buffer
-	options, ok := ParseCompactRunOptions([]string{"--rig", "my-rig", "--once"}, &errOut)
+	options, ok := ParseCompactRunOptions([]string{"--room", "my-rig", "--once"}, &errOut)
 	if !ok {
 		t.Fatalf("a blank COMPACT_QUIET_SECONDS was a parse failure: %q", errOut.String())
 	}
@@ -451,7 +451,7 @@ func TestABlankQuietValueMeansTheDefaultNotAFailedParse(t *testing.T) {
 func TestANonNumericQuietValueRefusesAndNamesIt(t *testing.T) {
 	t.Setenv("COMPACT_QUIET_SECONDS", "soon")
 	var errOut bytes.Buffer
-	if _, ok := ParseCompactRunOptions([]string{"--rig", "my-rig", "--once"}, &errOut); ok {
+	if _, ok := ParseCompactRunOptions([]string{"--room", "my-rig", "--once"}, &errOut); ok {
 		t.Fatal("a non-numeric COMPACT_QUIET_SECONDS was accepted")
 	}
 	if !strings.Contains(errOut.String(), "COMPACT_QUIET_SECONDS") {
@@ -462,7 +462,7 @@ func TestANonNumericQuietValueRefusesAndNamesIt(t *testing.T) {
 // TestCompactRunStateRootFlag: --state-root names the root; without it the machine's own default is used.
 func TestCompactRunStateRootFlag(t *testing.T) {
 	var errOut bytes.Buffer
-	options, ok := ParseCompactRunOptions([]string{"--rig", "my-rig", "--once"}, &errOut)
+	options, ok := ParseCompactRunOptions([]string{"--room", "my-rig", "--once"}, &errOut)
 	if !ok {
 		t.Fatalf("the default was refused: %s", errOut.String())
 	}
@@ -470,7 +470,7 @@ func TestCompactRunStateRootFlag(t *testing.T) {
 		t.Errorf("StateRoot = %q, want the machine default %q", options.StateRoot, want)
 	}
 
-	options, ok = ParseCompactRunOptions([]string{"--rig", "my-rig", "--once", "--state-root", "/from/flag"}, &errOut)
+	options, ok = ParseCompactRunOptions([]string{"--room", "my-rig", "--once", "--state-root", "/from/flag"}, &errOut)
 	if !ok {
 		t.Fatalf("the flag was refused: %s", errOut.String())
 	}
@@ -479,12 +479,12 @@ func TestCompactRunStateRootFlag(t *testing.T) {
 	}
 }
 
-// TestCompactRunRequiresARig: the Python's --rig defaulted to the owner's rig.
+// TestCompactRunRequiresARig: the Python's --room defaulted to the owner's rig.
 // test_compact_run_requires_a_rig.
 func TestCompactRunRequiresARig(t *testing.T) {
 	var errOut bytes.Buffer
 	if _, ok := ParseCompactRunOptions([]string{"--once"}, &errOut); ok {
-		t.Fatal("compact-run accepted no --rig")
+		t.Fatal("compact-run accepted no --room")
 	}
 	if !strings.Contains(errOut.String(), "no default rig") {
 		t.Errorf("the refusal did not state the rule: %q", errOut.String())

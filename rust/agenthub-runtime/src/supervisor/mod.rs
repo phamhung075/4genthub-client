@@ -30,7 +30,7 @@ const SEAT_READY_WINDOW_SECS: u64 = 60;
 /// a grace period, not a handshake. Short, because it proves nothing about the agent inside the pane.
 const NON_OMP_READY_GRACE_MS: u64 = 1500;
 
-/// What `Capture` takes when the caller names no line count: the same 200 the client's own rigd uses for a
+/// What `Capture` takes when the caller names no line count: the same 200 the client's own agent uses for a
 /// session whose transcript is empty (`clientsync.captureLines`). Named here rather than defaulted at the
 /// call site so the two sides cannot disagree about how much of a pane a fallback read returns.
 const DEFAULT_CAPTURE_LINES: usize = 200;

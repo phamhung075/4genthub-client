@@ -1,7 +1,7 @@
-// The session list and the two content reads the connector and rigd need, answered by the runtime over its
+// The session list and the two content reads the connector and agent need, answered by the runtime over its
 // own socket.
 //
-// WHY THIS EXISTS. `connectorverb.go` and `rigd.go` reached the local rig by exec-ing `rig` for facts the
+// WHY THIS EXISTS. `connectorverb.go` and `agent.go` reached the local rig by exec-ing `rig` for facts the
 // runtime already held: the session list (`rig ps --json`), a transcript (`rig transcript <session>`) and a
 // pane (`rig capture <session>`). Those reaches were DECLARED against this missing interface (DEPLOY-READY
 // section 65), and two of them do not work at all on the installed client, which answers
@@ -86,7 +86,7 @@ func (c *Client) ListSessions(room string) ([]SessionEntry, error) {
 }
 
 // Transcript reads a seat's transcript. lines <= 0 reads the file whole, which is what the connector's
-// one-shot send wants; rigd asks for its own tail window instead.
+// one-shot send wants; agent asks for its own tail window instead.
 func (c *Client) Transcript(session string, lines int) (TranscriptAnswer, error) {
 	resp, err := c.Call("Transcript", contentPayload(session, lines))
 	if err != nil {

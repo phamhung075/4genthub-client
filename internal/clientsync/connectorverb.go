@@ -134,7 +134,7 @@ func RunConnectorVerb(ctx context.Context, args []string, stdout, stderr io.Writ
 	}
 	// ONE SHOT, AND HONEST ABOUT IT: this verb registers the session with the state it can see and the
 	// transcript source, and sends no cursor - it is not tailing anything, so claiming a position in the
-	// source would make the cloud resume a stream nobody keeps. The long-running `rigd` is the tail.
+	// source would make the cloud resume a stream nobody keeps. The long-running `agent` is the tail.
 	ack, err := conn.RegisterSession(SessionRegistration{
 		Key: session, Name: session, Room: room, Seat: seat,
 		State: SessionRunning, Source: SourceTranscript,

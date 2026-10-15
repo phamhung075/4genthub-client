@@ -9,7 +9,7 @@ import (
 func TestRemoteCommandsRefusalGuardrails(t *testing.T) {
 	// Case 1: Disabled by default
 	sock := &fakeSocket{}
-	daemon := NewRigDaemon(RigDaemonOptions{})
+	daemon := NewAgentDaemon(AgentDaemonOptions{})
 	daemon.sock = sock
 
 	cmdFrame := map[string]any{
@@ -102,7 +102,7 @@ func TestRemoteCommandsRefusalGuardrails(t *testing.T) {
 
 func TestRemoteCommandsExecutionSuccess(t *testing.T) {
 	sock := &fakeSocket{}
-	daemon := NewRigDaemon(RigDaemonOptions{
+	daemon := NewAgentDaemon(AgentDaemonOptions{
 		AllowRemoteCommands: true,
 		AllowedRooms:        []string{"4genthub-min"},
 	})
@@ -145,7 +145,7 @@ func TestRemoteCommandsExecutionSuccess(t *testing.T) {
 
 func TestRemoteCommandsExecutionFailureReportsError(t *testing.T) {
 	sock := &fakeSocket{}
-	daemon := NewRigDaemon(RigDaemonOptions{
+	daemon := NewAgentDaemon(AgentDaemonOptions{
 		AllowRemoteCommands: true,
 		AllowedRooms:        []string{"4genthub-min"},
 	})
