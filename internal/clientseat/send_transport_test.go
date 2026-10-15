@@ -80,9 +80,22 @@ func fakeRuntime(t *testing.T, handler func(line string) string) (string, <-chan
 	return sock, requests
 }
 
+// pinGoDevShell STATES THE IDENTITY THIS FILE'S FAKES LICENSE, so the shell that RUNS the tests cannot decide
+// their outcome. Measured 2026-10-15: this command is green in go-dev's shell and red in the reviewer's with
+// `reviewer may not send a notice to dev (no link)`, because AGENTHUB_ROOM, AGENTHUB_SEAT and
+// AGENTHUB_SESSION_NAME are inherited from the seat that runs it and the resolver reads them (clientruntime's
+// seat environment IS the identity when the runtime has not named one). A send test that leaves the sender's
+// seat to the ambient environment tests the machine it ran on, not the guard.
+func pinGoDevShell(t *testing.T) {
+	t.Helper()
+	t.Setenv("AGENTHUB_ROOM", "4genthub-min")
+	t.Setenv("AGENTHUB_SEAT", "go-dev")
+	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+}
+
 // TestSendGoesThroughTheRuntimeSocket: the runtime carries the message in a From/To/Sent envelope.
 func TestSendGoesThroughTheRuntimeSocket(t *testing.T) {
-	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+	pinGoDevShell(t)
 	auditStoreUnder(t)
 
 	sock, requests := fakeRuntime(t, func(line string) string {
@@ -165,7 +178,7 @@ func TestSendGoesThroughTheRuntimeSocket(t *testing.T) {
 // The other daemon (the environment's own) answers every well-formed request here, so a leak to it is not a
 // connection error a test could read past: it lands on its channel, and the check is that its channel is empty.
 func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
-	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+	pinGoDevShell(t)
 
 	other, otherSeen := fakeRuntime(t, func(string) string {
 		return `{"ok":true,"data":[]}` + "\n"
@@ -243,7 +256,7 @@ func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
 // TestSendJsonPrintsTheRuntimesOwnAnswer: --json is the transport's own document. The runtime path answers
 // with the daemon's SendText document rather than a re-rendering of it.
 func TestSendJsonPrintsTheRuntimesOwnAnswer(t *testing.T) {
-	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+	pinGoDevShell(t)
 
 	auditStoreUnder(t)
 	sock, _ := fakeRuntime(t, func(line string) string {
@@ -275,7 +288,7 @@ func TestSendJsonPrintsTheRuntimesOwnAnswer(t *testing.T) {
 // the RUNTIME that is missing — the same rule the queue verb follows — and never the removed sentence about
 // the rig daemon.
 func TestSendNamesTheRuntimeWhenNoTransportAnswers(t *testing.T) {
-	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+	pinGoDevShell(t)
 	noRuntimeSocket(t)
 
 	var out, errOut bytes.Buffer
@@ -355,10 +368,7 @@ func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *te
 
 	run := func(t *testing.T, target string) (int, string, string, []string) {
 		t.Helper()
-		t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
-		// The ambient room must not decide which room is asked: this shell sits in 4genthub-min, and the send
-		// is addressed to leg-solo.
-		t.Setenv("AGENTHUB_ROOM", "4genthub-min")
+		pinGoDevShell(t)
 
 		var mu sync.Mutex
 		var lines []string
@@ -370,12 +380,12 @@ func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *te
 			if strings.Contains(line, `"GetRoomLinks"`) {
 				return roomLinksDoc("go-dev", "solo")
 			}
-		if strings.Contains(line, `"Whoami"`) {
-			// THE SENDER'S OWN IDENTITY IS ASKED OF THE RUNTIME FIRST, so a fake daemon has to answer it the
-			// way a daemon does: this shell is go-dev of 4genthub-min.
-			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
-				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
-		}
+			if strings.Contains(line, `"Whoami"`) {
+				// THE SENDER'S OWN IDENTITY IS ASKED OF THE RUNTIME FIRST, so a fake daemon has to answer it the
+				// way a daemon does: this shell is go-dev of 4genthub-min.
+				return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+					`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
+			}
 			if strings.Contains(line, `"ListSessions"`) {
 				// The native name is read back to its seat key here: the room's links name seat keys, so the
 				// daemon the delivery goes to is asked which seat that session is.
