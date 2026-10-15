@@ -1,7 +1,7 @@
 #!/bin/bash
 # build.sh - build 4genteam from this checkout and install it, with the client's env file.
 #
-#   scripts/build.sh              go vet, go test, build, install ~/.local/bin/4genteam, install .env
+#   scripts/build.sh              go vet, go test, build, install ~/.local/bin/4genteam and agenthub-runtime, install .env
 #   scripts/build.sh --no-test    skip go test (go vet still runs)
 #
 # The checkout's .env, when it exists, REPLACES ~/.config/4genthub/.env (mode 600): that is the one
@@ -20,12 +20,20 @@ if [ "${1:-}" != "--no-test" ]; then
   go test ./...
 fi
 
+# the runtime daemon is a second binary of this client: a change under rust/ reaches the machine only when
+# it is built and installed here, or the daemon goes on running the last one that was
+(cd "$root/rust/agenthub-runtime" && cargo build --release --offline --quiet)
+
 # build beside the target and rename: a seat that is running the old binary keeps its inode
 mkdir -p "$bin_dir"
 go build -o "$bin_dir/.4genteam.new" ./cmd/4genteam
 chmod 0755 "$bin_dir/.4genteam.new"
 mv -f "$bin_dir/.4genteam.new" "$bin_dir/4genteam"
 echo "installed $bin_dir/4genteam ($("$bin_dir/4genteam" version))"
+cp "$root/rust/agenthub-runtime/target/release/agenthub-runtime" "$bin_dir/.agenthub-runtime.new"
+chmod 0755 "$bin_dir/.agenthub-runtime.new"
+mv -f "$bin_dir/.agenthub-runtime.new" "$bin_dir/agenthub-runtime"
+echo "installed $bin_dir/agenthub-runtime (restart the daemon to run it)"
 
 if [ -f "$root/.env" ]; then
   mkdir -p "$env_dir"
