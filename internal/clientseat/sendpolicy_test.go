@@ -274,3 +274,34 @@ func TestASendWithoutAnIntentIsDecidedAsANotice(t *testing.T) {
 		t.Errorf("outcome = %q, want %q", lines[1].Outcome, commpolicy.OutcomeDelivered)
 	}
 }
+
+// THE SHAPE THIS ROOM ACTUALLY PRODUCES, AND THE MISMATCH THE DECLARATION WAS ABOUT TO SHIP: a send that names
+// NO intent is decided as a notice, and a link declared `delegates_to` authorizes only an explicit
+// `--intent task`. So a pair declared delegates_to REFUSES the traffic it exists to license - which is exactly
+// what the reviewer measured on 2026-10-15 in the live room, where `reviewer -> go-dev` and `reviewer ->
+// fe-dev` were declared delegates_to while every verdict row the reviewer sends carries no intent at all.
+// The fix is the declaration's kind (collaborates_with), never the sender and never the documented default.
+func TestASendWithNoIntentIsRefusedByADelegatesToLink(t *testing.T) {
+	harness := newAuditHarness(t, linkDoc(auditSender, auditPeer, "delegates_to"))
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(),
+		[]string{"4genthub-min", auditPeer, "a verdict sent the way verdicts are sent"}, &out, &errOut)
+
+	if code == clientcmd.ExitOK {
+		t.Fatalf("a default-intent send over a delegates_to link exited 0; stdout %q", out.String())
+	}
+	if !strings.Contains(errOut.String(), "no link") {
+		t.Errorf("stderr = %q, want the denial's own reason", errOut.String())
+	}
+	if harness.sent() {
+		t.Fatalf("the message was delivered anyway; frames %v", harness.frames)
+	}
+	lines := harness.lines(t)
+	if len(lines) != 1 {
+		t.Fatalf("audit lines = %+v, want the decision line alone", lines)
+	}
+	if lines[0].Allowed || lines[0].Intent != commpolicy.IntentNotice {
+		t.Errorf("decision = %+v, want a denied line whose intent is the default notice", lines[0])
+	}
+}
