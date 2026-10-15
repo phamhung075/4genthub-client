@@ -63,6 +63,25 @@ fn confirm_submission(
 /// Enter presses before a send is reported unconfirmed: the first, and one retry.
 const SUBMIT_ENTER_ATTEMPTS: usize = 2;
 
+/// Variables tmux itself sets in every pane. A pane that carries them makes a bare `tmux` command in the seat
+/// act on the ROOM'S OWN server (`$TMUX` beats `TMUX_TMPDIR`): fe-dev's `tmux kill-server` ended all five seats
+/// on 2026-10-15. They are not in the daemon's environment, so `denied_env_keys` never finds them; the wrapper
+/// names them. Without them a bare `tmux` in a seat reaches the user's default server, not the room's.
+const PANE_TMUX_KEYS: [&str; 2] = ["TMUX", "TMUX_PANE"];
+
+/// The ONE string tmux hands to the pane's shell: `env -u <key>... <runtime_cmd>`, for every denied key and the
+/// two tmux pane variables.
+fn pane_command(denied: &[String], runtime_cmd: &str) -> String {
+    let mut wrapped = String::from("env");
+    for key in denied.iter().map(String::as_str).chain(PANE_TMUX_KEYS) {
+        wrapped.push_str(" -u ");
+        wrapped.push_str(key);
+    }
+    wrapped.push(' ');
+    wrapped.push_str(runtime_cmd);
+    wrapped
+}
+
 fn tmux_command() -> Command {
     let mut cmd = Command::new("tmux");
     crate::scrub_env(&mut cmd);
@@ -119,19 +138,7 @@ impl TerminalManager {
         // single string too: passing `env` as its own argv element makes `env` treat the whole command as a
         // program name, and the pane dies instantly (which is how the first version of this failed - visible
         // as a room that starts no seat at all).
-        let denied = crate::denied_env_keys();
-        if denied.is_empty() {
-            cmd.arg(runtime_cmd);
-        } else {
-            let mut wrapped = String::from("env");
-            for key in &denied {
-                wrapped.push_str(" -u ");
-                wrapped.push_str(key);
-            }
-            wrapped.push(' ');
-            wrapped.push_str(runtime_cmd);
-            cmd.arg(wrapped);
-        }
+        cmd.arg(pane_command(&crate::denied_env_keys(), runtime_cmd));
 
         // The tmux *client* is ours and short-lived, but it is a process of this launch and it carries the
         // daemon's environment: measured, it held the host's addressing variables while the runner and the agent
@@ -331,6 +338,15 @@ mod launch_env_tests {
     /// The second seat launched into a server the first one created must carry its OWN identity. tmux
     /// builds a session's environment from the server's, so this fails whenever the variables ride the
     /// client's environment instead of `new-session -e`.
+    #[test]
+    fn the_pane_command_unsets_the_tmux_pane_variables_and_the_denied_keys() {
+        assert_eq!(
+            pane_command(&["RIGGED_A".to_string()], "/bin/runner x"),
+            "env -u RIGGED_A -u TMUX -u TMUX_PANE /bin/runner x"
+        );
+        assert_eq!(pane_command(&[], "/bin/runner x"), "env -u TMUX -u TMUX_PANE /bin/runner x");
+    }
+
     #[test]
     fn each_session_gets_its_own_env_not_the_servers() {
         let dir = std::env::temp_dir().join(format!("pty-launch-env-{}", std::process::id()));
