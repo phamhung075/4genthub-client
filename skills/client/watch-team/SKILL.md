@@ -25,7 +25,7 @@ this view, then the UI.
 That opens both workspaces:
 
 - `<RIG> grid`: 2 columns, one pane per live seat, sorted by name and filled top to bottom then left
-  to right, each pane running `feed --back 40 --width 200 --lines 60 --detail`. Every pane header
+  to right, each pane running `feed --back 40 --width 0 --lines 60 --detail`. Every pane header
   names the seat and its model and carries a token bar, `used/150k to compact`.
 - `<RIG> lead`: the lead's detailed feed on top, a `lead > input` pane below it (ratio 0.8) — a line
   typed there is sent to the lead.

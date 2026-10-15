@@ -68,11 +68,44 @@ type shared struct {
 	cols      int
 	stateRoot string
 	seats     []string
+
+	// view filters, passed on to every pane
+	only       string
+	errorsOnly bool
+	expand     bool
+	changes    bool
 }
 
 func (s shared) gridCommandArgs() string {
-	return fmt.Sprintf("--back %d --width %d --lines %d", s.back, s.width, s.lines) +
-		detailFlag(s.detail)
+	args := fmt.Sprintf("--back %d --width %d --lines %d", s.back, s.width, s.lines) + detailFlag(s.detail)
+	if s.only != "" {
+		args += " --only " + s.only
+	}
+	if s.changes {
+		args += " --changes"
+	}
+	if s.errorsOnly {
+		args += " --errors"
+	}
+	if s.expand {
+		args += " --expand"
+	}
+	return args
+}
+
+// onlyKinds is the --only list as a set; nil keeps every kind.
+func (s shared) onlyKinds() map[string]bool {
+	if s.changes {
+		return map[string]bool{"write": true}
+	}
+	if s.only == "" {
+		return nil
+	}
+	kinds := map[string]bool{}
+	for _, kind := range strings.Split(s.only, ",") {
+		kinds[strings.TrimSpace(kind)] = true
+	}
+	return kinds
 }
 
 func detailFlag(detail bool) string {

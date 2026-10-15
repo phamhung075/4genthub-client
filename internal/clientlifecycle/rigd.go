@@ -264,6 +264,10 @@ func rigdSpecs(rigs []string) ([]rigdSpec, error) {
 		if err != nil {
 			return nil, err
 		}
+		guardLog, err := IdleLogPath(rig)
+		if err != nil {
+			return nil, err
+		}
 		specs = append(specs,
 			rigdSpec{
 				safeguard: clientservices.Compact, rig: rig,
@@ -282,6 +286,12 @@ func rigdSpecs(rigs []string) ([]rigdSpec, error) {
 				argv:      []string{"sync", "messages", "--rig", rig, "--watch"},
 				logPath:   messagesLog,
 				threshold: clientservices.SilentAfter(clientservices.MessagesEvery),
+			},
+			rigdSpec{
+				safeguard: clientservices.RoomGuard, rig: rig,
+				argv:      []string{"idle-run", "--rig", rig},
+				logPath:   guardLog,
+				threshold: clientservices.SilentAfter(clientservices.RoomGuardEvery),
 			},
 		)
 	}

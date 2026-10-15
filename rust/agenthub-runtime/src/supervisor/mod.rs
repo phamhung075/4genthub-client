@@ -190,6 +190,88 @@ fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
     })
 }
 
+/// The seat's MCP config, which omp reads from its agent dir. It names the variables, never their values: the
+/// URL and the token come from the `.env` that `seat_env` hands every seat, so this file holds no secret.
+const SEAT_MCP_CONFIG: &str = r#"{"mcpServers":{"agenthub_http":{"type":"http","url":"${AGENTHUB_URL}/mcp","headers":{"Accept":"application/json, text/event-stream","Authorization":"Bearer ${AGENTHUB_TOKEN}"}}}}
+"#;
+
+/// The variable that names the client's skill tree (`share/`, `rooms/<room>/`, `rooms/<room>/<seat>/`). It is
+/// read from the state root's `.env`, else from the daemon's own environment.
+const SKILLS_ROOT_ENV: &str = "AGENTHUB_CLIENT_SKILLS";
+
+/// Install the seat's skills into `<seat dir>/skills/<name>`, which is where omp (its agent dir is the seat
+/// dir) loads them from: the shared skills, the room's, and the seat's own folder, the more specific one
+/// replacing a shared skill of the same name. The directory is runtime-owned, so it is rebuilt every start
+/// and a skill removed from the tree does not linger. No tree configured means no skills, which is not an
+/// error: a machine with no tree has nothing to install.
+fn install_seat_skills(state_dir: &Path, room: &str, seat: &str, seat_dir: &Path) -> Result<(), String> {
+    let root = env_file_vars(state_dir)
+        .remove(SKILLS_ROOT_ENV)
+        .or_else(|| std::env::var(SKILLS_ROOT_ENV).ok())
+        .filter(|v| !v.is_empty());
+    let Some(root) = root else { return Ok(()) };
+    let target = seat_dir.join("skills");
+    if target.exists() {
+        fs::remove_dir_all(&target).map_err(|e| format!("cannot clear {}: {e}", target.display()))?;
+    }
+    for skill in crate::skills::SkillResolver::new(root).resolve_for_seat(room, seat) {
+        let Some(source) = skill.path.parent() else { continue };
+        copy_dir(source, &target.join(&skill.name))
+            .map_err(|e| format!("cannot install the skill {}: {e}", skill.name))?;
+    }
+    Ok(())
+}
+
+/// Copy a directory tree, replacing what is at `to`. Every file under a skill goes with it (a skill may
+/// carry baselines and references beside its SKILL.md).
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.exists() {
+        fs::remove_dir_all(to)?;
+    }
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let dest = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &dest)?;
+        } else {
+            fs::copy(entry.path(), &dest)?;
+        }
+    }
+    Ok(())
+}
+
+/// The variables of `<state_dir>/.env`: `KEY=VALUE` lines, an optional `export ` prefix, one pair of matching
+/// quotes stripped, `#` comment and blank lines skipped. A missing or unreadable file is no variables. Values
+/// are never logged: the file holds credentials.
+fn env_file_vars(state_dir: &Path) -> HashMap<String, String> {
+    let Ok(text) = fs::read_to_string(state_dir.join(".env")) else {
+        return HashMap::new();
+    };
+    let mut vars = HashMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let value = value.trim();
+        let value = match value.as_bytes() {
+            [q @ (b'"' | b'\''), .., last] if q == last && value.len() >= 2 => &value[1..value.len() - 1],
+            _ => value,
+        };
+        vars.insert(key.to_string(), value.to_string());
+    }
+    vars
+}
+
 /// The environment ONE seat's runner and its agent are launched with.
 ///
 /// A pure function rather than an inline block, so what a seat inherits can be pinned without a tmux server:
@@ -207,8 +289,13 @@ fn seat_env(
     session_name: &str,
     seat_dir: &Path,
     runtime_socket: &Path,
+    state_dir: &Path,
 ) -> HashMap<String, String> {
-    let mut env = seat.env.clone();
+    // The state root's own `.env` is the client's one configuration file (the MCP URL and token, the provider
+    // keys): every seat starts with it, so no seat is asked to hold a copy. A key the seat's spec names wins
+    // over the file, and the runtime-owned keys below win over both.
+    let mut env = env_file_vars(state_dir);
+    env.extend(seat.env.clone());
     env.insert("AGENTHUB_ROOM".into(), room.into());
     env.insert("AGENTHUB_SEAT".into(), seat.seat_key.clone());
     env.insert("AGENTHUB_ROLE".into(), seat.seat_type.clone());
@@ -393,6 +480,9 @@ impl RoomSupervisor {
         let room_dir = self.room_dir(room);
         let seat_dir = room_dir.join("seats").join(&seat.seat_key);
         fs::create_dir_all(&seat_dir).map_err(|e| format!("cannot create seat dir: {e}"))?;
+        fs::write(seat_dir.join("mcp.json"), SEAT_MCP_CONFIG)
+            .map_err(|e| format!("cannot write the seat's mcp.json: {e}"))?;
+        install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
 
         // Determine working directory
         let cwd_str = seat.cwd.as_deref().or(spec.cwd.as_deref()).unwrap_or(".");
@@ -420,7 +510,7 @@ impl RoomSupervisor {
         };
 
         // Build environment variables
-        let env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket);
+        let env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket, &self.base_state_dir);
 
         // WHEN THIS GENERATION'S PANE WAS CREATED. The readiness proof below is a file the previous
         // generation's teardown also writes into, so existence alone cannot separate a handshake from an
@@ -2353,6 +2443,7 @@ mod tests {
             "agenthub--isolated--dev",
             Path::new("/state/rooms/isolated/seats/dev"),
             Path::new("/tmp/isolation/rt/agenthub.sock"),
+            Path::new("/nonexistent-state-root"),
         );
 
         assert_eq!(
@@ -2366,6 +2457,76 @@ mod tests {
             Some("agenthub--isolated--dev"),
             "the session name the seat's own client sends as"
         );
+    }
+
+    /// The state root's `.env` reaches every seat: the MCP URL and token are configured once, and a seat that
+    /// is started holds them without a copy. The seat's own spec wins over the file, and the runtime's keys
+    /// win over both.
+    #[test]
+    fn a_seats_env_carries_the_state_roots_env_file() {
+        let dir = scratch("seat-env-file");
+        fs::write(
+            dir.join(".env"),
+            "# a comment\nAGENTHUB_MCP_URL=http://127.0.0.1:8000/mcp\nexport QUOTED=\"a b\"\nSPEC_WINS=file\nAGENTHUB_ROOM=file\nbad key=x\n\nEMPTY=\n",
+        )
+        .expect("write .env");
+        let seat: SeatSpec = serde_json::from_value(serde_json::json!({
+            "seat_key": "dev", "seat_type": "developer", "runtime": "omp",
+            "env": {"SPEC_WINS": "spec"}
+        }))
+        .expect("seat");
+        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir);
+        assert_eq!(env.get("AGENTHUB_MCP_URL").map(String::as_str), Some("http://127.0.0.1:8000/mcp"));
+        assert_eq!(env.get("QUOTED").map(String::as_str), Some("a b"));
+        assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
+        assert_eq!(env.get("SPEC_WINS").map(String::as_str), Some("spec"), "the spec wins over the file");
+        assert_eq!(env.get("AGENTHUB_ROOM").map(String::as_str), Some("demo"), "the runtime wins over both");
+        assert!(!env.contains_key("bad key"));
+        let none = seat_env(&seat, "demo", "s", Path::new("/s"), Path::new("/r.sock"), Path::new("/nonexistent-state-root"));
+        assert!(!none.contains_key("AGENTHUB_MCP_URL"), "no file, no variables");
+    }
+
+    /// The MCP config a seat is started with carries variable references only, so it is safe to leave in the
+    /// seat dir and holds no credential.
+    #[test]
+    fn the_seat_mcp_config_names_variables_and_no_secret() {
+        let parsed: serde_json::Value = serde_json::from_str(SEAT_MCP_CONFIG).expect("valid json");
+        let server = &parsed["mcpServers"]["agenthub_http"];
+        assert_eq!(server["url"], "${AGENTHUB_URL}/mcp");
+        assert_eq!(server["headers"]["Authorization"], "Bearer ${AGENTHUB_TOKEN}");
+    }
+
+    /// The seat's own folder is nested one level deeper than the room's skills, and a seat receives share +
+    /// room + its own folder, the more specific replacing the shared one, and nothing of another seat.
+    #[test]
+    fn a_seat_gets_its_nested_skills_and_not_another_seats() {
+        let state = scratch("skills-state");
+        let tree = scratch("skills-tree");
+        let skill = |rel: &str, extra: &str| {
+            let dir = tree.join(rel);
+            fs::create_dir_all(&dir).expect("dir");
+            fs::write(dir.join("SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n").expect("skill");
+            if !extra.is_empty() {
+                fs::write(dir.join(extra), "y").expect("extra");
+            }
+        };
+        skill("share/common", "");
+        skill("share/both", "");
+        skill("rooms/r/room-skill", "");
+        skill("rooms/r/dev/own-skill", "baseline.json");
+        skill("rooms/r/dev/both", "");
+        skill("rooms/r/other/theirs", "");
+        fs::write(state.join(".env"), format!("{SKILLS_ROOT_ENV}={}\n", tree.display())).expect("env");
+        let seat_dir = state.join("rooms/r/seats/dev");
+        fs::create_dir_all(seat_dir.join("skills/stale")).expect("stale");
+        install_seat_skills(&state, "r", "dev", &seat_dir).expect("install");
+        let mut names: Vec<String> = fs::read_dir(seat_dir.join("skills"))
+            .expect("skills dir")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["both", "common", "own-skill", "room-skill"], "no stale, no other seat's skill");
+        assert!(seat_dir.join("skills/own-skill/baseline.json").is_file(), "files beside SKILL.md go too");
     }
 
     /// The nudge pass enumerates the rooms that are on disk. With no tmux session behind any seat, no seat

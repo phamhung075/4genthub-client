@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -40,6 +42,9 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 		logPath, _ := seatLog(root, s.rig, seats[0])
 		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModel(logPath),
 			func(line string) { fmt.Fprintln(out, line) })
+		if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
+			header.pane = func(title string) { _, _ = herdr(ctx, "pane", "rename", paneID, title) }
+		}
 	}
 
 	type position struct {
@@ -48,22 +53,53 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 	}
 	positions := map[string]position{}
 
+	opts := renderOptions{width: lineWidth(s.width, header != nil), lines: s.lines, detail: s.detail, expand: s.expand,
+		only: s.onlyKinds(), errorsOnly: s.errorsOnly, calls: newCallTracker()}
+	views := map[string]*seatView{}
+	for _, seat := range seats {
+		views[seat] = &seatView{}
+	}
+
 	show := func(seat, line string) {
 		if used := contextTokens(line); header != nil && used != nil {
 			header.setTokens(used)
 		}
-		stamp := time.Now().Format("15:04:05")
-		name := fg(colours[seat]) + padRight(seat, 12) + reset
-		if header != nil {
-			if tag := header.tag(); tag != "" {
-				name = tag
-			}
+		at := recordTime(line)
+		view := views[seat]
+		texts := eventsWith(line, opts)
+		if header != nil && len(texts) > 0 {
+			header.touch(at)
 		}
-		for _, text := range events(line, s.width, s.detail, s.lines) {
-			fmt.Fprintf(out, "%s%s%s %s%s\n", fg(stampColor), stamp, reset, name, text)
+		for _, text := range texts {
+			if text == view.last {
+				view.repeated++
+				continue
+			}
+			if view.repeated > 0 {
+				fmt.Fprintf(out, "%s%s↺ repeated ×%d%s\n", strings.Repeat(" ", 5+1+4), fg(stampColor), view.repeated, reset)
+				view.repeated = 0
+			}
+			view.last = text
+			if header != nil {
+				// A pane holds one seat: the clock and the meter ride on the rule, so no step line is indented.
+				info := func() string {
+					return strings.TrimSpace(view.stamp(at) + " " + view.meter(header.tag(), header.percent()))
+				}
+				if rule := view.ruleBefore(text, opts.width, info); rule != "" {
+					fmt.Fprintln(out, rule)
+				}
+				fmt.Fprintln(out, text)
+				continue
+			}
+			if rule := view.ruleBefore(text, opts.width, nil); rule != "" {
+				fmt.Fprintln(out, rule)
+			}
+			name := fg(colours[seat]) + padRight(seat, 12) + reset
+			fmt.Fprintf(out, "%s %s%s\n", view.stamp(at), name, text)
 		}
 	}
 
+	filterOpts := renderOptions{width: 1, lines: s.lines, detail: s.detail, expand: s.expand, only: opts.only, errorsOnly: s.errorsOnly}
 	if header == nil {
 		fmt.Fprintf(out, "-- following %d seats; Ctrl-C to stop\n", len(seats))
 	}
@@ -75,7 +111,7 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 		lines := readLines(logPath)
 		shown := []string{}
 		for _, line := range lines {
-			if len(events(line, 1, s.detail, s.lines)) > 0 {
+			if len(eventsWith(line, filterOpts)) > 0 {
 				shown = append(shown, line)
 			}
 		}
@@ -138,4 +174,22 @@ func padRight(text string, width int) string {
 		return text
 	}
 	return text + fmt.Sprintf("%*s", width-length, "")
+}
+
+// recordTime is when the seat logged the record, so the clock on a line is the seat's and a replay is
+// not stamped with the minute the viewer started. A record with no readable time is stamped now.
+func recordTime(line string) time.Time {
+	decoded, _, err := decodeOrderedJSON(line)
+	if err == nil {
+		if record, ok := decoded.(*orderedJSONObject); ok {
+			if value, present := record.get("timestamp"); present {
+				if text, ok := value.(string); ok {
+					if at, err := time.Parse(time.RFC3339Nano, text); err == nil {
+						return at.Local()
+					}
+				}
+			}
+		}
+	}
+	return time.Now()
 }

@@ -19,10 +19,12 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientcomplete"
 	"github.com/phamhung075/4genthub-client/internal/clientdecide"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientevidence"
 	"github.com/phamhung075/4genthub-client/internal/clientfeedback"
+	"github.com/phamhung075/4genthub-client/internal/clientheal"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientoutbox"
@@ -99,12 +101,14 @@ func commands() []clientcmd.Command {
 	// with the pair (state dir + socket) printed on every run. `up` is the room's own start path and stays
 	// where it is, in clientlifecycle.
 	registry = append(registry, clientroom.Commands()...)
+	registry = append(registry, clientheal.Commands()...)
 	registry = append(registry, clientoffpeak.Commands()...)
 	registry = append(registry, clientseat.Commands()...)
 	registry = append(registry, clientpolicy.Commands()...)
 	registry = append(registry, clientteam.Commands()...)
 	registry = append(registry, clientwatch.Commands()...)
 	registry = append(registry, clientfeedback.Commands()...)
+	registry = append(registry, clientcomplete.Commands()...)
 	registry = append(registry, clientdecide.Commands()...)
 	registry = append(registry, clientevidence.Commands()...)
 	registry = append(registry, clientrestore.Commands()...)

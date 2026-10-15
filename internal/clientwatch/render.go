@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -26,12 +27,35 @@ const (
 // seatColors cycle per seat, in the Python's order.
 var seatColors = []int{203, 114, 221, 75, 213, 87, 215, 183, 120, 229}
 
-// toolColors maps a tool name to its colour: reads blue, writes yellow, shell green, MCP magenta,
-// anything else white.
-var toolColors = map[string]int{
-	"read": 117, "grep": 117, "find": 117, "ls": 117, "search": 117,
-	"write": 221, "edit": 221, "ast_edit": 221,
-	"bash": 120, "eval": 120,
+// toolStyle is how a tool call looks: a glyph and a colour per kind of work, so a feed is read by shape.
+type toolStyle struct {
+	glyph  string
+	colour int
+	kind   string
+}
+
+var (
+	readStyle     = toolStyle{"◉", 117, "read"}
+	searchStyle   = toolStyle{"⌕", 81, "search"}
+	writeStyle    = toolStyle{"✎", 221, "write"}
+	shellStyle    = toolStyle{"❯", 120, "shell"}
+	webStyle      = toolStyle{"⌁", 75, "web"}
+	delegateStyle = toolStyle{"⇉", 183, "delegate"}
+	askStyle      = toolStyle{"?", 215, "ask"}
+	mcpStyle      = toolStyle{"⬡", mcpColor, "mcp"}
+	otherStyle    = toolStyle{"→", defaultToolColor, "other"}
+)
+
+// toolStyles maps a tool name to its style: reads blue, searches cyan, writes yellow, shell green,
+// web and delegation their own, MCP magenta, anything else white.
+var toolStyles = map[string]toolStyle{
+	"read": readStyle, "ls": readStyle,
+	"grep": searchStyle, "find": searchStyle, "glob": searchStyle, "search": searchStyle, "ast_grep": searchStyle,
+	"write": writeStyle, "edit": writeStyle, "ast_edit": writeStyle,
+	"bash": shellStyle, "eval": shellStyle,
+	"web_search": webStyle, "fetch": webStyle, "browser": webStyle,
+	"task": delegateStyle, "todo_write": delegateStyle,
+	"ask": askStyle,
 }
 
 func fg(code int) string { return fmt.Sprintf("\033[38;5;%dm", code) }
@@ -178,9 +202,15 @@ func block(head, style, text string, width, lines int) string {
 	if len(rawRows) == 0 {
 		rawRows = []string{""}
 	}
+	// width is the whole line: the head and the 4-column indent come out of it, so a wrapped row never
+	// outgrows the pane and the terminal never wraps it a second time to column 0.
+	rowWidth := width
+	if width > 0 {
+		rowWidth = max(20, width-max(4, visibleLen(head)))
+	}
 	var rows []string
 	for _, r := range rawRows {
-		rows = append(rows, wrapRunes(r, width)...)
+		rows = append(rows, wrapRunes(r, rowWidth)...)
 	}
 	if len(rows) == 0 {
 		rows = []string{""}
@@ -246,29 +276,49 @@ func cutRunes(text string, width int) string {
 }
 
 // callBody is (the names of the arguments not shown, the main argument as text).
-func callBody(args any) (string, string) {
+func callBody(args any) string {
 	object, ok := args.(*orderedJSONObject)
 	if !ok {
-		return "", pythonText(args)
+		return pythonText(args)
 	}
 	for _, key := range []string{"command", "CommandLine", "path", "AbsolutePath", "TargetFile", "target_file", "intent", "prompt", "code"} {
-		value, present := object.get(key)
-		if !present {
-			continue
+		if value, present := object.get(key); present {
+			return pythonText(value)
 		}
-		others := []string{}
-		for _, candidate := range object.keys {
-			if candidate != key {
-				others = append(others, candidate)
+	}
+	rest := &orderedJSONObject{}
+	for index, key := range object.keys {
+		if key != "i" {
+			rest.keys = append(rest.keys, key)
+			rest.values = append(rest.values, object.values[index])
+		}
+	}
+	return indentPython(rest)
+}
+
+// callIntent is the purpose a seat states in the "i" argument of its call.
+func callIntent(args any) string {
+	if object, ok := args.(*orderedJSONObject); ok {
+		if value, present := object.get("i"); present {
+			if text, ok := value.(string); ok {
+				return strings.TrimSpace(text)
 			}
 		}
-		extra := ""
-		if len(others) > 0 {
-			extra = " (+" + strings.Join(others, ", ") + ")"
-		}
-		return extra, key + "=" + pythonText(value)
 	}
-	return "", indentPython(object)
+	return ""
+}
+
+// mcpDevice is the tool named by the device path a seat reads or writes to reach an MCP tool,
+// xd://mcp__<server>_<tool>: a write sends the tool its arguments, a read returns its schema.
+func mcpDevice(name string, args any) (string, bool) {
+	object, ok := args.(*orderedJSONObject)
+	if !ok || (name != "write" && name != "read") {
+		return "", false
+	}
+	path, _ := object.get("path")
+	text, _ := path.(string)
+	device, found := strings.CutPrefix(text, "xd://mcp__")
+	return device, found
 }
 
 // pythonText is Python's str() for the values that reach a header: a string is itself, everything else
@@ -281,17 +331,24 @@ func pythonText(value any) string {
 }
 
 // detailLines renders the agent's reasoning, what it says, and what it is told.
-func detailLines(role string, part *orderedJSONObject, width, lines int) []string {
+func detailLines(role string, part *orderedJSONObject, o renderOptions) []string {
+	width, lines := o.width, o.lines
 	kind, _ := part.get("type")
 	kindText, _ := kind.(string)
 	switch {
 	case role == "assistant" && kindText == "thinking":
+		if !o.keep("think") {
+			return nil
+		}
 		if text, ok := part.get("thinking"); ok {
 			if trimmed := strings.TrimSpace(pythonText(text)); trimmed != "" {
 				return []string{block(bold+fg(183)+"~ think "+reset, fg(183)+"\033[3m", trimmed, width, lines)}
 			}
 		}
 	case role == "assistant" && kindText == "text":
+		if !o.keep("say") {
+			return nil
+		}
 		if text, ok := part.get("text"); ok {
 			trimmed := strings.TrimSpace(pythonText(text))
 			if len([]rune(trimmed)) > 1 {
@@ -299,6 +356,9 @@ func detailLines(role string, part *orderedJSONObject, width, lines int) []strin
 			}
 		}
 	case role == "user" && kindText == "text":
+		if !o.keep("in") {
+			return nil
+		}
 		if text, ok := part.get("text"); ok {
 			if trimmed := strings.TrimSpace(pythonText(text)); trimmed != "" {
 				return []string{block(bold+fg(87)+"◂ in "+reset, fg(123), trimmed, width, lines)}
@@ -308,9 +368,71 @@ func detailLines(role string, part *orderedJSONObject, width, lines int) []strin
 	return nil
 }
 
+// hookColor is the colour of what the runtime injects into a seat on its own, so a reader tells it from
+// the seat's own calls.
+const hookColor = 215
+
+var systemTags = strings.NewReplacer("<system-reminder>", "", "</system-reminder>", "", "<system-notice>", "", "</system-notice>", "")
+
+// hookMaxLines caps an injected notice: they repeat, and the seat's own work is what the feed is for.
+const hookMaxLines = 3
+
+// hookEvents renders what the runtime injects into a seat itself: a reminder or notice, a rule it injected
+// and the end of a session. The second result is false for a record that is none of these.
+func hookEvents(record *orderedJSONObject, o renderOptions) ([]string, bool) {
+	width, lines := o.width, o.lines
+	kind, _ := record.get("type")
+	badge := func(label string) string {
+		return "\033[1;38;5;16;48;5;" + fmt.Sprint(hookColor) + "m " + label + " " + reset + " "
+	}
+	if o.errorsOnly || !o.keep("hook") {
+		if kind == "custom_message" || kind == "ttsr_injection" {
+			return nil, true
+		}
+	}
+	switch kind {
+	case "custom_message":
+		customType, _ := record.get("customType")
+		label, _ := customType.(string)
+		content, _ := record.get("content")
+		text := strings.TrimSpace(systemTags.Replace(pythonText(content)))
+		return []string{block(badge("HOOK "+label), fg(hookColor), text, width, min(lines, hookMaxLines))}, true
+	case "ttsr_injection":
+		names := []string{}
+		if rules, ok := record.get("injectedRules"); ok {
+			if list, ok := rules.([]any); ok {
+				for _, rule := range list {
+					names = append(names, pythonText(rule))
+				}
+			}
+		}
+		return []string{block(badge("RULE"), fg(hookColor), strings.Join(names, ", "), width, lines)}, true
+	case "custom":
+		if customType, _ := record.get("customType"); customType != "session_exit" {
+			return nil, false
+		}
+		reason := ""
+		if data, ok := record.get("data"); ok {
+			if object, ok := data.(*orderedJSONObject); ok {
+				if value, present := object.get("reason"); present {
+					reason = pythonText(value)
+				}
+			}
+		}
+		return []string{block(badge("EXIT"), fg(hookColor), reason, width, lines)}, true
+	}
+	return nil, false
+}
+
 // events renders one session-log line. A line that is not JSON, or that carries no event, renders
 // nothing - the caller tells the two apart by the empty result.
 func events(line string, width int, detail bool, lines int) []string {
+	return eventsWith(line, renderOptions{width: width, lines: lines, detail: detail})
+}
+
+// eventsWith is events with the view options: which kinds are kept, whether results stay full, and the
+// tracker that ties a result to the call that made it.
+func eventsWith(line string, o renderOptions) []string {
 	decoded, _, err := decodeOrderedJSON(line)
 	if err != nil {
 		return nil
@@ -328,16 +450,19 @@ func events(line string, width int, detail bool, lines int) []string {
 		}
 		return []string{}
 	}
+	if rendered, isHook := hookEvents(record, o); isHook {
+		return rendered
+	}
 	if converted, isAgy := agyToOMP(record); isAgy {
 		out := []string{}
 		for _, c := range converted {
-			out = append(out, ompEvents(c, width, detail, lines)...)
+			out = append(out, ompEvents(c, o)...)
 		}
 		return out
 	}
 	out := []string{}
 	for _, converted := range claudeToOMP(record) {
-		out = append(out, ompEvents(converted, width, detail, lines)...)
+		out = append(out, ompEvents(converted, o)...)
 	}
 	return out
 }
@@ -522,6 +647,15 @@ func wrapContent(msg *orderedJSONObject, role string, content []any) *orderedJSO
 	inner := &orderedJSONObject{}
 	inner.keys = append(inner.keys, "role", "content")
 	inner.values = append(inner.values, role, content)
+	for _, key := range []string{"toolName", "isError"} {
+		if msg == nil {
+			break
+		}
+		if value, present := msg.get(key); present {
+			inner.keys = append(inner.keys, key)
+			inner.values = append(inner.values, value)
+		}
+	}
 	wrapper := &orderedJSONObject{}
 	wrapper.keys = append(wrapper.keys, "message")
 	wrapper.values = append(wrapper.values, inner)
@@ -543,7 +677,8 @@ func toolResultRecord(isError bool, text string) *orderedJSONObject {
 
 // ompEvents renders one omp-shaped record: a tool result (blocked, error, or plain), and the detail
 // lines that go with a tool call.
-func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []string {
+func ompEvents(record *orderedJSONObject, o renderOptions) []string {
+	width, detail, lines := o.width, o.detail, o.lines
 	message, _ := record.get("message")
 	msg, ok := message.(*orderedJSONObject)
 	if !ok {
@@ -565,17 +700,20 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 		}
 		text := strings.Join(pieces, " ")
 		body := pretty(text)
-		head120 := cutRunes(text, 120)
-		switch {
-		case strings.HasPrefix(text, "Tool ") && strings.Contains(head120, "is blocked by tool policy"):
-			return []string{block("\033[1;38;5;231;48;5;160m ✗ BLOCKED "+reset, fg(210), body, width, lines)}
-		default:
-			isError, _ := msg.get("isError")
-			if flag, _ := isError.(bool); flag {
-				return []string{block(bold+fg(203)+"✗ "+reset, fg(203), body, width, lines)}
+		tool := ""
+		if value, present := msg.get("toolName"); present {
+			if name, ok := value.(string); ok && name != "" {
+				tool = name + " "
 			}
-			return []string{block(fg(resultColor)+"← "+reset, fg(resultColor), body, width, lines)}
 		}
+		head120 := cutRunes(text, 120)
+		if strings.HasPrefix(text, "Tool ") && strings.Contains(head120, "is blocked by tool policy") {
+			return []string{block("\033[1;38;5;231;48;5;160m ✗ BLOCKED "+reset, fg(210), body, width, lines)}
+		}
+		isError, _ := msg.get("isError")
+		failed, _ := isError.(bool)
+		toolName := strings.TrimSpace(tool)
+		return o.resultLines(msg, toolName, body, failed)
 	}
 	items, ok := rawContent.([]any)
 	if !ok {
@@ -588,7 +726,7 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 			continue
 		}
 		if detail {
-			out = append(out, detailLines(roleText, part, width, lines)...)
+			out = append(out, detailLines(roleText, part, o)...)
 		}
 		if kind, _ := part.get("type"); kind != "toolCall" {
 			continue
@@ -599,20 +737,58 @@ func ompEvents(record *orderedJSONObject, width int, detail bool, lines int) []s
 				name = text
 			}
 		}
-		colour := defaultToolColor
+		style := otherStyle
 		if strings.HasPrefix(name, "mcp__") {
-			colour = mcpColor
-		} else if mapped, known := toolColors[name]; known {
-			colour = mapped
+			style = mcpStyle
+		} else if mapped, known := toolStyles[name]; known {
+			style = mapped
+		}
+		if o.errorsOnly || !o.keep(style.kind) {
+			continue
 		}
 		arguments, _ := part.get("arguments")
-		extra, body := callBody(arguments)
-		out = append(out, block(fmt.Sprintf("%s%s→ %s%s%s ", bold, fg(colour), name, extra, reset), fg(255), body, width, lines))
+		label, body := name, callBody(arguments)
+		if device, isDevice := mcpDevice(name, arguments); isDevice {
+			label, style = "mcp "+device, mcpStyle
+			body = ""
+			if name == "write" {
+				if object, ok := arguments.(*orderedJSONObject); ok {
+					if content, present := object.get("content"); present {
+						body = pythonText(content)
+					}
+				}
+			}
+		}
+		head := fmt.Sprintf("%s%s%s %s%s", bold, fg(style.colour), style.glyph, label, reset)
+		intent := callIntent(arguments)
+		if id, _ := part.get("id"); o.calls != nil {
+			if callID, ok := id.(string); ok {
+				o.calls.note(callID, style.kind, body)
+			}
+		}
+		if path, removed, added, isEdit := editDiff(name, arguments); isEdit {
+			rows, plus, minus := lineDiff(removed, added)
+			lead := fmt.Sprintf("%s  %s%s%s  %s+%d%s %s−%d%s", head, fg(255), path, reset, fg(addedColour), plus, reset, fg(removedColour), minus, reset)
+			if intent != "" {
+				lead += "  " + fg(250) + "\033[3m" + intent + reset
+			}
+			out = append(out, lead+"\n"+diffRows(rows, width, lines))
+			continue
+		}
+		switch {
+		case intent == "":
+			out = append(out, block(head+" ", fg(255), body, width, lines))
+		case body == "":
+			out = append(out, head+"  "+fg(250)+"\033[3m"+intent+reset)
+		default:
+			out = append(out, head+"  "+fg(250)+"\033[3m"+intent+reset+"\n"+block("    ", fg(255), body, width, lines))
+		}
 	}
 	return out
 }
 
-// Header is the seat name and its token bar as a line of the feed, repeated when the reading moves.
+// Header is the seat name, model and token bar: a line of the feed, repeated when the reading moves, or
+// the title of the pane the feed runs in.
 //
 // A pinned row needs a terminal scroll region, and lines scrolled inside a region never reach the
 // scrollback, so the pane could not be scrolled. A plain line keeps the scrollback.
@@ -623,15 +799,26 @@ type Header struct {
 	model  string
 	tokens *int
 
+	// lastEvent is when the seat last did anything, for the working / quiet status in the title.
+	lastEvent time.Time
+
 	lastText string
 	lastAt   time.Time
+
+	// pane, when set, takes the title instead of the feed: the grid pane's own title carries it.
+	pane func(title string)
 
 	// now and out are the clock and the sink, so a test can drive the repeat rule without waiting.
 	now func() time.Time
 	out func(string)
 }
 
-const headerRepeat = 20 * time.Second
+const (
+	headerRepeat = 20 * time.Second
+	paneRepeat   = 5 * time.Second
+)
+
+var ansiSequence = regexp.MustCompile("\033\\[[0-9;]*m")
 
 func newHeader(name string, colour, limit int, model string, out func(string)) *Header {
 	return &Header{name: name, colour: colour, limit: limit, model: model, now: time.Now, out: out}
@@ -641,21 +828,91 @@ func (h *Header) setTokens(tokens *int) { h.tokens = tokens }
 
 func (h *Header) tag() string { return barTag(h.tokens, h.limit) }
 
+func (h *Header) touch(at time.Time) {
+	if at.After(h.lastEvent) {
+		h.lastEvent = at
+	}
+}
+
+// percent is the context used, in whole percent of the compaction limit; 0 until a reading is known.
+func (h *Header) percent() int {
+	if h.tokens == nil || h.limit <= 0 {
+		return 0
+	}
+	return *h.tokens * 100 / h.limit
+}
+
+// status is what the seat is doing: working while events are arriving, then how long it has been quiet.
+func (h *Header) status() string {
+	if h.lastEvent.IsZero() {
+		return ""
+	}
+	age := h.now().Sub(h.lastEvent)
+	switch {
+	case age < 30*time.Second:
+		return fg(120) + "● working" + reset
+	case age < time.Minute:
+		return fg(stampColor) + "○ idle" + reset
+	case age < time.Hour:
+		return fg(stampColor) + fmt.Sprintf("○ quiet %dm", int(age.Minutes())) + reset
+	}
+	return fg(221) + fmt.Sprintf("○ quiet %dh%dm", int(age.Hours()), int(age.Minutes())%60) + reset
+}
+
 func (h *Header) title() string {
 	who := h.name
 	if h.model != "" {
 		who = h.name + " | " + h.model
 	}
-	return bold + fg(h.colour) + "== " + who + " ==" + reset + "  " + tokenBar(h.tokens, h.limit)
+	title := bold + fg(h.colour) + "== " + who + " ==" + reset + "  " + tokenBar(h.tokens, h.limit)
+	if status := h.status(); status != "" {
+		title += "  " + status
+	}
+	return title
 }
 
 // draw prints the bar line when the reading moved and the repeat interval has passed.
 func (h *Header) draw() {
 	title := h.title()
 	waited := h.now().Sub(h.lastAt)
+	if h.pane != nil {
+		if plain := ansiSequence.ReplaceAllString(title, ""); plain != h.lastText && waited >= paneRepeat {
+			h.pane(plain)
+			h.lastText = plain
+			h.lastAt = h.now()
+		}
+		return
+	}
 	if title != h.lastText && waited >= headerRepeat {
 		h.out(title)
 		h.lastText = title
 		h.lastAt = h.now()
 	}
+}
+
+// editDiff is the path and the removed and added text of an edit call, so the feed can show what changed
+// instead of the arguments as a dump.
+func editDiff(name string, args any) (path, removed, added string, ok bool) {
+	if name != "edit" {
+		return "", "", "", false
+	}
+	object, isObject := args.(*orderedJSONObject)
+	if !isObject {
+		return "", "", "", false
+	}
+	text := func(key string) (string, bool) {
+		value, present := object.get(key)
+		if !present {
+			return "", false
+		}
+		str, isString := value.(string)
+		return str, isString
+	}
+	removed, hasOld := text("old_string")
+	added, hasNew := text("new_string")
+	if !hasOld || !hasNew {
+		return "", "", "", false
+	}
+	path, _ = text("path")
+	return path, removed, added, true
 }

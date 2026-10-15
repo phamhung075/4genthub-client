@@ -105,6 +105,7 @@ func (f *healthFixture) everythingRunning() {
 	f.running(clientservices.Compact, "demo", 4101)
 	f.running(clientservices.Watchdog, "demo", 4102)
 	f.running(clientservices.Messages, "demo", 4105)
+	f.running(clientservices.RoomGuard, "demo", 4106)
 	f.running(clientservices.Bridge, "", 4103)
 	f.running(clientservices.Rigd, "", 4104)
 }

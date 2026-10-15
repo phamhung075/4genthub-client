@@ -308,7 +308,7 @@ func TestWatchOpensTheGridAndALeadWindowWithItsInput(t *testing.T) {
 	}
 	sawLeadFeed, sawLeadInput := false, false
 	for _, text := range typed {
-		if strings.Contains(text, "feed --rig r --seat lead --back 40 --width 200 --lines 25 --detail") {
+		if strings.Contains(text, "feed --rig r --seat lead --back 40 --width 0 --lines 25 --detail") {
 			sawLeadFeed = true
 		}
 		if strings.Contains(text, "input --rig r --seat lead") {

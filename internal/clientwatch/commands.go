@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
@@ -153,14 +155,16 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 	seats := stringList{}
 	switch verb {
 	case "feed":
+		viewFlags(flags, &state)
 		flags.IntVar(&state.back, "back", 3, "events replayed per seat")
-		flags.IntVar(&state.width, "width", 170, "characters kept of each line")
+		flags.IntVar(&state.width, "width", 0, "characters kept of each line (0: the width of the pane)")
 		flags.IntVar(&state.lines, "lines", 60, "lines shown of each call")
 		flags.BoolVar(&state.detail, "detail", false, "also show reasoning and messages")
 		flags.Var(&seats, "seat", "limit to this seat (repeatable)")
 	case "grid", "watch":
+		viewFlags(flags, &state)
 		flags.IntVar(&state.back, "back", 40, "events replayed per seat")
-		flags.IntVar(&state.width, "width", 200, "characters kept of each line")
+		flags.IntVar(&state.width, "width", 0, "characters kept of each line (0: the width of the pane)")
 		flags.IntVar(&state.lines, "lines", 60, "lines shown of each call")
 		flags.BoolVar(&state.detail, "detail", true, "also show reasoning and messages")
 		flags.IntVar(&state.cols, "cols", 2, "grid columns")
@@ -190,6 +194,10 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 		return clientcmd.ExitUsage
 	}
 	state.seats = seats
+	if err := state.checkKinds(); err != nil {
+		fmt.Fprintf(stderr, "4genteam %s: %v\n", verb, err)
+		return clientcmd.ExitUsage
+	}
 
 	if state.rig == "" {
 		fmt.Fprintf(stderr, "4genteam %s: --rig RIG is required (there is no default room)\n", verb)
@@ -269,5 +277,23 @@ func (l *stringList) String() string { return fmt.Sprintf("%v", []string(*l)) }
 
 func (l *stringList) Set(value string) error {
 	*l = append(*l, value)
+	return nil
+}
+
+// viewFlags are the flags that choose what the view keeps; every pane gets them from the verb that opened it.
+func viewFlags(flags *flag.FlagSet, state *shared) {
+	flags.StringVar(&state.only, "only", "", "keep only these kinds, comma separated: "+strings.Join(viewKinds, ", "))
+	flags.BoolVar(&state.errorsOnly, "errors", false, "keep only failures, refusals and the end of a session")
+	flags.BoolVar(&state.expand, "expand", false, "keep every result in full")
+	flags.BoolVar(&state.changes, "changes", false, "keep only what the seats changed (same as --only write)")
+}
+
+// checkKinds refuses a name --only does not know, before a pane opens on a filter that shows nothing.
+func (s shared) checkKinds() error {
+	for kind := range s.onlyKinds() {
+		if !slices.Contains(viewKinds, kind) {
+			return fmt.Errorf("--only: unknown kind %q; the kinds are %s", kind, strings.Join(viewKinds, ", "))
+		}
+	}
 	return nil
 }

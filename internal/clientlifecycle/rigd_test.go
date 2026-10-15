@@ -125,9 +125,11 @@ func TestTheChildListIsSevenOne(t *testing.T) {
 		"compact-run --rig demo @30s",
 		"watchdog demo --watch @3m0s",
 		"sync messages --rig demo --watch @30s",
+		"idle-run --rig demo @1m30s",
 		"compact-run --rig other @30s",
 		"watchdog other --watch @3m0s",
 		"sync messages --rig other --watch @30s",
+		"idle-run --rig other @1m30s",
 		"bridge run @6m0s",
 	}
 	if strings.Join(described, "|") != strings.Join(want, "|") {

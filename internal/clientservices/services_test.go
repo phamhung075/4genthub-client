@@ -78,11 +78,12 @@ func (f *reportFixture) row(safeguard, rig string, env Env) Health {
 // owns is how the silence went unnoticed.
 func TestTheSilenceThresholdsAreSevenFour(t *testing.T) {
 	want := map[string]time.Duration{
-		Compact:  30 * time.Second,
-		Watchdog: 180 * time.Second,
-		Messages: 30 * time.Second,
-		Bridge:   360 * time.Second,
-		Rigd:     75 * time.Second,
+		Compact:   30 * time.Second,
+		Watchdog:  180 * time.Second,
+		Messages:  30 * time.Second,
+		RoomGuard: 90 * time.Second,
+		Bridge:    360 * time.Second,
+		Rigd:      75 * time.Second,
 	}
 	for _, safeguard := range Safeguards() {
 		if got := DefaultSilentAfter(safeguard); got != want[safeguard] {
@@ -374,7 +375,7 @@ func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 	for _, row := range rows {
 		order = append(order, strings.TrimSpace(row.Rig+" "+row.Safeguard))
 	}
-	want := "demo compact,demo watchdog,demo messages,other compact,other watchdog,other messages,bridge,rigd"
+	want := "demo compact,demo watchdog,demo messages,demo roomguard,other compact,other watchdog,other messages,other roomguard,bridge,rigd"
 	if strings.Join(order, ",") != want {
 		t.Errorf("order = %v, want %v", order, want)
 	}

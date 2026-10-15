@@ -33,7 +33,7 @@ is `https://www.4genthub.com/`) and for the account's key. Both are theirs to gi
 
 ```bash
 4genteam --help            # the client; prints the verb list
-4genteam doctor            # reports safeguard stack health (rigd, compact, watchdog, bridge)
+4genteam doctor            # reports safeguard stack health (rigd, compact, watchdog, roomguard, bridge)
 tmux -V
 herdr --version
 curl -fsS <SERVER-URL>/health
@@ -63,11 +63,15 @@ The client has exactly one credential and reads exactly one file.
 
 ```bash
 mkdir -p ~/.config/4genthub
-cp .env.sample ~/.config/4genthub/.env    # then fill in AGENTHUB_TOKEN
+[ -f ~/.config/4genthub/.env ] || cp .env.sample ~/.config/4genthub/.env   # then fill in AGENTHUB_TOKEN
+chmod 600 ~/.config/4genthub/.env
 ```
 
+Initialize it once, before the first verb that talks to the server. Never copy over an existing file:
+it holds the user's key. `scripts/build.sh` creates it from `.env.sample` when none exists.
+
 Ask the user for the key; do not generate one, and do not put one in this file yourself. The
-sample also lists the optional settings (`TYPESAFE_API_KEY`, `DEEPSEEK_API_KEY`, the `COMPACT_*` limits,
+sample also lists the optional settings (`TYPESAFE_API_KEY`, which Jev uses on this machine for `4genteam decide` and `4genteam complete`; `DEEPSEEK_API_KEY`, the `COMPACT_*` limits,
 and `OFFPEAK_ONLY`); a blank value means the default shown in the sample. Only the
 `AGENTHUB_URL` and `AGENTHUB_TOKEN` have to be set for the client to talk to the server.
 
@@ -413,7 +417,7 @@ Once the room is up, a seat works the same way on any project.
 - **Record as you go.** `manage_task` `update` to start (it needs `details`), `manage_subtask` for
   the pieces, `manage_context` for the decisions, numbers and open questions the next session
   needs.
-- **Finish and hand off.** `manage_task` `complete` with what changed and what you ran, then tell
+- **Finish and hand off.** `4genteam complete --task <id> --base <sha> --summary <what changed> --test "<cmd>"` (it runs the Jev gate on this machine, then completes the task), then tell
   the lead the commit hash or the path you wrote. A room's work is not finished until the seat it
   names for review has seen it.
 - **Report friction.** `submit_feedback` (or `4genteam feedback` when a runtime has no MCP) sends
