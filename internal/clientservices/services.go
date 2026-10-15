@@ -43,7 +43,7 @@ const (
 	// RoomGuard is the idle-room guard: it asks Jev when every seat is idle and nudges a stuck seat.
 	RoomGuard = "roomguard"
 	Bridge    = "bridge"
-	Agent      = "agent"
+	Agent     = "agent"
 )
 
 // The four states of 7.2. There is no fifth, and `running` is the ONLY state doctor accepts.

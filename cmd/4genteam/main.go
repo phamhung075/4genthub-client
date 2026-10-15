@@ -77,10 +77,13 @@ func (c pendingCommand) Run(_ context.Context, args []string, stdout, stderr io.
 // verb, so a name that refuses must still say what it is and where the real implementation lives.
 func pendingUsage(name string) string {
 	if name == "seatcheck" {
-		return "usage: 4genteam seatcheck <send|audit-scan> [args]\n\n" +
+		// The checker's own `send` verb is DELETED (`cmd/seatcheck`), and this help must not send a
+		// reader to it: the audited send path is the client's own `4genteam send`, and the checker is
+		// left with `audit-scan`, which only reads.
+		return "usage: 4genteam seatcheck <audit-scan> [args]\n\n" +
 			"The checker is its own binary (cmd/seatcheck). This name refuses instead of forwarding, so " +
-			"nothing is half-implemented here; run `seatcheck send --to <seat> --intent <intent> -- " +
-			"<text>` or `seatcheck audit-scan --file <path>`.\n"
+			"nothing is half-implemented here; run `seatcheck audit-scan --file <path>` to scan observed " +
+			"command lines, or `4genteam send --to <seat> --intent <intent> -- <text>` to send a message.\n"
 	}
 	return "usage: 4genteam " + name + " [args]\n"
 }

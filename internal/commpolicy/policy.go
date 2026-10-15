@@ -78,9 +78,9 @@ type AuditRecord struct {
 	PolicyHash string
 	// Outcome is empty on the decision line, written before delivery, and "delivered" or
 	// "delivery_failed" on the line that follows an allowed one. An allowed decision line with
-	// no outcome line after it means the delivery outcome is unknown: seatcheck stopped (or could
-	// not write the outcome) between starting the delivery and recording it, so the message may
-	// have been delivered.
+	// no outcome line after it means the delivery outcome is unknown: the sender stopped (or
+	// could not write the outcome) between starting the delivery and recording it, so the
+	// message may have been delivered.
 	Outcome string `json:",omitempty"`
 }
 

@@ -20,7 +20,7 @@ import (
 // what this test exists to keep honest.
 func TestUnportedCommandRefusesRatherThanStubbing(t *testing.T) {
 	for _, args := range [][]string{
-		{"seatcheck", "send", "x", "y"},
+		{"seatcheck", "audit-scan", "--file", "x"},
 	} {
 		var out, errOut bytes.Buffer
 		if code := run(args, &out, &errOut); code != clientcmd.ExitUnavailable {

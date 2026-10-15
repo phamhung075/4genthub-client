@@ -83,7 +83,7 @@ func TestTheSilenceThresholdsAreSevenFour(t *testing.T) {
 		Messages:  30 * time.Second,
 		RoomGuard: 90 * time.Second,
 		Bridge:    360 * time.Second,
-		Agent:      75 * time.Second,
+		Agent:     75 * time.Second,
 	}
 	for _, safeguard := range Safeguards() {
 		if got := DefaultSilentAfter(safeguard); got != want[safeguard] {

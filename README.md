@@ -85,10 +85,9 @@ records rather than an accident of the port: `install-checker` compiles `cmd/sea
 store it was built for, and the seat cannot choose that directory at run time. The operator's own `4genteam`
 must not carry a per-seat build input, so the two builds stay separate. The guard itself has **one source** —
 this repository's `cmd/seatcheck`, which is the copy `install-checker` builds; the server no longer tracks a
-second one — and one name: it must be the bare `seatcheck` on the seat's `PATH`, because the seat's rendered
-settings allow exactly `Bash(seatcheck send:*)` and `pull` fails loudly when `seatcheck` does not resolve to
-the binary this client built. A `4genteam seatcheck send …` subcommand would satisfy neither the pin nor the
-allow rule.
+second one — and one name: it must be the bare `seatcheck` on the seat's `PATH`, and `pull` fails loudly when
+`seatcheck` does not resolve to the binary this client built. The checker no longer sends: `4genteam send` is
+the audited send path, and the checker's own `send` verb was deleted rather than left as a stub.
 
 ## The two credentials and the one env file
 

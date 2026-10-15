@@ -361,7 +361,7 @@ instead. That file is not this client's to overwrite; show the path to the user.
 ### 2.6 Brief the lead
 
 Tell the lead, in one message: the room, each seat with its type, runtime, model and policy, the
-links, and the skills attached to each seat. Use the room's own messaging rule (`seatcheck send`,
+links, and the skills attached to each seat. Use the room's own messaging rule (`4genteam send`,
 or the queue for durable handoffs); the lead routes the work from there.
 
 ### 2.7 Worked example: a three-seat room
