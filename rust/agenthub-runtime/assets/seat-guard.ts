@@ -50,10 +50,26 @@ const commandOf = (input: Record<string, unknown>): string =>
 // template (`.env.sample`, `.env.example`), which hold no secret.
 const ENV_FILE = /(^|[\s/"'=])\.env(?!\.(sample|example|template)\b)(\.[\w-]+)?(?=$|[\s"'|;&)])/;
 
-// A tmux invocation as the COMMAND of a statement, after env/sudo/VAR= noise: `tmux ...` and `env -u TMUX tmux ...`
-// match, `echo tmux is nice` does not.
-const TMUX_CALL =
-  /^\s*(?:(?:env|sudo|command|exec|nohup)\s+(?:-\S+\s+(?:[A-Za-z_]+\s+)?|[A-Za-z_]+=\S+\s+)*|[A-Za-z_]+=\S+\s+)*tmux\b(.*)$/s;
+// The statements of a command, for the rules that judge what is RUN: heredoc bodies are gone (commandOf), the
+// text inside quotes is blanked, and the rest is split at `&&`, `||`, `;`, newline and pipe. A word inside a quoted
+// note, `--body "run git push --dry-run"`, is data and not a command, and it refused a reviewer's queue row twice
+// (2026-10-15). The price: a command hidden in quotes (`sh -c 'git push'`) is not seen, and the guard is a net for
+// a seat's mistakes, not a sandbox.
+const statements = (input: Record<string, unknown>): string[] =>
+  commandOf(input)
+    .replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, (q) => q[0] + q[0])
+    .split(/&&|\|\||;|\n|\|/);
+
+// A statement whose COMMAND is `name`, after env/sudo/VAR= noise: `tmux ...` and `env -u TMUX tmux ...` match,
+// `echo tmux is nice` does not. The capture is what follows the command name.
+const callOf = (name: string): RegExp =>
+  new RegExp(
+    `^\\s*(?:(?:env|sudo|command|exec|nohup)\\s+(?:-\\S+\\s+(?:[A-Za-z_]+\\s+)?|[A-Za-z_]+=\\S+\\s+)*|[A-Za-z_]+=\\S+\\s+)*${name}\\b(.*)$`,
+    "s",
+  );
+const TMUX_CALL = callOf("tmux");
+const DOCKER_CALL = callOf("docker(?:-compose)?");
+const GIT_PUSH_CALL = callOf("git\\s+(?:-C\\s+\\S+\\s+)?push");
 
 // The rules. Each returns the reason a call is refused, or "" to let it through.
 const RULES: { rule: string; check: (tool: string, input: Record<string, unknown>) => string }[] = [
@@ -79,7 +95,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
   {
     rule: "docker",
     check: (tool, input) =>
-      tool === "bash" && /(^|[;&|(]\s*|\n\s*)(sudo\s+)?docker(-compose)?\b/.test(commandOf(input))
+      tool === "bash" && statements(input).some((part) => DOCKER_CALL.test(part))
         ? "Docker is not run from a seat; production updates by a push the owner approves"
         : "",
   },
@@ -92,9 +108,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     rule: "tmux-mutate",
     check: (tool, input) =>
       tool === "bash" &&
-      commandOf(input)
-        .split(/&&|\|\||;|\n|\|/)
-        .some((part) => {
+      statements(input).some((part) => {
           const call = part.match(TMUX_CALL);
           if (!call || /\s-[SL]\s/.test(call[1])) return false;
           const verb = call[1].match(/\b([a-z][a-z-]+)\b/);
@@ -106,7 +120,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
   {
     rule: "push",
     check: (tool, input) =>
-      tool === "bash" && /\bgit\s+(-C\s+\S+\s+)?push\b/.test(commandOf(input))
+      tool === "bash" && statements(input).some((part) => GIT_PUSH_CALL.test(part))
         ? "a seat does not push: a push to main deploys production and the owner approves every one. Report the commit to the lead"
         : "",
   },
