@@ -201,6 +201,16 @@ const SEAT_MCP_CONFIG: &str = r#"{"mcpServers":{"agenthub_http":{"type":"http","
 /// to remember to install is a hook that is missing on the next seat.
 const SEAT_TOOL_HOOK: &str = include_str!("../../assets/seat-guard.ts");
 
+/// The command an agy seat runs. agy takes its model from `--model` and otherwise from the owner's default, which
+/// can be out of quota: an agy seat started as bare `agy` took each message and never answered (the reviewer,
+/// 2026-10-15). The model is single-quoted because the command is a shell line.
+fn agy_command(model: Option<&str>) -> String {
+    match model.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(model) => format!("agy --model '{}'", model.replace('\'', r"'\''")),
+        None => "agy".to_string(),
+    }
+}
+
 /// The name of the entry the runtime owns in agy's global `hooks.json`.
 const AGY_GUARD_HOOK: &str = "seat-guard";
 
@@ -568,7 +578,7 @@ impl RoomSupervisor {
                     seat.seat_key
                 )
             }
-            AgentRuntime::Agy => "agy".to_string(),
+            AgentRuntime::Agy => agy_command(seat.model.as_deref()),
             AgentRuntime::Codex => "codex".to_string(),
             AgentRuntime::Custom(c) => c.clone(),
         };
@@ -2628,6 +2638,14 @@ mod tests {
 
     /// The agy guard is added beside another tool's hook without touching it, is idempotent, and a file that is not a
     /// JSON object is refused rather than overwritten.
+    #[test]
+    fn an_agy_seat_is_launched_with_its_model() {
+        assert_eq!(agy_command(Some("gemini-3.8-flash-low")), "agy --model 'gemini-3.8-flash-low'");
+        assert_eq!(agy_command(Some("a'b")), r"agy --model 'a'\''b'");
+        assert_eq!(agy_command(Some(" ")), "agy");
+        assert_eq!(agy_command(None), "agy");
+    }
+
     #[test]
     fn the_agy_guard_hook_joins_the_global_file_and_leaves_the_rest() {
         let home = scratch("agy-guard");
