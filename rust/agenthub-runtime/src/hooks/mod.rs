@@ -4,8 +4,8 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::broadcast;
-use tracing::{error, info};
+use tokio::sync::broadcast::{self, error::RecvError};
+use tracing::{error, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
@@ -95,7 +95,17 @@ impl HookBus {
         let audit_root = Arc::clone(&self.audit_root);
 
         tokio::spawn(async move {
-            while let Ok(event) = rx.recv().await {
+            loop {
+                // A lagged receiver lost events but is still subscribed: say how many and keep writing. Only a
+                // closed bus ends the listener, otherwise one burst would silence the audit for good.
+                let event = match rx.recv().await {
+                    Ok(event) => event,
+                    Err(RecvError::Lagged(missed)) => {
+                        warn!("the seat audit missed {missed} events");
+                        continue;
+                    }
+                    Err(RecvError::Closed) => break,
+                };
                 let (room, seat) = match &event {
                     SeatEvent::SessionStarted { room, seat, .. } => (room, seat),
                     SeatEvent::PreTurn { room, seat, .. } => (room, seat),
@@ -120,5 +130,62 @@ impl HookBus {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("agenthub-hooks-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir
+    }
+
+    fn started(seat: &str) -> SeatEvent {
+        SeatEvent::SessionStarted {
+            room: "r".into(),
+            seat: seat.into(),
+            session_name: "s".into(),
+            pid: 1,
+            timestamp: Utc::now(),
+        }
+    }
+
+    async fn lines(path: &std::path::Path, want: usize) -> Vec<String> {
+        for _ in 0..100 {
+            let text = std::fs::read_to_string(path).unwrap_or_default();
+            let got: Vec<String> = text.lines().map(String::from).collect();
+            if got.len() >= want {
+                return got;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        Vec::new()
+    }
+
+    #[tokio::test]
+    async fn an_event_is_appended_to_its_seats_audit_file() {
+        let dir = scratch("append");
+        let bus = HookBus::new(&dir, 8);
+        bus.emit(started("lead"));
+        bus.emit(started("go-dev"));
+        let lead = lines(&dir.join("r/lead-audit.jsonl"), 1).await;
+        assert_eq!(lead.len(), 1);
+        assert!(lead[0].contains("\"type\":\"SessionStarted\""));
+        assert_eq!(lines(&dir.join("r/go-dev-audit.jsonl"), 1).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_burst_that_laps_the_receiver_does_not_end_the_audit() {
+        let dir = scratch("burst");
+        let bus = HookBus::new(&dir, 2);
+        for _ in 0..50 {
+            bus.emit(started("lead"));
+        }
+        bus.emit(started("after-burst"));
+        assert_eq!(lines(&dir.join("r/after-burst-audit.jsonl"), 1).await.len(), 1);
     }
 }
