@@ -668,3 +668,34 @@ func TestTheExistenceCheckReadsTheNativeRoomLayout(t *testing.T) {
 		t.Errorf("a room in the seat-store layout counted as a native room: %v", err)
 	}
 }
+
+// A PANE IS NEVER GIVEN A NAME TO RESOLVE (P1's remainder, the reach inventory). `selfPath` used to fall
+// back to the bare string "4genteam" when `os.Executable` failed, and that string went into the pane's
+// shell line - so the pane's OWN shell would resolve it on PATH and could start an INSTALLED client rather
+// than this one. The fallback is gone: the failure is a refusal that names what could not be read, and a
+// pane is only ever sent an absolute path to THIS binary.
+func TestAPaneIsNeverGivenABareNameForItsShellToResolve(t *testing.T) {
+	prev := executable
+	executable = func() (string, error) { return "", errors.New("/proc/self/exe: permission denied") }
+	defer func() { executable = prev }()
+
+	command, err := paneCommand("watch --rig r")
+	if err == nil {
+		t.Fatalf("paneCommand = %q, want a refusal: a bare name would run whatever PATH resolves", command)
+	}
+	if !strings.Contains(err.Error(), "cannot name its own binary") {
+		t.Errorf("err = %v, want it to name the read that failed", err)
+	}
+	if strings.Contains(err.Error(), "exec 4genteam") || command != "" {
+		t.Errorf("command = %q err = %v, want no command line at all", command, err)
+	}
+
+	executable = func() (string, error) { return "/opt/4genthub/4genteam", nil }
+	command, err = paneCommand("watch --rig r")
+	if err != nil {
+		t.Fatalf("paneCommand with a readable self path: %v", err)
+	}
+	if command != "clear; exec /opt/4genthub/4genteam watch --rig r" {
+		t.Errorf("command = %q, want the absolute path of THIS binary and the verb", command)
+	}
+}

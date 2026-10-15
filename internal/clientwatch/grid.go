@@ -175,7 +175,11 @@ func runGrid(ctx context.Context, s shared, out io.Writer) error {
 		if _, err := herdr(ctx, "pane", "rename", pane, seat); err != nil {
 			return err
 		}
-		if _, err := herdr(ctx, "pane", "send-text", pane, paneCommand(seatCommand(s.rig, seat, s.gridCommandArgs()))); err != nil {
+		command, err := paneCommand(seatCommand(s.rig, seat, s.gridCommandArgs()))
+		if err != nil {
+			return err
+		}
+		if _, err := herdr(ctx, "pane", "send-text", pane, command); err != nil {
 			return err
 		}
 		if _, err := herdr(ctx, "pane", "send-keys", pane, "Enter"); err != nil {
@@ -284,8 +288,11 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 		if _, err := herdr(ctx, "pane", "rename", created, seat+inputSuffix); err != nil {
 			return err
 		}
-		if _, err := herdr(ctx, "pane", "send-text", created,
-			paneCommand(fmt.Sprintf("input --rig %s --seat %s", s.rig, seat))); err != nil {
+		command, err := paneCommand(fmt.Sprintf("input --rig %s --seat %s", s.rig, seat))
+		if err != nil {
+			return err
+		}
+		if _, err := herdr(ctx, "pane", "send-text", created, command); err != nil {
 			return err
 		}
 		if _, err := herdr(ctx, "pane", "send-keys", created, "Enter"); err != nil {
@@ -366,14 +373,18 @@ func runLeadWindow(ctx context.Context, s shared) error {
 		return err
 	}
 	commands := []struct {
-		pane    string
-		command string
+		pane string
+		verb string
 	}{
 		{root, fmt.Sprintf("feed --rig %s --seat lead --back 40 --width 0 --lines 25 --detail", s.rig)},
 		{below, fmt.Sprintf("input --rig %s --seat lead", s.rig)},
 	}
 	for _, entry := range commands {
-		if _, err := herdr(ctx, "pane", "send-text", entry.pane, paneCommand(entry.command)); err != nil {
+		command, err := paneCommand(entry.verb)
+		if err != nil {
+			return err
+		}
+		if _, err := herdr(ctx, "pane", "send-text", entry.pane, command); err != nil {
 			return err
 		}
 		if _, err := herdr(ctx, "pane", "send-keys", entry.pane, "Enter"); err != nil {

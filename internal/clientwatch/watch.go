@@ -57,6 +57,10 @@ var execCommand = func(ctx context.Context, name string, args ...string) (string
 // lookPath is the second half of the same seam: whether a tool exists at all.
 var lookPath = exec.LookPath
 
+// executable is the third: where this process's own binary is, which a pane is started with. A seam
+// because the fallback below it used to be a NAME, and the pin on that refusal needs to drive the failure.
+var executable = os.Executable
+
 // shared are the flags every reading verb takes. `--rig` has NO default: the doc says there is no
 // default room, and an owner's rig name must never be baked in.
 type shared struct {
@@ -231,17 +235,34 @@ func paneID(result map[string]any) string {
 
 // selfPath is what a pane runs: this binary, not a Python interpreter and module. The pane's shell
 // line is the ONE place a command line is built as text, because that is all a pane can be sent.
-func selfPath() string {
-	if path, err := os.Executable(); err == nil {
-		return path
+//
+// IT ANSWERS AN ERROR INSTEAD OF A NAME, and that is the reach inventory's remainder closed (P1). It
+// used to fall back to the string "4genteam", which the PANE'S OWN SHELL then resolved on PATH - the
+// one site in this client that could start an INSTALLED client rather than the running one. A pane
+// told to run whatever "4genteam" means on that machine is a different program's behaviour
+// attributed to this one, and `os.Executable` fails only where /proc/self/exe cannot be read: a
+// refusal that names that is what the caller can act on.
+func selfPath() (string, error) {
+	path, err := executable()
+	if err != nil {
+		return "", &clientcmd.CodedError{
+			Code: clientcmd.ExitUnavailable,
+			Message: fmt.Sprintf("this client cannot name its own binary (%v); a pane runs THIS binary and no "+
+				"other, so nothing was started rather than a bare \"4genteam\" for the pane's shell to resolve "+
+				"on PATH, which may be a different program", err),
+		}
 	}
-	return "4genteam"
+	return path, nil
 }
 
 // paneCommand is the line typed into a pane: clear the pane, then exec the client so the pane closes
 // with it. The doc states this behaviour, so it is not an implementation detail.
-func paneCommand(verb string) string {
-	return fmt.Sprintf("clear; exec %s %s", selfPath(), verb)
+func paneCommand(verb string) (string, error) {
+	path, err := selfPath()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("clear; exec %s %s", path, verb), nil
 }
 
 // reportError prints the ONE message a refusal carries and returns its exit code.
