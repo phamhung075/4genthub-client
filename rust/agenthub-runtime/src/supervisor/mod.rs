@@ -190,6 +190,37 @@ fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
     })
 }
 
+/// The variables of `<state_dir>/.env`: `KEY=VALUE` lines, an optional `export ` prefix, one pair of matching
+/// quotes stripped, `#` comment and blank lines skipped. A missing or unreadable file is no variables. Values
+/// are never logged: the file holds credentials.
+fn env_file_vars(state_dir: &Path) -> HashMap<String, String> {
+    let Ok(text) = fs::read_to_string(state_dir.join(".env")) else {
+        return HashMap::new();
+    };
+    let mut vars = HashMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        if key.is_empty() || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            continue;
+        }
+        let value = value.trim();
+        let value = match value.as_bytes() {
+            [q @ (b'"' | b'\''), .., last] if q == last && value.len() >= 2 => &value[1..value.len() - 1],
+            _ => value,
+        };
+        vars.insert(key.to_string(), value.to_string());
+    }
+    vars
+}
+
 /// The environment ONE seat's runner and its agent are launched with.
 ///
 /// A pure function rather than an inline block, so what a seat inherits can be pinned without a tmux server:
@@ -207,8 +238,13 @@ fn seat_env(
     session_name: &str,
     seat_dir: &Path,
     runtime_socket: &Path,
+    state_dir: &Path,
 ) -> HashMap<String, String> {
-    let mut env = seat.env.clone();
+    // The state root's own `.env` is the client's one configuration file (the MCP URL and token, the provider
+    // keys): every seat starts with it, so no seat is asked to hold a copy. A key the seat's spec names wins
+    // over the file, and the runtime-owned keys below win over both.
+    let mut env = env_file_vars(state_dir);
+    env.extend(seat.env.clone());
     env.insert("AGENTHUB_ROOM".into(), room.into());
     env.insert("AGENTHUB_SEAT".into(), seat.seat_key.clone());
     env.insert("AGENTHUB_ROLE".into(), seat.seat_type.clone());
@@ -420,7 +456,7 @@ impl RoomSupervisor {
         };
 
         // Build environment variables
-        let env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket);
+        let env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket, &self.base_state_dir);
 
         // WHEN THIS GENERATION'S PANE WAS CREATED. The readiness proof below is a file the previous
         // generation's teardown also writes into, so existence alone cannot separate a handshake from an
@@ -2353,6 +2389,7 @@ mod tests {
             "agenthub--isolated--dev",
             Path::new("/state/rooms/isolated/seats/dev"),
             Path::new("/tmp/isolation/rt/agenthub.sock"),
+            Path::new("/nonexistent-state-root"),
         );
 
         assert_eq!(
@@ -2366,6 +2403,33 @@ mod tests {
             Some("agenthub--isolated--dev"),
             "the session name the seat's own client sends as"
         );
+    }
+
+    /// The state root's `.env` reaches every seat: the MCP URL and token are configured once, and a seat that
+    /// is started holds them without a copy. The seat's own spec wins over the file, and the runtime's keys
+    /// win over both.
+    #[test]
+    fn a_seats_env_carries_the_state_roots_env_file() {
+        let dir = scratch("seat-env-file");
+        fs::write(
+            dir.join(".env"),
+            "# a comment\nAGENTHUB_MCP_URL=http://127.0.0.1:8000/mcp\nexport QUOTED=\"a b\"\nSPEC_WINS=file\nAGENTHUB_ROOM=file\nbad key=x\n\nEMPTY=\n",
+        )
+        .expect("write .env");
+        let seat: SeatSpec = serde_json::from_value(serde_json::json!({
+            "seat_key": "dev", "seat_type": "developer", "runtime": "omp",
+            "env": {"SPEC_WINS": "spec"}
+        }))
+        .expect("seat");
+        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir);
+        assert_eq!(env.get("AGENTHUB_MCP_URL").map(String::as_str), Some("http://127.0.0.1:8000/mcp"));
+        assert_eq!(env.get("QUOTED").map(String::as_str), Some("a b"));
+        assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
+        assert_eq!(env.get("SPEC_WINS").map(String::as_str), Some("spec"), "the spec wins over the file");
+        assert_eq!(env.get("AGENTHUB_ROOM").map(String::as_str), Some("demo"), "the runtime wins over both");
+        assert!(!env.contains_key("bad key"));
+        let none = seat_env(&seat, "demo", "s", Path::new("/s"), Path::new("/r.sock"), Path::new("/nonexistent-state-root"));
+        assert!(!none.contains_key("AGENTHUB_MCP_URL"), "no file, no variables");
     }
 
     /// The nudge pass enumerates the rooms that are on disk. With no tmux session behind any seat, no seat
