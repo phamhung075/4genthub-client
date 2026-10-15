@@ -3,9 +3,9 @@
 ### Added
 - `internal/clientroom/room.go` — `4genteam room status|stop|reseat|compact`, the room-scoped frame over the
   runtime's IPC. Every sub-verb prints the pair it ran against (`room: <room>@<state-dir> socket: <socket>`)
-  because neither is resolved implicitly: the state dir is the flag, else `$OPENRIG_STATE_ROOT`, else this
-  machine's own; the socket is `--socket`, else `$OPENRIG_RUNTIME_SOCKET`, else this machine's own.
-  `stop` is `StopRoom` and nothing else — no tmux, no rigd, no bridge, no `~/.openrig` — and the room's
+  because neither is resolved implicitly: the state dir is the flag, else `$AGENTHUB_STATE_ROOT`, else this
+  machine's own; the socket is `--socket`, else `$CLIENT_RUNTIME_SOCKET`, else this machine's own.
+  `stop` is `StopRoom` and nothing else — no tmux, no rigd, no bridge, no `~/config/4genthub` — and the room's
   directory (spec.json, seats/, logs/) is left in place so the room can be started again. `reseat` is
   `StopSeat` then `RestartSeat`, in that order. `compact` asks the runtime once per RUNNING seat (the
   protocol's `ForceCompact` is session-scoped, so the session name is built in one named helper), refuses a
@@ -19,7 +19,7 @@
 ### Changed
 - `up` is ROOM-SCOPED: `upCommand.NeedsRig` is false, so the dispatcher hands it a nil rig. The room is the
   positional and its seats come from the LOCAL team definition, so starting them needs nothing resolved from
-  OpenRig — requiring one is what made the native start path depend on the CLI exec it replaces. The two
+  4genteam — requiring one is what made the native start path depend on the CLI exec it replaces. The two
   places that still reach for a rig take nil: the peak gate's fail-closed activity read already did, and
   `openUIImpl` now resolves the tool itself (a third that dereferenced it would panic on every `up`).
 - `up` PRINTS the state dir and the socket before it touches the room, and it CHECKS BEFORE IT STARTS.
@@ -39,7 +39,7 @@
 - `gofmt` clean, `go build ./...` exit 0, `go vet ./internal/clientlifecycle/` exit 0,
   `go test ./internal/clientlifecycle/ -count=1` → `ok 0.053s`.
 - Forced end-to-end through the REAL binary against a stub daemon that speaks the client's own line envelope
-  (`{"action":…,"payload":…}\n` / `{"ok":true,"data":…}\n`), with `OPENRIG_RUNTIME_SOCKET` pointing at it so
+  (`{"action":…,"payload":…}\n` / `{"ok":true,"data":…}\n`), with `CLIENT_RUNTIME_SOCKET` pointing at it so
   nothing live was touched:
   - all seats running → exit 0 and the wire carries **no** `StartRoom` and **no** `RestartSeat` (three
     `GetRoomStatus` only), which is the design's "a second `up` restarts nothing";

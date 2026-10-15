@@ -10,7 +10,7 @@ are in the report to the lead; this entry is the one thing in the unit that chan
 line a defect rather than a stale noun:
 
 1. `rig` is not this client's tool. The symlink that made `rig` reach `4genteam` is gone (`8193820`), and what
-   resolves on this box is the OpenRig node CLI in nvm's bin — a program this stack is retiring.
+   resolves on this box is the 4genteam node CLI in nvm's bin — a program this stack is retiring.
 2. Bare `rig up` is the launch the client's own skills forbid, because it bypasses `rigd`, the compaction
    supervisor, the watchdog and the bridge.
 

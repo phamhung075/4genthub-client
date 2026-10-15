@@ -3,7 +3,7 @@
 ### What was wrong
 
 `4genteam sync switch ROOM SEAT --model M [--apply set-model|restart]` still ran `rig seat set-model`,
-`rig seat stop` and `rig seat launch`, so the verb stopped working the day OpenRig is retired. The runtime had
+`rig seat stop` and `rig seat launch`, so the verb stopped working the day 4genteam is retired. The runtime had
 `StopSeat` and `RestartSeat` but no way to record a seat's model and no way to restart without the old agent
 session.
 

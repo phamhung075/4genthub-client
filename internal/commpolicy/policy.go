@@ -241,7 +241,7 @@ func writeUint(h hash.Hash, v uint64) {
 //
 // The spellings are the ones this host has, measured 2026-10-15: `4genteam` is
 // the native client and carries the send path (`send`, `input`, and the rail's
-// `room queue create`), while `rig` on PATH is `@openrig/cli`, a different file
+// `room queue create`), while `rig` on PATH is `@reference/cli`, a different file
 // that must never carry a seat's message. Binding only the retired `rig`
 // spellings left the control matching nothing on the path the client sends over.
 func BypassSuspected(known []string, observed string) bool {
@@ -272,7 +272,7 @@ func BypassSuspected(known []string, observed string) bool {
 		case "send", "input":
 			return true
 		case "room":
-			// The rail delivers to a seat's mail the same way `rig queue` did:
+			// The rail delivers to a seat's mail the same way `the task queue` did:
 			// it is a direct send that never met the checker.
 			return len(fields) > i+2 && fields[i+2] == "queue" && len(fields) > i+3 && fields[i+3] == "create"
 		default:

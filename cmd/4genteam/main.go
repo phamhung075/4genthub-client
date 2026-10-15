@@ -167,7 +167,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func usage(w io.Writer) {
-	_, _ = io.WriteString(w, "4genteam - the local the rig orchestrator client\n\ncommands:\n")
+	_, _ = io.WriteString(w, "4genteam - the local 4genthub client\n\ncommands:\n")
 	for _, cmd := range commands() {
 		_, _ = io.WriteString(w, "  "+cmd.Name()+"\t"+cmd.Summary()+"\n")
 	}

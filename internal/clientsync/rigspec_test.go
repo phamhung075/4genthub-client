@@ -36,7 +36,7 @@ func TestFetchRigspecPinsTheFourTransportRefusals(t *testing.T) {
 		wantInText string
 	}{
 		{"HTTP error carries the status and the body's first 300 characters", 500, strings.Repeat("x", 400), clientcmd.ExitRemote,
-			"GET /api/v2/openrig/rooms/dev/rigspec failed: HTTP 500 " + strings.Repeat("x", 300)},
+			"GET /api/v2/rooms/dev/rigspec failed: HTTP 500 " + strings.Repeat("x", 300)},
 		{"invalid JSON", 200, "{not json", clientcmd.ExitRemote, "returned invalid JSON"},
 		{"a JSON list is a malformed response, not invalid JSON", 200, `[1,2]`, clientcmd.ExitRemote, "returned a malformed response"},
 		{"success false is an error response", 200, `{"success":false}`, clientcmd.ExitRemote, "returned an error response"},
@@ -74,7 +74,7 @@ func TestFetchRigspecSendsTheTokenAndThePath(t *testing.T) {
 	if _, err := FetchRigspec(context.Background(), server.URL+"/", "s3cret", "dev"); err != nil {
 		t.Fatalf("FetchRigspec: %v", err)
 	}
-	if seen.URL.Path != "/api/v2/openrig/rooms/dev/rigspec" {
+	if seen.URL.Path != "/api/v2/rooms/dev/rigspec" {
 		t.Errorf("path = %q, want the rigspec path (a trailing slash on the base URL must not double)", seen.URL.Path)
 	}
 	if got := seen.Header.Get("Authorization"); got != "Bearer s3cret" {

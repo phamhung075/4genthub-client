@@ -21,7 +21,7 @@ func TestPublishSkillsEmitsOneBlockPerSkillWithProvenance(t *testing.T) {
 	}
 	puts := map[string]map[string]any{}
 	for _, request := range fake.puts() {
-		puts[strings.Split(request.path, "/")[5]] = decodeObject(t, request.body)
+		puts[strings.Split(request.path, "/")[4]] = decodeObject(t, request.body)
 	}
 	if len(puts) != 3 {
 		t.Fatalf("pushed %d module(s), want 3 (%v)", len(puts), keysOf(puts))
@@ -74,7 +74,7 @@ func TestPublishSkillsAttemptsEveryEntryAndNamesEveryFailure(t *testing.T) {
 	fake := installFake(t)
 	withCredentials(t, fake)
 	library := writeLibrary(t)
-	fake.override("PUT", "/api/v2/openrig/modules/beta-skill/versions/1.0.0", 400,
+	fake.override("PUT", "/api/v2/modules/beta-skill/versions/1.0.0", 400,
 		`{"detail": "content must be 1 to 65536 bytes"}`)
 
 	code, out, errOut := runTeam(t, "publish-skills", "--inventory", filepath.Join(library, "inventory.json"), "--source-root", library)
@@ -83,7 +83,7 @@ func TestPublishSkillsAttemptsEveryEntryAndNamesEveryFailure(t *testing.T) {
 	}
 	attempted := map[string]bool{}
 	for _, request := range fake.puts() {
-		attempted[strings.Split(request.path, "/")[5]] = true
+		attempted[strings.Split(request.path, "/")[4]] = true
 	}
 	for _, slug := range []string{"alpha-skill", "beta-skill", "gamma-skill"} {
 		if !attempted[slug] {
@@ -157,7 +157,7 @@ func TestPublishSkillsChangedContentPushesTheNextPatch(t *testing.T) {
 	for _, request := range fake.puts()[3:] {
 		pushed = append(pushed, request.path)
 	}
-	if len(pushed) != 1 || pushed[0] != "/api/v2/openrig/modules/alpha-skill/versions/1.0.1" {
+	if len(pushed) != 1 || pushed[0] != "/api/v2/modules/alpha-skill/versions/1.0.1" {
 		t.Fatalf("PUTs after the change = %v, want the single 1.0.1 push", pushed)
 	}
 	if !strings.Contains(out, "module alpha-skill@1.0.1 (new version; 1.0.0 stored with different content): applied") {

@@ -8,7 +8,7 @@
   Child argv is the reference's (`pi-runner-protocol.js:220-242`): `--mode rpc --session-dir
   <seat dir>/sessions --approval-mode yolo|always-ask [--model M]`; the child inherits the seat's
   identity because the supervisor already exported `AGENTHUB_*` into the pane, so there is no second env
-  copy and no `OPENRIG_*` family. A runtime with no native rpc path is refused by name.
+  copy and no `CLIENT_*` family. A runtime with no native rpc path is refused by name.
 - `rooms/<room>/run/<seat>.sock` — the seat's mailbox, where the daemon hands the runner a frame it must
   relay (today: `{"type":"compact"}`). `runner::request_compact` is what the IPC `ForceCompact` verb and
   `agenthub-runtime compact <seat>` now call.
@@ -77,7 +77,7 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
 1. §1 says the reference's runner owns a **socketpair**; the measured reference uses plain pipes on
    fd 0/1/2 (`pi-runner.js:818-822`). Ownership is the property that matters.
 2. §1's table says the force-compact path reaches the agent as a `{"type":"compact"}` frame relayed by
-   the runner. No `{"type":"compact"}` exists anywhere in the OpenRig package; the frame is **ours**
+   the runner. No `{"type":"compact"}` exists anywhere in the 4genteam package; the frame is **ours**
    (omp does understand it — measured: `Nothing to compact (session too small)`).
 3. §1's table attributes the channel theft (pidfd_getfd) to the daemon's handling of the reference
    runner. Measured: the pidfd cluster is not the daemon's, and it is not in this repo at all — it is
@@ -121,13 +121,13 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
 
   **Reachability, answered plainly (lead's question): the legacy pidfd path is STILL PRESENT AND REACHABLE.**
   `rust/forcecompact` is a member of this workspace and builds with it, its binary is installed at
-  `~/.local/bin/forcecompact`, and OpenRig's own client invokes it — `4genteam compact-run --rig RIG
+  `~/.local/bin/forcecompact`, and the previous client's own client invokes it — `4genteam compact-run --rig RIG
   [--forcecompact PATH]`, with `4GENTEAM_FORCECOMPACT` to point at it, whose own error text reads "the
   forcecompact helper is not on PATH … an omp seat past the hard limit cannot be force-compacted". So
   "the descriptor theft is gone from the shipped set" is **not** true of the branch under gate while that
   client path runs: the new runner's compaction is ptrace-free (a `{"type":"compact"}` frame the agent
   handles itself), but the *client's* compaction supervisor still shells out to the ptrace helper. Retiring
-  it is a change in the OpenRig client and the operator's configuration, not in this row — routed, not
+  it is a change in the 4genteam client and the operator's configuration, not in this row — routed, not
   silently done here.
 
 ### Changed
@@ -269,12 +269,12 @@ id-mismatch branch itself is unit-tested; in this run the id matched, which is r
 
 ### Fixed
 - **A seat's agent no longer inherits the live rig's addressing.** The runtime only *added* its own
-  `AGENTHUB_*` variables, so a room started the way the operator starts one handed its agent `OPENRIG_HOME`,
-  `OPENRIG_URL`, the activity-hook token, `OPENRIG_DB` and the session/node/transcript ids — an agent process
+  `AGENTHUB_*` variables, so a room started the way the operator starts one handed its agent `CLIENT_HOME`,
+  `CLIENT_URL`, the activity-hook token, `CLIENT_DB` and the session/node/transcript ids — an agent process
   able to address the live daemon from inside a scratch room. `scrub_env` (`src/main.rs`) removes every
-  variable by prefix before the agent is spawned, so a new `OPENRIG_*` variable cannot leak by being
+  variable by prefix before the agent is spawned, so a new `CLIENT_*` variable cannot leak by being
   forgotten, and the seat's own `AGENTHUB_*`/`PI_CODING_AGENT_DIR` identity is untouched.
-  **Measured, with a daemon whose own environment carried nine `OPENRIG_*` variables**: the runner (the
+  **Measured, with a daemon whose own environment carried nine `CLIENT_*` variables**: the runner (the
   daemon's child through tmux) still carries them, and the `omp` agent it spawns carries **none**, with
   `AGENTHUB_*` and `PI_CODING_AGENT_DIR` intact — the controlled pair, parent has / child has not, differing
   by exactly this call. *Correction to my own first two readings*: they reported the leak "unchanged" because

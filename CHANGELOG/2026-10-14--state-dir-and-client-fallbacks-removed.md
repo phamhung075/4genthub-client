@@ -1,17 +1,17 @@
-## State lives in `~/.config/4genthub`; the OpenRig fallbacks are removed
+## State lives in `~/.config/4genthub`; the 4genteam fallbacks are removed
 
 ### Changed
 
-- Default state root is `~/.config/4genthub` through one helper, `clientenv.StateSubdir`. `OPENRIG_STATE_ROOT` is gone.
+- Default state root is `~/.config/4genthub` through one helper, `clientenv.StateSubdir`. `AGENTHUB_STATE_ROOT` is gone.
 - Seat store: `~/.config/4genthub/seats`. Sender identity: `AGENTHUB_SESSION_NAME`.
-- Env renames: `OPENRIG_RUNTIME_SOCKET` -> `AGENTHUB_RUNTIME_SOCKET`, `OPENRIG_CLIENT_SKILLS` -> `AGENTHUB_CLIENT_SKILLS`,
-  `OPENRIG_SKILLS_ROOT` -> `AGENTHUB_SKILLS_ROOT`. The shared skill `OPENRIG.md` is now `VENDORING.md`.
+- Env renames: `CLIENT_RUNTIME_SOCKET` -> `AGENTHUB_RUNTIME_SOCKET`, `CLIENT_CLIENT_SKILLS` -> `AGENTHUB_CLIENT_SKILLS`,
+  `AGENTHUB_SKILLS_ROOT` -> `AGENTHUB_SKILLS_ROOT`. The shared skill `CLIENT.md` is now `VENDORING.md`.
 - `send` refuses `--verify`, `--force`, `--wait-for-idle`, `--dangerously-interact` and `--reason` (no native meaning).
 - `continue --all` and the watchdog read rooms and seats through the runtime.
 
 ### Removed
 
-- `clientruntime/openrigdaemon.go`, `RigEntries`, the `OPENRIG_URL` transport, the installcheck OpenRig port,
+- `clientruntime/referencedaemon.go`, `RigEntries`, the `CLIENT_URL` transport, the installcheck 4genteam port,
   `NeedsRig`/`clientcmd.Rig`, the top-level `queue` shim and the `argv[0]=="rig"` map.
 
 ### Fixed

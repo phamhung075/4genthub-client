@@ -14,7 +14,7 @@ import (
 )
 
 // The API prefix every path in this package is relative to.
-const apiPrefix = "/api/v2/openrig"
+const apiPrefix = "/api/v2"
 
 // apiPathSeatTypes is the one seat-types path, named once because both the seed decision and the plan
 // refer to it.

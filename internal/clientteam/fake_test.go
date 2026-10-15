@@ -78,10 +78,10 @@ func (f *fakeCloud) storePushes() {
 			continue
 		}
 		parts := strings.Split(request.path, "/")
-		if len(parts) < 8 {
+		if len(parts) < 7 {
 			continue
 		}
-		slug, version := parts[5], parts[7]
+		slug, version := parts[4], parts[6]
 		var body map[string]any
 		if err := json.Unmarshal([]byte(request.body), &body); err != nil {
 			continue
@@ -147,12 +147,12 @@ func (f *fakeCloud) moduleListing() string {
 }
 
 func (f *fakeCloud) storedModuleFor(path string) (map[string]any, bool) {
-	// /api/v2/openrig/modules/{slug}/versions/{version}
+	// /api/v2/modules/{slug}/versions/{version}
 	parts := strings.Split(path, "/")
-	if len(parts) != 8 || parts[4] != "modules" || parts[6] != "versions" {
+	if len(parts) != 7 || parts[3] != "modules" || parts[5] != "versions" {
 		return nil, false
 	}
-	module, known := f.stored[parts[5]+"@"+parts[7]]
+	module, known := f.stored[parts[4]+"@"+parts[6]]
 	if !known {
 		return nil, false
 	}

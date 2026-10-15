@@ -12,7 +12,7 @@ import (
 )
 
 // PathsPath is SEATS_PATH in agenthub_client/src/agenthub_client/seat_sync.py: one resolved seat, by room and seat.
-const PathsPath = "/api/v2/openrig/seats"
+const PathsPath = "/api/v2/seats"
 
 // hashPattern is HASH_RE: a hash is a directory name, so it may not contain a separator, a space or
 // anything else that would make it mean more than one path component.

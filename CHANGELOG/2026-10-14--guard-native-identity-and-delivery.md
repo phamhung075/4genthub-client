@@ -2,8 +2,8 @@
 
 ### What was wrong
 
-`cmd/seatcheck` is what a seat runs instead of `rig send`, and it reached the two halves of that job by
-exec-ing the OpenRig CLI:
+`cmd/seatcheck` is what a seat runs instead of `4genteam send`, and it reached the two halves of that job by
+exec-ing the 4genteam CLI:
 
 ```go
 out, err := exec.Command("rig", "whoami", "--json").Output()      // main.go rigWhoami
@@ -18,8 +18,8 @@ back to the seat's own environment, so an identity exists with no daemon at all.
 ### What it is now
 
 The chain moved out of the verb and became one exported function, `internal/clientruntime.ResolveIdentity`
-(transport.go): the runtime socket first, a rig's OpenRig daemon second, the seat's own environment
-(`AGENTHUB_ROOM`/`AGENTHUB_SEAT`, else `OPENRIG_SESSION_NAME`) last. `whoamiCommand.Run` PRINTS what it
+(transport.go): the runtime socket first, a rig's 4genteam daemon second, the seat's own environment
+(`AGENTHUB_ROOM`/`AGENTHUB_SEAT`, else `AGENTHUB_SESSION_NAME`) last. `whoamiCommand.Run` PRINTS what it
 returns and `cmd/seatcheck` REASONS about it, so the two cannot resolve identity differently. A document the
 daemon answered with is still carried whole (`ResolvedIdentity.Document`), because the CLI prints that payload
 unmodified and projects it compactly unless `--full`; the runtime's and the environment's answers are values
@@ -36,7 +36,7 @@ func rigWhoami() (identity, error) {
 ```
 
 The delivery became `internal/clientruntime.DeliverToSession` — the same runtime-first / daemon-fallback
-chain the `send` verb runs, with NO daemon-only switch set, which is exactly the shape `rig send SESSION TEXT`
+chain the `send` verb runs, with NO daemon-only switch set, which is exactly the shape `4genteam send SESSION TEXT`
 had (no `--verify`, `--wait-for-idle`, `--dangerously-interact`, `--raw`). It is exported from
 `clientruntime` rather than from `clientseat` because `reseat.go` was held by the author of the U3 gate fix
 while this landed; the flag-aware send verb keeps its own path there.
@@ -50,7 +50,7 @@ func rigSend(target, text string, stdout, stderr io.Writer) int {
 The failure shape is ONE, which is what the ruling asked for: whatever the delivery answers (1 refused, 3 no
 transport, a transport's own code), `runSend` maps every non-zero to `exitDeliveryFailed` (5), so a policy
 result (2/3/4) can never be read as a delivery failure and a transport's code never leaks as the guard's exit.
-The `delivery failed` line no longer names `rig send`.
+The `delivery failed` line no longer names `4genteam send`.
 
 `whoami` also asks the runtime for this seat's NATIVE session name (`agenthub--<room>--<seat>`, the shape the
 runtime's own helper renders) when the environment names the halves and no session, instead of an empty
@@ -75,17 +75,17 @@ The new tests are the acceptance's instrument and they fail on the pre-change co
 removed, `exec_test.go` copied in):
 
 ```
---- FAIL: TestIdentityIsResolvedNativelyWithNoRigOnPath   exec_test.go:173: rigWhoami: parse rig whoami: unexpected end of JSON input
---- FAIL: TestIdentityComesFromTheRuntimeSocket            exec_test.go:195: rigWhoami: parse rig whoami: unexpected end of JSON input
---- FAIL: TestIdentityFallsBackToTheOpenRigDaemon         exec_test.go:231: rigWhoami: parse rig whoami: unexpected end of JSON input
+--- FAIL: TestIdentityIsResolvedNativelyWithNoRigOnPath   exec_test.go:173: rigWhoami: parse 4genteam whoami: unexpected end of JSON input
+--- FAIL: TestIdentityComesFromTheRuntimeSocket            exec_test.go:195: rigWhoami: parse 4genteam whoami: unexpected end of JSON input
+--- FAIL: TestIdentityFallsBackToThe4genteamDaemon         exec_test.go:231: rigWhoami: parse 4genteam whoami: unexpected end of JSON input
 --- FAIL: TestDeliveryGoesToTheRuntimeSocket              exec_test.go:259: stdout = "", want the delivery's own line
---- FAIL: TestDeliveryFallsBackToTheOpenRigDaemon         exec_test.go:309: asked "", want the daemon's send route
+--- FAIL: TestDeliveryFallsBackToThe4genteamDaemon         exec_test.go:309: asked "", want the daemon's send route
 --- FAIL: TestDeliveryWithNoTransportAtAllIsOneRefusal    exec_test.go:327: rigSend = 0 with no transport; stdout = ""
 ```
 
 The instrument is a fake `rig` FIRST on PATH that records its own execution, and its record not existing:
 that is the only honest way to assert "no process was started", and it is what fails above (the old seam
-execs it and parses its empty answer). The tests also install a fake runtime socket or a fake OpenRig daemon,
+execs it and parses its empty answer). The tests also install a fake runtime socket or a fake 4genteam daemon,
 so the native sources are arranged rather than assumed, and every test pins the runtime socket AWAY from this
 machine's real one.
 
@@ -97,16 +97,16 @@ own locations differ because earlier commits already moved some of them).
 | site (r7-shim) | what it was | disposition |
 | --- | --- | --- |
 | `internal/clientseat/reseat.go:137` | `rigNodes`: `rig ps --nodes --rig RIG --json` | already converted before this row (234e162) — now `roomNodes` via `clientruntime.GetRoomStatus` |
-| `internal/clientseat/reseat.go:258` | `sendCommand`'s `rig send` fallback | already deleted before this row (d777b52) — and the same functions were held by the U3 gate fix author here |
+| `internal/clientseat/reseat.go:258` | `sendCommand`'s `4genteam send` fallback | already deleted before this row (d777b52) — and the same functions were held by the U3 gate fix author here |
 | `internal/clientseat/sync.go:214` | `seatActivity`: `rig ps` → `agentActivity.state` | NOT CONVERTED — no native source exists; see "the decision" below |
 | `internal/clientseat/sync.go:268` | `relaunch`: `rigID`/`rig launch` through the CLI | already converted before this row (0905d48) — now `clientruntime.RestartSeat` |
 | `internal/clientlifecycle/supervisor.go:301` | `rigIdle`: `rig ps` → `agentActivity.state` | NOT CONVERTED — no native source exists; landed DECLARED EXCEPTION (7d07eca, 10dc456, 0905d48) |
-| `internal/clientlifecycle/supervisor.go:328` | `rigSay`: `rig send … --wait-for-idle 120` | already converted before this row (7d07eca) — now `runtimeSendText` |
-| `internal/clientlifecycle/supervisor.go:349` | `rigAbort`: `rig send … /abort --raw` | already converted before this row (056d155) |
+| `internal/clientlifecycle/supervisor.go:328` | `rigSay`: `4genteam send … --wait-for-idle 120` | already converted before this row (7d07eca) — now `runtimeSendText` |
+| `internal/clientlifecycle/supervisor.go:349` | `rigAbort`: `4genteam send … /abort --raw` | already converted before this row (056d155) |
 | `internal/clientsync/respawnverb.go:56` | `runRigCapture`: `rig ps`, `rig seat launch` | NOT CONVERTED — two thirds are convertible, the verb's DECISION is not; see below |
 | `internal/clientcmd/command.go:134` | `RequireRig`'s `LookPath("rig")` (the eleventh) | NOT CONVERTED — the shared platform matrix, not a site fix; see below |
-| `cmd/seatcheck/main.go:346` | `rigWhoami`: `rig whoami --json` | CONVERTED — `clientruntime.ResolveIdentity` + `identityFromDocument` |
-| `cmd/seatcheck/main.go:418` | `rigSend`: `rig send -- TARGET TEXT` | CONVERTED — `clientruntime.DeliverToSession` |
+| `cmd/seatcheck/main.go:346` | `rigWhoami`: `4genteam whoami --json` | CONVERTED — `clientruntime.ResolveIdentity` + `identityFromDocument` |
+| `cmd/seatcheck/main.go:418` | `rigSend`: `4genteam send -- TARGET TEXT` | CONVERTED — `clientruntime.DeliverToSession` |
 | `internal/clientsync/bundleverb.go:42-48` | `bundleRunRig`: `exec.LookPath(argv[0])` then `exec.Command(path, argv[1:]...)`, argv built at :192 as `rig bundle create …` | NOT CONVERTED, and ABSENT FROM THE ASSIGNMENT'S KEY — no conversion attempted in this unit; the runtime's own IPC surface (listed under "the decision") has no bundle operation |
 | `internal/clientsync/connectorverb.go:354-355` | ~~`runRig`: `exec.CommandContext(ctx, "rig", args...)` — the only literal `"rig"` CommandContext anywhere in the tree~~ | RETIRED — NOT A SITE. Correction (2026-10-14, a later pass): this row was written from an assignment key that named a `runRig` here, and at 4203d96 the file is 315 lines with no `exec`, no `LookPath`, no `runRig`, no `"rig"` program and no `os/exec` import (`wc -l` = 315; a grep for `exec.`, `LookPath` and `os/exec` returns nothing), while its own comment at :193 reads THE CLI REACH IS RETIRED. Nothing here is owed a conversion |
 | `internal/clientsync/switchverb.go:53-58` | `switchRunRig`: `exec.LookPath(argv[0])` then `exec.Command(path, argv[1:]...)`, called as `rig ps --json --nodes --rig ROOM` at :350 and again at :322 | NOT CONVERTED, and ABSENT FROM THE ASSIGNMENT'S KEY — the read is `GetRoomStatus`-shaped (the same substitution `respawn`'s canonicalSession half uses), but the swap is the verb's own decision and is not in this unit |

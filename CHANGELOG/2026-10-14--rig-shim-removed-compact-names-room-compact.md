@@ -3,7 +3,7 @@
 ### Removed
 
 - `4genteam rig-shim` (`internal/clientruntime/command.go`): it installed a `rig` symlink to the client for the
-  retired OpenRig CLI. Nothing else in the client reads argv[0] `rig`.
+  retired 4genteam CLI. Nothing else in the client reads argv[0] `rig`.
 
 ### Changed
 
@@ -18,6 +18,6 @@
 ### Kept on purpose
 
 `rigd`, `bridge`, `doctor`, `status`, `log`, `stop`, `compact-run` are the client's own cloud connector and
-safeguard supervisor, not OpenRig; none reads `~/.openrig` or calls the `rig` CLI. The restore brief already
+safeguard supervisor, not 4genteam; none reads `~/config/4genthub` or calls the `rig` CLI. The restore brief already
 sends through `clientruntime.DeliverToSession(session, text)`, so the 2-vs-3 positional `send` bug does not exist
 at this HEAD.

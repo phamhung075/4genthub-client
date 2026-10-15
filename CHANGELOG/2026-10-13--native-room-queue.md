@@ -6,7 +6,7 @@
   `create`, `list`, `show`, `update`, `claim`, `close` each RE-READ the row they answer with, so what a
   caller is told is what the next read shows. The state set `{pending, in-progress, blocked, handed-off,
   done}` and the closure-reason set `{handed_off_to, blocked_on, denied, canceled, no-follow-on,
-  escalation, superseded}` are preserved from the OpenRig table, as are `chain_of_record`, `reply_to`,
+  escalation, superseded}` are preserved from the 4genteam table, as are `chain_of_record`, `reply_to`,
   the transitions table (who/when/from/to/note) and the wake fields (`blocked_on`,
   `wake_after_seconds`). Validation names the offending value: an unknown state or closure reason lists
   the valid ones, an unknown id names itself. A note with no state is a state-preserving append. A

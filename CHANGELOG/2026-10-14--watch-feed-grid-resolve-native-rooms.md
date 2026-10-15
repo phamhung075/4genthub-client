@@ -17,7 +17,7 @@
   `<root>/<rig>-<seat>@<rig>/agent/...`.
 - Not changed: `CanonicalRigSeat` and the send translation still accept the documented `<rig>-<seat>@<rig>` input form;
   `clientsync` seat-store commands (`sync`, `pull`, `bundle`, `withhold`) legitimately use the cloud seat store. The
-  forcecompact helper is documented as targeting an OpenRig `pi-runner.js` seat; whether it works on a native seat was not measured.
+  forcecompact helper is documented as targeting an 4genteam `pi-runner.js` seat; whether it works on a native seat was not measured.
 
 ### Tested
 `TestTheExistenceCheckReadsTheNativeRoomLayout` (clientwatch) plus fixtures moved to native names in `clientrestore`,

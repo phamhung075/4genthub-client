@@ -6,7 +6,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## 2026-10-14 — `rig-shim` removed; `compact` names the runtime's own verb
 
 ### Removed
-- `4genteam rig-shim` (it symlinked `~/.local/bin/rig` to the client, a compatibility layer for the retired OpenRig `rig` CLI). Test: `clientruntime.TestNoCompatibilityShimVerbIsRegistered`.
+- `4genteam rig-shim` (it symlinked `~/.local/bin/rig` to the client, a compatibility layer for the retired 4genteam `rig` CLI). Test: `clientruntime.TestNoCompatibilityShimVerbIsRegistered`.
 
 ### Changed
 - `4genteam compact RIG` with no rigd running now also names `4genteam room compact RIG`, which force-compacts the room's seats through the runtime. Test: `clientlifecycle.TestCompactSpawnsNothingAndRefusesWithoutTheAuthority`.
@@ -29,11 +29,11 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## 2026-10-14 — the two printed sites the gate called gaps are defects, and the text says so now
 
 ### Changed
-- `internal/clientsync/switchverb.go` — the runtime-change notice printed the OpenRig CLI's own three-line
+- `internal/clientsync/switchverb.go` — the runtime-change notice printed the 4genteam CLI's own three-line
   sequence as a procedure. Following it does not switch a runtime: its middle line is a MACHINE-WIDE
   safeguard stop on this box (measured: rigd reaped with its children, for every rig) and its last line
   cannot run at all (`--team DIR is required`). The notice now prints no verb from the lead's machine-wide
-  list and no OpenRig CLI verb anywhere: it says this client has no sequence that completes the switch,
+  list and no 4genteam CLI verb anywhere: it says this client has no sequence that completes the switch,
   names the two verbs it does own — `4genteam sync rig ROOM --update` writes the room's definition and each
   seat's pinned snapshot; `4genteam seat reseat RIG --seat NAME` stops and restarts a seat so it loads the
   configuration it now has — and states that neither is run for the reader and that whether a restart
@@ -43,7 +43,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `TestSwitchRuntimeChangePrintsNoMachineWideVerb` is the pin the incident earned: it fails on the text
   this commit replaces, naming each machine-wide verb and what was measured about it. Both pins whose names
   claimed "manual steps" moved with the text.
-- `internal/clientruntime/openrigdaemon.go` — the `@external` reply footer named `rig queue create`, which
+- `internal/clientruntime/referencedaemon.go` — the `@external` reply footer named `the task queue create`, which
   fails here by name ("create is not a read this shim performs", exit 2). It now states the limit: the
   destination is not a local session and this client's queue reads only. Its pin asserts the absence of the
   removed verb instead of its presence.
@@ -54,7 +54,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## 2026-10-14 — every printed rig reference names a command that exists on this box
 
 ### Changed
-- `internal/clientlifecycle/lifecycle.go` — both "could not open the OpenRig UI" lines pointed at
+- `internal/clientlifecycle/lifecycle.go` — both "could not open the 4genteam UI" lines pointed at
   `rig daemon status`, which is not a verb the installed client has. They name `4genteam doctor`: one
   row per safeguard, and it exits 0 only when every row is running, so a bare exit code from it is a
   snapshot rather than a property (the gate measured 0 and 3 within the same hour, a `bridge: silent`
@@ -64,17 +64,17 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   line `reseat.go:237` prints to stdout. The send help's node pointer names
   `4genteam ps <RIG> --nodes --json` (run: exit 0, a `SESSION` column per seat), and the
   rendered-unconfirmed footer names `4genteam capture <session>`.
-- `internal/clientruntime/openrigdaemon.go` — the `↩ Reply:` footer rendered `rig send`; it names
+- `internal/clientruntime/referencedaemon.go` — the `↩ Reply:` footer rendered `4genteam send`; it names
   `4genteam send`, this client's own verb and transport.
 - `internal/clientwatch/commands.go` — the `inputs` and `input` notes said a line typed in a pane "is sent
-  with `rig send`". The pane has not exec'd `rig` since `grid.go`'s `sendLine` moved in process through
+  with `4genteam send`". The pane has not exec'd `rig` since `grid.go`'s `sendLine` moved in process through
   `clientruntime.RuntimeSendText`, so the note was stale: it now says the line goes through this client's
   own transport.
-- Pins moved with the strings: `clientruntime/openrigdaemon_test.go` (both footers) and
-  `clientseat/seatargument_test.go`. The no-generation assertion in `openrigdaemon_test.go` now matches the
+- Pins moved with the strings: `clientruntime/referencedaemon_test.go` (both footers) and
+  `clientseat/seatargument_test.go`. The no-generation assertion in `the reference clientdaemon_test.go` now matches the
   generation suffix marker `· gen ` instead of the bare word `gen`, which "4genteam" itself contains.
 - Kept with a named reason, in `SWEEP-printed-rig-strings-2026-10-14.md`: the `@external` reply's
-  `rig queue create` (this client's `queue` shim refuses writes by name, so no native writer exists to point
+  `the task queue create` (this client's `queue` shim refuses writes by name, so no native writer exists to point
   at), the `switch` runtime-change procedure and `sync bundle`'s `rig up <bundle> --target` (no native verb
   consumes a rig.yaml or a `.rigbundle`; `4genteam up` takes `RIG --team DIR`), and the install-checker's
   `rig daemon stop|start` (a different daemon from the one `4genteam stop`/`up` manage). Generated policy
@@ -160,12 +160,12 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   read and for a shell that names no daemon. `internal/clientbridge/runloop_test.go` serves the route in the
   fixture so every cycle walks a real one, and the bridge tests cover the unreadable-list note.
 
-## 2026-10-14 — capture reads a pane through the runtime, not through the OpenRig daemon
+## 2026-10-14 — capture reads a pane through the runtime, not through the 4genteam daemon
 
 ### Changed
-- `internal/clientruntime/command.go` — `captureCommand` no longer dials the OpenRig daemon. It gated on
-  `OPENRIG_URL`/`OPENRIG_PORT`, POSTed `/api/transport/capture` and parsed the document it got back, so the verb
-  only worked where an OpenRig path existed — exactly what this cutover removes. It now calls
+- `internal/clientruntime/command.go` — `captureCommand` no longer dials the 4genteam daemon. It gated on
+  `CLIENT_URL`/`CLIENT_PORT`, POSTed `/api/transport/capture` and parsed the document it got back, so the verb
+  only worked where an 4genteam path existed — exactly what this cutover removes. It now calls
   `Client.Capture` over the client's own transport (the runtime's terminal manager, the process that owns the tmux
   server). Verbatim stdout and `--lines` are unchanged; `--json` prints this client's own capture answer (the seat
   and its content) because there is no daemon body to pass through any more; a runtime that is absent or refuses
@@ -261,7 +261,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 - `internal/clientruntime` — ONE exported reading of a room's node records,
-  `RoomNodes(ctx, room) (nodes []map[string]any, ok bool, err error)`: the local runtime first, the OpenRig
+  `RoomNodes(ctx, room) (nodes []map[string]any, ok bool, err error)`: the local runtime first, the 4genteam
   daemon's node table second, rows in the CLI's own keys whichever answered. `ReadRigNodes` is now the
   unexported `daemonNodes`, the daemon rung of that same read, so a verb cannot take a rung by accident. The
   runtime rung also carries `lifecycleState` beside `sessionStatus` — the same fact under the key the
@@ -292,8 +292,8 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 - `internal/clientfeedback/feedback.go` — the verb's `--room`/`--seat`/`--session` defaults come from
-  `clientruntime.ResolveIdentity` (the runtime socket, then a rig's OpenRig daemon, then this shell's seat
-  environment) instead of from an exec of `rig whoami --json`. The refusal no longer names a command that
+  `clientruntime.ResolveIdentity` (the runtime socket, then a rig's 4genteam daemon, then this shell's seat
+  environment) instead of from an exec of `4genteam whoami --json`. The refusal no longer names a command that
   cannot exist after the cutover. Commit `3840b8e`.
 - `internal/clientrestore/restore.go` — the restore brief is delivered by `clientruntime.DeliverToSession`,
   which takes the session name AS GIVEN. The seam it replaces tried the runtime only behind a guard for the
@@ -444,7 +444,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Not claimed
 - A strict same-seat round-trip against the daemon's `agentActivity.state` needs a seat that is BOTH in a native room
-  and registered with the OpenRig daemon, and that conjunction arrives with the cutover. Measured here is the
+  and registered with the 4genteam daemon, and that conjunction arrives with the cutover. Measured here is the
   vocabulary (byte-identical spellings, pinned by test) and the daemon's live words for this rig tonight
   (idle/running/unknown), which are exactly what this mapping produces from the corresponding runner states.
 
@@ -532,7 +532,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `TestQueueListRefusesAnAnswerItCannotRead` (new): a bare ok envelope refuses with "carried no data" and a
   wrong-shaped document refuses with "could not be read", both at exit 3 and both asserted NOT to print any queue
   reading; the control — a real empty array — still prints "Measured 0 pending items" at exit 0.
-- On the wire, `queue list` against a fake runtime on `OPENRIG_RUNTIME_SOCKET`:
+- On the wire, `queue list` against a fake runtime on `CLIENT_RUNTIME_SOCKET`:
   bare `{"ok":true}` → "the runtime's QueueList answer could not be read … carried no data at all", exit 3 (before:
   "Measured 0 pending items", exit 0); wrong shape → refusal, exit 3 (before: exit 1, because this site returned
   `ExitRemote` while the typed path returns the room contract's 3); real empty array → "Measured 0 pending items",
@@ -556,7 +556,7 @@ format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   incomplete split still put `StartRoom` on the wire; it does not now.
 
 ### Verified, on the wire rather than in the abstract
-`up room-a --team <dir>` against a fake runtime on `OPENRIG_RUNTIME_SOCKET`, its request log read afterwards (no
+`up room-a --team <dir>` against a fake runtime on `CLIENT_RUNTIME_SOCKET`, its request log read afterwards (no
 daemon spawned, checked):
 
 - answer truncated mid-document → `GetRoomStatus` only, **no `StartRoom`**, exit 3, message "the runtime's
@@ -650,13 +650,13 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 ## 2026-10-14 — the grid's input loop delivers a typed line in process, and reads the name from the record
 
 ### Changed
-- `internal/clientwatch/grid.go` — **the input loop's `rig send` exec is gone.** It ran `rig send <composed name>`:
+- `internal/clientwatch/grid.go` — **the input loop's `4genteam send` exec is gone.** It ran `4genteam send <composed name>`:
   after this client's rename `rig` resolves to this same binary, so the grid started a copy of itself and showed the
   caller a subprocess refusal, and `fmt.Sprintf("%s-%s@%s", rig, seat, rig)` INVENTED the session name from a
   convention instead of reading it from the seat's record — the defect the SEAT shape's send path records as fixed.
   The line is now delivered through the send verb's own primitives (`ResolveSeatAddress`, then `RuntimeSendText` or
-  `OpenRigSend` according to the transport the record names), with `SendOptions.Sender` preserving what the exec used
-  to inherit from `OPENRIG_SESSION_NAME`. `sendLine` is a package var, so the tests drive the loop with no daemon.
+  `4genteamSend` according to the transport the record names), with `SendOptions.Sender` preserving what the exec used
+  to inherit from `AGENTHUB_SESSION_NAME`. `sendLine` is a package var, so the tests drive the loop with no daemon.
 
 ### Verified
 - `internal/clientwatch` — `TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop` now asserts the invariant rather than
@@ -788,16 +788,16 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 ## 2026-10-14 — the seat guard's identity and delivery are native, and the site inventory is not disposed: four declared sites plus three seams the assignment key never listed
 
 ### Changed
-- `cmd/seatcheck`: `rigWhoami` no longer execs `rig whoami --json` and `rigSend` no longer execs
-  `rig send -- TARGET TEXT`. The identity comes from the client's own resolver, now ONE exported function
+- `cmd/seatcheck`: `rigWhoami` no longer execs `4genteam whoami --json` and `rigSend` no longer execs
+  `4genteam send -- TARGET TEXT`. The identity comes from the client's own resolver, now ONE exported function
   (`internal/clientruntime.ResolveIdentity`, whose chain the `whoami` verb also uses): the runtime socket
-  first, a rig's OpenRig daemon second, the seat's own environment last — so the guard answers on a machine
+  first, a rig's 4genteam daemon second, the seat's own environment last — so the guard answers on a machine
   with no daemon at all. The delivery goes through `internal/clientruntime.DeliverToSession`, the same
   runtime-first / daemon-fallback chain the `send` verb runs, with no daemon-only switch set — exactly the
-  shape `rig send SESSION TEXT` had.
+  shape `4genteam send SESSION TEXT` had.
 - The guard's failure shape is ONE: every non-zero the delivery answers is mapped to `exitDeliveryFailed` (5)
   by `runSend`, so a policy result (2/3/4) is never readable as a delivery failure and a transport's own code
-  never leaks as the guard's exit. The `delivery failed` line no longer names `rig send`.
+  never leaks as the guard's exit. The `delivery failed` line no longer names `4genteam send`.
 - `internal/clientruntime`: the whoami chain moved out of `whoamiCommand.Run` into `ResolveIdentity`, so the
   verb PRINTS an answer and the guard REASONS about the same one; a document the daemon answered with is still
   carried whole (the CLI prints it unmodified). `whoami` asks the runtime for this seat's NATIVE session name
@@ -807,7 +807,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
   session name from the room and seat it was handed — `agenthub--RIG--SEAT`, a name no seat on this rig
   carries, which the local runtime therefore refused while a healthy daemon was never asked. The name is now
   READ, by the new `internal/clientruntime.ResolveSeatAddress`, from the record that owns the pane: the room's
-  runtime record first (`GetRoomStatus(room)` under the native socket's room scope), the OpenRig daemon's seat
+  runtime record first (`GetRoomStatus(room)` under the native socket's room scope), the 4genteam daemon's seat
   records second (`/api/ps` maps the rig NAME the caller typed to the rigId the records use,
   `/api/rigs/<id>/nodes` lists the seat with its session name as a field). Neither door closing composes one:
   a seat absent from both records is refused with both doors named and exit 3. The record that answers also
@@ -834,7 +834,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 ### Verified
 - `go build ./...`, `go vet ./...`, `go test ./... -count=1` → 24 packages ok.
 - The new `cmd/seatcheck` tests fail on HEAD's `main.go` for the plainest reason — it execs `rig`: run against
-  a pristine HEAD tree with the SAME test file, six tests fail (`parse rig whoami: unexpected end of JSON
+  a pristine HEAD tree with the SAME test file, six tests fail (`parse 4genteam whoami: unexpected end of JSON
   input`, `rigSend = 0 with no transport`, …). The instrument is a fake `rig` first on PATH that records its
   own execution, and its record not existing.
 - The other nine sites of the eleven-site inventory are disposed in
@@ -870,7 +870,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 - The seat send's dead fallback is FIXED by this lineage rather than repaired: `sendCommand.Run`'s own
   `RIG SEAT MESSAGE` shape used to fall back to `exec.LookPath("rig")` + `exec.Command(path, "send", ...)`, and on
   this machine `rig` is a symlink to this client - so the "fallback" re-entered the same verb, whose three-positional
-  entry refused the two-argument OpenRig form. The reader got a failure report about a command nobody had asked for,
+  entry refused the two-argument 4genteam form. The reader got a failure report about a command nobody had asked for,
   which is why seat-to-seat send looked dead on the installed binary AND on a tip build. `d777b52` deleted the
   fallback (the send goes to `clientruntime.SendTextToSeat`) and pinned the deletion AS AN ABSENCE:
   `TestTheRigSeatMessageShapeNeverFallsBackToShellingOutToRig` empties PATH, so the test fails if any shell-out
@@ -916,7 +916,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 - The refusal for a daemon-only switch with a HEALTHY runtime and a dead daemon no longer opens with "no runtime
   is answering at <socket>" — false, and aimed at the transport that DID answer. `DaemonSwitchMissing` names the
   flag and the daemon; `FallbackMissing` keeps its sentence for the case where the runtime really did not
-  answer. Measured: `rc=3`, "`--verify` needs the OpenRig daemon, and the OpenRig fallback at
+  answer. Measured: `rc=3`, "`--verify` needs the 4genteam daemon, and the 4genteam fallback at
   http://127.0.0.1:1 is not available either; nothing was sent".
 
 ### Added
@@ -930,18 +930,18 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 
 ### Changed
 - `whoami`, `queue` and `send` resolve their transport through ONE seam, `internal/clientruntime/transport.go`
-  (`ResolveTransport`): a runtime that answers on `DefaultSocketPath()` carries the request, the OpenRig HTTP
+  (`ResolveTransport`): a runtime that answers on `DefaultSocketPath()` carries the request, the 4genteam HTTP
   path is asked only when no runtime answers, and with neither the refusal NAMES THE RUNTIME
-  (`FallbackMissing`) instead of the OpenRig daemon. The old order resolved from the seat environment, so a
-  shell carrying `OPENRIG_SESSION_NAME` went straight to HTTP. Measured on this machine with
-  `OPENRIG_URL=http://127.0.0.1:1` and the runtime up: `whoami --json` exited 3 and `queue list` exited 3,
-  both answering "the OpenRig daemon at http://127.0.0.1:1 is not answering". After the change `whoami --json`
+  (`FallbackMissing`) instead of the 4genteam daemon. The old order resolved from the seat environment, so a
+  shell carrying `AGENTHUB_SESSION_NAME` went straight to HTTP. Measured on this machine with
+  `CLIENT_URL=http://127.0.0.1:1` and the runtime up: `whoami --json` exited 3 and `queue list` exited 3,
+  both answering "the 4genteam daemon at http://127.0.0.1:1 is not answering". After the change `whoami --json`
   exits 0 with the seat identity and `queue list` reaches the runtime, whose own answer is what the caller
   reads. `internal/clientruntime/queue.go` and `ipc.go` are untouched: no wire method was missing.
 - `whoami` RECOVERS an identity instead of reporting one transport's mood: the runtime is asked first, a
   runtime that cannot place this seat falls through to the daemon, and with no daemon at all the seat's own
   environment IS the document (`resolved_by: environment`) — `AGENTHUB_ROOM`/`AGENTHUB_SEAT` when a native seat
-  states both, otherwise `<seat>@<rig>` from `OPENRIG_SESSION_NAME`. Booting the runtime is no longer a side
+  states both, otherwise `<seat>@<rig>` from `AGENTHUB_SESSION_NAME`. Booting the runtime is no longer a side
   effect of asking who we are (`EnsureDaemon` left this verb). One rendering (`printWhoami`) prints both
   sources, so the runtime path and the environment path cannot drift apart.
 - `queue` reads the runtime's rail — `QueueList`, and `QueueShow` for both `show` and `transitions`, whose
@@ -958,8 +958,8 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 ### Verified
 - The U3 acceptance instrument, run from the seat shell (the full before/after output, the build and the test
   results, are in `CHANGELOG/2026-10-14--shim-runtime-first.md`):
-  `OPENRIG_URL=http://127.0.0.1:1 4genteam whoami --json` → exit 0 with the seat identity;
-  `OPENRIG_URL=http://127.0.0.1:1 4genteam queue list` → the runtime's own answer, never the removed sentence.
+  `CLIENT_URL=http://127.0.0.1:1 4genteam whoami --json` → exit 0 with the seat identity;
+  `CLIENT_URL=http://127.0.0.1:1 4genteam queue list` → the runtime's own answer, never the removed sentence.
 - `go test ./internal/clientruntime/ ./internal/clientseat/ -count=1` → ok; `go build ./...`, `go vet` and
   `gofmt -l` clean. Eight new tests were run against the pre-change verb files (swapped in from `HEAD`) and
   fail there, then pass with the change: `TestQueueListPrefersTheRuntimeEvenWhenADaemonIsUp`,
@@ -975,7 +975,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 ### Added
 - `4genteam room status|stop|reseat|compact` (`internal/clientroom/room.go`): the room-scoped frame over the runtime's IPC.
   Every sub-verb prints the pair it ran against (`room: <room>@<state-dir> socket: <socket>`), because neither is resolved
-  implicitly. `stop` is `StopRoom` alone — no tmux, no rigd, no bridge, no `~/.openrig` — and leaves the room's directory in
+  implicitly. `stop` is `StopRoom` alone — no tmux, no rigd, no bridge, no `~/config/4genthub` — and leaves the room's directory in
   place so the room can be started again. `reseat` is `StopSeat` then `RestartSeat`, in that order. `compact` asks the
   runtime once per RUNNING seat and refuses a stopped one by name rather than reporting a compact that did not happen; a
   runtime refusal is repeated in the runtime's own words. Both refusals exit 2.
@@ -985,7 +985,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 
 ### Changed
 - `up` is room-scoped: `upCommand.NeedsRig` is false, so the dispatcher hands it a nil rig — the room is the positional and
-  its seats come from the LOCAL team definition, so starting them needs nothing resolved from OpenRig. The two rig reaches
+  its seats come from the LOCAL team definition, so starting them needs nothing resolved from 4genteam. The two rig reaches
   that remain take nil (`openUIImpl` now resolves the tool itself, as the peak gate's nil branch already did).
 - `up` PRINTS the state dir and the socket before it touches the room, and CHECKS BEFORE IT STARTS: the definition is sent
   whole only when the daemon does not know the room, or when every seat it reports is stopped — nothing running, so nothing
@@ -998,7 +998,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 - `TestSeatStartPlan` pins the check-then-start decision; three existing tests moved to the new codes; `gofmt` clean,
   `go build ./...` and `go vet` exit 0, `go test ./internal/clientlifecycle/ -count=1` → ok.
 - Forced end-to-end through the REAL binary against a stub daemon that speaks the client's own line envelope
-  (`OPENRIG_RUNTIME_SOCKET` points at it, so nothing live is touched): a second `up` sends NO start request at all; one
+  (`CLIENT_RUNTIME_SOCKET` points at it, so nothing live is touched): a second `up` sends NO start request at all; one
   stopped seat gets exactly one `RestartSeat` and its running siblings get none; a seat that never returns exits 2 with the
   seat named; a room the daemon does not know gets `StartRoom` with the whole definition, exit 0 or 3 on the daemon's
   answer; usage is 3. The room verbs' own forcing runs (including `compact` sending `ForceCompact` for exactly the running
@@ -1071,25 +1071,25 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 ## 2026-10-13 — the delivery goes to the daemon, and the envelope keeps the human's name
 
 ### Changed
-- `sync messages` delivers through the OpenRig daemon (`clientruntime.OpenRigSend`, the route `rig send` itself takes)
-  instead of exec'ing `rig send`. The envelope is rendered by the client's own body renderer, so a delivered message
+- `sync messages` delivers through the 4genteam daemon (`clientruntime.4genteamSend`, the route `4genteam send` itself takes)
+  instead of exec'ing `4genteam send`. The envelope is rendered by the client's own body renderer, so a delivered message
   reaches a pane in exactly the wrapper a human's own send produces — and there is no child process left to outrun or
   to fail for a reason of its own. `humanSenderEnv` is DELETED with the exec, because the environment stamping it did
   exists to make a child process say the right thing.
-- One addition to `clientruntime.SendOptions`: `Sender`. `OpenRigSend` writes the envelope AS `openRigSession()`, which
+- One addition to `clientruntime.SendOptions`: `Sender`. `4genteamSend` writes the envelope AS `sessionName()`, which
   is right for a caller in a seat shell and wrong for this one: the deliverer runs outside any seat shell and the text
-  is the human's, so the envelope must say `human@kernel`. The exec got that by stamping `OPENRIG_SESSION_NAME` onto
-  the child; the option gets it without a child. Blank keeps the old meaning, so `rig send` itself is unchanged.
+  is the human's, so the envelope must say `human@kernel`. The exec got that by stamping `AGENTHUB_SESSION_NAME` onto
+  the child; the option gets it without a child. Blank keeps the old meaning, so `4genteam send` itself is unchanged.
 - A delivery the daemon refuses is reported in the daemon's own words — `Detail`, else `Error`, else `Warning`, else
   the HTTP status — rather than flattened into a bare code.
 
 ### Verified
 - `TestMessagesVerbDeliversThroughTheDaemonWithTheCLIEnvelope` runs the REAL delivery (the fixture's substitute is
-  taken back) against a stub daemon, with PATH emptied and a decoy in `OPENRIG_SESSION_NAME`. It asserts the route, the
+  taken back) against a stub daemon, with PATH emptied and a decoy in `AGENTHUB_SESSION_NAME`. It asserts the route, the
   recipient session, the message body, `From: human@kernel`, and the decoy's ABSENCE. RED-then-GREEN: dropping the
   explicit sender fails it with the envelope the deliverer's own seat would have written,
   `From: 4genthub-min-go-dev@4genthub-min`; restored, green.
-- The live leg is blocked on the READ's commodity question — the native room store holds no row for a seat the OpenRig
+- The live leg is blocked on the READ's commodity question — the native room store holds no row for a seat the 4genteam
   daemon started, so `GetRoomStatus` refuses with `cannot read room spec` — and not on this change. The stub daemon
   proves the request the verb makes, not the pane it reaches; the test file says so in its own header.
 - `go build ./...`, `go vet ./internal/clientsync/ ./internal/clientruntime/` and `go test ./...` are green: 23
@@ -1119,7 +1119,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
   through the real rig and the suite would have said nothing. `fakeRoom` empties PATH for exactly that reason.
 - `go build ./...`, `go vet ./internal/clientsync/` and `go test ./internal/clientsync/` are green; the 14 message-verb
   tests pass, including `TestSeatSessionsFromSkipsEverySeatWithoutALivePrompt`, which holds the skip rule against the
-  runtime's death states. `runRig` no longer appears anywhere in the file. The verb's delivery site (`rig send`, the
+  runtime's death states. `runRig` no longer appears anywhere in the file. The verb's delivery site (`4genteam send`, the
   second half of this unit) is still there and is next.
 
 ## 2026-10-13 — the relaunch goes to the runtime, and both activity readers are declared
@@ -1154,7 +1154,7 @@ sends), `TestADaemonRefusalStillStartsFromTheDefinition`, `TestATransportFailure
 
 ## 2026-10-13 — the supervisor's sends go to the runtime, and rigIdle is declared rather than converted
 
-`clientlifecycle` sent every message by shelling out: `rigSay` ran `rig send <session> <text> --wait-for-idle 120
+`clientlifecycle` sent every message by shelling out: `rigSay` ran `4genteam send <session> <text> --wait-for-idle 120
 [--raw]`, and `rigIdle` read agentActivity by running `rig ps --nodes`. The send is converted; the read is not, and now
 says why.
 
@@ -1190,7 +1190,7 @@ A client built from a branch has to reach a daemon built from the SAME branch wh
 default path; without a knob there is no way to test the cutover before it happens on the owner's machine.
 
 ### Added
-- `OPENRIG_RUNTIME_SOCKET` (`clientruntime.RuntimeSocketEnv`), read FIRST by `DefaultSocketPath()` — the ONE resolution
+- `CLIENT_RUNTIME_SOCKET` (`clientruntime.RuntimeSocketEnv`), read FIRST by `DefaultSocketPath()` — the ONE resolution
   point `NewClient("")` reaches. A set override REPLACES the derivation rather than joining it, so one socket is named
   by exactly ONE input and the client and the daemon it starts agree on the path. A blank value counts as unset, the
   rule this client's other environment variables already use. The NAME IS A CONTRACT and is pinned by a test, because
@@ -1214,7 +1214,7 @@ default path; without a knob there is no way to test the cutover before it happe
 
 ## 2026-10-13 — the abort keystroke goes to the runtime, with the bare text asserted
 
-`clientlifecycle.rigAbort` shelled out to `rig send <session> /abort --raw`. It now types the bare `/abort` through
+`clientlifecycle.rigAbort` shelled out to `4genteam send <session> /abort --raw`. It now types the bare `/abort` through
 `clientruntime.SendText` — no `From`/`To` envelope, because a sender prefix arrives as a MESSAGE where the runner needs
 a keystroke.
 
@@ -1291,7 +1291,7 @@ refusal.
 
 `sendCommand.Run`'s own `RIG SEAT MESSAGE` shape tried the native runtime send and then, on failure, fell
 back to `exec.LookPath("rig")` + `exec.Command(path, "send", <session>, <text>)`. On this machine `rig` is a
-symlink to THIS client, so the "fallback" was a self-call: the two-argument OpenRig form went back into the
+symlink to THIS client, so the "fallback" was a self-call: the two-argument 4genteam form went back into the
 same verb, whose three-positional entry then refused it, and the reader got a failure report about a command
 nobody had asked for. The route is the FALLBACK — which is why the same failure appeared both on the
 installed binary and on a tip build; the tip build had no arity bug of its own, it delegated.
@@ -1302,7 +1302,7 @@ installed binary and on a tip build; the tip build had no arity bug of its own, 
   `exec.LookPath("rig")` / `exec.Command` fallback is DELETED rather than repaired: after this client's rename
   that name resolves to this binary.
 - `internal/clientseat/reseat.go`: the verb's help claimed the shape "sends MESSAGE to the seat with
-  `rig send`"; it now says the send goes through the local runtime and does not shell out to `rig`, with the
+  `4genteam send`"; it now says the send goes through the local runtime and does not shell out to `rig`, with the
   reason.
 
 ### Verified
@@ -1353,14 +1353,14 @@ type could not represent the difference, so the distinction died at the deserial
 - Repo and path, so nothing has to guess which checkout: this is the SAME repository as the native `up` commit
   `354831d` — `agenthub_client` (remote `git@github.com:phamhung075/4genthub-client.git`, main checkout
   `/home/daihu/__projects__/4genthub/agenthub_client`), branch `4genthub-min/u2-native-runner` in the linked
-  worktree `/home/daihu/.openrig/agenthub-seats/4genthub-min/wt/u2-native-runner`, with the crate at
+  worktree `/home/daihu/.config/4genthub/agenthub-seats/4genthub-min/wt/u2-native-runner`, with the crate at
   `rust/agenthub-runtime/` inside it. `354831d` is NOT an ancestor of that repo's `HEAD`, so a reviewer builds
   from the hash explicitly.
 - The reviewer's B1p check goes green by ITS OWN re-run of the two tests above, not by this note.
 
 ## 2026-10-13 — `up` starts a room from the local team definition, and `--room-only` says what it excludes
 
-`up` restored rooms through OpenRig (`rig up RIG --existing`) and started the runtime daemon with no state
+`up` restored rooms through 4genteam (`rig up RIG --existing`) and started the runtime daemon with no state
 dir at all: `clientruntime.EnsureDaemon` spawns `agenthub-runtime --socket PATH daemon` and drops both
 streams, so the daemon landed on this machine's default state tree and a start that failed had nothing to
 read. A room that did not already exist could not be started by that path either: `StartRoomByName` sends
@@ -1445,27 +1445,27 @@ this file's tests are frame- and redaction-level by their own stated rule.
   application's own `400 Expected WebSocket upgrade` (`ws_mount.go:918`) - the transport the fixed client
   now uses reaches the application rather than the terminator.
 
-## 2026-10-13 — `rig queue` answers from the daemon, `rig capture` exists, and a queue note is readable
+## 2026-10-13 — `the task queue` answers from the daemon, `rig capture` exists, and a queue note is readable
 
 Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps`; the daemon's own
 `commands.captureExamples` advertises `rig capture`. Both are fixed here on top of the verdict changes.
 
 ### Fixed
-- **`rig queue` answered a false empty.** Measured before: `rig queue --json` → `[]`, exit 0, and the bare
-  form printed "No pending items in local queue." while this rig's OpenRig queue held the rows the lead had
+- **`the task queue` answered a false empty.** Measured before: `the task queue --json` → `[]`, exit 0, and the bare
+  form printed "No pending items in local queue." while this rig's 4genteam queue held the rows the lead had
   routed. On a rig whose durable work *is* the queue, a false empty is worse than an error: a seat trusts it
   and believes it owes nothing. The verb now reads the daemon (`GET /api/queue/list` with
   `destinationSession` of this seat's session, `activeOnly=1`, `compact=1`) and renders one line per row. An
   empty document is reported only as a **measurement of a named session against a named daemon**
-  (`Measured 0 pending items for <session> on the OpenRig daemon at <url>.`); with no daemon configured it
-  says nothing was measured and exits 3 (`set OPENRIG_URL or OPENRIG_PORT`); a daemon refusal is reported
+  (`Measured 0 pending items for <session> on the 4genteam daemon at <url>.`); with no daemon configured it
+  says nothing was measured and exits 3 (`set CLIENT_URL or CLIENT_PORT`); a daemon refusal is reported
   with its status and reason, never flattened to `[]`.
 - **The list's own parameter was dropped.** The route reads `destinationSession`; `--destination` now
-  reaches it, so `rig queue --destination 4genthub-min-reviewer@4genthub-min` answers with that seat's rows
+  reaches it, so `the task queue --destination 4genthub-min-reviewer@4genthub-min` answers with that seat's rows
   (live). Same class as the defect, in the same verb, found by reading the route rather than the output.
 - **A queue write is refused by name, in both its spellings.** `queue update <id> --note ...`,
   `queue update <id> --state done`, `claim`, `block` and the rest are writes this shim does not perform:
-  exit 2, nothing sent, stderr naming the write and pointing at the OpenRig CLI — the subcommand is judged
+  exit 2, nothing sent, stderr naming the write and pointing at the 4genteam CLI — the subcommand is judged
   **before** the flag parser runs, so the flag spelling is not answered with a complaint about the write's
   own argument. (Only an undeclared flag on a *read*, e.g. `queue list --nope`, is answered by the parser.)
   Measured before: a write reported success while its note was unreadable anywhere the caller could look.
@@ -1475,7 +1475,7 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
   printed the raw payload to stderr with exit 1. An absent `ok` is now a success; only an explicit
   `ok:false` is a refusal. (Found by the reviewer's request-capture stub, which names the pane `text` and
   omits `ok`; the daemon's own keys were re-measured live to confirm the strict half still bites.)
-- **`send` dropped `deliveryId`.** The route reads it (`transport.js:76`) and the OpenRig CLI always sends
+- **`send` dropped `deliveryId`.** The route reads it (`transport.js:76`) and the 4genteam CLI always sends
   one (`send.ts:475`, `deliveryId: randomUUID()`); the daemon uses it as this delivery's outbox id
   (`session-transport.js:1143`) and refuses a reuse that names other content instead of re-delivering it
   (`:1160`). The shim now sends a fresh v4 identity per invocation — never a constant, which would make a
@@ -1485,7 +1485,7 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
 - **`rig capture <session> [--lines <n>] [--json]`** (`internal/clientruntime`): the verb the daemon's own
   `whoami` advertises, through `POST /api/transport/capture` on the same route the R7 receiver-side proof
   used. The pane goes out verbatim, no heading added.
-- **`rig queue show <qitemId>`** and **`rig queue transitions <qitemId>`**: a note the queue accepts does not
+- **`the task queue show <qitemId>`** and **`the task queue transitions <qitemId>`**: a note the queue accepts does not
   ride the row — `update --note` writes it into the row's transition log, and the row document carries no
   note field at all (`transitionNote`, `humanDetail` and `resolution` are null on every row read, including
   the ones with notes). `transitions` reads the log, which is where the note actually is.
@@ -1497,13 +1497,13 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
   `reorderFlags` helper is gone. `whoami` keeps its own flag set: it takes no positionals.
 
 ### Tests
-- `internal/clientruntime/openrigdaemon_test.go`: the queue list asks for THIS seat's `destinationSession`
+- `internal/clientruntime/referencedaemon_test.go`: the queue list asks for THIS seat's `destinationSession`
   with `activeOnly=1`/`compact=1` and prints every row the daemon returned; an empty document is a named
   measurement; a daemonless shell gets the refusal, not an empty list; a daemon failure is surfaced;
   `transitions` prints the note the row does not carry; `show` names the row's state and blocker; the write
   shapes (`update <id> --note`, `update <id>`, `claim <id>`) exit 2 with **zero requests**; `--json` prints
   the daemon's own document; `capture` prints the pane and takes `--lines` on either side of the session;
-  `OpenRigSend` names the delivery with a fresh v4 id on every invocation.
+  `4genteamSend` names the delivery with a fresh v4 id on every invocation.
 
 ### Verified (live, 4genthub-min rig, binary built from this commit at `/tmp/r7-verdict/4genteam`)
 - `4genteam queue --json` → 4 rows, including three **this seat did not create** (U2 `…86cab906`, U1+U0
@@ -1516,8 +1516,8 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
 - `4genteam queue update <id> --note "…"` → exit 2, `unknown flag --note for this verb; nothing was read`,
   and the row's `tsUpdated` unchanged (nothing written); `queue claim <id>` → exit 2, `"claim" is not a read
   this shim performs … Nothing was read or written.`
-- `env -u OPENRIG_URL -u OPENRIG_PORT 4genteam queue` → exit 3, `no OpenRig daemon is configured in this
-  environment (set OPENRIG_URL or OPENRIG_PORT); nothing was measured`.
+- `env -u CLIENT_URL -u CLIENT_PORT 4genteam queue` → exit 3, `no 4genteam daemon is configured in this
+  environment (set CLIENT_URL or CLIENT_PORT); nothing was measured`.
 - `4genteam capture 4genthub-min-reviewer@4genthub-min --lines 4` → the pane; two sessions → usage, exit 2;
   `--nope` → exit 2 naming the flag; daemonless → exit 3.
 - `go build ./...`, `go vet ./...`, `go test ./...` exit 0 (23 packages ok); `gofmt -l` clean on both
@@ -1527,7 +1527,7 @@ Row A of the R7 follow-up. R7's compat list names `whoami`, `send`, `queue`, `ps
 ### Named, not silently fixed
 - **`queue list --json` prints `[]` for an empty queue.** That is the daemon's own document, printed
   verbatim — the same rule the rest of this shim follows for `--json` — and the *human* form is the one that
-  carries the named measurement (`Measured 0 pending items for <session> on the OpenRig daemon at <url>.`).
+  carries the named measurement (`Measured 0 pending items for <session> on the 4genteam daemon at <url>.`).
   It is only a true empty because the request reached a named daemon: a shell that names none exits 3 and
   prints no list at all. Named here because `[]` is the exact string this row exists to banish from the
   surface a seat reads.
@@ -1554,8 +1554,8 @@ The two majors from `GATE-08c41a5-r7-shim-2026-10-13.md` (verdict: approve with 
 minors in the same files. Stacked on `08c41a5` on branch `4genthub-min/r7-shim`.
 
 ### Fixed
-- **M1 — the CLI's documented `send` flags were parsed as message text.** `internal/clientseat`: the verb used Go's `flag` package, which stops at the first positional, so the exact form the daemon's own `whoami` prints as `commands.sendExamples` — `rig send <session> 'message' --verify` — read as rig=`<session>`, seat=`"message"`, message=`--verify` and delivered **nothing to the named seat**; `--verify` in front was rejected outright (`flag provided but not defined`). Every documented option is now parsed **wherever it sits on the line** (`internal/clientruntime/flags.go`, `SplitFlags`): an undeclared flag is an error and an error stops the send (`nothing was sent`), never a positional. Implemented because this shim has a daemon: `--verify`, `--force`, `--wait-for-idle <s>`, `--raw`, `--dangerously-interact` (implies `--raw`, carries `--reason`), `--json`, and `--from` (for this shim's own native `RIG SEAT MESSAGE` shape). **Refused, because they address a surface this local shim does not have**: `--to`, `--pod`, `--rig` (fan-out), `--host` (remote), `--context` (pack resolves) — exit 2, nothing sent, each naming why. The invariant: no invocation may deliver to a destination other than the named seat, and no flag may silently change what is delivered.
-- **M2 — the daemon's `warning` was discarded.** `internal/clientruntime/openrigdaemon.go` + `internal/clientseat`: the success payload carries `warning` and the shim printed a bare `Sent to X`. As of OPR.0.4.3.28 the readiness guard sends-with-advisory (only `needs_input` hard-refuses), so that warning is the **only** signal a seat gets that its message went into a pane that was not reading. It is now surfaced the way the CLI does — `Advisory: <warning>` on human output — and `--json` prints the daemon's answer verbatim, so the field rides both. A `retained` outcome is reported as the CLI reports it (`Retained, not delivered to <session>. <warning>`), never as a delivery.
+- **M1 — the CLI's documented `send` flags were parsed as message text.** `internal/clientseat`: the verb used Go's `flag` package, which stops at the first positional, so the exact form the daemon's own `whoami` prints as `commands.sendExamples` — `4genteam send <session> 'message' --verify` — read as rig=`<session>`, seat=`"message"`, message=`--verify` and delivered **nothing to the named seat**; `--verify` in front was rejected outright (`flag provided but not defined`). Every documented option is now parsed **wherever it sits on the line** (`internal/clientruntime/flags.go`, `SplitFlags`): an undeclared flag is an error and an error stops the send (`nothing was sent`), never a positional. Implemented because this shim has a daemon: `--verify`, `--force`, `--wait-for-idle <s>`, `--raw`, `--dangerously-interact` (implies `--raw`, carries `--reason`), `--json`, and `--from` (for this shim's own native `RIG SEAT MESSAGE` shape). **Refused, because they address a surface this local shim does not have**: `--to`, `--pod`, `--rig` (fan-out), `--host` (remote), `--context` (pack resolves) — exit 2, nothing sent, each naming why. The invariant: no invocation may deliver to a destination other than the named seat, and no flag may silently change what is delivered.
+- **M2 — the daemon's `warning` was discarded.** `internal/clientruntime/referencedaemon.go` + `internal/clientseat`: the success payload carries `warning` and the shim printed a bare `Sent to X`. As of OPR.0.4.3.28 the readiness guard sends-with-advisory (only `needs_input` hard-refuses), so that warning is the **only** signal a seat gets that its message went into a pane that was not reading. It is now surfaced the way the CLI does — `Advisory: <warning>` on human output — and `--json` prints the daemon's answer verbatim, so the field rides both. A `retained` outcome is reported as the CLI reports it (`Retained, not delivered to <session>. <warning>`), never as a delivery.
 
 ### Changed
 - `whoami --json` asks the daemon for `compact=1` by default and prints the CLI's **identity-recovery allowlist** (`projectCompactWhoami`: `resolvedBy`, `identity`'s eight fields, `peers`' three, `peersNote`, `edges`, `transcript`'s `path`/`tailCommand`); `--full` (and the CLI's `--verbose`) skips both and prints the daemon's bytes as they arrived. The previous behaviour printed the full document always and re-indented it.
@@ -1563,7 +1563,7 @@ minors in the same files. Stacked on `08c41a5` on branch `4genthub-min/r7-shim`.
 - The envelope renders the sender label **exactly as it arrived** (only the blank *test* is trimmed) and the occupant generation by **presence**, truncated to eight characters — both the CLI's own conditions (`m3`, `m4`).
 
 ### Tests
-- `internal/clientruntime/openrigdaemon_test.go`: `SplitFlags` takes an option before, between and after the positionals, honours `--name=value` and `--`, refuses an undeclared flag, a value where none is taken and a missing value; the optioned body carries `verify`/`force`/`waitForIdleMs` under the route's own names, `--raw` sends the text exactly, `--dangerously-interact` carries its reason; the envelope's padded label and 3-character generation; `whoami` asks for `compact=1` and its projection drops `contextUsage`/`commands`/`attachmentType`/a peer's `label`, while `--full` prints the daemon's bytes; a 404 exits 1.
+- `internal/clientruntime/referencedaemon_test.go`: `SplitFlags` takes an option before, between and after the positionals, honours `--name=value` and `--`, refuses an undeclared flag, a value where none is taken and a missing value; the optioned body carries `verify`/`force`/`waitForIdleMs` under the route's own names, `--raw` sends the text exactly, `--dangerously-interact` carries its reason; the envelope's padded label and 3-character generation; `whoami` asks for `compact=1` and its projection drops `contextUsage`/`commands`/`attachmentType`/a peer's `label`, while `--full` prints the daemon's bytes; a 404 exits 1.
 - `internal/clientseat/send_test.go`: the daemon's own trailing `--verify` form and its leading form both deliver to the named seat with the flag carried, never in the text; the advisory reaches stdout; `--to` is refused with nothing sent; an unknown flag is refused; `--verify` prints the daemon's verdict plus the named un-run probe; a `retained` outcome is not a delivery; `--wait-for-idle 30` becomes 30000 ms and `0` is a caller error; `--json` prints the daemon's answer verbatim.
 
 ### Verified (live, 4genthub-min rig, binary built from this commit at `/tmp/r7-verdict/4genteam`)
@@ -1577,22 +1577,22 @@ minors in the same files. Stacked on `08c41a5` on branch `4genthub-min/r7-shim`.
 - `--verify` reports the **daemon's** verification (`outcome`/`verified`; `delivered` means the text and the Enter landed and the post-send capture re-confirmed the snippet) and prints the CLI's own line for an effect check that **could not run**, naming the reason: the CLI's client-side staged-residual probe plus its one guarded Enter is not implemented here, so nothing presses Enter into a peer's pane uninvited and no verdict claims more than was measured.
 - The compact projection's field SET is the CLI's; its key ORDER is Go's (sorted), not the CLI's insertion order.
 
-## 2026-10-13 — `rig send` and `rig whoami` work on a rig the OpenRig daemon hosts
+## 2026-10-13 — `4genteam send` and `4genteam whoami` work on a rig the 4genteam daemon hosts
 
 ### Fixed
-- `rig send <session> <text>`: `internal/clientseat` accepted only `RIG SEAT MESSAGE`, so R7's drop-in promise (`NEXT-GEN2.md` §1.5 — "existing seat prompts and skills work without modification") failed at the first call. Measured on the live 4genthub-min rig: `rig send 4genthub-min-architect@4genthub-min "..."` → `4genteam send: RIG, SEAT and MESSAGE are required`, exit 2; the verb's own fallback shells `rig send <rig>-<seat>@<rig> <text>` (two arguments) through the binary that IS the shim, so it re-entered the same refusal. Two arguments are now that shape: the message goes to the OpenRig daemon's `POST /api/transport/send`, wrapped in the OpenRig CLI's own `From:`/`To:`/`Sent:` envelope and attributed to `OPENRIG_SESSION_NAME` through `X-OpenRig-Session`. The three-argument shape is unchanged.
-- `rig whoami`: the verb asked only the native runtime, whose room store (`~/.config/4genthub/rooms`) holds no row for a seat the OpenRig daemon started, and answered `seat identity could not be resolved from active rooms` (exit 3) on this rig. A shell that names a daemon (`OPENRIG_URL`, else `OPENRIG_PORT`) now asks it — `GET /api/whoami?sessionName=<OPENRIG_SESSION_NAME>` — and prints its document: `--json` prints the daemon's own bytes, the shape the OpenRig CLI returns. A shell naming no daemon keeps the native path unchanged.
+- `4genteam send <session> <text>`: `internal/clientseat` accepted only `RIG SEAT MESSAGE`, so R7's drop-in promise (`NEXT-GEN2.md` §1.5 — "existing seat prompts and skills work without modification") failed at the first call. Measured on the live 4genthub-min rig: `4genteam send 4genthub-min-architect@4genthub-min "..."` → `4genteam send: RIG, SEAT and MESSAGE are required`, exit 2; the verb's own fallback shells `4genteam send <rig>-<seat>@<rig> <text>` (two arguments) through the binary that IS the shim, so it re-entered the same refusal. Two arguments are now that shape: the message goes to the 4genteam daemon's `POST /api/transport/send`, wrapped in the 4genteam CLI's own `From:`/`To:`/`Sent:` envelope and attributed to `AGENTHUB_SESSION_NAME` through `X-4genteam-Session`. The three-argument shape is unchanged.
+- `4genteam whoami`: the verb asked only the native runtime, whose room store (`~/.config/4genthub/rooms`) holds no row for a seat the 4genteam daemon started, and answered `seat identity could not be resolved from active rooms` (exit 3) on this rig. A shell that names a daemon (`CLIENT_URL`, else `CLIENT_PORT`) now asks it — `GET /api/whoami?sessionName=<AGENTHUB_SESSION_NAME>` — and prints its document: `--json` prints the daemon's own bytes, the shape the 4genteam CLI returns. A shell naming no daemon keeps the native path unchanged.
 
 ### Added
-- `internal/clientruntime/openrigdaemon.go` — `OpenRigSendMessage` plus the pieces both verbs share: the envelope renderer, the base URL (`OPENRIG_URL`, else the loopback address at `OPENRIG_PORT`), the optional `$OPENRIG_HOME/terminal-token` bearer (omitted when absent, as the CLI does), and the identity renderer.
-- The client's own fifth safeguard is unblocked by the same fix: `sync messages`' deliverer shells `rig send <session> <text>` (`internal/clientsync/messagesverb.go`) and was refused by that arity bug.
+- `internal/clientruntime/referencedaemon.go` — `4genteamSendMessage` plus the pieces both verbs share: the envelope renderer, the base URL (`CLIENT_URL`, else the loopback address at `CLIENT_PORT`), the optional `$CLIENT_HOME/terminal-token` bearer (omitted when absent, as the CLI does), and the identity renderer.
+- The client's own fifth safeguard is unblocked by the same fix: `sync messages`' deliverer shells `4genteam send <session> <text>` (`internal/clientsync/messagesverb.go`) and was refused by that arity bug.
 
 ### Tests
-- `internal/clientruntime/openrigdaemon_test.go`: the daemon is asked for the environment's session and receives the sender header; `--json` prints the daemon's document; a 404 becomes exit 3 naming the daemon's reason; the envelope is pinned byte for byte (stamp, `· gen <first8>`, the `@external` reply spelling, the `<unknown sender>` label); base-URL and token precedence.
+- `internal/clientruntime/referencedaemon_test.go`: the daemon is asked for the environment's session and receives the sender header; `--json` prints the daemon's document; a 404 becomes exit 3 naming the daemon's reason; the envelope is pinned byte for byte (stamp, `· gen <first8>`, the `@external` reply spelling, the `<unknown sender>` label); base-URL and token precedence.
 - `internal/clientseat/send_test.go`: two arguments post the envelope to `/api/transport/send` and name the session on stdout; the daemon's refusal exits non-zero; one argument is still a caller error and never reaches the daemon.
 
 ### Verified
-- Live 4genthub-min rig, before (installed shim): `rig whoami --json` → exit 3, `seat identity could not be resolved from active rooms`; `rig send 4genthub-min-fe-dev@4genthub-min "probe"` → exit 2, `RIG, SEAT and MESSAGE are required`. After, built from this commit: `rig whoami --json` → exit 0 with the daemon's document (identity, four peers, transcript path); `rig send 4genthub-min-reviewer@4genthub-min "..."` → exit 0, `Sent to 4genthub-min-reviewer@4genthub-min`, and the receiver's own pane shows the envelope (`From: 4genthub-min-go-dev@4genthub-min`, `To: 4genthub-min-reviewer@4genthub-min`, `Sent: 10-13 18:56Z · gen 17ec5cb7`, `---`, text, `---`, `↩ Reply: rig send 4genthub-min-go-dev@4genthub-min "..."`).
+- Live 4genthub-min rig, before (installed shim): `4genteam whoami --json` → exit 3, `seat identity could not be resolved from active rooms`; `4genteam send 4genthub-min-fe-dev@4genthub-min "probe"` → exit 2, `RIG, SEAT and MESSAGE are required`. After, built from this commit: `4genteam whoami --json` → exit 0 with the daemon's document (identity, four peers, transcript path); `4genteam send 4genthub-min-reviewer@4genthub-min "..."` → exit 0, `Sent to 4genthub-min-reviewer@4genthub-min`, and the receiver's own pane shows the envelope (`From: 4genthub-min-go-dev@4genthub-min`, `To: 4genthub-min-reviewer@4genthub-min`, `Sent: 10-13 18:56Z · gen 17ec5cb7`, `---`, text, `---`, `↩ Reply: 4genteam send 4genthub-min-go-dev@4genthub-min "..."`).
 - `go build ./...`, `go vet ./...`, `go test ./...` exit 0 with every package ok; `gofmt -l .` reports only the two pre-existing files (`internal/clientoutbox/commands.go`, `internal/clientwatch/render_test.go`).
 - `internal/clientruntime/command.go` was run through `gofmt` while the branch was added, which normalizes the file's pre-existing drift (`shimCommand`/`queueCommand` method declarations); the other two drifted files are untouched.
 
@@ -1604,7 +1604,7 @@ minors in the same files. Stacked on `08c41a5` on branch `4genthub-min/r7-shim`.
 
 ### Changed
 - The `rig` symlink maps `ps` to `ps` (it mapped to `status`), and `status --nodes|--compact|--grid` routes to `ps`.
-- `skills/client/rig-runtime-switch` and `seat-runtime-switch`: `rig` on PATH is the 4genteam shim, so spec and node operations call the OpenRig CLI by path (`$OPENRIG`). `sync switch` only records the occupant, `seat reseat` must not be used to change a runtime (it left a seat dead), and a teardown blocked by "no server running" is cleared with a throwaway tmux session.
+- `skills/client/rig-runtime-switch` and `seat-runtime-switch`: `rig` on PATH is the 4genteam shim, so spec and node operations call the 4genteam CLI by path (`$CLIENT`). `sync switch` only records the occupant, `seat reseat` must not be used to change a runtime (it left a seat dead), and a teardown blocked by "no server running" is cleared with a throwaway tmux session.
 
 ## 2026-10-13 — the seat-message deliverer ran only when a human typed it; it is now the fifth supervised safeguard
 
@@ -1621,7 +1621,7 @@ minors in the same files. Stacked on `08c41a5` on branch `4genthub-min/r7-shim`.
   each seat's session from `rig ps --nodes --rig R --json` (running seats only, by canonical session), and
   `--watch` runs one pass every 10 s until the context is cancelled — a pass that fails is logged and the
   loop goes on, because a deliverer that stops is how the message reached the cloud and stopped there.
-  Sends are stamped `OPENRIG_SESSION_NAME=human@kernel` so the receiving seat sees the human sender.
+  Sends are stamped `AGENTHUB_SESSION_NAME=human@kernel` so the receiving seat sees the human sender.
 - `MessagesLogPath` (`internal/clientlifecycle/paths.go`): `messages-<rig>.log`, what every pass printed,
   so a message that would not land stays readable after the fact.
 
@@ -1791,7 +1791,7 @@ minors in the same files. Stacked on `08c41a5` on branch `4genthub-min/r7-shim`.
 
 ### Fixed
 - `internal/clientwatch/seatlog.go`, `internal/seatlog/seatlog.go`: a seat whose omp state directory existed was
-  always read as an omp seat, even with no session in it. OpenRig writes that directory (holding only
+  always read as an omp seat, even with no session in it. 4genteam writes that directory (holding only
   `agent/AGENTS.md`) for a Claude Code seat too, so the architect's grid pane showed its header and no events.
   An omp seat now needs a session in the directory; without one the Claude Code log is looked for.
 - Test: `TestSeatLogPrefersOmpStateThenClaude` gains the empty-directory case; it fails without the change.
@@ -1863,7 +1863,7 @@ minors in the same files. Stacked on `08c41a5` on branch `4genthub-min/r7-shim`.
 - `seat reseat --force` skips the quiet wait for the owner who decides a restart cannot wait. The seat resumes its
   session; only the turn in progress is lost.
 - `send [--from NAME] RIG SEAT MESSAGE`: one signed message to one seat. The text starts with
-  `From NAME:` because `rig send` does not carry the sender outside a seat shell, and it reaches `rig`
+  `From NAME:` because `4genteam send` does not carry the sender outside a seat shell, and it reaches `rig`
   as one argument, so no shell expands backticks in it.
 - `internal/clientseat/sync.go`: a `rig launch` that times out after rig's 5 s ("outcome UNKNOWN") counts as done
   when the seat's tmux session comes up within 3 minutes. The launch had landed and the client had stopped on it.
@@ -1948,7 +1948,7 @@ worker's record; the reviewer's gate re-runs them.
 ## 2026-10-11 — `4genteam team prune`: remove the seats a team no longer defines
 
 ### Added
-- `internal/clientteam/prune.go`: `4genteam team prune --team DIR [--dry-run]` lists the cloud room's seats, deletes those `team.json` does not define (`DELETE /api/v2/openrig/rooms/{room}/seats/{seat}`), and refuses to delete anything when the listing cannot be read. `apply` only creates, so a seat dropped from `team.json` stayed in the room and `sync rig` kept building it into the rig.
+- `internal/clientteam/prune.go`: `4genteam team prune --team DIR [--dry-run]` lists the cloud room's seats, deletes those `team.json` does not define (`DELETE /api/v2/rooms/{room}/seats/{seat}`), and refuses to delete anything when the listing cannot be read. `apply` only creates, so a seat dropped from `team.json` stayed in the room and `sync rig` kept building it into the rig.
 - `internal/clientteam/team.go`: the verb is registered and listed in the usage.
 
 ### Verified
@@ -2013,7 +2013,7 @@ worker's record; the reviewer's gate re-runs them.
 
 ### Added
 - `internal/clientskills/links_test.go`: `TestShippedSkillLinksResolve` — every local link in every
-  shipped `SKILL.md` and in the companions beside it (`OPENRIG.md`, `LOCAL-INSIGHTS.md`) must resolve
+  shipped `SKILL.md` and in the companions beside it (`CLIENT.md`, `LOCAL-INSIGHTS.md`) must resolve
   against its own directory. It fails on exactly the ten links above before this change and passes
   after it. Its header states the scope and the three exclusions (fenced code blocks, fill-in template
   documents, off-site targets), because a check whose scope is unstated is read as "everything
@@ -2021,7 +2021,7 @@ worker's record; the reviewer's gate re-runs them.
   documents rather than links to files a skill promises to ship.
 
 ### Changed
-- `skills/share/agent-browser/OPENRIG.md`: a modification-table row for the repair, and the
+- `skills/share/agent-browser/CLIENT.md`: a modification-table row for the repair, and the
   vendoring-completeness statement — `add-supplementary-files` adds to an upstream body rather than
   completing its file set, so this canonical example ships the supplementary half and not every path
   its body names. Its frontmatter records the divergence.
@@ -2138,7 +2138,7 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: how to watch a running room — the seat grid,
   the lead window, the input panes, the option list and the rules. Generic, with placeholders, so
   it works in any project; the skill is the same procedure packaged for a project's skills path.
-- `docs/AGENT-SETUP.md`: setting a machine up for the 4genthub MCP, OpenRig and herdr, then the
+- `docs/AGENT-SETUP.md`: setting a machine up for the 4genthub MCP, 4genteam and herdr, then the
   procedure an agent follows to build a room and its seats. The README now links it, the watch doc
   and the watch skill.
 - `4genteam team apply`, `import-project`, `publish-skills` and `drift-check` are implemented in Go
@@ -2153,9 +2153,9 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 - The `team` and `watch` verb groups are registered in the binary's dispatcher (`b311b86`).
 - `4genteam watch`, `grid`, `feed`, `inputs` and `input` are implemented in Go (`5fd1216`,
   `internal/clientwatch`), with `docs/WATCH.md` as the contract: `--rig` is required, the state root
-  is `--state-root`, else `$OPENRIG_STATE_ROOT`, else the machine's own `~/.openrig/state/omp`, and a
+  is `--state-root`, else `$AGENTHUB_STATE_ROOT`, else the machine's own `~/.config/4genthub/state/omp`, and a
   machine without herdr or without a readable state root exits non-zero with one message. The input
-  panes send with `rig send`, never a raw tmux attach.
+  panes send with `4genteam send`, never a raw tmux attach.
 - The supervisor's witnessed-compaction path is tested (`internal/clientlifecycle`): a new
   compaction record sends the seat the resume text, and an unwitnessed one is reported and retried
   rather than assumed.
@@ -2165,7 +2165,7 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   rather than leaving behind a binary nothing can call.
 - `4genteam sync offline-install` is implemented in Go (`internal/clientsync`): it reads a
   materialized bundle's `rig.yaml` and copies each member's pinned `policy.json`/`pinned.json` into
-  `<home>/.openrig/agenthub-seats/<room>/<member>/`, which is the one place `seatcheck` looks, and
+  `<home>/.config/4genthub/agenthub-seats/<room>/<member>/`, which is the one place `seatcheck` looks, and
   refuses a policy that names another seat instead of handing a seat the wrong links.
 - `4genteam sync respawn` is implemented in Go (`41335a4`, `internal/clientsync`): it launches a
   fresh occupant only for a seat that holds the dead reading for `--after-seconds` (default 30s),
@@ -2174,9 +2174,9 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   without launching anything.
 - `4genteam feedback` is implemented in Go (`e0a9b98`, `internal/clientfeedback`): the friction
   channel's second door is native now - the flags are parsed in-process, the body is marshalled by
-  `encoding/json` and sent in one POST to `/api/v2/openrig/feedback`, so no `.sh` file, no `python3`
+  `encoding/json` and sent in one POST to `/api/v2/feedback`, so no `.sh` file, no `python3`
   and no `curl` is needed. The layer is validated before any dial, the identity defaults come from
-  `rig whoami --json` (read lazily, so a fully-specified call needs no rig at all), and
+  `4genteam whoami --json` (read lazily, so a fully-specified call needs no rig at all), and
   `$AGENTHUB_TOKEN` is sent as a bearer token that is never printed. Deviations from the script,
   named rather than hidden: the URL default is `$AGENTHUB_URL`, this client's one server variable,
   instead of the script's MCP/public chain; any 2xx counts as stored; and a missing credential or URL
@@ -2193,7 +2193,7 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   arguments (the source label is this tree's own), warns about the seats a rig root leaves unpinned,
   and exits 2 when there is no pinned snapshot; switch records the new occupant in the cloud first,
   applies a model change with `rig seat set-model` (or stops and relaunches fresh with
-  `--apply restart`), prints the manual steps for a runtime change because OpenRig cannot swap one in
+  `--apply restart`), prints the manual steps for a runtime change because 4genteam cannot swap one in
   place, and exits 0 with `applied=none` when rig is missing or the seat is absent from `rig ps` -
   the cloud change is the authority, and only the local half is outstanding.
 - Every verb answers `--help` (`5cb9206`): one decision in `internal/clientcmd` replaced the per-verb
@@ -2209,18 +2209,18 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   `.agents/skills` (its `.claude/skills` entry is a symlink to it), de-privatised and corrected for the
   Go client; `README.md` and `docs/AGENT-SETUP.md` describe the tree and how a skill reaches a seat.
 - `internal/clientskills`: the client delivers the skills it owns. The tree is found at `--skills-root`,
-  else `$OPENRIG_CLIENT_SKILLS`, else `skills/` beside the binary; a seat receives `share/`, then its
+  else `$CLIENT_CLIENT_SKILLS`, else `skills/` beside the binary; a seat receives `share/`, then its
   room's room-level skills, then its own seat-level skills — so a more specific copy replaces a shared
   name — and never another room's, another seat's or `client/`'s. Installing copies each skill whole
   into the seat's own skills path (`<agent dir>/skills/<id>/`, the directory its agent spec already
   points at) and declares the ids in that spec's `resources.skills` and in every profile's
-  `uses.skills`, because OpenRig projects only the skills a profile selects.
+  `uses.skills`, because 4genteam projects only the skills a profile selects.
 - `sync rig` delivers them (`3bc73b9`): the build is the step that writes each seat's agent directory, so
   it is the step that delivers — `internal/clientskills` resolves what that seat receives (`share/`, the
   room's room-level skills, its own seat-level ones, and nothing from another room, another seat or
   `client/`), installs them whole into `<rig>/agents/<seat>/skills/<id>/`, and declares the ids in that
   seat's `agent.yaml` (`resources.skills[]` and every profile's `uses.skills`). The tree is at
-  `--skills-root`, else `$OPENRIG_CLIENT_SKILLS`, else `skills/` beside the binary, and a tree that is
+  `--skills-root`, else `$CLIENT_CLIENT_SKILLS`, else `skills/` beside the binary, and a tree that is
   not there is refused by name BEFORE the room is fetched. A seat whose render carries no `agent.yaml`
   is named on stderr and receives nothing: files nothing loads are dead weight.
 
@@ -2239,9 +2239,9 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   ba3b09e): the REAL `seatPath` resolver - the var every earlier test stubbed - returns the tmux global
   PATH while a server runs, else the cold-start daemon own PATH with `daemonPathSource` read out of
   `<pid>/environ`, else this process PATH with `shellPathSource`, and reads no process table at all
-  while no daemon port is known. The daemon port is `OPENRIG_PORT` before the port in `OPENRIG_URL`, a
-  non-numeric `OPENRIG_PORT` falls through to the URL, and a URL without a numeric port is the empty
-  fallback; the pid comes out of a real `ss -ltnp` listing (a decoy OpenRig on another port is ignored)
+  while no daemon port is known. The daemon port is `CLIENT_PORT` before the port in `CLIENT_URL`, a
+  non-numeric `CLIENT_PORT` falls through to the URL, and a URL without a numeric port is the empty
+  fallback; the pid comes out of a real `ss -ltnp` listing (a decoy 4genteam on another port is ignored)
   and is `0` when the port line names no pid, when nothing listens, and when `ss` itself fails.
   `inputs open --seat` splits and renames exactly the named seat pane, prints `inputs: opened 1`, and
   gives a seat outside the filter no pane; and the three `pretty` cases pin what the log does to JSON -
@@ -2274,8 +2274,8 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 
 - The bridge PRODUCES agent-to-human notifications (`internal/clientbridge/notifications.go`): each cycle it lists the
   rigs this machine sees (`rig ps --json`), reads the rows addressed to that rig's human
-  (`rig queue list --destination human@<rig> --json` — the daemon's own destination form), and posts ONE frame per row
-  to `/api/v2/broadcast/notify`: `event_type`/`entity_type` `notification`, `entity_id` the OpenRig row id, and
+  (`the task queue list --destination human@<rig> --json` — the daemon's own destination form), and posts ONE frame per row
+  to `/api/v2/broadcast/notify`: `event_type`/`entity_type` `notification`, `entity_id` the 4genteam row id, and
   `data.message` the row's summary (its first non-empty body line as the fallback, bounded to 300 BYTES - the slice is
   by byte, so a multi-byte character on the boundary can be split). The
   contract is fixed by the consumer rather than chosen here: the route requires those three fields and takes the target
@@ -2310,7 +2310,7 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   suite would couple the two.
 
 - `4genteam offpeak`, and the DeepSeek peak gate in the client itself (`internal/clientoffpeak`): the port of the
-  shell gate `~/.openrig/bin/deepseek-offpeak.sh`, which the client now answers instead of shelling out. The default
+  shell gate `~/.config/4genthub/bin/deepseek-offpeak.sh`, which the client now answers instead of shelling out. The default
   form prints the one human line and the exit code IS the answer (0 off-peak, 1 peak), so it still works as
   `offpeak --quiet && run-the-work`; `--json` emits one object (`state`, `utc`, `weekday`, `holiday`, `reason`,
   `next`); `status` prints the setting, where it came from and the state now; `set on|off` writes the ONE
@@ -2361,14 +2361,14 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   setting — never an editor, `sed` or a shell redirect into the file that holds the credential.
 
 - `4genteam continue` and `4genteam watchdog` are implemented in Go (`internal/clientrestore`, PORTED FROM
-  `~/.openrig/bin/rig-continue.sh` and `~/.openrig/bin/rig-watchdog.sh`, which stay where they are). `continue`
-  restores a stopped rig from its latest snapshot and briefs every seat from `~/.openrig/briefs/<rig>.txt`, with
+  `~/.config/4genthub/bin/rig-continue.sh` and `~/.config/4genthub/bin/rig-watchdog.sh`, which stay where they are). `continue`
+  restores a stopped rig from its latest snapshot and briefs every seat from `~/.config/4genthub/briefs/<rig>.txt`, with
   `briefs/<rig>/<seat>.txt` replacing the shared text for that seat; with no argument it lists the rigs and the
   briefs on disk, and `--all` walks every rig that has a brief, one rig's failure never stopping the others,
   exiting non-zero when at least one visited rig is not up.
   `watchdog` reports (`--check`, `<rig>`), watches (`<rig> --watch [SECONDS] [HEARTBEAT_POLLS]`, `--all --watch`),
   restores a rig whose tmux sessions have vanished only after TWO consecutive dead polls, and self-tests its
-  decision rule (`--self-test`). Both keep the scripts' log paths (`~/.openrig/logs/rig-continue.log`,
+  decision rule (`--self-test`). Both keep the scripts' log paths (`~/.config/4genthub/logs/rig-continue.log`,
   `rig-watchdog.log`) and their line shape, and `continue` keeps `RIG_CONTINUE_WATCH=0` and the wall step.
   FOUR THINGS DIFFER ON PURPOSE: the watchdog counts running seats with `encoding/json` instead of piping
   `rig ps --json` through `python3`; both verbs run the DeepSeek peak gate before a restore - the same gate
@@ -2443,9 +2443,9 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   `install-checker`). The behaviour is unchanged: a non-zero exit, offline, naming the offending argument.
   A table test pins the exit code and the name, never the sentence.
 - A machine whose real home cannot be resolved now REFUSES the state root instead of answering a
-  relative `.openrig/state/omp` (`42132ff`): `clientenv.DefaultStateRoot` returns no path at all and the
+  relative `.config/4genthub/state/omp` (`42132ff`): `clientenv.DefaultStateRoot` returns no path at all and the
   new `clientenv.ResolveStateRoot` refuses with one message naming both escapes (`--state-root DIR` or
-  `OPENRIG_STATE_ROOT`), so no path this client derives can depend on the working directory. The
+  `AGENTHUB_STATE_ROOT`), so no path this client derives can depend on the working directory. The
   resolution points that take the root refuse the same way — `compact`/`compact-run`, `policy apply`,
   `seat sync|watch`, `watch` and `sync rig` — and the four clauses before it are unchanged.
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md` (both tables, so the mirrors stay mirrors):
@@ -2462,7 +2462,7 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   `watch-team-grid` directory is gone, and the skill's own options table carries `--state-root` as
   `docs/WATCH.md` now does.
 - `docs/WATCH.md` names `--state-root` in its options table: where the session logs are read from
-  is the flag, else `$OPENRIG_STATE_ROOT`, else `~/.openrig/state/omp`.
+  is the flag, else `$AGENTHUB_STATE_ROOT`, else `~/.config/4genthub/state/omp`.
 - `.env.sample` states the one-credential, one-file contract: `AGENTHUB_URL` and `AGENTHUB_TOKEN`
   in `~/.config/4genthub/.env`, with a variable already in the environment winning over the file.
   It carries no token value, and every key it lists is one the client reads.
@@ -2536,7 +2536,7 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   read (`internal/clientteam/publish.go`). The pin guard read an absent pin as "nothing to check" and fell
   through to the digest check, so an inventory whose provenance nobody can name published silently - the
   one case in which the guard cannot exist, and worse than a stale one, because nothing downstream can
-  detect the divergence. Census first: every `*.json` under this project and under the OpenRig tree was
+  detect the divergence. Census first: every `*.json` under this project and under the 4genteam tree was
   scanned for the inventory shape (a top-level `skills` array whose rows carry `canonical`/`plugin`) - 2,749
   files, four matches, and all four are the same committed record `ai_docs/agent-system/skill-library.json`
   (52 skills, `generated_from` naming `31fe301b`), so no real inventory omits the pin. Red first: with the
@@ -2553,7 +2553,7 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   each naming the rig it belongs to - with no rig named. Comments only; no behaviour and no test changed.
 - `policy apply` writes only the seats whose runtime it serves (`internal/clientpolicy`): a seat of another
   runtime is refused BY NAME, and the whole set is decided before the first write. The document the verb
-  renders is an omp config and the state root it resolves defaults to `~/.openrig/state/omp`, so on a mixed
+  renders is an omp config and the state root it resolves defaults to `~/.config/4genthub/state/omp`, so on a mixed
   room the old loop wrote the omp seats and then stopped at the other runtime's seat with `no agent directory
   … (never launched?)` - a seat that HAD been launched, under its own runtime's root - leaving a partial
   application, a false reason, and nothing saying what had been written. Measured on a scratch room before the
@@ -2588,10 +2588,10 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
 - `docs/WATCH.md` and `skills/client/watch-team/SKILL.md`: the three `inputs` examples pass the `--rig` the
   verb requires.
 - `4genteam watch`, `grid` and `feed` now resolve the state root exactly as the doc comment and
-  `docs/WATCH.md` promised: `--state-root`, else `$OPENRIG_STATE_ROOT`, else the machine's own
-  `~/.openrig/state/omp` (`clientenv.DefaultStateRoot()`). The third clause was documented but
+  `docs/WATCH.md` promised: `--state-root`, else `$AGENTHUB_STATE_ROOT`, else the machine's own
+  `~/.config/4genthub/state/omp` (`clientenv.DefaultStateRoot()`). The third clause was documented but
   missing, so the feed refused on a machine where the doc says it reads. The usage text now states the
-  home-relative default (`~/.openrig/state/omp`) rather than only the variable name - the resolution
+  home-relative default (`~/.config/4genthub/state/omp`) rather than only the variable name - the resolution
   stays absolute - and a root that is named but not there is refused by its path whichever clause
   named it.
 - `4genteam sync --help` prints the verb group's usage and exits 0; it used to be read as an
@@ -2601,7 +2601,7 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   wrote, so the installed systemd unit and the running bridge read the same file by construction.
 - One resolver decides the state root for every verb that takes one: `sync rig`, `compact-run` and
   `policy apply` now call `clientenv.ResolveStateRoot` like `seat sync|watch` already did, so
-  `$OPENRIG_STATE_ROOT` is honored by all of them. The defect was that these three named the variable
+  `$AGENTHUB_STATE_ROOT` is honored by all of them. The defect was that these three named the variable
   in their refusal and then ignored it: whoever set it got the machine's tree with no error, which is
   the wrong tree read or written silently. The order is unchanged — the flag, else the variable, else
   this machine's own default — and nothing resolvable still refuses with the one message naming both
@@ -2611,11 +2611,11 @@ cannot see that. Verdict `GATE-8cf6a34-help-before-matrix-2026-10-10.md`.
   variable's root, `compact-run` reads it with no flag, `policy apply` writes under it, and the flag
   still wins.
 - The seat store is resolved the way the state root is: ONE implementation in `internal/clientenv`
-  (`DefaultSeatStore()`, `ResolveSeatStore()`), the account home's `.openrig/agenthub-seats`, so it is
+  (`DefaultSeatStore()`, `ResolveSeatStore()`), the account home's `.config/4genthub/agenthub-seats`, so it is
   the same store inside a seat and out. It used to be read under `$HOME` in three packages, and a seat
   runs with `HOME` pointed at its own state directory - so the same command resolved a different store
   per seat, and the watch verbs then refused a room that exists, because the store they looked in had no
-  room in it. It also fell back to a RELATIVE `.openrig/agenthub-seats` when the home could not be read,
+  room in it. It also fell back to a RELATIVE `.config/4genthub/agenthub-seats` when the home could not be read,
   which made the store depend on the working directory. Both are gone: a store that cannot be resolved
   refuses with one message naming the reason and both escapes, and every verb that takes a store shares
   that refusal - `sync pull|status|bundle|messages|rig|install-checker`, `bridge` and `seat`.

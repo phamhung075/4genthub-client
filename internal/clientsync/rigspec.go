@@ -15,7 +15,7 @@ import (
 )
 
 // RoomsPath is ROOMS_PATH in agenthub_client/src/agenthub_client/seat_sync.py.
-const RoomsPath = "/api/v2/openrig/rooms"
+const RoomsPath = "/api/v2/rooms"
 
 // HTTPTimeout is the Python's urlopen timeout (60 seconds), named rather than inlined so a reader can
 // see it is a ported constant and not a guess.

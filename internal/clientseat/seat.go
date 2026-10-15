@@ -1,4 +1,4 @@
-// Package clientseat is the `seat` verb group: keep the local the rig orchestrator seats in step with the cloud.
+// Package clientseat is the `seat` verb group: keep the local seats in step with the cloud.
 //
 // The cloud owns what a seat is and resolves it into a snapshot named by a hash. This package compares
 // the hash each local seat is pinned to with the cloud's current one, adopts the newer snapshot THROUGH

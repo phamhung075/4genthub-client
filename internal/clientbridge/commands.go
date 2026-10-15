@@ -257,7 +257,7 @@ WantedBy=default.target
 // operator reading the journal sees the same sentences the Python printed.
 func noteTo(stderr io.Writer) func(string) {
 	return func(message string) {
-		_, _ = fmt.Fprintf(stderr, "openrig-bridge: %s\n", message)
+		_, _ = fmt.Fprintf(stderr, "bridge: %s\n", message)
 	}
 }
 

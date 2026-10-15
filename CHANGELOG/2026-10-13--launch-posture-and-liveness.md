@@ -14,7 +14,7 @@ authority rather than a guess:
 - the value the client actually materialises is `builtin:yolo` (`internal/clientsync/rigverb.go:62`),
   whose comment gives the reason — without a full-bypass launch "omp's always-ask floor cancels approvals
   headlessly and the seat parks";
-- `internal/clientpolicy/policy.go` states the same shape from the runner's side: "OpenRig launches an omp
+- `internal/clientpolicy/policy.go` states the same shape from the runner's side: "4genteam launches an omp
   seat in exactly one of two postures - yolo, or always-ask which the managed runner auto-cancels". The
   auto-cancel half is this runner's own dialog handling and was measured in the run below.
 

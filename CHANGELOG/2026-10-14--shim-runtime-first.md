@@ -3,18 +3,18 @@
 ### What was wrong
 
 `whoami`, `queue` and `send` resolved their transport from the SEAT ENVIRONMENT, not from what was actually
-running: a shell carrying `OPENRIG_SESSION_NAME` (and any `OPENRIG_URL`) sent every one of them straight to
-the OpenRig daemon over HTTP, and this client's own runtime — the daemon that holds the seat's rail — was
-never asked. Reproduced on the seat machine with a dead `OPENRIG_URL` and the runtime up, from the pre-change
+running: a shell carrying `AGENTHUB_SESSION_NAME` (and any `CLIENT_URL`) sent every one of them straight to
+the 4genteam daemon over HTTP, and this client's own runtime — the daemon that holds the seat's rail — was
+never asked. Reproduced on the seat machine with a dead `CLIENT_URL` and the runtime up, from the pre-change
 tree (`/tmp/shim-check-old`, built from `HEAD` before the change):
 
 ```
-$ OPENRIG_URL=http://127.0.0.1:1 /tmp/shim-check-old whoami --json
-4genteam whoami: the OpenRig daemon at http://127.0.0.1:1 is not answering: Get "http://127.0.0.1:1/api/whoami?sessionName=4genthub-min-go-dev%404genthub-min&compact=1": dial tcp 127.0.0.1:1: connect: connection refused
+$ CLIENT_URL=http://127.0.0.1:1 /tmp/shim-check-old whoami --json
+4genteam whoami: the 4genteam daemon at http://127.0.0.1:1 is not answering: Get "http://127.0.0.1:1/api/whoami?sessionName=4genthub-min-go-dev%404genthub-min&compact=1": dial tcp 127.0.0.1:1: connect: connection refused
 exit=3
 
-$ OPENRIG_URL=http://127.0.0.1:1 /tmp/shim-check-old queue list
-4genteam queue: the OpenRig daemon at http://127.0.0.1:1 is not answering: Get "http://127.0.0.1:1/api/queue/list?activeOnly=1&compact=1&destinationSession=4genthub-min-go-dev%404genthub-min": dial tcp 127.0.0.1:1: connect: connection refused
+$ CLIENT_URL=http://127.0.0.1:1 /tmp/shim-check-old queue list
+4genteam queue: the 4genteam daemon at http://127.0.0.1:1 is not answering: Get "http://127.0.0.1:1/api/queue/list?activeOnly=1&compact=1&destinationSession=4genthub-min-go-dev%404genthub-min": dial tcp 127.0.0.1:1: connect: connection refused
 exit=3
 ```
 
@@ -23,16 +23,16 @@ exit=3
 The preference order lives in one file, `internal/clientruntime/transport.go`:
 
 ```
-runtime present (with or without an OpenRig daemon also up)  -> the RUNTIME answers;
-runtime absent, OpenRig daemon present                       -> the OpenRig path answers, unchanged;
+runtime present (with or without an 4genteam daemon also up)  -> the RUNTIME answers;
+runtime absent, 4genteam daemon present                       -> the 4genteam path answers, unchanged;
 neither                                                      -> the refusal names the RUNTIME.
 ```
 
 `ResolveTransport` reads that from a dial of `DefaultSocketPath()` (the one socket resolution point, override
-`OPENRIG_RUNTIME_SOCKET`), so a verb reports the transport that really carried it. `FallbackMissing` builds the
-refusal, naming the runtime's socket and the knob, and the OpenRig clause from this machine's own
-configuration — `no OpenRig daemon is configured in this environment (set OPENRIG_URL or OPENRIG_PORT)` when
-none is named, `the OpenRig fallback at <url> is not available either` when one is named but did not answer.
+`CLIENT_RUNTIME_SOCKET`), so a verb reports the transport that really carried it. `FallbackMissing` builds the
+refusal, naming the runtime's socket and the knob, and the 4genteam clause from this machine's own
+configuration — `no 4genteam daemon is configured in this environment (set CLIENT_URL or CLIENT_PORT)` when
+none is named, `the 4genteam fallback at <url> is not available either` when one is named but did not answer.
 
 `whoami` keeps its identity-recovery chain on top of that: a runtime that ANSWERS with an identity is the
 answer; a runtime that cannot place this seat falls through; a daemon that ANSWERS (including its 404 for an
@@ -45,7 +45,7 @@ document, `resolved_by: environment`.
 $ GOCACHE=$(pwd)/.gocache TMPDIR=$(pwd)/.gotmp go build -o /tmp/shim-check ./cmd/4genteam
 (exit 0)
 
-$ OPENRIG_URL=http://127.0.0.1:1 /tmp/shim-check whoami --json
+$ CLIENT_URL=http://127.0.0.1:1 /tmp/shim-check whoami --json
 {
   "resolved_by": "environment",
   "identity": {
@@ -67,8 +67,8 @@ $ OPENRIG_URL=http://127.0.0.1:1 /tmp/shim-check whoami --json
 }
 exit=0
 
-$ OPENRIG_URL=http://127.0.0.1:1 /tmp/shim-check queue list
-4genteam queue: the runtime at /home/daihu/.openrig/state/omp/4genthub-min-go-dev@4genthub-min/.config/4genthub/run/runtime.sock refused it: invalid request JSON: unknown variant `QueueList`, expected one of `StartRoom`, `StopRoom`, `StopSeat`, `RestartSeat`, `SendText`, `GetRoomStatus`, `ListAllRooms`, `Whoami`, `ForceCompact`, `Ping` at line 1 column 21
+$ CLIENT_URL=http://127.0.0.1:1 /tmp/shim-check queue list
+4genteam queue: the runtime at /home/daihu/.config/4genthub/state/omp/4genthub-min-go-dev@4genthub-min/.config/4genthub/run/runtime.sock refused it: invalid request JSON: unknown variant `QueueList`, expected one of `StartRoom`, `StopRoom`, `StopSeat`, `RestartSeat`, `SendText`, `GetRoomStatus`, `ListAllRooms`, `Whoami`, `ForceCompact`, `Ping` at line 1 column 21
 exit=1
 ```
 
@@ -82,7 +82,7 @@ pinned, frame and all, by `TestQueueListPrefersTheRuntimeEvenWhenADaemonIsUp`.
 The banned sentence is gone from the queue path:
 
 ```
-$ OPENRIG_URL=http://127.0.0.1:1 /tmp/shim-check queue list 2>&1 >/dev/null | grep -c "the OpenRig daemon at http://127.0.0.1:1 is not answering"
+$ CLIENT_URL=http://127.0.0.1:1 /tmp/shim-check queue list 2>&1 >/dev/null | grep -c "the 4genteam daemon at http://127.0.0.1:1 is not answering"
 0
 ```
 
@@ -90,8 +90,8 @@ A shell that carries NO seat identity at all is still refused rather than invent
 but cannot resolve an unnamed seat, and the daemon at :1 does not answer):
 
 ```
-$ env -u OPENRIG_SESSION_NAME -u AGENTHUB_SESSION_NAME -u AGENTHUB_ROOM -u AGENTHUB_SEAT OPENRIG_URL=http://127.0.0.1:1 /tmp/shim-check whoami --json
-4genteam whoami: no runtime is answering at /home/daihu/.openrig/state/omp/4genthub-min-go-dev@4genthub-min/.config/4genthub/run/runtime.sock (set OPENRIG_RUNTIME_SOCKET, or start agenthub-runtime with --socket /home/daihu/.openrig/state/omp/4genthub-min-go-dev@4genthub-min/.config/4genthub/run/runtime.sock daemon); no seat environment names this seat either (set AGENTHUB_ROOM and AGENTHUB_SEAT, or OPENRIG_SESSION_NAME)
+$ env -u AGENTHUB_SESSION_NAME -u AGENTHUB_SESSION_NAME -u AGENTHUB_ROOM -u AGENTHUB_SEAT CLIENT_URL=http://127.0.0.1:1 /tmp/shim-check whoami --json
+4genteam whoami: no runtime is answering at /home/daihu/.config/4genthub/state/omp/4genthub-min-go-dev@4genthub-min/.config/4genthub/run/runtime.sock (set CLIENT_RUNTIME_SOCKET, or start agenthub-runtime with --socket /home/daihu/.config/4genthub/state/omp/4genthub-min-go-dev@4genthub-min/.config/4genthub/run/runtime.sock daemon); no seat environment names this seat either (set AGENTHUB_ROOM and AGENTHUB_SEAT, or AGENTHUB_SESSION_NAME)
 exit=3
 ```
 

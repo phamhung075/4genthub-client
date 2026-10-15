@@ -76,13 +76,13 @@ func TestApplyWithoutCredentialsStillPlansTheSeed(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut)
 	}
 	for _, want := range []string{
-		"plan: seat types (seed) (POST /api/v2/openrig/seat-types/seed)",
-		"plan: module demo-module@1.0.0 (PUT /api/v2/openrig/modules/demo-module/versions/1.0.0)",
-		"plan: room demo (POST /api/v2/openrig/rooms)",
-		"plan: seat lead (POST /api/v2/openrig/rooms/demo/seats)",
-		"plan: link lead delegates_to lead (PUT /api/v2/openrig/rooms/demo/seats/lead/links)",
-		"plan: overlay company (PUT /api/v2/openrig/overlay)",
-		"plan: overlay seat lead (PUT /api/v2/openrig/rooms/demo/seats/lead/overlay)",
+		"plan: seat types (seed) (POST /api/v2/seat-types/seed)",
+		"plan: module demo-module@1.0.0 (PUT /api/v2/modules/demo-module/versions/1.0.0)",
+		"plan: room demo (POST /api/v2/rooms)",
+		"plan: seat lead (POST /api/v2/rooms/demo/seats)",
+		"plan: link lead delegates_to lead (PUT /api/v2/rooms/demo/seats/lead/links)",
+		"plan: overlay company (PUT /api/v2/overlay)",
+		"plan: overlay seat lead (PUT /api/v2/rooms/demo/seats/lead/overlay)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("plan missing %q\n%s", want, out)

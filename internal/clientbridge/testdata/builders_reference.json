@@ -1,5 +1,5 @@
 {
-  "comment": "Reference outputs from scripts/openrig_bridge.py, generated once and stored so the Go port can be compared without a Python runtime in the test.",
+  "comment": "Reference outputs from scripts/bridge.py, generated once and stored so the Go port can be compared without a Python runtime in the test.",
   "agents_input": [
     {
       "agent": "lead",

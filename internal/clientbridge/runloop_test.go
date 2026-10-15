@@ -48,7 +48,7 @@ type step struct {
 // errNoAnswer is a transport that never answered, in the shape net/http hands one back: the URL it was
 // trying, then the reason. It carries the URL and NOT the credential - the token lives in a header - so
 // the loop can print it and the operator can see which cloud was unreachable.
-var errNoAnswer = errors.New(`Post "http://bridge.invalid/api/v2/openrig/seat-status": dial tcp: connect: connection refused`)
+var errNoAnswer = errors.New(`Post "http://bridge.invalid/api/v2/seat-status": dial tcp: connect: connection refused`)
 
 type fakeClock struct{ at time.Time }
 
@@ -118,7 +118,7 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 		if f.queueJSON == "" {
 			return nil, nil
 		}
-		return parseItems(f.queueJSON, "rig queue list")
+		return parseItems(f.queueJSON, "the task queue list")
 	}
 	return f
 }

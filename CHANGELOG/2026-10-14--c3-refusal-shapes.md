@@ -1,7 +1,7 @@
-# The three refusal shapes, and capture off the OpenRig daemon
+# The three refusal shapes, and capture off the 4genteam daemon
 
 C3, the unit the lead routed from the architect's final scope ruling
-(`/home/daihu/.openrig/agenthub-seats/4genthub-min/ARCH-RULING-c3-refusal-shapes-final-2026-10-14.md`), after the
+(`/home/daihu/.config/4genthub/agenthub-seats/4genthub-min/ARCH-RULING-c3-refusal-shapes-final-2026-10-14.md`), after the
 callback fix. Commits `a70f5da` (an older runtime is named), `5dfc9d9` (capture off the daemon), `e4b5ccf` (the
 rig list from the daemon's route), `a092770` (the gate's silence ended), `2926981` (an undelivered brief fails
 the restore), `5fb4aef` (respawn's launch refused in words). Every sha was verified from a clean checkout: build
@@ -21,7 +21,7 @@ The ruling was worked by measuring each item against HEAD, so nothing already la
   FRAMING failure was not distinguished from a verb's own refusal. Open, fixed here.
 - **R `runRigCapture`** — carries ONE leg, the seat launch; the two `ps --json --nodes` legs the ruling names
   were already rebound to `clientruntime.SeatNode` in `d6c0749`.
-- **capture** — still gated on `OPENRIG_URL`/`OPENRIG_PORT` and POSTed `/api/transport/capture`, while
+- **capture** — still gated on `CLIENT_URL`/`CLIENT_PORT` and POSTed `/api/transport/capture`, while
   `clientruntime.Client.Capture` already reads the pane over the runtime's own socket.
 
 ## M: the version boundary is a fact about versions
@@ -79,8 +79,8 @@ this path cannot hide behind a stub.
 
 ## capture: one call onto an interface that was already there
 
-`captureCommand` gated on `OPENRIG_URL`/`OPENRIG_PORT`, POSTed `/api/transport/capture` and parsed the document
-it got back — so the verb only worked where an OpenRig path existed, which is the path this pass removes. It
+`captureCommand` gated on `CLIENT_URL`/`CLIENT_PORT`, POSTed `/api/transport/capture` and parsed the document
+it got back — so the verb only worked where an 4genteam path existed, which is the path this pass removes. It
 calls `Client.Capture` now, over the client's own transport. Verbatim stdout and `--lines` are unchanged;
 `--json` prints this client's own capture answer, because there is no daemon body to pass through any more; a
 runtime that is absent or refuses is a refusal in words with `ExitUnavailable` and nothing on stdout, and nothing
@@ -96,7 +96,7 @@ of a path the verb no longer walks — the failure mode this cutover keeps findi
 `continue`'s archived listing and the bridge's notification sweep both read `clientruntime.RigEntries`
 (`GET /api/ps`) instead of exec-ing `rig ps`. The listing keeps the shell's `head -30` cap, sorts by name with
 the id breaking ties, marks `[archived]` because it asked for archived rigs, names a failed read, and — one
-judgement beyond the delegated task — says when no OpenRig daemon is named rather than leaving the section empty
+judgement beyond the delegated task — says when no 4genteam daemon is named rather than leaving the section empty
 under a heading that would then read "no rigs here". The delegated version was silent there; the line it
 replaces named the absent rig tool for the same reason, so silence was a regression in information and is
 corrected. `ParseRigNames` went with its only caller.

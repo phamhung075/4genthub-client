@@ -18,7 +18,7 @@ import (
 
 // The wire contract, in the Python bridge's own numbers.
 const (
-	statusPath      = "/api/v2/openrig/seat-status"
+	statusPath      = "/api/v2/seat-status"
 	notifyPath      = "/api/v2/broadcast/notify"
 	HeartbeatSecs   = 60.0
 	MaxBackoffSecs  = 120.0

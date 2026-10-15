@@ -46,7 +46,7 @@ import (
 )
 
 // messagesPath is one seat's messages, by room and seat: the pull and the ack both hang off it.
-const messagesPath = "/api/v2/openrig/rooms/%s/seats/%s/messages"
+const messagesPath = "/api/v2/rooms/%s/seats/%s/messages"
 
 // messagesUsage is the verb's whole surface.
 const messagesUsage = `usage: 4genteam sync messages <room> <seat> [--session <name>] [--limit <n>] [--dry-run] [--out <dir>]

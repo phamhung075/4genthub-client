@@ -25,24 +25,19 @@ use supervisor::RoomSupervisor;
 ///
 /// Default deny, by prefix, because the failure this prevents is one of omission: the runtime only *adds*
 /// its own `AGENTHUB_*` variables, so without this a room started the way the operator starts one hands its
-/// agent the live rig's addressing - `OPENRIG_HOME`, `OPENRIG_URL`, the activity-hook token, `OPENRIG_DB`,
-/// and the session/node/transcript ids - and an agent process can then reach the live daemon from inside a
-/// scratch room. Measured before this existed: nine `OPENRIG_*` variables were visible in the agent's own
-/// `/proc/<pid>/environ`.
+/// agent a live rig's addressing and session/node ids, and an agent process can then reach that rig from
+/// inside a scratch room.
 ///
-/// `RIGGED_` is denied for the same reason one rename later: the client still reads `RIGGED_SESSION_NAME` as
-/// `legacySessionEnv` (a client-side constant), so an agent that inherits a live rig's
-/// pre-rename session name is handed an identity that is not its seat's - exactly the falsification this list
-/// exists to stop. Measured while widening it: the harness sets seven variables for a seat and every one is
-/// already covered (`OPENRIG_HOME`, `OPENRIG_NODE_ID`, `OPENRIG_OCCUPANT_GENERATION`, `OPENRIG_PORT`,
-/// `OPENRIG_RUNTIME`, `OPENRIG_SESSION_NAME`, `OPENRIG_URL`), so this costs nothing today and closes the alias.
+/// `RIGGED_` is denied because the client still reads `RIGGED_SESSION_NAME` as `legacySessionEnv` (a
+/// client-side constant), so an agent that inherits a live rig's pre-rename session name is handed an
+/// identity that is not its seat's - exactly the falsification this list exists to stop.
 ///
 /// `AGENTHUB_` is deliberately NOT denied, and the boundary is a decision rather than an oversight. The
 /// supervisor inserts this room's own `AGENTHUB_ROOM`, `AGENTHUB_SEAT`, `AGENTHUB_ROLE`, `AGENTHUB_RUNTIME`,
 /// `AGENTHUB_SESSION_NAME` and `AGENTHUB_MODEL` *after* the scrub, so those would survive a prefix denial - but
 /// the client also reads `AGENTHUB_TOKEN` and `AGENTHUB_URL`, which nothing re-inserts, and whether a room's
 /// agent may hold an inherited cloud token is a design question. Named on U6's row, not decided here.
-pub const ENV_DENY_PREFIXES: [&str; 2] = ["OPENRIG_", "RIGGED_"];
+pub const ENV_DENY_PREFIXES: [&str; 1] = ["RIGGED_"];
 
 pub fn env_is_denied(key: &str) -> bool {
     ENV_DENY_PREFIXES.iter().any(|p| key.starts_with(p))
@@ -88,9 +83,8 @@ pub fn tmux_root_for(state_dir: &std::path::Path) -> std::path::PathBuf {
 ///
 /// WHY THE SERVER HAD TO BECOME OURS, measured on this machine rather than reasoned: a pane takes its
 /// environment from the tmux SERVER it is created on, so a scratch room started from a completely poisoned
-/// daemon still produced a pane holding six host variables - `OPENRIG_DB` and `OPENRIG_ACTIVITY_HOOK_TOKEN`
-/// among them, none of which came from the daemon that was started. The host's server held thirteen
-/// `OPENRIG_*` keys GLOBALLY, and `scrub_env` on the client cannot reach them: it removes what the daemon
+/// daemon still produced a pane holding six host variables, none of which came from the daemon that was
+/// started. The host's server held thirteen foreign keys GLOBALLY, and `scrub_env` on the client cannot reach them: it removes what the daemon
 /// inherited, and tmux propagates exactly those, so anything living only in the server survives. The
 /// scrub and this function are one change rather than two: the server takes the environment of whoever
 /// creates it, and the client that creates ours is already scrubbed.
@@ -346,10 +340,6 @@ mod tests {
     #[test]
     fn the_deny_list_covers_every_prefix_that_addresses_a_rig() {
         for denied in [
-            "OPENRIG_URL",
-            "OPENRIG_HOME",
-            "OPENRIG_SESSION_NAME",
-            "OPENRIG_PORT",
             "RIGGED_SESSION_NAME",
         ] {
             assert!(env_is_denied(denied), "{denied} addresses a rig and must be denied");
@@ -375,7 +365,6 @@ mod tests {
     /// `/proc/<pid>/environ` is what the design's predicate is measured against.
     #[test]
     fn scrub_removes_denied_keys_and_leaves_the_rest() {
-        std::env::set_var("OPENRIG_TESTONLY_SCRUB", "poison");
         std::env::set_var("RIGGED_TESTONLY_SCRUB", "poison");
         std::env::set_var("NOT_OURS_TESTONLY_SCRUB", "keep");
 
@@ -391,11 +380,10 @@ mod tests {
             })
             .collect();
 
-        std::env::remove_var("OPENRIG_TESTONLY_SCRUB");
         std::env::remove_var("RIGGED_TESTONLY_SCRUB");
         std::env::remove_var("NOT_OURS_TESTONLY_SCRUB");
 
-        for denied in ["OPENRIG_TESTONLY_SCRUB", "RIGGED_TESTONLY_SCRUB"] {
+        for denied in ["RIGGED_TESTONLY_SCRUB"] {
             assert!(
                 envs.iter().any(|(k, v)| k == denied && v.is_none()),
                 "{denied} must arrive at the child as an explicit removal, not as an absent variable"

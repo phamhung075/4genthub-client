@@ -29,91 +29,91 @@
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/settings",
+   "path": "/api/v2/settings",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms",
+   "path": "/api/v2/rooms",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/machines",
+   "path": "/api/v2/machines",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/seat-types",
+   "path": "/api/v2/seat-types",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms",
+   "path": "/api/v2/rooms",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/seat-types",
+   "path": "/api/v2/seat-types",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/modules",
+   "path": "/api/v2/modules",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-ab/seats",
+   "path": "/api/v2/rooms/4genthub-ab/seats",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/modules/deepseek-offload/versions/1.3.0",
+   "path": "/api/v2/modules/deepseek-offload/versions/1.3.0",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/modules/agenthub-http/versions/1.3.0",
+   "path": "/api/v2/modules/agenthub-http/versions/1.3.0",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/modules/sequential-thinking/versions/1.3.0",
+   "path": "/api/v2/modules/sequential-thinking/versions/1.3.0",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/overlay",
+   "path": "/api/v2/overlay",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-ab/overlay",
+   "path": "/api/v2/rooms/4genthub-ab/overlay",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-ab/seats/arm-control/overlay",
+   "path": "/api/v2/rooms/4genthub-ab/seats/arm-control/overlay",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/seats/4genthub-ab/arm-control",
+   "path": "/api/v2/seats/4genthub-ab/arm-control",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
@@ -125,193 +125,193 @@
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms",
+   "path": "/api/v2/rooms",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/machines",
+   "path": "/api/v2/machines",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-ab/seats",
+   "path": "/api/v2/rooms/4genthub-ab/seats",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/smoke/seats",
+   "path": "/api/v2/rooms/smoke/seats",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-min/seats",
+   "path": "/api/v2/rooms/4genthub-min/seats",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-client/seats",
+   "path": "/api/v2/rooms/4genthub-client/seats",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats",
+   "path": "/api/v2/rooms/4genthub-dev/seats",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-ab/seats/lead/links",
+   "path": "/api/v2/rooms/4genthub-ab/seats/lead/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-ab/seats/arm-terse/links",
+   "path": "/api/v2/rooms/4genthub-ab/seats/arm-terse/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-ab/seats/arm-control/links",
+   "path": "/api/v2/rooms/4genthub-ab/seats/arm-control/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-ab/seats/arm-verify/links",
+   "path": "/api/v2/rooms/4genthub-ab/seats/arm-verify/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/smoke/seats/lead/links",
+   "path": "/api/v2/rooms/smoke/seats/lead/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-min/seats/fe-dev/links",
+   "path": "/api/v2/rooms/4genthub-min/seats/fe-dev/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-client/seats/go-dev-a/links",
+   "path": "/api/v2/rooms/4genthub-client/seats/go-dev-a/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-min/seats/go-dev/links",
+   "path": "/api/v2/rooms/4genthub-min/seats/go-dev/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/architect/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/architect/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-min/seats/reviewer/links",
+   "path": "/api/v2/rooms/4genthub-min/seats/reviewer/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-min/seats/lead/links",
+   "path": "/api/v2/rooms/4genthub-min/seats/lead/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/tester/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/tester/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/reviewer/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/reviewer/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/lead/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/lead/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/writer/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/writer/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/debugger/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/debugger/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-min/seats/architect/links",
+   "path": "/api/v2/rooms/4genthub-min/seats/architect/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-client/seats/writer/links",
+   "path": "/api/v2/rooms/4genthub-client/seats/writer/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-client/seats/reviewer/links",
+   "path": "/api/v2/rooms/4genthub-client/seats/reviewer/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/web-dev/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/web-dev/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/go-dev/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/go-dev/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-dev/seats/planner/links",
+   "path": "/api/v2/rooms/4genthub-dev/seats/planner/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-client/seats/lead/links",
+   "path": "/api/v2/rooms/4genthub-client/seats/lead/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/rooms/4genthub-client/seats/go-dev-b/links",
+   "path": "/api/v2/rooms/4genthub-client/seats/go-dev-b/links",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
   {
    "method": "GET",
-   "path": "/api/v2/openrig/feedback",
+   "path": "/api/v2/feedback",
    "origin": "https://api.4genthub.com",
    "status": 200
   },
@@ -3264,7 +3264,7 @@
      "type": null,
      "id": null,
      "name": null,
-     "aria": "Edit and publish forming-an-openrig-mental-model",
+     "aria": "Edit and publish forming-an-client-mental-model",
      "text": "Edit and publish",
      "href": null,
      "visible": true
@@ -3544,7 +3544,7 @@
      "type": null,
      "id": null,
      "name": null,
-     "aria": "Edit and publish openrig-architect",
+     "aria": "Edit and publish client-architect",
      "text": "Edit and publish",
      "href": null,
      "visible": true
@@ -3554,7 +3554,7 @@
      "type": null,
      "id": null,
      "name": null,
-     "aria": "Edit and publish openrig-cmux",
+     "aria": "Edit and publish client-cmux",
      "text": "Edit and publish",
      "href": null,
      "visible": true
@@ -3564,7 +3564,7 @@
      "type": null,
      "id": null,
      "name": null,
-     "aria": "Edit and publish openrig-herdr",
+     "aria": "Edit and publish client-herdr",
      "text": "Edit and publish",
      "href": null,
      "visible": true
@@ -3574,7 +3574,7 @@
      "type": null,
      "id": null,
      "name": null,
-     "aria": "Edit and publish openrig-operating-model",
+     "aria": "Edit and publish client-operating-model",
      "text": "Edit and publish",
      "href": null,
      "visible": true
@@ -3584,7 +3584,7 @@
      "type": null,
      "id": null,
      "name": null,
-     "aria": "Edit and publish openrig-skills",
+     "aria": "Edit and publish client-skills",
      "text": "Edit and publish",
      "href": null,
      "visible": true
@@ -3594,7 +3594,7 @@
      "type": null,
      "id": null,
      "name": null,
-     "aria": "Edit and publish openrig-software-factory",
+     "aria": "Edit and publish client-software-factory",
      "text": "Edit and publish",
      "href": null,
      "visible": true
@@ -3604,7 +3604,7 @@
      "type": null,
      "id": null,
      "name": null,
-     "aria": "Edit and publish openrig-upgrade",
+     "aria": "Edit and publish client-upgrade",
      "text": "Edit and publish",
      "href": null,
      "visible": true
@@ -5052,7 +5052,7 @@
     "4genthub",
     "Seat friction",
     "Runtime",
-    "OpenRig",
+    "4genteam",
     "Cloud",
     "Seat context",
     "Workspace",

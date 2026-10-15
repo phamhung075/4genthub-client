@@ -40,11 +40,11 @@ import (
 
 // feedbackPath is the ONE route the friction channel writes to: the same path the MCP tool
 // `submit_feedback` posts to.
-const feedbackPath = "/api/v2/openrig/feedback"
+const feedbackPath = "/api/v2/feedback"
 
 // feedbackLayers is the closed vocabulary the server accepts. It is checked BEFORE any request is
 // made, so a wrong layer costs no dial and no credential.
-var feedbackLayers = []string{"runtime", "openrig", "cloud", "seat-context", "workspace", "other"}
+var feedbackLayers = []string{"runtime", "client", "cloud", "seat-context", "workspace", "other"}
 
 // httpTimeout is the client's HTTP convention (the same 60s internal/clientsync gives RequestJSON),
 // named so a reader can see it is a constant rather than a guess.
@@ -62,7 +62,7 @@ const feedbackUsage = `usage: 4genteam feedback --layer <layer> --text <text> [-
 Report friction from a seat whose runtime has no MCP: one HTTP POST to the feedback route,
 the same payload the MCP tool ` + "`submit_feedback`" + ` sends. The owner reads the reports grouped by layer.
 
-  --layer    REQUIRED. One of: runtime, openrig, cloud, seat-context, workspace, other
+  --layer    REQUIRED. One of: runtime, client, cloud, seat-context, workspace, other
   --text     REQUIRED. What happened, and what you expected instead.
   --room     Optional. Defaults to the rig name this seat's identity chain resolves.
   --seat     Optional. Defaults to the member id this seat's identity chain resolves.

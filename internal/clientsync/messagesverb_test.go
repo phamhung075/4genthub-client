@@ -51,7 +51,7 @@ func (c *messageCloud) seen() []string {
 
 func (c *messageCloud) handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v2/openrig/rooms/{room}/seats/{seat}/messages", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/v2/rooms/{room}/seats/{seat}/messages", func(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.bySeat == nil {
@@ -70,7 +70,7 @@ func (c *messageCloud) handler() http.Handler {
 			"success": true, "messages": messages, "cursor": "2026-10-10T09:00:00Z|m9",
 		})
 	})
-	mux.HandleFunc("POST /api/v2/openrig/rooms/{room}/seats/{seat}/messages/{id}/ack", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/v2/rooms/{room}/seats/{seat}/messages/{id}/ack", func(w http.ResponseWriter, r *http.Request) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		id := r.PathValue("id")

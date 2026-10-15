@@ -187,7 +187,7 @@ message each other, `whoami` returns no `edges`, and the topology page draws the
 Do not run `team apply` until `links` holds at least: the lead `delegates_to` every other seat,
 each worker `delegates_to` the reviewer, and every non-lead seat `escalates_to` the lead. `team apply` and its dry run refuse a team of more than one seat with no `links`. The dry
 run in 2.3 must show one `link` line per edge; if it shows none, stop and add them. After apply,
-read back `GET /api/v2/openrig/rooms/<room>/seats/<seat>/links` for each seat, and put the same
+read back `GET /api/v2/rooms/<room>/seats/<seat>/links` for each seat, and put the same
 list in the local `spec.json` so `whoami` returns it.
 | `escalates_to` | reports and escalations |
 

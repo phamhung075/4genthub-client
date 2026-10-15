@@ -10,9 +10,9 @@ class rather than one verb (the reviewer's gate finding 1, routed by the lead as
 Two things, and the second is the reason a pin was needed rather than another sweep.
 
 1. Two surviving mentions in `docs/WATCH.md` were **instructions, not contrasts** — the worse half of the
-   class, because they read as procedure: the input pane said a line "is sent to the seat with `rig send`",
+   class, because they read as procedure: the input pane said a line "is sent to the seat with `4genteam send`",
    and the evidence list printed `rig ps --nodes --rig <RIG>  # one row per seat`. Measured on this box `rig`
-   resolves to the OpenRig CLI 0.6.10 whose daemon is not running, so following either line lands on
+   resolves to the 4genteam CLI 0.6.10 whose daemon is not running, so following either line lands on
    `daemon unreachable … Resolved: partial via session name`. Repointed, not reworded around.
 
 2. The remaining mentions are legitimate — a contrast that draws the distinction the skill exists to teach, or
@@ -27,7 +27,7 @@ A new package, `internal/retiredverbs`, that reads the delivered text and fails 
 retired program unless an allowlist entry carries it **with a reason**.
 
 - **The class is data.** `RetiredCommands` lists eleven commands — `rig` with `up`, `ps`, `send`, `create`,
-  `launch`, `grow`, `capture`, `daemon`, `policy list`; the bare `pi-runner.js`; the `openrig daemon` — each
+  `launch`, `grow`, `capture`, `daemon`, `policy list`; the bare `pi-runner.js`; the `the reference client daemon` — each
   line reviewable, each carrying the one-line *why* the failure message quotes (`the predecessor
   orchestrator's delivery`).
 - **The delivered text is three surfaces.** Go string literals in non-test files (what the client PRINTS;
@@ -52,10 +52,10 @@ retired program unless an allowlist entry carries it **with a reason**.
   `skills/client/{rig-runtime-switch,spawn-team}/SKILL.md` (one contrast, four prohibitions/negations) and
   three in this package's own table and allowlist. `0` unexpected.
 - **RED when a line is restored, on both surfaces.** The falsification, run as one edit-and-revert:
-  `docs/WATCH.md` put back to `rig send`, and a non-test Go literal reading
+  `docs/WATCH.md` put back to `4genteam send`, and a non-test Go literal reading
   "Resume the seat: run `rig up <spec>.yaml` to bring the room back." added to the package.
   The pin reported both, by name —
-  `docs/WATCH.md:84: rig send (the predecessor orchestrator's delivery)` and
+  `docs/WATCH.md:84: 4genteam send (the predecessor orchestrator's delivery)` and
   `internal/retiredverbs/zzfalsify.go:4: rig up (the predecessor orchestrator's up)` — with
   `2 command span(s) name a retired program and no allowlist entry carries them` and `FAIL`, each failure
   quoting the whole line it found under the span. The scratch file and the docs line were then reverted; the

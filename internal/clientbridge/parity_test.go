@@ -24,7 +24,7 @@ func pythonDuplicateLines(t *testing.T) []string {
 		if !strings.Contains(line, "rename one") {
 			continue
 		}
-		out = append(out, strings.TrimPrefix(line, "openrig-bridge: "))
+		out = append(out, strings.TrimPrefix(line, "bridge: "))
 	}
 	sort.Strings(out)
 	return out

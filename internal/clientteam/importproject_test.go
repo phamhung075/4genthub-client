@@ -22,19 +22,19 @@ func TestImportProjectPushesMCPBlocksAndSkills(t *testing.T) {
 	paths := map[string]bool{}
 	for _, request := range fake.puts() {
 		parts := strings.Split(request.path, "/")
-		puts[parts[5]] = decodeObject(t, request.body)
+		puts[parts[4]] = decodeObject(t, request.body)
 		paths[request.path] = true
 	}
 	for _, slug := range []string{"weather", "filesystem", "alpha-skill", "beta-skill"} {
 		if _, ok := puts[slug]; !ok {
 			t.Fatalf("no PUT for %s; PUTs were %v", slug, keysOf(puts))
 		}
-		if !paths["/api/v2/openrig/modules/"+slug+"/versions/1.0.0"] {
+		if !paths["/api/v2/modules/"+slug+"/versions/1.0.0"] {
 			t.Errorf("no PUT to the 1.0.0 path for %s", slug)
 		}
 	}
 	for _, request := range fake.recorded() {
-		if request.method == "GET" && !strings.HasPrefix(request.path, "/api/v2/openrig/modules/") {
+		if request.method == "GET" && !strings.HasPrefix(request.path, "/api/v2/modules/") {
 			t.Errorf("module resolution GET went to %s", request.path)
 		}
 	}
@@ -173,7 +173,7 @@ func TestImportProjectChangedContentPushesTheNextPatch(t *testing.T) {
 	for _, request := range fake.puts()[4:] {
 		pushed = append(pushed, request.path)
 	}
-	if len(pushed) != 1 || pushed[0] != "/api/v2/openrig/modules/alpha-skill/versions/1.0.1" {
+	if len(pushed) != 1 || pushed[0] != "/api/v2/modules/alpha-skill/versions/1.0.1" {
 		t.Fatalf("PUTs after the change = %v, want the single 1.0.1 alpha-skill push", pushed)
 	}
 	body := decodeObject(t, fake.puts()[4].body)

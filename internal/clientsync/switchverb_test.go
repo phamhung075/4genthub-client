@@ -121,7 +121,7 @@ func TestSwitchModelPutsBodyKeepsRuntimeAndSetsModel(t *testing.T) {
 		t.Fatalf("put %d times, want 1", len(cloud.puts))
 	}
 	put := cloud.puts[0]
-	if put.path != "/api/v2/openrig/rooms/room1/seats/seat1/occupant" {
+	if put.path != "/api/v2/rooms/room1/seats/seat1/occupant" {
 		t.Errorf("PUT %s, want the occupant path", put.path)
 	}
 	if put.auth != "Bearer test-token" {
@@ -298,7 +298,7 @@ func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 		}
 	}
 
-	for _, needle := range []string{"rig seat", "rig remove", "rig daemon", "rig bundle", "rig export", "rig ps", "rig queue"} {
+	for _, needle := range []string{"rig seat", "rig remove", "rig daemon", "rig bundle", "rig export", "rig ps", "the task queue"} {
 		if strings.Contains(printed, needle) {
 			t.Errorf("the runtime-change notice prints the rig CLI verb %q, which a reader cannot run after the cutover:\n%s", needle, printed)
 		}

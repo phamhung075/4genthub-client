@@ -6,10 +6,10 @@ operator — `skills/share/**` and `skills/rooms/**` (delivered to seats by `4ge
 
 ## What was wrong
 
-`skills/share/development-team/SKILL.md:14` told every seat reading it to run `rig whoami --json`. Measured on
-this box, `rig` resolves to the OpenRig CLI 0.6.10, and that command answers `daemon unreachable … Resolved:
+`skills/share/development-team/SKILL.md:14` told every seat reading it to run `4genteam whoami --json`. Measured on
+this box, `rig` resolves to the 4genteam CLI 0.6.10, and that command answers `daemon unreachable … Resolved:
 partial via session name` — a partial identity from a program whose daemon is not running. The same class ran
-through the other trees: `rig send` as the message route, `rig ps --nodes --rig R --json` as the liveness read,
+through the other trees: `4genteam send` as the message route, `rig ps --nodes --rig R --json` as the liveness read,
 `rig policy list` for the permission postures, `rig capture` / `rig terminal open` for a pane, `rig usage series
 --lane provider_window` for a provider window, `rig daemon status|start` for the daemon, and the spec/node verbs
 (`rig up <spec>.yaml`, `rig down --delete`, `rig create`, `rig grow|add|shrink|remove`, `rig launch`, `rig
@@ -73,7 +73,7 @@ where **no** native verb exists the text now says so instead of prescribing a de
   session` appears nowhere in this tree's Go source; the row's VERB is repointed, the quoted symptom is not this
   client's text.
 - `docs/AGENT-SETUP.md:1`'s title still says "the rig orchestrator" — a product name, not a spelling a reader runs.
-- Code-side naming, out of this unit: `internal/clientbridge/commands.go:260` prints an `openrig-bridge:` log
-  prefix, and `clientfeedback` offers `--layer openrig`. Neither is a procedure.
-- `internal/clientpolicy/policy.go:71-73` / `:185` (`rig down*`, `rig up*`, `rig remove*`, `rig whoami*`) — the
+- Code-side naming, out of this unit: `internal/clientbridge/commands.go:260` prints an `bridge:` log
+  prefix, and `clientfeedback` offers `--layer the reference client`. Neither is a procedure.
+- `internal/clientpolicy/policy.go:71-73` / `:185` (`rig down*`, `rig up*`, `rig remove*`, `4genteam whoami*`) — the
   parked guardrail unit, waiting on the architect's C5 ruling and sharing a file with owner item 16.

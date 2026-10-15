@@ -45,7 +45,7 @@ import (
 // Retired is a command a reader must never be told to run: the program, and the sub-verb it took.
 type Retired struct {
 	// Program is the first word of the command, matched case-insensitively ("rig", "pi-runner.js",
-	// "openrig").
+	// "node").
 	Program string
 	// Subverb is the word (or two words, for "policy list") that must follow the program for the span to be
 	// this command. Empty means the program alone is the command.
@@ -67,7 +67,6 @@ var RetiredCommands = []Retired{
 	{Program: "rig", Subverb: "daemon", Why: "the predecessor orchestrator's daemon"},
 	{Program: "rig", Subverb: "policy list", Why: "the predecessor orchestrator's policy listing"},
 	{Program: "pi-runner.js", Why: "the per-seat runner the runtime's native runner replaced"},
-	{Program: "openrig", Subverb: "daemon", Why: "the predecessor orchestrator's daemon"},
 }
 
 // Allow carries ONE deliberate survivor: a span that names a retired command in order to say it is gone, to

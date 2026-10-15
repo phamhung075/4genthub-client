@@ -137,7 +137,7 @@ func TestFeedbackUsageErrorsNeverDial(t *testing.T) {
 		{"layer flag with no value", []string{"--layer"}, "--layer is required"},
 		{"missing text", []string{"--layer", "runtime"}, "--text is required"},
 		{"text flag with no value", []string{"--layer", "runtime", "--text"}, "--text is required"},
-		{"invalid layer", []string{"--layer", "harness", "--text", "t"}, `--layer "harness" is not one of runtime, openrig, cloud, seat-context, workspace, other`},
+		{"invalid layer", []string{"--layer", "harness", "--text", "t"}, `--layer "harness" is not one of runtime, client, cloud, seat-context, workspace, other`},
 		{"unknown argument", []string{"--layer", "runtime", "--text", "t", "--nope"}, "unknown argument: --nope"},
 	}
 	for _, tc := range cases {
@@ -201,7 +201,7 @@ func TestFeedbackPostsTheReportAndRelaysTheAnswer(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := runFeedback(context.Background(), []string{
-		"--layer", "openrig",
+		"--layer", "client",
 		"--text", "it broke",
 		"--room", "dev",
 		"--seat", "alpha",
@@ -226,7 +226,7 @@ func TestFeedbackPostsTheReportAndRelaysTheAnswer(t *testing.T) {
 	}
 	want := map[string]any{
 		"room": "dev", "seat": "alpha", "session": "dev-alpha@dev",
-		"layer": "openrig", "text": "it broke",
+		"layer": "client", "text": "it broke",
 	}
 	for key, value := range want {
 		if body[key] != value {
@@ -270,7 +270,7 @@ func TestFeedbackURLDefaultAndOverride(t *testing.T) {
 
 // Identity defaults come from the client's own identity chain - here its last link, this shell's seat
 // environment - and a flag that IS given wins over that reading for that field only. This is the test that
-// replaced the exec of `rig whoami --json`.
+// replaced the exec of `4genteam whoami --json`.
 func TestFeedbackIdentityDefaultsComeFromTheSeatEnvironment(t *testing.T) {
 	server := newFeedbackServer(t)
 	feedbackEnv(t, server.URL, "tok")

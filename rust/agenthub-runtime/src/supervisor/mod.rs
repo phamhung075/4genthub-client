@@ -1153,7 +1153,7 @@ impl RoomSupervisor {
     /// The active rows the room's rail is holding for one seat, by qitem id.
     ///
     /// The rail's rows are written by the client's `room queue` verbs, whose `--to` is a free session
-    /// string, and the two spellings in use disagree: the live rig's `OPENRIG_SESSION_NAME` is
+    /// string, and the two spellings in use disagree: the live rig's session name is
     /// `<rig>-<seat>@<rig>` while this runtime derives `agenthub--<room>--<seat>`, and a row a human wrote
     /// by hand usually names the bare seat key. All three are matched, because a spelling gap here would
     /// be read as "nothing is waiting" - the one lie this join exists to prevent. The rows are selected

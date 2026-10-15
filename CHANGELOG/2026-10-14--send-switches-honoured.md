@@ -5,7 +5,7 @@
 The U3 gate at `c55fa87` returned REQUEST CHANGES on one claim, and it was the claim that matters most for a
 person: `send RIG SEAT MESSAGE` — the client's OWN shape — never consulted the daemon-only switch list. It built
 its text and called `SendTextToSeat` directly, so every switch on that line was parsed and then dropped. Forced in
-the gate, with a live runtime and a dead `OPENRIG_URL`, one flag at a time:
+the gate, with a live runtime and a dead `CLIENT_URL`, one flag at a time:
 
 ```
 $ 4genteam send lab dev "gate text" --wait-for-idle 5        # types immediately; does not wait
@@ -42,8 +42,8 @@ live runtime socket:
 A daemon-only switch with a HEALTHY runtime and a dead daemon used to print
 
 ```
-4genteam send: no runtime is answering at /tmp/u3gate/rt.sock (set OPENRIG_RUNTIME_SOCKET, ...);
-the OpenRig fallback at http://127.0.0.1:1 is not available either; nothing was sent
+4genteam send: no runtime is answering at /tmp/u3gate/rt.sock (set CLIENT_RUNTIME_SOCKET, ...);
+the 4genteam fallback at http://127.0.0.1:1 is not available either; nothing was sent
 ```
 
 — whose first clause is false, and which aims the reader at a transport that answered. The two reasons a send
@@ -52,7 +52,7 @@ reaches the daemon need different sentences, so the refusal is now chosen by the
 missing when the runtime really was the transport that failed. Measured, healthy runtime + dead daemon + `--verify`:
 
 ```
-rc=3  4genteam send: --verify needs the OpenRig daemon, and the OpenRig fallback at http://127.0.0.1:1
+rc=3  4genteam send: --verify needs the 4genteam daemon, and the 4genteam fallback at http://127.0.0.1:1
 is not available either; nothing was sent
 ```
 
