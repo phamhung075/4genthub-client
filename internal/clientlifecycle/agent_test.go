@@ -393,6 +393,7 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 	restoreAll(t)
 	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
 	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
+	t.Setenv("AGENTHUB_CONNECTOR_TOKEN", "not-a-real-token")
 
 	var ran []string
 	ensureDaemon = func(string, io.Writer) (string, error) {
@@ -460,5 +461,17 @@ func TestStartAgentLeavesARunningAuthorityAlone(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "4242") {
 		t.Errorf("stdout = %q, want the pid it found", out.String())
+	}
+}
+
+// TestMissingCloudEnvNamesTheConnectorTokenSeparately: the upload token is its own credential, so an
+// `up` with the MCP key set but no connector token is refused naming only that variable.
+func TestMissingCloudEnvNamesTheConnectorTokenSeparately(t *testing.T) {
+	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
+	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
+	t.Setenv("AGENTHUB_CONNECTOR_TOKEN", "")
+	got := missingCloudEnv()
+	if len(got) != 1 || got[0] != "AGENTHUB_CONNECTOR_TOKEN" {
+		t.Fatalf("missingCloudEnv() = %v, want only AGENTHUB_CONNECTOR_TOKEN", got)
 	}
 }

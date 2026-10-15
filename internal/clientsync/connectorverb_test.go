@@ -87,7 +87,7 @@ func TestRigSessionCandidatesCarryTheSeatIdentity(t *testing.T) {
 // here and the new refusal passes without running anything - before any socket is opened.
 func TestConnectorVerbRequiresASessionWithoutShellingOut(t *testing.T) {
 	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
-	t.Setenv("AGENTHUB_TOKEN", "token")
+	t.Setenv("AGENTHUB_CONNECTOR_TOKEN", "token")
 	t.Setenv("PATH", t.TempDir())
 
 	var stdout, stderr strings.Builder

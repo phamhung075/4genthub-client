@@ -156,6 +156,7 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	restoreAll(t)
 	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
 	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
+	t.Setenv("AGENTHUB_CONNECTOR_TOKEN", "not-a-real-token")
 	ensureDaemon = func(string, io.Writer) (string, error) {
 		ran = append(ran, "ensureDaemon")
 		return "/tmp/daemon.log", nil

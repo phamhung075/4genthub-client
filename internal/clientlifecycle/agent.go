@@ -85,7 +85,8 @@ func (agentCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wr
 				"for the rigs listed in agent.json,\n"+
 				"so it is the single restart authority: `stop` stops agent and its children, and `up` starts it.\n\n"+
 				"  status [--json]      the safeguard rows and the per-session withheld counts\n\n"+
-				"Requires AGENTHUB_URL and AGENTHUB_TOKEN (the value is never printed).")
+				"Requires AGENTHUB_URL and AGENTHUB_CONNECTOR_TOKEN, a token with the sessions:write scope\n"+
+				"(the value is never printed).")
 		return clientcmd.ExitOK
 	}
 	if len(args) > 0 && args[0] == "status" {
@@ -117,7 +118,7 @@ func runAgent(ctx context.Context, stdout, stderr io.Writer) int {
 	})
 	daemon := clientsync.NewAgentDaemon(clientsync.AgentDaemonOptions{
 		BaseURL:     os.Getenv("AGENTHUB_URL"),
-		Token:       os.Getenv("AGENTHUB_TOKEN"),
+		Token:       os.Getenv("AGENTHUB_CONNECTOR_TOKEN"),
 		ConnectorID: connectorIdentity(),
 		Log:         manager.log,
 		Rows:        manager.rows,

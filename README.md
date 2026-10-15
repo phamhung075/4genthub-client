@@ -90,9 +90,9 @@ settings allow exactly `Bash(seatcheck send:*)` and `pull` fails loudly when `se
 the binary this client built. A `4genteam seatcheck send …` subcommand would satisfy neither the pin nor the
 allow rule.
 
-## The one credential and the one env file
+## The two credentials and the one env file
 
-There is exactly one credential, `AGENTHUB_TOKEN`, paired with `AGENTHUB_URL`, and one file for it:
+`AGENTHUB_TOKEN` is your key for the server and the MCP tools. `AGENTHUB_CONNECTOR_TOKEN` is a second token with only the `sessions:write` scope, used by the `agent` daemon and `sync connector` to upload sessions; a leaked upload token cannot read or change tasks. Both pair with `AGENTHUB_URL`, and one file holds them:
 
 ```bash
 mkdir -p ~/.config/4genthub
@@ -164,7 +164,8 @@ Every key lives in `~/.config/4genthub/.env` or the environment; only the first 
 | Variable | Meaning |
 |---|---|
 | `AGENTHUB_URL` | the server, for example `https://api.4genthub.com` |
-| `AGENTHUB_TOKEN` | your key; the one credential |
+| `AGENTHUB_TOKEN` | your key for the server and the MCP tools |
+| `AGENTHUB_CONNECTOR_TOKEN` | the upload token, scope `sessions:write` only; read by `agent` and `sync connector` |
 | `TYPESAFE_API_KEY` | TypeSafe AI System One token. Jev runs on this machine, never on the server: `4genteam decide` and `4genteam complete` call it from here (model `jev-1.13.0`) |
 | `TYPESAFE_BASE_URL` | TypeSafe AI base endpoint (default `https://api.typesafe.ai/v1`) |
 | `JEV_DECISION_THRESHOLD` | confidence at or above which a seat or lead decides for itself; the value set in the config is the one used |

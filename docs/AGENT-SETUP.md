@@ -57,6 +57,7 @@ The client has exactly one credential and reads exactly one file.
 
 - `AGENTHUB_URL` — the server's base URL, no trailing slash.
 - `AGENTHUB_TOKEN` — the account key.
+- `AGENTHUB_CONNECTOR_TOKEN` — the upload token for the `agent` daemon, scope `sessions:write` only.
 - The file is `~/.config/4genthub/.env`.
 - **A variable already set in the environment wins over the file.** The file is a default, not an
   override.

@@ -28,7 +28,7 @@ Sends ONE local rig session to the cloud over /ws/connector.
   --connector-id <id>   the connector identity the server binds this socket to (default: hostname)
   --lines <n>           transcript lines to send, newest last (default 50)
 
-Requires AGENTHUB_URL and AGENTHUB_TOKEN. The token needs the sessions:write scope; without it the
+Requires AGENTHUB_URL and AGENTHUB_CONNECTOR_TOKEN, a token with the sessions:write scope; without it the
 server completes the handshake and closes with 1008, which this verb reports rather than retries.`
 
 // RunConnectorVerb drives the slice and returns a process exit code.
@@ -83,7 +83,7 @@ func RunConnectorVerb(ctx context.Context, args []string, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "sync connector: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	token, err := RequireEnv("AGENTHUB_TOKEN")
+	token, err := RequireEnv("AGENTHUB_CONNECTOR_TOKEN")
 	if err != nil {
 		fmt.Fprintf(stderr, "sync connector: %v\n", err)
 		return clientcmd.ExitUsage

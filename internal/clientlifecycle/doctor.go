@@ -158,11 +158,11 @@ func waitForSafeguardsImpl(rig string) ([]clientservices.Health, bool) {
 }
 
 // missingCloudEnv names the credentials this machine cannot report without, and NEVER their values. 7.5
-// makes a bridge refused for a missing AGENTHUB_URL or AGENTHUB_TOKEN a FAILED `up`, so the check runs
+// makes a bridge refused for a missing AGENTHUB_URL, AGENTHUB_TOKEN or AGENTHUB_CONNECTOR_TOKEN a FAILED `up`, so the check runs
 // before agent is started rather than surfacing as a bridge that died at once.
 var missingCloudEnv = func() []string {
 	var missing []string
-	for _, name := range []string{"AGENTHUB_URL", "AGENTHUB_TOKEN"} {
+	for _, name := range []string{"AGENTHUB_URL", "AGENTHUB_TOKEN", "AGENTHUB_CONNECTOR_TOKEN"} {
 		if strings.TrimSpace(os.Getenv(name)) == "" {
 			missing = append(missing, name)
 		}

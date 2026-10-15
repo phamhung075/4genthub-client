@@ -131,7 +131,7 @@ var redactionPatterns = []redactionRule{
 	// An HTTP auth header keeps the scheme and the space.
 	{regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}`), keepPrefix},
 	// An assignment keeps the variable name and the separator AND any space after it.
-	{regexp.MustCompile(`(?i)((?:AGENTHUB_TOKEN|AGENTHUB_API_TOKEN|DEEPSEEK_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|AGENTHUB_PUBLIC_URL)\s*[=:]\s*)\S+`), keepPrefix},
+	{regexp.MustCompile(`(?i)((?:AGENTHUB_TOKEN|AGENTHUB_CONNECTOR_TOKEN|AGENTHUB_API_TOKEN|DEEPSEEK_API_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|AGENTHUB_PUBLIC_URL)\s*[=:]\s*)\S+`), keepPrefix},
 	// A provider token is entirely secret, so nothing is kept: these four patterns carry NO capture
 	// group, because ${1} expands to the empty string when there is no group and the whole match must
 	// go. Wrapping them in parentheses first kept the token and redacted the empty string after it.

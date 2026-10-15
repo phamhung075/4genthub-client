@@ -64,6 +64,7 @@ func stubWholeUp(t *testing.T) *[]string {
 	// otherwise catch are set here and never printed.
 	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
 	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
+	t.Setenv("AGENTHUB_CONNECTOR_TOKEN", "not-a-real-token")
 	runWatchView = func(string, io.Writer) { *ran = append(*ran, "watch") }
 	openUI = func(io.Writer) {}
 	runHerdr = func(io.Writer, io.Writer) int { return clientcmd.ExitOK }
