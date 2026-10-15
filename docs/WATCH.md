@@ -45,6 +45,11 @@ seat's status: `● working` while an event is under 30 s old, then `○ idle` a
 An event line is prefixed with the time the seat logged it, shown only when the minute changes, and
 with the context percentage, shown only when it crosses a 10% step.
 
+In a one-seat pane (a single `--seat`, or `feed` in a plain terminal) the time and the percentage ride on the
+rule above the step instead of in a prefix, and step lines start at column 0. A wrapped row stays indented
+under its head (width minus the head's length, at least 4), so a long line never returns to the left edge.
+The percentage is re-shown at each 5-point step in that mode.
+
 | Mark | Meaning |
 |---|---|
 | `<glyph> <tool> <intent>` | a tool call, its glyph and colour set by the kind of work: `◉` read (blue), `⌕` search (cyan), `✎` write or edit (yellow), `❯` shell (green), `⌁` web (blue), `⇉` delegate or todo (violet), `?` ask (orange), `→` anything else (white); the dim italic intent is the purpose the seat stated, and the main argument (command, path, prompt) follows on the lines below, with no `key=` |
