@@ -218,8 +218,9 @@ var rigMaterializeAgent = func(source, seatDir, target string) error {
 	if err := rigCopyTree(source, target); err != nil {
 		return err
 	}
-	// policy.json is the file seatcheck reads at runtime and pinned.json is the pin, so both travel
-	// next to the rendered files a bundle will copy (G4 fix).
+	// pinned.json is the pin and policy.json is the policy `offline-install` puts in the seat store, which
+	// is where the send path writes a seat's audit.jsonl, so both travel next to the rendered files a bundle
+	// will copy (G4 fix).
 	for _, name := range []string{"policy.json", "pinned.json"} {
 		candidate := filepath.Join(seatDir, name)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {

@@ -213,8 +213,8 @@ func validLayer(layer string) bool {
 }
 
 // readIdentity reads the three defaults from the client's own identity chain - the runtime socket first,
-// then this shell's own seat environment. That is the chain `whoami --json` prints and the chain
-// cmd/seatcheck asks.
+// then this shell's own seat environment. That is the chain `whoami --json` prints and the chain the send
+// path (internal/clientseat) asks.
 //
 // The failure keeps the same shape it had when rig supplied the answer: the chain's own refusal, which
 // the caller turns into its usage error. An identity the chain resolves to empty fields is the script's

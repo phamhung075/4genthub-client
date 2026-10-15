@@ -143,8 +143,8 @@ func runtimeJSONDocument(value any) []byte {
 }
 
 // ResolveIdentity answers who this seat is, over the ONE chain: the runtime socket first, then the seat's own
-// environment. It is the chain `4genteam whoami` prints, extracted so that a SECOND caller (the seat guard,
-// cmd/seatcheck) asks the same question the same way.
+// environment. It is the chain `4genteam whoami` prints, extracted so that the OTHER callers - the send path
+// (internal/clientseat) and `4genteam feedback` - ask the same question the same way.
 //
 // `session` is the caller's explicit session name (the verb's --session); "" means the seat's own
 // environment (AGENTHUB_SESSION_NAME, else the AGENTHUB_ROOM/AGENTHUB_SEAT pair).
@@ -186,13 +186,13 @@ func ResolveIdentity(session string) (WhoamiResponse, error) {
 	}
 }
 
-// DeliverToSession delivers ONE message to ONE session through the runtime socket. It is the native half of
-// the seat guard's delivery (cmd/seatcheck), so the guard delivers through the SAME transport the `send`
-// verb uses. The text is wrapped in the From/To/Sent envelope, attributed to this shell's own session name.
+// DeliverToSession delivers ONE message to ONE session through the runtime socket. It is the delivery the
+// restore path uses (internal/clientrestore), on the SAME transport the `4genteam send` verb delivers over.
+// The text is wrapped in the From/To/Sent envelope, attributed to this shell's own session name.
 //
 // The exit code is the client's own: 0 delivered, ExitRemote (1) when the runtime refused it,
 // ExitUnavailable (3) when no runtime answered. A caller that must not report a policy result as a delivery
-// failure maps it at its own boundary - the guard maps every non-zero to its own one delivery failure code.
+// failure maps it at its own boundary.
 func DeliverToSession(session, text string, stdout, stderr io.Writer) int {
 	if ResolveTransport() != TransportRuntime {
 		fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", RuntimeMissing())

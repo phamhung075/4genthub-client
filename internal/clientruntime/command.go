@@ -40,8 +40,8 @@ func (whoamiCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 		return clientcmd.ExitUsage
 	}
 
-	// THE CHAIN IS ONE FUNCTION (ResolveIdentity), so this verb PRINTS an answer and the seat guard
-	// (cmd/seatcheck) reasons about the same one.
+	// THE CHAIN IS ONE FUNCTION (ResolveIdentity), so this verb PRINTS an answer and the send path
+	// (internal/clientseat) reasons about the same one.
 	resolved, err := ResolveIdentity(*sessionFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)

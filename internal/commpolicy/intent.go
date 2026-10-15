@@ -1,9 +1,9 @@
 package commpolicy
 
-// IntentWords is the CLI spelling of each intent. It lives here, beside the constants, because TWO surfaces
-// take `--intent` - the seatcheck checker and the client's own send path (wired 2026-10-15, the architect's
-// ruling that the decision attaches to the capability) - and a word list copied into the second one would be
-// a second definition of the same five words.
+// IntentWords is the CLI spelling of each intent. It lives here, beside the constants, because the ONE
+// surface that takes `--intent` is the client's own send path (internal/clientseat, wired 2026-10-15: the
+// architect's ruling that the decision attaches to the capability), and a word list copied into that package
+// would be a second definition of the same five words.
 var IntentWords = map[string]Intent{
 	"task":       IntentTask,
 	"escalation": IntentEscalation,

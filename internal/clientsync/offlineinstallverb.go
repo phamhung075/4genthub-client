@@ -19,10 +19,11 @@ import (
 // offlineInstallUsage is what `sync offline-install --help` prints.
 const offlineInstallUsage = `usage: 4genteam sync offline-install TARGET [--home DIR]
 
-Install a materialized bundle's pinned policy into the seat store. seatcheck resolves its policy as
-<home>/.config/4genthub/seats/<room>/<member>/policy.json and it is deliberately not a flag, so
-this is what makes an offline seat's allowed path able to decide and audit. TARGET is the
-materialized bundle; HOME defaults to this account's home directory.
+Install a materialized bundle's pinned policy into the seat store at
+<home>/.config/4genthub/seats/<room>/<member>/, the directory the seat's pinned.json sits in and the send
+path writes a seat's audit.jsonl into. The path is deliberately not a flag. The decision is not read
+from this file: 4genteam send (internal/clientseat) builds it at send time from the room's declared
+links. TARGET is the materialized bundle; HOME defaults to this account's home directory.
 `
 
 // rigSpec is only the part of a rig spec this verb reads: the room's name and each member's id and
@@ -38,7 +39,8 @@ type rigSpec struct {
 }
 
 // RunOfflineInstallVerb is `sync offline-install`: the bundle's pinned policy becomes the policy the
-// seat store at <home>/.config/4genthub/seats holds, which is the only place seatcheck looks.
+// seat store at <home>/.config/4genthub/seats holds, the store the send path audits a seat's sends into
+// (audit.jsonl beside the policy).
 func RunOfflineInstallVerb(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, arg := range args {
 		if arg == "-h" || arg == "--help" {

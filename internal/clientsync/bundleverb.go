@@ -5,10 +5,10 @@
 // seat's resolved snapshot comes from the lock this client wrote - the same hash a running seat was
 // launched from - so the bundle the operator ships and the seat that is running are the same artifact.
 //
-// A bundle copies `<rig-root>/agents/<agent>/` verbatim, and seatcheck reads a seat's policy from the
-// pin that directory is supposed to hold. When the rig root carries no usable pin the artifact still
-// passes its own integrity check, and the first sign of trouble is offline-install refusing it later -
-// so the build WARNS here, on stderr, and never refuses.
+// A bundle copies `<rig-root>/agents/<agent>/` verbatim, and the pin that directory is supposed to hold is
+// the seat's pinned.json plus the `policy.json` `offline-install` installs into the seat store. When the rig
+// root carries no usable pin the artifact still passes its own integrity check, and the first sign of trouble
+// is offline-install refusing it later - so the build WARNS here, on stderr, and never refuses.
 package clientsync
 
 import (
