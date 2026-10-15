@@ -195,6 +195,52 @@ fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
 const SEAT_MCP_CONFIG: &str = r#"{"mcpServers":{"agenthub_http":{"type":"http","url":"${AGENTHUB_URL}/mcp","headers":{"Accept":"application/json, text/event-stream","Authorization":"Bearer ${AGENTHUB_TOKEN}"}}}}
 "#;
 
+/// The variable that names the client's skill tree (`share/`, `rooms/<room>/`, `rooms/<room>/<seat>/`). It is
+/// read from the state root's `.env`, else from the daemon's own environment.
+const SKILLS_ROOT_ENV: &str = "AGENTHUB_CLIENT_SKILLS";
+
+/// Install the seat's skills into `<seat dir>/skills/<name>`, which is where omp (its agent dir is the seat
+/// dir) loads them from: the shared skills, the room's, and the seat's own folder, the more specific one
+/// replacing a shared skill of the same name. The directory is runtime-owned, so it is rebuilt every start
+/// and a skill removed from the tree does not linger. No tree configured means no skills, which is not an
+/// error: a machine with no tree has nothing to install.
+fn install_seat_skills(state_dir: &Path, room: &str, seat: &str, seat_dir: &Path) -> Result<(), String> {
+    let root = env_file_vars(state_dir)
+        .remove(SKILLS_ROOT_ENV)
+        .or_else(|| std::env::var(SKILLS_ROOT_ENV).ok())
+        .filter(|v| !v.is_empty());
+    let Some(root) = root else { return Ok(()) };
+    let target = seat_dir.join("skills");
+    if target.exists() {
+        fs::remove_dir_all(&target).map_err(|e| format!("cannot clear {}: {e}", target.display()))?;
+    }
+    for skill in crate::skills::SkillResolver::new(root).resolve_for_seat(room, seat) {
+        let Some(source) = skill.path.parent() else { continue };
+        copy_dir(source, &target.join(&skill.name))
+            .map_err(|e| format!("cannot install the skill {}: {e}", skill.name))?;
+    }
+    Ok(())
+}
+
+/// Copy a directory tree, replacing what is at `to`. Every file under a skill goes with it (a skill may
+/// carry baselines and references beside its SKILL.md).
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.exists() {
+        fs::remove_dir_all(to)?;
+    }
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let dest = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &dest)?;
+        } else {
+            fs::copy(entry.path(), &dest)?;
+        }
+    }
+    Ok(())
+}
+
 /// The variables of `<state_dir>/.env`: `KEY=VALUE` lines, an optional `export ` prefix, one pair of matching
 /// quotes stripped, `#` comment and blank lines skipped. A missing or unreadable file is no variables. Values
 /// are never logged: the file holds credentials.
@@ -436,6 +482,7 @@ impl RoomSupervisor {
         fs::create_dir_all(&seat_dir).map_err(|e| format!("cannot create seat dir: {e}"))?;
         fs::write(seat_dir.join("mcp.json"), SEAT_MCP_CONFIG)
             .map_err(|e| format!("cannot write the seat's mcp.json: {e}"))?;
+        install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
 
         // Determine working directory
         let cwd_str = seat.cwd.as_deref().or(spec.cwd.as_deref()).unwrap_or(".");
@@ -2447,6 +2494,39 @@ mod tests {
         let server = &parsed["mcpServers"]["agenthub_http"];
         assert_eq!(server["url"], "${AGENTHUB_URL}/mcp");
         assert_eq!(server["headers"]["Authorization"], "Bearer ${AGENTHUB_TOKEN}");
+    }
+
+    /// The seat's own folder is nested one level deeper than the room's skills, and a seat receives share +
+    /// room + its own folder, the more specific replacing the shared one, and nothing of another seat.
+    #[test]
+    fn a_seat_gets_its_nested_skills_and_not_another_seats() {
+        let state = scratch("skills-state");
+        let tree = scratch("skills-tree");
+        let skill = |rel: &str, extra: &str| {
+            let dir = tree.join(rel);
+            fs::create_dir_all(&dir).expect("dir");
+            fs::write(dir.join("SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n").expect("skill");
+            if !extra.is_empty() {
+                fs::write(dir.join(extra), "y").expect("extra");
+            }
+        };
+        skill("share/common", "");
+        skill("share/both", "");
+        skill("rooms/r/room-skill", "");
+        skill("rooms/r/dev/own-skill", "baseline.json");
+        skill("rooms/r/dev/both", "");
+        skill("rooms/r/other/theirs", "");
+        fs::write(state.join(".env"), format!("{SKILLS_ROOT_ENV}={}\n", tree.display())).expect("env");
+        let seat_dir = state.join("rooms/r/seats/dev");
+        fs::create_dir_all(seat_dir.join("skills/stale")).expect("stale");
+        install_seat_skills(&state, "r", "dev", &seat_dir).expect("install");
+        let mut names: Vec<String> = fs::read_dir(seat_dir.join("skills"))
+            .expect("skills dir")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["both", "common", "own-skill", "room-skill"], "no stale, no other seat's skill");
+        assert!(seat_dir.join("skills/own-skill/baseline.json").is_file(), "files beside SKILL.md go too");
     }
 
     /// The nudge pass enumerates the rooms that are on disk. With no tmux session behind any seat, no seat
