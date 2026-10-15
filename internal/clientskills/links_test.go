@@ -1,9 +1,18 @@
+// Package clientskills is one check: every LOCAL link in every shipped skill document resolves
+// against the directory that carries the document.
+//
+// The package's delivery half - the tree locator (`Locate`), the copy into a seat's skills path
+// (`Install`) and the `agent.yaml` declaration (`Declare`) - went with `clientsync/rigverb.go`, its
+// only caller, and the runtime installs a seat's skills itself (`install_seat_skills`,
+// `rust/agenthub-runtime/src/supervisor/mod.rs:258`, from the tree `AGENTHUB_CLIENT_SKILLS` names).
+// No path in the module resolves that half any more, so it is deleted; this guard is kept, because it
+// judges the tree that is still shipped and still installed.
 package clientskills
 
 // The check this file exists for: every LOCAL link in every shipped skill document resolves against
 // the directory that carries the document. `team publish-skills` pushes this tree to the cloud
-// catalog and the removed `sync room` delivered it to every seat, so a link that does not resolve
-// was delivered to every seat that received the skill. The class is the reviewer's finding of 2026-10-10 (ten dead links in
+// catalog and the runtime installs it into every seat's skills directory, so a link that does not
+// resolve was delivered to every seat that received the skill. The class is the reviewer's finding of 2026-10-10 (ten dead links in
 // `skills/share/agent-browser/SKILL.md`, finding 5 of GATE-49e8d433-post-hoc-six): before the fix
 // this test fails on exactly those ten and on nothing else, and after it there are none.
 //
