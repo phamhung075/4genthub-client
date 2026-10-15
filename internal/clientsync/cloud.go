@@ -1,4 +1,7 @@
-// The cloud half of `sync status`: what the cloud would serve now, seat by seat.
+// The cloud transport: every verb that reads or writes over HTTP goes through RequestJSON, which carries
+// the Python's four refusals and its two shape checks. It used to be the `sync status` cloud half; the
+// route it was written for (`GET {ROOMS_PATH}/{room}/rigspec`) is gone, and this half is what the other
+// verbs still need.
 package clientsync
 
 import (
@@ -88,66 +91,6 @@ func RequestJSON(ctx context.Context, method, baseURL, token, path string, paylo
 		}
 	}
 	return object, nil
-}
-
-// FetchRigspec ports fetch_rigspec: GET {ROOMS_PATH}/{room}/rigspec, then the `success is not True`
-// check and the `rigspec` shape check, each with the Python's message at EXIT_REMOTE.
-func FetchRigspec(ctx context.Context, baseURL, token, room string) (map[string]any, error) {
-	path := RoomsPath + "/" + room + "/rigspec"
-	body, err := RequestJSON(ctx, "GET", baseURL, token, path, nil)
-	if err != nil {
-		return nil, err
-	}
-	if success, isBool := body["success"].(bool); !isBool || !success {
-		return nil, remoteFailure("GET", path, "returned an error response")
-	}
-	rigspec, ok := body["rigspec"].(map[string]any)
-	if !ok {
-		return nil, remoteFailure("GET", path, "response has no rigspec")
-	}
-	return rigspec, nil
-}
-
-// CloudHashes is cloud_hashes: seat -> the hash of the snapshot the cloud would serve now, plus the
-// cloud's own listing ORDER.
-//
-// THE ORDER IS RETURNED RATHER THAN LOST, and that is the one deliberate difference from the Python:
-// `{entry["seat"]: entry["hash"] for entry in rigspec["seats"]}` builds a dict whose order the Python
-// keeps and Go maps cannot, so the order travels beside the map and the status core takes it as an
-// argument. Without it the rendered table would be in Go's map order, which is not the Python's.
-func CloudHashes(ctx context.Context, baseURL, token, room string) ([]string, map[string]string, error) {
-	rigspec, err := FetchRigspec(ctx, baseURL, token, room)
-	if err != nil {
-		return nil, nil, err
-	}
-	seats, _ := rigspec["seats"].([]any)
-	order := make([]string, 0, len(seats))
-	hashes := make(map[string]string, len(seats))
-	for _, entry := range seats {
-		row, ok := entry.(map[string]any)
-		if !ok {
-			return nil, nil, cloudEntryFailure("is not an object")
-		}
-		seat, seatIsString := row["seat"].(string)
-		hash, hashIsString := row["hash"].(string)
-		if !seatIsString || !hashIsString {
-			return nil, nil, cloudEntryFailure("has no seat/hash strings")
-		}
-		order = append(order, seat)
-		hashes[seat] = hash
-	}
-	return order, hashes, nil
-}
-
-// cloudEntryFailure is the Python's path for a malformed entry: its dict comprehension raises, the
-// caller's generic handler catches it, and main() maps anything that is not EXIT_USAGE to EXIT_FAILED -
-// which is 3, the code this client calls ExitUnavailable. Reported rather than skipped, because
-// skipping would answer "nothing is behind" for a rigspec the cloud could not have meant.
-func cloudEntryFailure(why string) error {
-	return &clientcmd.CodedError{
-		Message: fmt.Sprintf("rigspec seat entry %s", why),
-		Code:    clientcmd.ExitUnavailable,
-	}
 }
 
 func remoteFailure(method, path, cause string) error {

@@ -48,8 +48,8 @@ install -m 0755 4genteam ~/.local/bin/     # or any directory that is already on
 4genteam version                           # the binary's own version
 ```
 
-A binary installed on its own has no `skills/` tree beside it, and `sync room` refuses until it finds
-the tree it delivers to the seats: set `AGENTHUB_CLIENT_SKILLS=/path/to/4genthub-client/skills`, or
+A binary installed on its own has no `skills/` tree beside it, and a seat's restart refuses until it finds
+the tree it delivers to the seat: set `AGENTHUB_CLIENT_SKILLS=/path/to/4genthub-client/skills`, or
 pass `--skills-root DIR` to that verb. A checkout has it at `skills/`.
 
 **From source, with Go 1.26 or newer.** One module, one dependency (`gopkg.in/yaml.v3`):
@@ -249,16 +249,13 @@ shows only `supervising` is not broken: no seat has reached the limit yet.
 Run from the project's directory. `ROOM` is the room's name on the server.
 
 ```bash
-4genteam sync room ROOM      # writes ~/.config/4genthub/seats/ROOM/rig/rig.yaml and the seat files
 4genteam up ROOM            # starts the full lifecycle: daemon, seats, supervisor, bridge and watch view
 ```
 
-`sync room` does everything a new room needs in one step: when a member's model names a provider
-(`provider/model`), it links this client's own env file, `~/.config/4genthub/.env`, to the room's
-`.env`, and refuses naming that path when the file does not exist (omp reads the key from the launch
-directory's `.env`); it sets every seat's working directory to the room directory, sets the
-unattended seat policy `builtin:yolo`, and creates each seat's state directory. A regular `.env`
-already in the room directory is refused and named, never overwritten.
+`sync room` is GONE (2026-10-15): it read the cloud's `GET /api/v2/rooms/{room}/rigspec`, which the server
+deleted, and a verb kept only to fail would be a deprecation shim. What it did for a NEW room - link the
+provider's env file, write the room's seat files - now comes from the room's own definition and the
+launcher: `4genteam up ROOM --team DIR`. See the CHANGELOG entry for the operator's sentence.
 
 Seats run unattended with the bypass policy: only launch them in a project whose commit and deny rules
 you accept.
@@ -321,8 +318,8 @@ what it is scoped to.
 
 ### The skills for the LLM that runs the client
 
-`skills/client/` is read by the LLM that operates `4genteam` and the rig, not by a seat, so `sync room`
-never delivers it:
+`skills/client/` is read by the LLM that operates `4genteam` and the rig, not by a seat, so a seat's
+delivery never installs it:
 
 | Skill | Use it to |
 |---|---|
@@ -336,23 +333,23 @@ never delivers it:
 ### Using this tree from another project
 
 This tree is the one source of skills. A project does not keep its own copy.
-- **Seats:** `4genteam sync room` delivers `share/` and the room's skills into each seat. A seat gets nothing from a project-local skills folder.
+- **Seats:** a seat's restart delivers `share/` and the room's skills into it (`4genteam seat reseat ROOM --seat NAME`, or the relaunch a reseat performs). A seat gets nothing from a project-local skills folder.
 - **An LLM outside a seat** (your own session, an operator): copy or link the `skills/client/` folders it needs into the path its runtime reads, or point it at this directory.
-- **Tell the project's agents:** add one line to the project's `AGENTS.md`, for example: `Project skills: <path to this repository>/skills/ (share/ and rooms/<room>/ are delivered to seats by 4genteam sync room; client/ is for the LLM running the client)`.
+- **Tell the project's agents:** add one line to the project's `AGENTS.md`, for example: `Project skills: <path to this repository>/skills/ (share/ and rooms/<room>/ reach a seat when its restart delivers them; client/ is for the LLM running the client)`.
 
 ## Failure map
 
 | Message or symptom | Cause | Action |
 |---|---|---|
 | `AGENTHUB_URL and AGENTHUB_TOKEN must be set (in the environment or the client's env file)`, or `AGENTHUB_URL is not set` / `AGENTHUB_TOKEN is not set` from a verb that talks to the server | no credential configured | set both in `~/.config/4genthub/.env` |
-| `a ROOM is required` | the verb needs a room and none was given | pass the room: `4genteam seat status ROOM` |
+| `a ROOM is required` | the verb needs a room and none was given | pass the room: `4genteam seat reseat ROOM --seat NAME` |
 | `error: team apply: --team DIR is required (the directory that holds team.json)` | no default team exists | pass the team directory |
 | `error: team publish-skills: --inventory FILE is required (the skill library inventory JSON)` | no default inventory exists | pass the inventory file |
-| `the room has a provider/model seat and … does not exist: omp reads the key from the launch directory's .env` | this client's env file is missing, so the room's `.env` has nothing to link to | create `~/.config/4genthub/.env`, then run `sync room` again |
-| `the client's skill tree is not at … (no share/ directory)` | `sync room` writes the skills this client owns into each seat, and could not find that tree | pass `--skills-root DIR`, or set `AGENTHUB_CLIENT_SKILLS` to a tree that holds `share/` |
+| `the room has a provider/model seat and … does not exist: omp reads the key from the launch directory's .env` | this client's env file is missing, so the room's `.env` has nothing to link to | create `~/.config/4genthub/.env`, then rebuild the room with `4genteam up ROOM --team DIR` |
+| `the client's skill tree is not at … (no share/ directory)` | a seat's restart delivers this client's own skills into it (`seat reseat`, or a relaunch), and the tree was not found | pass `--skills-root DIR`, or set `AGENTHUB_CLIENT_SKILLS` to a tree that holds `share/` |
 | `seatcheck does not resolve to … on PATH` | the seat checker is not where the seats will look for it | run `4genteam sync install-checker --go-dir .` and put that directory on `PATH` |
-| a seat's working directory shows `(deleted)` | the room was built by an older client | run `sync room`, then relaunch the seat |
-| a seat waits at an approval prompt | the room was not synced by this client | run `sync room` and `rig up` again |
+| a seat's working directory shows `(deleted)` | the room was built by an older client | rebuild the room with `4genteam up ROOM --team DIR`, then relaunch the seat |
+| a seat waits at an approval prompt | the room was not materialized by this client | rebuild the room with `4genteam up ROOM --team DIR` |
 | `… is not a symlink: refusing to replace a file this client did not create` | a real `.env` sits in the room directory | move it aside or point it at the key file |
 | a supervisor is still running after `4genteam stop ROOM` | `stop` and `status` find one by the argv fragment `compact-run --room ROOM`, and this one was started by an older client whose argv does not carry it | stop it where it was started, and do not run `4genteam compact ROOM` beside it, which would start a second supervisor for that room |
 | the supervisor never compacts | the runtime reports no context size | give those seats a short-session rule instead |

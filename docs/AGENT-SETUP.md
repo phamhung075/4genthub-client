@@ -113,7 +113,7 @@ fix: ask for a key, and never paste one into a message.
 | `403 Not authenticated` from `<SERVER-URL>` or the MCP endpoint | no bearer token reached the server | ask the user for a key; never paste one into a message |
 | `401 Invalid authentication credentials` | a token arrived and is invalid or expired | ask the user for a new key; nothing else in the client or `.mcp.json` needs to change |
 | `4genteam doctor` reports a safeguard row that is not running | the runtime daemon or that safeguard is stopped | `4genteam up <RIG> --team <DIR>`; `doctor` itself is read-only and starts nothing |
-| `4genteam ps <RIG> --nodes` shows no seat for the room | the room was never materialized on this machine | `4genteam sync room <ROOM>`, then `4genteam up <RIG> --team <DIR>` (step 2.5) |
+| `4genteam ps <RIG> --nodes` shows no seat for the room | the room was never materialized on this machine | `4genteam up <RIG> --team <DIR>` (step 2.5) |
 | the watch view does not open | herdr or tmux is missing | `herdr --version`, `tmux -V`; stop and tell the user |
 | `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `4genteam up`, `compact`, `continue`, `watchdog` or `sync respawn` | the room holds a seat on a `deepseek/` model, and `OFFPEAK_ONLY` is on (the default) so the client will not start or resume it inside a peak window (01:00-04:00 and 06:00-10:00 UTC, Monday-Friday) | not a fault. Start it at the peak rate with `--allow-peak`, or `4genteam offpeak set off` to allow it from now on, or wait for the off-peak instant the message names. `4genteam offpeak` reports the state, `4genteam offpeak status` the setting |
 | a seat exits at once after launch | its runtime is not installed, or its runtime and model disagree | read the seat's log and report the missing piece to the user; do not switch the model to make it start |
@@ -228,8 +228,9 @@ without one is a seat folder.** So `skills/rooms/<room>/<name>` is a room-level 
 `SKILL.md` and the seat folder `<name>` when it does not. A shared or client skill stays generic — no
 rig, seat, host or personal path in it.
 
-**The client also delivers this tree itself.** `4genteam sync room ROOM` is the step that writes each
-seat's agent directory, so it is also the step that gives a seat the skills it resolves to: it copies
+**The client also delivers this tree itself.** A seat's restart (`4genteam seat reseat`, or the relaunch it
+performs) is the step that writes that seat's agent directory, so it is also the step that gives the seat
+the skills it resolves to: it copies
 them into that seat's skills path (`<out>/<room>/rig/agents/<seat>/skills/<skill>/`) and declares the
 ids in that seat's `agent.yaml` — `resources.skills[]` and each profile's `uses.skills` — because the
 declaration is what the runtime loads from, exactly as below. The tree is found at `--skills-root`,
@@ -334,7 +335,6 @@ The cloud now knows the room; this machine has no seats yet. Ask the user which 
 use (the room name by default), then:
 
 ```bash
-4genteam sync room <ROOM>         # writes the room's definition and the seat files
 4genteam up <RIG> --team <DIR>   # launches daemon, seats, supervisor, bridge and watch wall
 4genteam ps <RIG> --nodes        # one row per seat of the room, with its lifecycle and activity
 ```
@@ -354,9 +354,6 @@ room with no such seat, or an unreadable room, is never refused. See
 
 To watch the room work — the seat grid and the lead's own window — see
 [docs/WATCH.md](WATCH.md).
-
-`sync room` refuses to replace a real `.env` that sits in the room directory — it names the path
-instead. That file is not this client's to overwrite; show the path to the user.
 
 ### 2.6 Brief the lead
 
@@ -390,8 +387,8 @@ direction gets its own link.
 ]
 ```
 
-Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam sync room <ROOM>`,
-`4genteam up <RIG> --team <DIR>`, `4genteam ps <RIG> --nodes`, and the brief
+Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam up <RIG> --team <DIR>`
+(2.5), `4genteam ps <RIG> --nodes`, and the brief
 to the lead (2.6).
 
 ### 2.8 The questions, in the order to ask them

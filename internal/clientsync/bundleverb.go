@@ -187,9 +187,9 @@ func bundleCreate(parsed bundleArgs, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stderr,
 			"warning: %d seat(s) in this bundle have no usable pinned policy, so a seat launched from it "+
-				"offline cannot decide or audit and an offline install will refuse it - %s. Build the rig "+
-				"root with `4genteam sync room <room>`, which materializes each seat's policy.json into its "+
-				"agent directory.\n",
+				"offline cannot decide or audit and an offline install will refuse it - %s. The rig root "+
+				"must carry each seat's policy.json in its agent directory (the client's `sync room` verb "+
+				"wrote it until 2026-10-15, when the cloud route it read was deleted).\n",
 			len(missing), strings.Join(details, "; "))
 	}
 	fmt.Fprintln(stdout, bundlePath)

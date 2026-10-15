@@ -5,13 +5,13 @@ description: Switch ONE seat of a team rig to another runtime/LLM (e.g. architec
 
 # Switch one seat's runtime / LLM
 
-Nothing changes a *running* seat's runtime in place: the predecessor CLI's `launch` and `remove` acted on a node without changing one, and editing a spec never touched a live seat. `4genteam` says the same of itself — `4genteam sync switch` prints no sequence that completes a runtime change, and names only the two steps that exist (`4genteam sync room <room> --update`, `4genteam seat reseat <rig> --seat <name>`). Example: an architect seat moved from `claude-code`/`opus` to `omp`/`deepseek/deepseek-flash` — a definition change plus a restart.
+Nothing changes a *running* seat's runtime in place: the predecessor CLI's `launch` and `remove` acted on a node without changing one, and editing a spec never touched a live seat. `4genteam` says the same of itself — `4genteam sync switch` prints no sequence that completes a runtime change, and names only the two things that exist (the room's definition and each seat's files are written by the launcher, `4genteam up <room> --team <dir>`; `4genteam seat reseat <rig> --seat <name>` stops and restarts a seat so it loads the configuration it now has). Example: an architect seat moved from `claude-code`/`opus` to `omp`/`deepseek/deepseek-flash` — a definition change plus a restart.
 
 ## Which `rig`: `4genteam`, and what it can and cannot do
 
 `4genteam` is this client's own binary: it answers no `rig` verb, and its `stop` is machine-wide, not a room teardown. **It cannot switch a runtime in place, and it prints no sequence that completes the switch** — `4genteam sync switch` says exactly that and names the two steps that do exist:
 
-- `4genteam sync room <room> --update` writes the room's definition and each seat's pinned snapshot.
+- The room's definition and its seats' files are written by the launcher: `4genteam up <room> --team <dir>`. (The client's `sync room` verb rewrote them from the cloud's rigspec until 2026-10-15, when the route behind it was deleted - see the client CHANGELOG.)
 - `4genteam seat reseat <rig> --seat <name>` stops and restarts a seat so it loads the configuration it now has.
 
 Neither runs inside `sync switch` (both write, and a restart is peak-gated for a DeepSeek seat), and **whether a restart carries a changed RUNTIME is not established**. The switch is the owner's call.
@@ -37,7 +37,7 @@ A room-wide rebuild kills **every** seat in the room, not just the one switching
 
 ## Steps
 
-`<room>` is the room's slug and `<rig>` its rig name — the same string in this layout. Its definition is `~/.config/4genthub/rooms/<room>/spec.json`, written by `4genteam sync room <room> --update`.
+`<room>` is the room's slug and `<rig>` its rig name — the same string in this layout. Its definition is `~/.config/4genthub/rooms/<room>/spec.json`, written by the launcher (`4genteam up <room> --team <dir>`).
 
 1. **Record the change in cloud, once per seat.** The cloud is the authority on the occupant, and the verb prints what it did not apply:
    ```bash
@@ -50,10 +50,9 @@ A room-wide rebuild kills **every** seat in the room, not just the one switching
    tmux set-environment -g DEEPSEEK_API_KEY <key>                             # for the seats' panes
    ```
    **Pitfall seen live:** a launch environment that lacked the key left omp seats on `runtime_error: No API key found for deepseek`, and the send verb refused with "interactive prompt (runtime_error)".
-3. **Read both sides**: `4genteam room status <room>` prints one line per seat (SEAT RUNTIME STATE SESSION) as the runtime sees it, and `4genteam sync room <room> --update` writes the definition the seats will load. This client has no dry-run verb for a definition change — these two reads are what makes a disagreement visible before a seat is touched.
+3. **Read both sides**: `4genteam room status <room>` prints one line per seat (SEAT RUNTIME STATE SESSION) as the runtime sees it, and the definition the seats will load is written by the launcher (`4genteam up <room> --team <dir>`). This client has no dry-run verb for a definition change — these two reads are what makes a disagreement visible before a seat is touched.
 4. **Switch** (after the owner's yes) — the two native steps, and nothing that stops the machine's safeguards:
    ```bash
-   4genteam sync room <room> --update                          # the definition the seats will load
    4genteam seat reseat <rig> --seat <seat> [--allow-peak]     # stop and restart that one seat, once it is quiet
    ```
    `seat reseat` waits for the seat to be quiet; `--force` skips that wait and a seat mid-turn loses the turn. **Whether the restart carries a changed RUNTIME is not established — measure it (step 5)** rather than assuming it. If the room is not running at all, `4genteam up <rig> --team <the room's team dir>` starts it (`--team DIR` is required), and `4genteam continue <rig>` restores a stopped room and briefs its seats.
@@ -73,7 +72,7 @@ A room-wide rebuild kills **every** seat in the room, not just the one switching
 
 ## Switching back after the reset
 
-Repeat with the original runtime and model through the same three verbs: `4genteam sync switch` records it, `4genteam sync room --update` writes the definition, `4genteam seat reseat` loads it. The seat's state lives in the handover files and the queue, not in the session.
+Repeat with the original runtime and model through the same steps: `4genteam sync switch` records it, the launcher (`4genteam up <room> --team <dir>`) writes the definition, and `4genteam seat reseat` loads it. The seat's state lives in the handover files and the queue, not in the session.
 
 ## Relaying to a seat that refuses (`interactive prompt`)
 

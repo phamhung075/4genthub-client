@@ -258,8 +258,9 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 		fmt.Fprintf(stderr,
 			"runtime changed: the rig orchestrator cannot switch a runtime in place, and this client prints no "+
 				"sequence that completes the switch (it has none that can be run):\n"+
-				"  4genteam sync room %s --update writes the room's definition and each seat's pinned "+
-				"snapshot.\n"+
+				"  the room's definition and each seat's files are written by the launcher "+
+				"(`4genteam up %s --team <dir>`); the `sync room` verb that rewrote them from the "+
+				"cloud is gone (2026-10-15).\n"+
 				"  4genteam seat reseat <rig> --seat <name> stops and restarts a seat so it loads the "+
 				"configuration it now has.\n"+
 				"  Neither is run here (both write; a restart is peak-gated for a deepseek seat), and "+

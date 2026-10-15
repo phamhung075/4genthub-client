@@ -48,10 +48,13 @@ func TestAPendingVerbAnswersHelpToo(t *testing.T) {
 }
 
 // TestPortedVerbsRefuseOnTheEnvironment is the OTHER half of the test above, and it replaces the entries
-// that sat inside it: `sync status` stopped being unported in 64f8ecde and `sync pull` in the pull commit,
-// so the property to pin is no longer the porting note but the failure a ported verb gives when the
-// platform is not configured - the same one the binary was smoked against: exit 2 and the variable's
-// name, with nothing on stdout.
+// that sat inside it: `sync pull` stopped being unported in the pull commit, so the property to pin is no
+// longer the porting note but the failure a ported verb gives when the platform is not configured - the
+// same one the binary was smoked against: exit 2 and the variable's name, with nothing on stdout.
+//
+// `sync status` SAT IN THIS TABLE until 2026-10-15 and is gone with the rigspec route it compared against;
+// the row went with the verb rather than being re-pointed, because the property under test is "a ported
+// verb names the missing environment" and a verb that no longer exists has nothing to say.
 //
 // It stays in the exit-code-and-message shape rather than being loosened to "some error", because the
 // code is the part a caller scripts against and the message is the part an operator acts on.
@@ -59,7 +62,6 @@ func TestPortedVerbsRefuseOnTheEnvironment(t *testing.T) {
 	t.Setenv("AGENTHUB_URL", "")
 	t.Setenv("AGENTHUB_TOKEN", "")
 	for _, args := range [][]string{
-		{"sync", "status", "4genthub-dev"},
 		{"sync", "pull", "4genthub-dev", "alpha"},
 	} {
 		var out, errOut bytes.Buffer

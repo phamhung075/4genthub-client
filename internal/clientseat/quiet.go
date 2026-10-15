@@ -1,171 +1,18 @@
-// The adopting half of `seat`: sync, watch, the quiet wait and the relaunch.
+// The wait and the restart a reseat needs: the quiet wait over a seat's own activity, the activity
+// readers it uses, and the relaunch. It was `sync.go`, and the adopting half (`seat sync`, `seat watch`)
+// went with the rigspec route it adopted from - see the package doc for the sentence an operator gets.
 package clientseat
 
 import (
 	"fmt"
-	"io"
 	"math"
 	"os"
-	"os/exec"
-	"os/signal"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
-	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
-
-// SyncRigArgs is the adopt step's command: THIS binary's own `sync room`, so the pinning rules (never
-// fall back to another snapshot; a missing pin is an error) stay in one place. The Python called
-// `python -m agenthub_client.seat_sync room ROOM --out OUT --update`.
-func SyncRigArgs(self, room, out string) []string {
-	return []string{self, "sync", "room", room, "--out", out, "--update"}
-}
-
-// syncDeps is everything sync_once touches outside the two reads: the adopt step, the quiet wait, the
-// relaunch, and the log. Each is a field so the suite drives sync with no rig, no cloud and no waiting.
-type syncDeps struct {
-	src        source
-	runSyncRig func(room, out string) error
-	waitQuiet  func(rig, seat string) bool
-	relaunch   func(rig, seat string) error
-	logf       func(format string, args ...any)
-}
-
-func defaultSyncDeps(stateRoot string) *syncDeps {
-	return &syncDeps{
-		src:        cloudSource{},
-		runSyncRig: runSyncRigCommand,
-		waitQuiet:  func(rig, seat string) bool { return NewQuietWaiter(stateRoot).Wait(rig, seat) },
-		relaunch:   relaunch,
-		logf:       logLine,
-	}
-}
-
-func runSync(args []string, stdout, stderr io.Writer) int {
-	parsed, code, ok := parseOptions("sync", args, true, false, stdout, stderr)
-	if !ok {
-		return code
-	}
-	stateRoot, err := clientenv.ResolveStateRoot("")
-	if err != nil {
-		return report(stderr, err)
-	}
-	exitCode, err := syncOnce(parsed, defaultSyncDeps(stateRoot))
-	if err != nil {
-		return report(stderr, err)
-	}
-	return exitCode
-}
-
-func runWatch(args []string, stdout, stderr io.Writer) int {
-	parsed, code, ok := parseOptions("watch", args, true, true, stdout, stderr)
-	if !ok {
-		return code
-	}
-	stateRoot, err := clientenv.ResolveStateRoot("")
-	if err != nil {
-		return report(stderr, err)
-	}
-	deps := defaultSyncDeps(stateRoot)
-	logLine("watching %s every %ds; Ctrl-C to stop", parsed.room, parsed.interval)
-	interrupted := make(chan os.Signal, 1)
-	signal.Notify(interrupted, os.Interrupt)
-	for {
-		if _, err := syncOnce(parsed, deps); err != nil {
-			// Keep watching: the next pass retries from a clean read.
-			logLine("FAILED: %v", err)
-		}
-		select {
-		case <-interrupted:
-			return clientcmd.ExitOK
-		case <-time.After(time.Duration(parsed.interval) * time.Second):
-		}
-	}
-}
-
-// syncOnce adopts every behind seat and, when asked, restarts the ones that changed. It returns the
-// exit code and, for a failure the caller should print, an error - the Python's ClientError, whose code
-// decides the exit.
-func syncOnce(parsed options, deps *syncDeps) (int, error) {
-	out := expand(parsed.out)
-	rig := parsed.rigName()
-	cloud, err := deps.src.CloudHashes(parsed.room)
-	if err != nil {
-		return 0, err
-	}
-	cloud = seatsFiltered(cloud, parsed.seats)
-	pins, err := pinnedHashes(deps.src, out, parsed.room, cloud)
-	if err != nil {
-		return 0, err
-	}
-	behind := SeatsBehind(cloud, pins)
-	if len(behind) == 0 {
-		deps.logf("%s: all %d seats in sync", parsed.room, len(cloud))
-		return clientcmd.ExitOK, nil
-	}
-	deps.logf("%s: behind: %s", parsed.room, strings.Join(behind, ", "))
-	if err := deps.runSyncRig(parsed.room, out); err != nil {
-		return 0, &clientcmd.CodedError{
-			Message: fmt.Sprintf("4genteam sync room failed: %v", err),
-			Code:    ExitFailed,
-		}
-	}
-	after, err := pinnedHashes(deps.src, out, parsed.room, cloud)
-	if err != nil {
-		return 0, err
-	}
-	if still := SeatsBehind(cloud, after); len(still) > 0 {
-		return 0, &clientcmd.CodedError{
-			Message: fmt.Sprintf("adopted nothing for: %s (pin did not move to the cloud hash)", strings.Join(still, ", ")),
-			Code:    ExitFailed,
-		}
-	}
-	deps.logf("adopted the newer snapshot for: %s", strings.Join(behind, ", "))
-	if parsed.relaunch == "none" {
-		deps.logf("running seats keep what they loaded; the change applies at each seat's next launch")
-		return clientcmd.ExitOK, nil
-	}
-	failed := 0
-	for _, seat := range behind {
-		if !deps.waitQuiet(rig, seat) {
-			deps.logf("%s: not quiet within %d minutes, left running with the old snapshot",
-				seat, int(quietWaitSeconds/60))
-			failed++
-			continue
-		}
-		if err := deps.relaunch(rig, seat); err != nil {
-			return 0, err
-		}
-		deps.logf("%s: relaunched on the new snapshot", seat)
-	}
-	if failed > 0 {
-		return ExitFailed, nil
-	}
-	return clientcmd.ExitOK, nil
-}
-
-func runSyncRigCommand(room, out string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	args := SyncRigArgs(self, room, out)
-	done, err := exec.Command(args[0], args[1:]...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%s", truncate(strings.TrimSpace(string(done)), 300))
-	}
-	return nil
-}
-
-func truncate(text string, limit int) string {
-	if len(text) > limit {
-		return text[:limit]
-	}
-	return text
-}
 
 // QuietWaiter is wait_until_quiet: true once the seat is not running and its session has been still for
 // QuietSeconds, twice in a row. Every read is a field, so the suite needs no rig and no clock.
@@ -346,7 +193,7 @@ func relaunch(rig, seat string) error {
 	return nil
 }
 
-// logf writes a timed line. It is a variable so a test can silence it.
+// logLine writes a timed line. It is a variable so a test can silence it.
 var logLine = func(format string, args ...any) {
 	fmt.Fprintf(os.Stdout, "%s %s\n", time.Now().Format("15:04:05"), fmt.Sprintf(format, args...))
 }

@@ -1,6 +1,6 @@
-// The pinned-snapshot reader. A seat's snapshot is pinned by hash, and `sync status` compares that pin
-// with the hash the cloud would serve now, so this file is the local half of the one comparison the
-// whole client exists for.
+// The pinned-snapshot reader. A seat's snapshot is pinned by hash; the comparison against the hash
+// the cloud would serve now lived in the removed `sync status` verb, and the readers that are left
+// here - `sync pull` and `sync bundle` - are what resolve the pin.
 package clientsync
 
 import (

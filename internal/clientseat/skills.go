@@ -26,7 +26,7 @@ func deliverSkills(store, stateRoot, rig, seat string) error {
 	source := filepath.Join(store, rig, "rig", "agents", seat, "skills")
 	if info, err := os.Stat(source); err != nil || !info.IsDir() {
 		return &clientcmd.CodedError{
-			Message: fmt.Sprintf("seat %s has no skills to deliver: %s is missing; run `4genteam sync room %s` first", seat, source, rig),
+			Message: fmt.Sprintf("seat %s has no skills to deliver: %s is missing (the client's `sync room` verb wrote it until 2026-10-15, when the cloud route it read was deleted)", seat, source),
 			Code:    ExitFailed,
 		}
 	}

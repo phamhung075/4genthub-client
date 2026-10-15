@@ -1,4 +1,4 @@
-// Package clientsync is the sync half of 4genteam: pull, rig, bundle, switch, status and watch,
+// Package clientsync is the sync half of 4genteam: pull, messages, bundle, switch and the install verbs,
 // ported test-for-test from the Python test now at agenthub_client/tests/test_seat_sync.py (it lived at
 // the retired Python seat_sync test until 2026-10-09, when the scripts left the tree, and at
 // agenthub_main/src/tests/scripts/ until 2026-10-08).
@@ -25,13 +25,18 @@ func Commands() []clientcmd.Command {
 
 // syncVerbs are the verbs this group answers under `sync`, and EVERY one of them is implemented here:
 // the list exists so `--help` can name them, not as a promise this build cannot keep. It carries every
-// verb Python's argparse registers (pull, rig, bundle, offline-install, respawn, install-checker,
-// switch) plus the four this client's own contract adds (status, messages, connector, and the
-// pull-deliver loop those two share). Python never registered a `watch` under sync - its watch is the
-// top-level view of a room - so no such verb is declared here either.
+// verb Python's argparse registers that still has a surface in this client (pull, bundle, offline-install,
+// respawn, install-checker, switch) plus the three this client's own contract adds (messages, connector,
+// and the pull-deliver loop those two share). Python never registered a `watch` under sync - its watch is
+// the top-level view of a room - so no such verb is declared here either.
+//
+// `status` AND `room` ARE NOT HERE, and their absence is the point: both compared or materialized a seat's
+// snapshot against `GET /api/v2/rooms/{room}/rigspec`, which the server deleted (cbc51bae). A verb kept to
+// print an error would be a deprecation shim, so they are gone - see the CHANGELOG entry that carries the
+// same sentence for an operator.
 var syncVerbs = []string{
-	"status", "pull", "messages", "connector",
-	"room", "bundle", "switch",
+	"pull", "messages", "connector",
+	"bundle", "switch",
 	"install-checker", "offline-install", "respawn",
 }
 
@@ -51,13 +56,10 @@ func (syncCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		printUsage(stdout)
 		return clientcmd.ExitOK
 	}
-	// status, pull and connector are ported: status compares each seat's local pin with the cloud's
-	// hash, pull writes the snapshot and moves the pin, and connector reports one local session.
-	// messages is the other direction of the same path pull uses: it takes the text a window addressed
-	// to a seat and types it into that seat's session here, where the terminal actually is.
+	// pull and connector are ported: pull writes the snapshot and moves the pin, and connector reports one
+	// local session. messages is the other direction of the same path pull uses: it takes the text a window
+	// addressed to a seat and types it into that seat's session here, where the terminal actually is.
 	switch args[0] {
-	case "status":
-		return RunStatusVerb(ctx, args[1:], stdout, stderr)
 	case "pull":
 		return RunPullVerb(ctx, args[1:], stdout, stderr)
 	case "messages":
@@ -74,8 +76,6 @@ func (syncCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		return RunBundleVerb(ctx, args[1:], stdout, stderr)
 	case "switch":
 		return RunSwitchVerb(ctx, args[1:], stdout, stderr)
-	case "room":
-		return RunRigVerb(ctx, args[1:], stdout, stderr)
 	}
 	// Every verb this group declares has a case above, so a name that reaches here is not a verb of
 	// this client at all: a usage error, not a promise this build cannot keep. TestEveryDeclaredVerb-
@@ -102,7 +102,7 @@ func printUsage(w io.Writer) {
 	for _, verb := range syncVerbs {
 		_, _ = io.WriteString(w, "  "+verb+"\n")
 	}
-	_, _ = io.WriteString(w, "\nstatus, pull and messages read the cloud and the local pins; rig materializes a room's seats;\n"+
+	_, _ = io.WriteString(w, "\npull and messages read the cloud and the local pins;\n"+
 		"bundle, switch, respawn, offline-install and install-checker move or manage what was pulled.\n"+
 		"Every verb this group declares is implemented here. A verb that is not declared is a usage error,\n"+
 		"never a promise this build cannot keep.\n")

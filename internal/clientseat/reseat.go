@@ -1,9 +1,9 @@
-// `seat reseat` and `send`: the two lifecycle steps `seat sync` could not do on its own.
+// `seat reseat` and `send`: the two lifecycle steps the removed `seat sync` could not do on its own.
 //
-// `seat sync --relaunch quiet` restarts only the seats whose snapshot changed. A seat that holds an old
-// skill, an old cwd or an old guide while its pin is already current is "in sync" and is never restarted.
-// `seat reseat` restarts the named seats at their own quiet point, whatever their pin says, through the
-// same quiet wait and relaunch that `seat sync` uses.
+// The removed `seat sync --relaunch quiet` restarted only the seats whose snapshot changed, so a seat
+// holding an old skill, an old cwd or an old guide while its pin was already current counted as "in
+// sync" and was never restarted. `seat reseat` restarts the named seats at their own quiet point,
+// whatever their pin says, through the same quiet wait and relaunch the removed verb used.
 package clientseat
 
 import (

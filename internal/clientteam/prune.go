@@ -8,7 +8,7 @@ import (
 
 // runPrune is `team prune`: delete the seats a room holds that team.json does not define. apply only
 // creates, so a seat removed from team.json would otherwise stay in the room and keep appearing in
-// the rigspec that `sync room` builds.
+// the room's definition.
 func runPrune(args []string, stdout, stderr io.Writer) error {
 	const usage = `usage: 4genteam team prune --team DIR [--dry-run]
 

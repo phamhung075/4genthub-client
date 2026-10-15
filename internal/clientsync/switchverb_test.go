@@ -186,8 +186,8 @@ func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsTheLimit(t *testing.T) {
 	if strings.Contains(errOut, "rig down") || strings.Contains(errOut, "rig up") {
 		t.Errorf("stderr = %q, want no rig CLI lifecycle verb in the notice", errOut)
 	}
-	if !strings.Contains(errOut, "4genteam sync room room1 --update") {
-		t.Errorf("stderr = %q, want the client's own read of the room's definition", errOut)
+	if !strings.Contains(errOut, "4genteam up room1 --team") {
+		t.Errorf("stderr = %q, want the client's own pointer to the room's definition", errOut)
 	}
 	if want := "switched:room1/seat1 runtime=codex model=old-model applied=manual\n"; out != want {
 		t.Errorf("stdout = %q, want %q", out, want)
@@ -258,7 +258,7 @@ func TestSwitchRuntimeChangePrintsTheLimitAndSkipsTheSeat(t *testing.T) {
 	if len(stub.calls) != 0 {
 		t.Errorf("a runtime change touched a seat: %v", stub.calls)
 	}
-	for _, want := range []string{"4genteam sync room room1 --update", "4genteam seat reseat", "owner's call"} {
+	for _, want := range []string{"4genteam up room1 --team", "4genteam seat reseat", "owner's call"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("stderr does not say %q:\n%s", want, errOut)
 		}

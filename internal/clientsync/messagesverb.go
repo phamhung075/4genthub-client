@@ -24,7 +24,7 @@
 // one pass over every seat, writes a heartbeat per pass, and never exits on a transient failure: the
 // next pass retries whatever the cloud, the rig or one seat's session refused.
 //
-// The transport is the package's own RequestJSON (rigspec.go), so this verb reports the cloud's
+// The transport is the package's own RequestJSON (cloud.go), so this verb reports the cloud's
 // refusals in the shape every other verb here does rather than in one of its own.
 package clientsync
 
