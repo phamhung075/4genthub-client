@@ -375,7 +375,9 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                         if let Some(err) = &error_text {
                             mirror(&format!("ERROR rpc: {err}"));
                         }
-                        if failed {
+                        if failed && is_compact_reply(id) {
+                            mirror("compact refused; no turn is affected, the seat keeps its state");
+                        } else if failed {
                             if let Some(err) = error_text {
                                 let has_pending = pending_reader.lock().is_some();
                                 if !is_our_prompt && has_pending && !turn_active {
@@ -978,6 +980,19 @@ fn gc_after_spill(state_dir: &Path, target: &RunnerTarget, sent: &frame::Sent) -
     Ok(())
 }
 
+/// The id prefix of a compaction frame relayed to a seat. Its reply is not a turn: an agent with nothing yet
+/// to compact answers `Nothing to compact (session too small)`, and that must not read as a refused turn.
+const COMPACT_ID_PREFIX: &str = "forcecompact-";
+
+/// Whether a response id belongs to a compaction frame this runner relayed.
+///
+/// A `compact` is fire-and-forget (`request_compact` sends it with no `replyTo`), so its reply answers a
+/// *request* and can never be a turn's outcome, whatever it says — including a transport error, which the
+/// ladder would otherwise refuse as "a retryable failure with no turn to resume" and block the seat for.
+pub fn is_compact_reply(id: &str) -> bool {
+    id.starts_with(COMPACT_ID_PREFIX)
+}
+
 /// Ask a running seat's runner to relay a compaction frame to its agent.
 ///
 /// This is what replaces the `pidfd_getfd` theft: the daemon writes one JSON line into the seat's
@@ -985,7 +1000,7 @@ fn gc_after_spill(state_dir: &Path, target: &RunnerTarget, sent: &frame::Sent) -
 /// runner is a refusal naming the seat, not a silent success.
 pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<String, String> {
     let target = target_from_session(session_or_target)?;
-    let id = format!("forcecompact-{}", std::process::id());
+    let id = format!("{COMPACT_ID_PREFIX}{}", std::process::id());
     // Fire-and-forget, which is what compact's callers already had: no `replyTo`, so the relay is a write
     // into the seat's mailbox and nothing more. It goes through the same sender the daemon uses for anything
     // else it has to say to a seat, so the fallback exit cannot drift into a second copy of it.
@@ -1072,7 +1087,22 @@ pub enum Failure {
     Retryable(&'static str),
     /// The turn ended on something a retry cannot fix; a human or another seat must look.
     Terminal(&'static str),
+    /// The agent declined a *request*, and no turn died: nothing is published and nothing is re-sent.
+    ///
+    /// Measured (2026-10-14, live room `4genthub-min`): a `compact` relayed to a seat with no turns yet is
+    /// answered `Nothing to compact (session too small)`. Read as a refused turn it published `blocked`,
+    /// and because the nudge loop wakes only `idle` seats, go-dev, fe-dev and reviewer were never handed a
+    /// row — a healthy seat, killed by its own health report.
+    Noop(&'static str),
 }
+
+/// The measured refusals that are NOT failures of a turn: omp's own answer when asked to compact a session
+/// with nothing in it yet. Both halves of the message omp actually sends — `Nothing to compact (session
+/// too small)` — are here, so a reworded half cannot quietly become a refused turn again.
+pub const NOOP_SIGNATURES: [(&str, &str); 2] = [
+    ("Nothing to compact", "omp has nothing to compact yet"),
+    ("session too small", "the session is too small to compact"),
+];
 
 /// The measured signatures of a transport/provider failure (`FINDING-omp-runner-death-pattern`, and the
 /// scout's map of `pi-runner.js`): these two are omp's own rpc errors, the third is its socket close.
@@ -1088,6 +1118,15 @@ pub const RETRYABLE_SIGNATURES: [(&str, &str); 8] = [
 ];
 
 pub fn classify_failure(error: &str) -> Failure {
+    // A refusal to do something that was itself optional is not a dead turn, and is checked first: it must
+    // never reach the ladder that publishes `blocked`. A response that carried no id this runner knows is
+    // the measured shape — `is_compact_reply` catches the replies that do carry one, and this catches the
+    // ones omp answers without it.
+    for (needle, label) in NOOP_SIGNATURES {
+        if error.contains(needle) {
+            return Failure::Noop(label);
+        }
+    }
     for (needle, label) in RETRYABLE_SIGNATURES {
         if error.contains(needle) {
             return Failure::Retryable(label);
@@ -1324,6 +1363,8 @@ pub fn write_state(state_path: &Path, state: &str, classification: &str, attempt
 /// The refusal is terminal and the turn is live, so neither of the arms above is honest — resuming would
 /// double the work the live turn is doing, and `Nothing` is the arm that loses the text. It is held for the
 /// next turn instead, and the state file says so while it waits.
+///
+/// A no-op refusal publishes nothing at all — there was no turn to lose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Resume {
     Nothing(&'static str),
@@ -1360,6 +1401,9 @@ pub fn decide_resume(
     }
     match classify_failure(error) {
         Failure::Terminal(label) => Resume::Blocked(label),
+        // A declined request, not a dead turn: nothing to resume and nothing to publish — the seat keeps
+        // the state it had, which for a fresh seat is `idle`, so the nudge loop can still wake it.
+        Failure::Noop(label) => Resume::Nothing(label),
         Failure::Retryable(label) => {
             if !ours {
                 // Nothing to re-send, and a seat that is not running must not read as healthy: blocked,
@@ -1756,11 +1800,54 @@ mod tests {
             match classify_failure(error) {
                 Failure::Retryable(what) => assert_eq!(what, label, "{error}"),
                 Failure::Terminal(what) => panic!("{error} classified terminal ({what})"),
+                Failure::Noop(what) => panic!("{error} classified a no-op ({what})"),
             }
         }
         match classify_failure("unknown tool 'nope'") {
             Failure::Terminal(what) => assert!(what.contains("refused"), "{what}"),
             Failure::Retryable(what) => panic!("a refused turn is not retryable ({what})"),
+            Failure::Noop(what) => panic!("a refused turn is not a no-op ({what})"),
+        }
+    }
+
+    /// A compact reply carries the compact frame's id and is never a turn, whatever it says — so the caller
+    /// must be able to tell it from a prompt's or a resume's reply by the id alone.
+    #[test]
+    fn a_compact_reply_is_told_from_a_turn_by_its_id() {
+        let compact = format!("{COMPACT_ID_PREFIX}{}", std::process::id());
+        assert!(is_compact_reply(&compact), "{compact}");
+        assert!(!is_compact_reply("runner-resume-1-1"));
+        assert!(!is_compact_reply("runner-get-state"));
+        // The measured correlation gap: a response whose id this runner does not recognise arrives as "?".
+        // It must NOT be read as a compact reply — the message table below is what saves that case.
+        assert!(!is_compact_reply("?"));
+    }
+
+    /// The R2 defect, at the classifier: omp refuses to compact a seat that has no turns yet, and that
+    /// refusal was read as a refused turn — so a healthy seat was published `blocked` at first start and,
+    /// because the nudge loop wakes only `idle` seats, was never handed its queue rows.
+    #[test]
+    fn a_compact_refusal_with_nothing_to_compact_is_a_no_op() {
+        for (error, label) in [
+            (
+                "Nothing to compact (session too small)",
+                "omp has nothing to compact yet",
+            ),
+            ("Nothing to compact", "omp has nothing to compact yet"),
+            ("session too small", "the session is too small to compact"),
+        ] {
+            match classify_failure(error) {
+                Failure::Noop(what) => assert_eq!(what, label, "{error}"),
+                Failure::Terminal(what) => panic!("a compact refusal classified terminal ({what})"),
+                Failure::Retryable(what) => panic!("a compact refusal classified retryable ({what})"),
+            }
+            // The shape a fire-and-forget compact reply actually arrives in: no pending prompt, no turn
+            // running. NOT blocked: the seat is healthy and has to stay wakeable.
+            assert_eq!(
+                decide_resume(false, false, false, error, 0),
+                Resume::Nothing(label),
+                "{error}"
+            );
         }
     }
 
