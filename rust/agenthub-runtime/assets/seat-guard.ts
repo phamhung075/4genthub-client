@@ -14,7 +14,7 @@
 // A line is {at, seat, tool, target, outcome, ms, rule?, error?}. `outcome` is "ok", "error" or
 // "blocked"; a blocked call carries the `rule` that refused it. An MCP call is the tool mcp__<server>_<tool>
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -184,10 +184,23 @@ function fromAgy(call: AgyCall): { tool: string; input: Record<string, unknown> 
   return { tool: name, input: { path: key ? args[key] : "" } };
 }
 
+// agy starts a NEW conversation at every seat start, and nothing else tells the client which one is the seat's:
+// `watch`, `feed` and `ps` read the transcript of the id in <seat dir>/agy-conversation. The hook payload names
+// the conversation it runs for, so the seat's own hook keeps that file current.
+function recordConversation(id: string): void {
+  const path = join(process.env.PI_CODING_AGENT_DIR ?? ".", "agy-conversation");
+  try {
+    if (id && readFileSync(path, "utf8").trim() !== id) writeFileSync(path, id);
+  } catch {
+    if (id) try { writeFileSync(path, id); } catch { /* the seat's work does not depend on it */ }
+  }
+}
+
 async function agyHook(phase: string): Promise<void> {
   let raw = "";
   for await (const chunk of process.stdin) raw += chunk;
-  const payload = JSON.parse(raw || "{}") as { toolCall?: AgyCall; error?: string };
+  const payload = JSON.parse(raw || "{}") as { toolCall?: AgyCall; error?: string; conversationId?: string };
+  recordConversation(payload.conversationId ?? "");
   const { tool, input } = fromAgy(payload.toolCall ?? {});
   const full = redact(describe(tool, input));
   if (phase === "post") {
