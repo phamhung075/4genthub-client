@@ -227,7 +227,10 @@ func (m *rigdManager) pass() {
 	if err := clientservices.WriteHeartbeat(clientservices.Rigd, ""); err != nil {
 		m.log(fmt.Sprintf("cannot write rigd's own heartbeat: %v", err))
 	}
-	state := clientservices.ReadRigdState()
+	state, err := clientservices.ReadRigdState()
+	if err != nil {
+		m.log(fmt.Sprintf("the rooms meant to run could not be read, so no child is started this pass: %v", err))
+	}
 	specs, err := rigdSpecs(state.Rigs)
 	if err != nil {
 		m.log(fmt.Sprintf("cannot resolve the log directory, so no child can be started: %v", err))
@@ -513,7 +516,13 @@ func (m *rigdManager) report(rows []clientservices.Health) {
 // kept: `up` may have added a room between this pass's read and this write, and dropping it would make up
 // a liar.
 func (m *rigdManager) persist(rows []clientservices.Health) {
-	fresh := clientservices.ReadRigdState()
+	fresh, err := clientservices.ReadRigdState()
+	if err != nil {
+		// NOTHING IS WRITTEN: this pass rewrites the rigs list from what it read, so persisting over a list
+		// that could not be read would drop every room from the rooms meant to run. The next pass reads again.
+		m.log(fmt.Sprintf("the rooms meant to run could not be read, so this pass kept no safeguard rows: %v", err))
+		return
+	}
 	recorded := m.recorded()
 	merged := make([]clientservices.Health, 0, len(rows))
 	for _, row := range rows {
@@ -615,7 +624,14 @@ var signalPID = func(pid int, signal syscall.Signal) error {
 // recordRig adds a room to rigd.json's list, which is what "meant to run" means: rigd supervises a
 // supervisor and a watchdog for it from its next pass on.
 func recordRig(rig string, stderr io.Writer) bool {
-	state := clientservices.AddRig(clientservices.ReadRigdState(), rig)
+	state, err := clientservices.ReadRigdState()
+	if err != nil {
+		// NOT RECORDED, AND NOTHING WRITTEN: adding this rig to a list that could not be read would record it
+		// into the empty list and drop every OTHER room from the rooms meant to run.
+		fmt.Fprintf(stderr, "4genteam: the rooms meant to run could not be read, so %s was NOT recorded in rigd.json: %v\n", rig, err)
+		return false
+	}
+	state = clientservices.AddRig(state, rig)
 	if err := clientservices.WriteRigdState(state); err != nil {
 		fmt.Fprintf(stderr, "4genteam: could not record rig %s in rigd.json: %v\n", rig, err)
 		return false
@@ -687,7 +703,13 @@ func runRigdStatus(args []string, stdout, stderr io.Writer) int {
 			return clientcmd.ExitUsage
 		}
 	}
-	state := clientservices.ReadRigdState()
+	state, stateErr := clientservices.ReadRigdState()
+	if stateErr != nil {
+		// The rows and the counts below are measured from pgrep and heartbeat files, so they still print; the
+		// rigs list does not, and saying so is the difference between "no rooms are meant to run" and "the list
+		// could not be read".
+		fmt.Fprintf(stderr, "4genteam rigd status: the rooms meant to run could not be read, so the rigs list below is empty for that reason: %v\n", stateErr)
+	}
 	rows := rowsFor("")
 	withheld := withheldCounts()
 	if asJSON {

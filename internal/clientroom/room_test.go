@@ -400,6 +400,16 @@ func useTempRigdState(t *testing.T, rooms ...string) string {
 	return path
 }
 
+// rigdRigs is the rooms-meant-to-run list for tests whose subject is not the read itself.
+func rigdRigs(t *testing.T) []string {
+	t.Helper()
+	state, err := clientservices.ReadRigdState()
+	if err != nil {
+		t.Fatalf("ReadRigdState: %v", err)
+	}
+	return state.Rigs
+}
+
 // TestRoomStopDropsTheRoomFromTheRoomsMeantToRun pins the fix for a stopped room that rigd kept supervising:
 // the stop removes exactly that room from the list and leaves the others.
 func TestRoomStopDropsTheRoomFromTheRoomsMeantToRun(t *testing.T) {
@@ -409,7 +419,7 @@ func TestRoomStopDropsTheRoomFromTheRoomsMeantToRun(t *testing.T) {
 	if code, _, stderr := runRoom(t, daemon.args("stop", testRoom)...); code != clientcmd.ExitOK {
 		t.Fatalf("exit %d (stderr %q)", code, stderr)
 	}
-	if got := strings.Join(clientservices.ReadRigdState().Rigs, ","); got != "other" {
+	if got := strings.Join(rigdRigs(t), ","); got != "other" {
 		t.Errorf("rooms meant to run = %q, want only %q", got, "other")
 	}
 }
@@ -422,7 +432,36 @@ func TestRoomStopDropsTheRoomEvenWhenTheRuntimeRefusesTheStop(t *testing.T) {
 	if code, _, _ := runRoom(t, daemon.args("stop", testRoom)...); code == clientcmd.ExitOK {
 		t.Fatal("a refused StopRoom must not exit 0")
 	}
-	if rooms := clientservices.ReadRigdState().Rigs; len(rooms) != 0 {
+	if rooms := rigdRigs(t); len(rooms) != 0 {
 		t.Errorf("rooms meant to run = %v, want none", rooms)
 	}
+}
+
+// TestRoomStopRefusesToWriteAListItCouldNotRead pins the destructive half of the failed-read class this pod
+// has been closing all day. `stop` rewrites the rooms-meant-to-run list with what it read, so ONE unreadable
+// rigd.json turned the machine's list into the empty one and dropped every OTHER room from rigd's view - the
+// rooms it is there to keep running. Measured before the fix: with `not json{` written over a two-room list,
+// the file came back as the empty state and `other` was gone. A read that failed is not the answer "nothing
+// is meant to run", and a verb must not write the answer it could not read.
+func TestRoomStopRefusesToWriteAListItCouldNotRead(t *testing.T) {
+	path := useTempRigdState(t, testRoom, "other")
+	unreadable := "not json{ into the file\n"
+	if err := os.WriteFile(path, []byte(unreadable), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	daemon := newFakeDaemon(t, map[string]string{"StopRoom": okData("null")})
+
+	code, stdout, stderr := runRoom(t, daemon.args("stop", testRoom)...)
+	if code == clientcmd.ExitOK {
+		t.Fatalf("a stop over a list that could not be read exited 0 (stdout %q)", stdout)
+	}
+	if !strings.Contains(stderr, "could not be read") || !strings.Contains(stderr, "NOT dropped") {
+		t.Errorf("stderr = %q, want the failed read named and the room said not dropped", stderr)
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != unreadable {
+		t.Errorf("the file that could not be read was rewritten to %q (err %v); nothing may be written over it", got, err)
+	}
+	// The room is not stopped either: with the room still in a list that could not be read, stopping it would
+	// have rigd bring it straight back, which is the lie the ordering in `runStop` exists to prevent.
+	assertRequests(t, daemon)
 }

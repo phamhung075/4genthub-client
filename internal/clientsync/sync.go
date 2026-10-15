@@ -106,10 +106,17 @@ func printUsage(w io.Writer) {
 		"bundle, switch, respawn, offline-install and install-checker move or manage what was pulled.\n"+
 		"Every verb this group declares is implemented here. A verb that is not declared is a usage error,\n"+
 		"never a promise this build cannot keep.\n")
-	// The Python's argparse epilog printed this, and test_help_states_offline_use_is_manual asserts
-	// both sentences, so it is ported: offline use is the operator's own choice, and the client never
-	// reaches for a bundle by itself. "script" became "client" because there is no script to speak of.
+	// The Python's argparse epilog printed this, and test_help_states_offline_use_is_manual asserts the
+	// row: offline use is the operator's own choice, and the client never reaches for a bundle by itself.
+	// "script" became "client" because there is no script to speak of.
+	//
+	// THE PROGRAM THE EPILOG NAMED IS GONE, SO THE LINE IS GONE. It printed `rig up <bundle> --target
+	// <dir>`: the retired orchestrator CLI, which is not this client's tool and which bare `rig up` calls
+	// in a form this stack forbids. C3's rule for a printed line is that it RUNS or it is ABSENT, and this
+	// client has no verb that STARTS a room from a bundle - so the paragraph names the verb it does have
+	// (`sync offline-install`, which puts the bundle's pinned policy in the seat store) and says the rest
+	// in words. The pin below fails on any reappearance of the dead procedure.
 	_, _ = io.WriteString(w, "\nOffline use is an explicit operator choice: after `bundle` produces a `.rigbundle`,\n"+
-		"run it yourself with `rig up <bundle> --target <dir>`. This client never falls back\n"+
-		"to a bundle automatically.\n")
+		"the pinned policy it carries goes in with `4genteam sync offline-install <TARGET>`. This client\n"+
+		"never falls back to a bundle automatically, and it has no verb that starts a room from one.\n")
 }

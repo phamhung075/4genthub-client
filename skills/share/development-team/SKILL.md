@@ -11,7 +11,7 @@ independence was explicitly selected.
 
 ## Start from the work
 
-Run `rig whoami --json`, then resolve `project.yaml -> mission.yaml -> active
+Run `4genteam whoami --json`, then resolve `project.yaml -> mission.yaml -> active
 slice.yaml -> selected component or wave map -> addressed context`. The complete
 lookup and precedence rule is `docs/reference/product-journey-sdlc.md#resolve-the-selected-path`
 (installed: `<rig install>/reference/product-journey-sdlc.md#resolve-the-selected-path`).

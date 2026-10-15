@@ -178,8 +178,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let hook_bus = HookBus::new(state_path.join("audit"), 1024);
-    let supervisor = Arc::new(RoomSupervisor::new(&state_path, hook_bus));
+    // The socket is resolved BEFORE the supervisor exists, because the supervisor hands it to every seat it
+    // starts: a seat's own client reaches its daemon through `$AGENTHUB_RUNTIME_SOCKET`, and only the daemon
+    // knows which path it is answering on.
     let socket_path = cli.socket.unwrap_or_else(IpcServer::default_socket_path);
+    let supervisor = Arc::new(RoomSupervisor::new(
+        &state_path,
+        hook_bus,
+        socket_path.clone(),
+    ));
 
     match cli.command {
         Commands::Daemon => {

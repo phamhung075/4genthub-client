@@ -13,10 +13,28 @@ func TestRuntimeSendLineNamesAnUnconfirmedSubmission(t *testing.T) {
 	}
 }
 
-func TestRuntimeSendLineReadsSubmittedAndMissingOutcomeAsSent(t *testing.T) {
-	for _, answer := range []string{`{"delivered":"s","outcome":"submitted"}`, `{"delivered":"s","outcome":"relayed","runner":{"relayed":"prompt"}}`, `{"delivered":"s"}`, `not json`} {
-		if got := RuntimeSendLine("s", []byte(answer)); got != "Sent to s\n" {
-			t.Errorf("answer %s: got %q, want the plain Sent line", answer, got)
+// TestOnlyASubmissionEarnsTheSentLine is the pin for the defect U3 run 1 and the live room both failed on: a
+// `Sent to <session>` line, exit 0, for text the agent never received. The runtime proves a submission only
+// with `outcome: submitted` — a pane that changed after Enter — while a runner seat's `relayed` means the
+// frame reached the runner and the agent's own answer (which may be a refusal) is never reported back; a
+// missing outcome, an outcome this build does not know, and an unreadable answer prove nothing at all, and
+// those three used to print the delivery claim too.
+func TestOnlyASubmissionEarnsTheSentLine(t *testing.T) {
+	if got := RuntimeSendLine("s", []byte(`{"delivered":"s","outcome":"submitted"}`)); got != "Sent to s\n" {
+		t.Errorf("a submitted send: got %q, want the Sent line", got)
+	}
+	for _, c := range []struct{ answer, want string }{
+		{`{"delivered":"s","outcome":"relayed","runner":{"relayed":"prompt"}}`, "Relayed to s, submission unconfirmed"},
+		{`{"delivered":"s"}`, "Submission unconfirmed for s"},
+		{`{"delivered":"s","outcome":"queued"}`, `Submission unconfirmed for s: the runtime answered "queued"`},
+		{`not json`, "Submission unconfirmed for s"},
+	} {
+		got := RuntimeSendLine("s", []byte(c.answer))
+		if !strings.HasPrefix(got, c.want) {
+			t.Errorf("answer %s: got %q, want a prefix %q", c.answer, got, c.want)
+		}
+		if strings.HasPrefix(got, "Sent to ") {
+			t.Errorf("answer %s: a delivery was claimed for it: %q", c.answer, got)
 		}
 	}
 }

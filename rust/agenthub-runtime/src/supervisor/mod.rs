@@ -3,7 +3,7 @@ use crate::pty::TerminalManager;
 use crate::queue::{ListFilter, QueueStore};
 use crate::types::*;
 use chrono::{DateTime, Utc};
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -122,28 +122,11 @@ fn readiness_refusal(
 pub struct RoomSupervisor {
     base_state_dir: PathBuf,
     active_rooms: Arc<Mutex<HashMap<String, RoomSpec>>>,
-    /// The room's queue store, opened on first use and held for as long as the daemon serves the room.
-    /// SQLite is the rail: one connection per room, the same object every verb reads, so a write is
-    /// visible to the next read without a re-open in between.
-    queue_stores: Arc<Mutex<HashMap<String, QueueStore>>>,
+    /// THE SOCKET THIS DAEMON ANSWERS ON, kept because every seat it starts has to know it: a seat's own
+    /// `4genteam send`/`room queue` resolves the socket from `$AGENTHUB_RUNTIME_SOCKET` and then this machine's
+    /// own path, so a seat that is not told would address whichever daemon owns the default socket.
+    runtime_socket: PathBuf,
     hook_bus: HookBus,
-}
-
-/// A room's open queue store, borrowed from the supervisor's cache for the length of one verb. Derefs to
-/// the store, so a caller writes `store.create(input)` exactly as it would on an owned store.
-pub struct RoomQueueStore<'a> {
-    stores: MutexGuard<'a, HashMap<String, QueueStore>>,
-    room: String,
-}
-
-impl std::ops::Deref for RoomQueueStore<'_> {
-    type Target = QueueStore;
-
-    fn deref(&self) -> &QueueStore {
-        self.stores
-            .get(&self.room)
-            .expect("the store is inserted for this room before the borrow is handed out")
-    }
 }
 
 /// The one read of a seat's own state file and the room's rail that both the status row and the nudge
@@ -207,14 +190,49 @@ fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
     })
 }
 
+/// The environment ONE seat's runner and its agent are launched with.
+///
+/// A pure function rather than an inline block, so what a seat inherits can be pinned without a tmux server:
+/// this map IS the contract between the daemon and the client a seat runs (`4genteam send`, `room queue`), and
+/// a field missing here is a seat that answers a different daemon, or none.
+///
+/// `AGENTHUB_RUNTIME_SOCKET` is the daemon's OWN socket, and it OVERRIDES whatever the room's spec recorded:
+/// the socket that matters to a seat is the one the daemon that started it answers on, and a value written into
+/// a spec at `up` time can only be the socket of whichever daemon existed then. Measured 2026-10-14 in an
+/// isolated run: the run's own seat carried no socket at all, resolved this machine's own (the box's live
+/// runtime) and had its message refused for a mailbox under the LIVE state directory.
+fn seat_env(
+    seat: &SeatSpec,
+    room: &str,
+    session_name: &str,
+    seat_dir: &Path,
+    runtime_socket: &Path,
+) -> HashMap<String, String> {
+    let mut env = seat.env.clone();
+    env.insert("AGENTHUB_ROOM".into(), room.into());
+    env.insert("AGENTHUB_SEAT".into(), seat.seat_key.clone());
+    env.insert("AGENTHUB_ROLE".into(), seat.seat_type.clone());
+    env.insert("AGENTHUB_RUNTIME".into(), seat.runtime.clone());
+    env.insert("AGENTHUB_SESSION_NAME".into(), session_name.into());
+    env.insert("PI_CODING_AGENT_DIR".into(), seat_dir.to_string_lossy().to_string());
+    env.insert(
+        "AGENTHUB_RUNTIME_SOCKET".into(),
+        runtime_socket.to_string_lossy().to_string(),
+    );
+    if let Some(m) = &seat.model {
+        env.insert("AGENTHUB_MODEL".into(), m.clone());
+    }
+    env
+}
+
 impl RoomSupervisor {
-    pub fn new(base_state_dir: impl Into<PathBuf>, hook_bus: HookBus) -> Self {
+    pub fn new(base_state_dir: impl Into<PathBuf>, hook_bus: HookBus, runtime_socket: impl Into<PathBuf>) -> Self {
         let base_state_dir = base_state_dir.into();
         let _ = fs::create_dir_all(&base_state_dir);
         Self {
             base_state_dir,
             active_rooms: Arc::new(Mutex::new(HashMap::new())),
-            queue_stores: Arc::new(Mutex::new(HashMap::new())),
+            runtime_socket: runtime_socket.into(),
             hook_bus,
         }
     }
@@ -229,13 +247,22 @@ impl RoomSupervisor {
         self.base_state_dir.join("rooms").join(room)
     }
 
-    /// The room's durable queue store.
+    /// The room's durable queue store, OPENED FOR THIS REQUEST.
+    ///
+    /// The rail is a file the room owns, and it can be replaced while the daemon lives: a rebuilt room, a
+    /// restore, or an instrument's own hygiene (`rm -f queue.sqlite`, which the U3 harness does between legs)
+    /// all hand the daemon a new file at the same path. A store held from the room's first use would keep
+    /// writing into the deleted inode - SQLite answers `attempt to write a readonly database`, naming a
+    /// permission on a file that is writable, and keeps serving the OLD rows as fact - and nothing but a
+    /// daemon restart would clear it. So nothing is held: every verb opens the file it is about to use, and
+    /// the next request cannot see a file that is no longer there. A room's descriptors then live as long as
+    /// its request instead of as long as the daemon has ever touched the room.
     ///
     /// A room that was never started has no directory and no rail, so a queue verb against it is a refusal
     /// naming the room — not an empty queue, which is the same untrue answer as a bare `[]` (Rule 2: no
     /// answer where there is no record). A *stopped* room keeps its directory and its rows, and stays
     /// readable.
-    pub fn queue_store(&self, room: &str) -> Result<RoomQueueStore<'_>, String> {
+    pub fn queue_store(&self, room: &str) -> Result<QueueStore, String> {
         let room_dir = self.room_dir(room);
         if !room_dir.is_dir() {
             return Err(format!(
@@ -243,14 +270,7 @@ impl RoomSupervisor {
                 room_dir.display()
             ));
         }
-        let mut stores = self.queue_stores.lock();
-        if !stores.contains_key(room) {
-            stores.insert(room.to_string(), QueueStore::open(&room_dir)?);
-        }
-        Ok(RoomQueueStore {
-            stores,
-            room: room.to_string(),
-        })
+        QueueStore::open(&room_dir)
     }
 
     /// Derive standard session name: agenthub--<room>--<seat>
@@ -280,6 +300,14 @@ impl RoomSupervisor {
 
         let room_dir = self.room_dir(&room_name);
         fs::create_dir_all(&room_dir).map_err(|e| format!("cannot create room dir: {e}"))?;
+        // THE ROOM'S LAYOUT IS CREATED WITH THE ROOM, not left to whichever writer happens to get there
+        // first: `seats/`, `logs/` and `run/` are the room's own shape, read by the acceptance and by an
+        // operator, and a `logs/` that appeared only once a runner had a diagnostic to write made "no log
+        // yet" and "no such directory" the same answer.
+        for dir in ["seats", "logs", "run"] {
+            fs::create_dir_all(room_dir.join(dir))
+                .map_err(|e| format!("cannot create the room's {dir} dir: {e}"))?;
+        }
 
         let mut final_spec = spec;
         let spec_file = room_dir.join("spec.json");
@@ -392,16 +420,7 @@ impl RoomSupervisor {
         };
 
         // Build environment variables
-        let mut env = seat.env.clone();
-        env.insert("AGENTHUB_ROOM".into(), room.into());
-        env.insert("AGENTHUB_SEAT".into(), seat.seat_key.clone());
-        env.insert("AGENTHUB_ROLE".into(), seat.seat_type.clone());
-        env.insert("AGENTHUB_RUNTIME".into(), seat.runtime.clone());
-        env.insert("AGENTHUB_SESSION_NAME".into(), session_name.clone());
-        env.insert("PI_CODING_AGENT_DIR".into(), seat_dir.to_string_lossy().to_string());
-        if let Some(m) = &seat.model {
-            env.insert("AGENTHUB_MODEL".into(), m.clone());
-        }
+        let env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket);
 
         // WHEN THIS GENERATION'S PANE WAS CREATED. The readiness proof below is a file the previous
         // generation's teardown also writes into, so existence alone cannot separate a handshake from an
@@ -550,9 +569,8 @@ impl RoomSupervisor {
         }
 
         self.active_rooms.lock().remove(room);
-        // The room's store goes with its seats; the next verb for this room opens the file fresh, which is
-        // what makes a stopped room's rows durable-but-not-cached rather than lost.
-        self.queue_stores.lock().remove(room);
+        // Nothing else is dropped with the room: the rail is opened per request and holds no state here, so
+        // a stopped room's rows are durable-but-not-cached without the daemon having to remember anything.
         // A spill outlives no room (`SPEC-runner-relay-protocol-2026-10-13.md` §2): its payloads are the
         // room's bytes, and a tree left behind would be a payload no handle can name again.
         let _ = crate::frame::remove_spill_trees(&room_dir);
@@ -1748,7 +1766,47 @@ mod tests {
     /// A supervisor needs a `HookBus`, whose constructor spawns its audit task, so these tests run on a
     /// tokio runtime (`#[tokio::test]`) even where nothing is awaited.
     fn supervisor_at(state_dir: &Path) -> RoomSupervisor {
-        RoomSupervisor::new(state_dir, HookBus::new(state_dir.join("audit"), 8))
+        RoomSupervisor::new(
+            state_dir,
+            HookBus::new(state_dir.join("audit"), 8),
+            state_dir.join("run").join("agenthub.sock"),
+        )
+    }
+
+    /// THE ROOM'S LAYOUT IS PART OF STARTING THE ROOM, not something its first writer creates: the
+    /// acceptance asserts `seats/`, `logs/` and `run/` immediately after `up`, and run 4 was starved by
+    /// that single assertion because `logs/` existed nowhere until a writer happened to need it.
+    ///
+    /// The room here has NO SEATS, so `start_room` refuses - "started no seat (0 of 0)" is its own answer
+    /// and not a silent success - and the point of the test is that the layout is already in place when it
+    /// answers, exactly as the room's directory and `spec.json` are.
+    #[tokio::test]
+    async fn starting_a_room_creates_its_seats_logs_and_run_directories() {
+        let state_dir = scratch("room-layout");
+        let spec: RoomSpec = serde_json::from_value(serde_json::json!({
+            "room": "layout",
+            "seats": [],
+            "links": []
+        }))
+        .expect("spec");
+
+        let refused = supervisor_at(&state_dir)
+            .start_room(spec)
+            .expect_err("a room with no seats is refused rather than reported as started");
+        assert!(
+            refused.contains("started no seat"),
+            "the refusal names what happened: {refused}"
+        );
+
+        let room_dir = state_dir.join("rooms").join("layout");
+        for dir in ["seats", "logs", "run"] {
+            assert!(
+                room_dir.join(dir).is_dir(),
+                "{dir}/ is part of the room's shape, not something its first writer creates: {}",
+                room_dir.display()
+            );
+        }
+        let _ = fs::remove_dir_all(&state_dir);
     }
 
     /// A MULTI-LINE MESSAGE TO A RUNNER SEAT IS ONE `text` FRAME IN ITS MAILBOX, not one pane line per line:
@@ -2075,7 +2133,8 @@ mod tests {
         let supervisor = supervisor_at(&dir);
         let mut expected_ids = Vec::new();
         {
-            // Scoped: `queue_store` holds the store mutex for the borrow, and `waiting_rows` takes it again.
+            // The three rows are written before the join reads, and the join opens the rail for itself - the
+            // same path a seat's own request takes.
             let store = supervisor.queue_store("demo").expect("open the rail");
             for (to, summary) in [
                 (session.as_str(), "native"),
@@ -2127,6 +2186,90 @@ mod tests {
         for id in expected_ids {
             assert!(waiting.contains(&id), "{id} missing from {waiting:?}");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE RAIL IS A FILE THE ROOM OWNS, AND IT CAN BE REPLACED UNDER A LIVE DAEMON — a rebuilt room, a
+    /// restore, or an instrument's own hygiene (`rm -f queue.sqlite`, which the U3 harness does between legs)
+    /// hands the daemon a new file at the same path. A store held from the room's first use went on writing
+    /// into the deleted inode: SQLite refused it with `attempt to write a readonly database` (naming a
+    /// permission on a file that is writable) and every read kept answering the OLD rows as fact, for the rest
+    /// of the daemon's life. Nothing is held now, so the next verb opens the file it is about to use.
+    ///
+    /// The check is the one the defect needs: after the replacement, the next write is IN THE NEW FILE — the
+    /// moved file keeps only the row it already had — and a read stops reporting the old rows as this room's.
+    #[tokio::test]
+    async fn a_replaced_rail_is_the_one_the_next_verb_uses() {
+        let dir = scratch("replaced-rail");
+        let seat = seat_key("replaced-rail");
+        write_spec(&dir, "demo", &seat);
+        let supervisor = supervisor_at(&dir);
+        let room_dir = dir.join("rooms").join("demo");
+        let rail = room_dir.join("queue.sqlite");
+
+        let before = supervisor
+            .queue_store("demo")
+            .expect("open the rail")
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: seat.clone(),
+                summary: "before the room was rebuilt".into(),
+                ..Default::default()
+            })
+            .expect("create");
+        assert!(
+            rail.is_file(),
+            "the first verb left the rail at {}",
+            rail.display()
+        );
+
+        // Moved aside rather than deleted, so the test can read afterwards what the daemon did NOT do: write
+        // here. It goes into a room-shaped directory of its own, so the same store API can read it back.
+        let moved_dir = dir.join("rooms").join("demo-before-the-rebuild");
+        fs::create_dir_all(&moved_dir).expect("a home for the replaced rail");
+        let moved = moved_dir.join("queue.sqlite");
+        fs::rename(&rail, &moved).expect("move the rail aside");
+        assert!(!rail.is_file(), "the room's rail is gone from its path");
+
+        let after = supervisor
+            .queue_store("demo")
+            .expect("the next verb opens the file it is about to use")
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: seat.clone(),
+                summary: "after the room was rebuilt".into(),
+                ..Default::default()
+            })
+            .expect("create into the new file");
+
+        let rows = supervisor
+            .queue_store("demo")
+            .expect("open the rail")
+            .list(&ListFilter {
+                active_only: true,
+                ..Default::default()
+            })
+            .expect("list");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the new rail holds the new row and not the old one: {rows:?}"
+        );
+        assert_eq!(rows[0].qitem_id, after.qitem_id);
+
+        let stale = QueueStore::open(&moved_dir)
+            .expect("the moved file is still a rail")
+            .list(&ListFilter {
+                active_only: true,
+                ..Default::default()
+            })
+            .expect("list the moved rail");
+        assert_eq!(stale.len(), 1);
+        assert_eq!(
+            stale[0].qitem_id, before.qitem_id,
+            "the moved file kept its own row: the write went to the new file, not into the deleted inode"
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -2185,6 +2328,44 @@ mod tests {
         // ...and the missing advisory is absent, not a fabricated empty one.
         assert!(statuses[0].alert.is_none());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A SEAT IS STARTED KNOWING WHICH DAEMON IT BELONGS TO. A seat's own `4genteam send`/`room queue`
+    /// resolves the socket from `$AGENTHUB_RUNTIME_SOCKET` and then THIS MACHINE'S own path, so a seat whose env
+    /// lacks it addresses whichever daemon owns the default socket - measured 2026-10-14 in an isolated run: the
+    /// run's own seat reached the box's live runtime, whose answer was a refusal for a mailbox under the live
+    /// state directory.
+    ///
+    /// The spec's own entry does not win: the socket that matters is the one the daemon that STARTED the seat
+    /// answers on, and a value recorded in a spec can only be the socket of whichever daemon existed then.
+    #[test]
+    fn a_seats_env_states_the_socket_of_the_daemon_that_started_it() {
+        let seat: SeatSpec = serde_json::from_value(serde_json::json!({
+            "seat_key": "dev",
+            "seat_type": "developer",
+            "runtime": "omp",
+            "env": {"AGENTHUB_RUNTIME_SOCKET": "/tmp/stale.sock"}
+        }))
+        .expect("seat");
+        let env = seat_env(
+            &seat,
+            "isolated",
+            "agenthub--isolated--dev",
+            Path::new("/state/rooms/isolated/seats/dev"),
+            Path::new("/tmp/isolation/rt/agenthub.sock"),
+        );
+
+        assert_eq!(
+            env.get("AGENTHUB_RUNTIME_SOCKET").map(String::as_str),
+            Some("/tmp/isolation/rt/agenthub.sock"),
+            "the seat has to be told the socket of the daemon that started it"
+        );
+        assert_eq!(env.get("AGENTHUB_ROOM").map(String::as_str), Some("isolated"));
+        assert_eq!(
+            env.get("AGENTHUB_SESSION_NAME").map(String::as_str),
+            Some("agenthub--isolated--dev"),
+            "the session name the seat's own client sends as"
+        );
     }
 
     /// The nudge pass enumerates the rooms that are on disk. With no tmux session behind any seat, no seat

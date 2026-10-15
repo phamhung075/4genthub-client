@@ -93,9 +93,9 @@ func TestPayloadParityWithThePythonBridge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read rig_ps.json: %v", err)
 	}
-	nodes, err := ParseRigNodes(string(nodesRaw))
+	nodes, err := parseItems(string(nodesRaw), "rig ps")
 	if err != nil {
-		t.Fatalf("ParseRigNodes: %v", err)
+		t.Fatalf("unwrapping testdata/rig_ps.json: %v", err)
 	}
 
 	// The one pinned seat the dump carries, placed where the builder reads pins from.

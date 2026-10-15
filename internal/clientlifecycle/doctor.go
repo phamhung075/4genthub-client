@@ -80,7 +80,11 @@ var rowsFor = safeguardRows
 // run has an empty list and still gets the bridge and rigd rows, which is the point: rigd's own absence
 // is the loudest row there is.
 func safeguardRows(rig string) []clientservices.Health {
-	state := clientservices.ReadRigdState()
+	// A REPORT SURFACE MAY GO ON WITHOUT THE LIST. The rigs list decides WHICH rooms get rows; a failed read
+	// leaves it empty exactly as a machine whose rigd never ran does, and this verb neither writes nor acts,
+	// so the rows for the two machine-scoped safeguards still print. `rigd status` says in words when the
+	// read failed; naming it here needs an error shape in the report seam, which is its own unit.
+	state, _ := clientservices.ReadRigdState()
 	rigs := state.Rigs
 	if rig != "" {
 		rigs = []string{rig}

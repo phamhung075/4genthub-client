@@ -7,7 +7,7 @@ description: Continue or spawn an agent team with 4genteam, or spawn an in-sessi
 
 Two ways to run a team, and the two are not exclusive:
 
-- **A team rig** — the durable form: seats in tmux supervised by 4genteam, survives restarts and resumes each seat's own session. **ALWAYS launch or restore using `4genteam up <rig> [--allow-peak]` or `4genteam continue <rig>`. NEVER use bare `rig up` to launch/resume a rig**, because bare `rig up` bypasses the entire client lifecycle: `rigd`, the compaction supervisor (`auto compact`), the `watchdog`, the status `bridge`, and the styled `watch` grid. See the sections below.
+- **A team room** — the durable form: seats in tmux supervised by 4genteam, survives restarts and resumes each seat's own session. **ALWAYS launch or restore using `4genteam up <rig> --team <DIR> [--allow-peak]` or `4genteam continue <rig>`** (`--team DIR` is required: the room's seats come from the local team definition that directory holds, and there is no default). **NEVER launch or resume with the predecessor orchestrator's `rig up`**: it bypasses this client's whole lifecycle — `rigd`, the compaction supervisor (`auto compact`), the `watchdog`, the status `bridge`, and the styled `watch` grid — and its daemon is not running (measured 2026-10-14: `rig whoami` answers `daemon unreachable`). See the sections below.
 - **An in-session Claude Code team** — the Proxy Pattern below: teammates spawned from the current session, sharing its terminal.
 
 **Only the in-session team below needs the lead to fetch each agent's configuration and inject it into the teammate's prompt** — a Claude Code teammate spawned by the `Task` tool does not inherit MCP connections. **A rig is the other case and needs none of that**: 4genteam renders each seat's own `agent.yaml` and guidance at launch, and a seat has its own MCP whenever its render carries mcp blocks — measured 2026-10-10 on `<RIG>`, where a seat resolves `mcp__agenthub_http__*` and `mcp__deepseek__*`. That is why a seat's own `AGENTS.md` tells it to drive `manage_task` itself instead of waiting for a lead to hand it configuration.
@@ -16,7 +16,7 @@ Two ways to run a team, and the two are not exclusive:
 
 ### 1. Start full stack (seats + rigd + auto-compact + watchdog + bridge + watch wall):
 ```bash
-4genteam up <rig> [--allow-peak]
+4genteam up <rig> --team <DIR> [--allow-peak]
 ```
 `4genteam up` starts the entire supervisor stack in order: seat sessions, `rigd` (which supervises the `compact` loop and `watchdog`), status `bridge`, and automatically opens `4genteam watch`.
 
@@ -38,15 +38,15 @@ Two ways to run a team, and the two are not exclusive:
 
 One file per rig: `~/.config/4genthub/briefs/<rig>.txt`. It is sent verbatim to every seat, prefixed with `Your seat: <seat>.`
 
-- **Backticks inside a `rig send` message are executed by YOUR OWN shell before rig ever sees the text** — the effect is not mangling. Sending `rig send <seat> "text with a backtick-quoted command"` substitutes that command on the sending side; the seat policy does not catch it, because a refusal matches on the command prefix, not on a substitution buried inside an argument. (Measured 2026-10-10: a ruling reached a seat with every backtick-quoted name replaced by empty output, from a refused command inside them.) **Mitigation**: keep backticks, `$` and unbalanced apostrophes out of the message, or wrap the whole message in SINGLE quotes so your shell substitutes nothing.
+- **Backticks inside a `4genteam send` message are executed by YOUR OWN shell before `4genteam` ever sees the text** — the effect is not mangling. Sending `4genteam send <seat> "text with a backtick-quoted command"` substitutes that command on the sending side; the seat policy does not catch it, because a refusal matches on the command prefix, not on a substitution buried inside an argument. (Measured 2026-10-10: a ruling reached a seat with every backtick-quoted name replaced by empty output, from a refused command inside them.) **Mitigation**: keep backticks, `$` and unbalanced apostrophes out of the message, or wrap the whole message in SINGLE quotes so your shell substitutes nothing.
 - Phrase it as a re-scan request ("re-scan the board and take the unblocked items, correcting this list if stale"), not an asserted work list. Resumed seats hold fresher context and correct a stale list; on 2026-10-05 the lead corrected two already-verified items within a minute.
 - Name the goal, what needs the user's approval, what is budget-capped, and the flow between seats.
 
 ### Spawning a new team (new project, new rig)
 
-1. Write a rig spec: `pods[].members[]` with `id`, `agent_ref`, `runtime`, `model`, `cwd`, `permission_policy`, plus `edges` (`delegates_to`, `collaborates_with`, `escalates_to`). Working examples for two runtimes: `~/.config/4genthub/seats/<rig>/rig/rig-omp.yaml` (omp/DeepSeek) and `rig-claude.yaml` (claude-code).
-2. `rig up <spec.yaml> --cwd <project-root>`; a one-seat rig needs no spec at all: `rig create <name>`.
-3. Resize in place: `rig grow <rig-id> <members...>`, `rig add`, `rig shrink`, `rig remove`.
+1. Write the room's team definition: a `team.json` in a directory of your choice, holding `room{slug,name}`, `modules[]`, `seats[]` (`seat_key`, `seat_type`, `runtime`, `model`, `permission_policy`, `cwd`, `env`), `links[]` (`delegates_to`, `collaborates_with`, `escalates_to`) and `overlays{}`. Working examples in this repository: `scripts/team/<room>/team.json` and `~/.config/4genthub/rooms/<room>/team/team.json`.
+2. `4genteam up <room> --team <that directory>` — the room and its seats come from the definition it holds, and the daemon starts with them. This client has no `rig create` and no `rig up <spec>.yaml`: a room is created from its local definition, or materialized from the cloud with `4genteam sync rig <room>` then started the same way.
+3. **Resizing a live room has no verb on this client.** The predecessor CLI's `grow`/`add`/`shrink`/`remove` are gone: a room's seats are its definition, so a change means editing `team.json`, then `4genteam sync rig <room> --update` (writes the definition and each seat's pinned snapshot) and `4genteam seat reseat <rig> --seat <name>` for the seats that must reload it.
 4. Write `~/.config/4genthub/briefs/<rig>.txt` and run `4genteam continue <rig>` to brief it — the same command as continuing an existing team.
 
 ### Watching a team (the standing choice, 2026-10-07)
@@ -60,18 +60,18 @@ Always watch an omp seat team with the grid script, not with bare tiles:
 - `4genteam` is this repository's Go binary (`go build -o ~/.local/bin/4genteam ./cmd/4genteam`), so it runs from anywhere once it is on `PATH`; `4genteam up <rig>` opens this wall as part of the full lifecycle. `4genteam continue` logs `watch wall skipped (herdr or 4genteam missing)` and carries on when either is absent; `RIG_CONTINUE_WATCH=0` turns the wall off for a headless run.
 
 - One herdr workspace `<rig> grid`, one pane per seat, 2 columns, each pane a live feed of that seat's tool calls, reasoning (`~ think`), replies (`▸ say`) and incoming messages (`◂ in`).
-- `4genteam continue <rig>` already runs it at the end (skip with `RIG_CONTINUE_WATCH=0`). After `rig up` or a runtime switch run it yourself. It never talks to a seat. It closes the rig's earlier grid and lead workspaces first, so a relaunch always gives the same single wall: the seat name, model and token meter in each pane, 2 columns, `--back 40 --width 0 --lines 60 --detail`.
-- `rig terminal open <rig>` (one raw `tmux attach` tile per seat) is the secondary view: use it for a seat's own screen, not as the default.
+- `4genteam continue <rig>` already runs it at the end (skip with `RIG_CONTINUE_WATCH=0`). After `4genteam up <rig> --team <DIR>` or a runtime switch run it yourself. It never talks to a seat. It closes the rig's earlier grid and lead workspaces first, so a relaunch always gives the same single wall: the seat name, model and token meter in each pane, 2 columns, `--back 40 --width 0 --lines 60 --detail`.
+- The secondary view is a seat's own screen, and this client has no verb that opens one raw `tmux attach` tile per seat: read that pane with `4genteam capture <session>`, or attach by hand. Use it for a seat's own screen, not as the default.
 - omp and claude-code seats have a session log (a claude-code seat shows its model and tokens too). A runtime with no log reader yet (Codex, agy) keeps its pane and header but shows no events.
 - Full reference: `docs/WATCH.md`.
 
 ### Traps (any rig, any runtime)
 
-- Liveness: `rig ps --nodes --rig <rig>`. `rig capture` can read blank; `tmux capture-pane -p -t <session>` does not lie.
+- Liveness: `4genteam ps <rig> --nodes`. `4genteam capture <session>` can read blank; `tmux capture-pane -p -t <session>` does not lie.
 - `[omp-runner] ERROR rpc: RPC response exceeded the transport limit` printed after `READY` is cosmetic on resume — the seat still answers. Ping it before considering a re-prime.
-- Route: check the provider window before picking a runtime (`rig usage series --lane provider_window`). When Claude weekly is capped (it was 100 percent on 2026-10-05, reset 2026-10-06 12:00Z), the seats belong on omp/DeepSeek.
+- Route: check the provider window before picking a runtime. The predecessor CLI's `rig usage series --lane provider_window` has no `4genteam` counterpart — for DeepSeek billing the native read is `4genteam offpeak`, and for the other providers the vendor's own dashboard is the source. When Claude weekly is capped (it was 100 percent on 2026-10-05, reset 2026-10-06 12:00Z), the seats belong on omp/DeepSeek.
 - Write domain: a repo worktree takes one writer team. A second team stays out of it (skill files, brief files, read-only audits).
-- A stopped rig loses nothing: seats, sessions and snapshots live in the daemon database, so "down" is a lifecycle state, not data loss. Do not tear a rig down to bring it back — `4genteam continue <rig> [--allow-peak]` restores the rig, briefs the seats, and starts the full supervisor stack (never bare `rig up <rig> --existing`).
+- A stopped room loses nothing: seats, sessions and snapshots live under `~/.config/4genthub/rooms/<room>/`, so "down" is a lifecycle state, not data loss. Do not tear a room down to bring it back — `4genteam continue <rig> [--allow-peak]` restores it, briefs the seats, and starts the full supervisor stack (never the predecessor's `rig up <rig> --existing`).
 
 ## When to Use
 

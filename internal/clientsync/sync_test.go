@@ -43,19 +43,28 @@ func TestEveryDeclaredVerbAnswersHelp(t *testing.T) {
 }
 
 // test_help_states_offline_use_is_manual (tests/test_seat_sync.py:1544): the help says offline use is
-// the operator's own choice and where the bundle is run. Python's argparse printed it as the sync
+// the operator's own choice and how the bundle is put to use. Python's argparse printed it as the sync
 // parser's epilog; the Go help had dropped it, which left the row with no Go witness. The test carries
 // the row's name, so the parity instrument pairs it by name rather than by an alias entry, and it
-// asserts the row's own two sentences on stdout with exit 0 - `script` became `client` in the port.
+// asserts the row's own sentences on stdout with exit 0 - `script` became `client` in the port.
+//
+// THE ROW'S OTHER HALF IS C3's RULE FOR A PRINTED LINE: it RUNS or it is ABSENT. The epilog named
+// `rig up <bundle> --target <dir>`, which is the retired orchestrator CLI and the one launch this stack
+// forbids, and this client has no verb that starts a room from a bundle - so the sentence names
+// `sync offline-install` instead and the dead procedure is asserted ABSENT here. That assertion is the
+// half with teeth: it fails the moment someone re-adds a line a reader cannot run.
 func TestHelpStatesOfflineUseIsManual(t *testing.T) {
 	var out, errOut bytes.Buffer
 	if code := (syncCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("sync --help exited %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut.String())
 	}
-	for _, want := range []string{"rig up <bundle> --target <dir>", "never falls back"} {
+	for _, want := range []string{"Offline use is an explicit operator choice", "4genteam sync offline-install", "never falls back"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("sync --help does not say %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "rig up") {
+		t.Errorf("sync --help prints the retired `rig up` procedure again - a line a reader cannot run:\n%s", out.String())
 	}
 }
 

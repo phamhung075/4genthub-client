@@ -106,7 +106,7 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 		}
 		return "", fmt.Errorf("%s: not a tool this fixture runs", argv[0])
 	}
-	f.bridge.Nodes = func() ([]any, error) { return ParseRigNodes(f.rigJSON) }
+	f.bridge.Nodes = func() ([]any, error) { return parseItems(f.rigJSON, "rig ps") }
 	f.bridge.Links = func(string) ([]rigEdge, error) { return nil, nil }
 	f.clock = &fakeClock{at: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	f.bridge.clock = f.clock.now

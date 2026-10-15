@@ -27,12 +27,12 @@ const (
 	// verb refuses in words rather than falling back to `rig` - so the value is still parsed and validated
 	// (a caller's command line does not change the day the runtime grows the verb) and then set aside at the
 	// one place the launch would have spent it.
-	defaultRespawnReason = "agent died outside `rig seat stop` (respawn)"
+	defaultRespawnReason = "agent died outside the runtime's own stop (respawn)"
 )
 
 const respawnUsage = `usage: 4genteam sync respawn ROOM SEAT [--after-seconds SECONDS] [--reason TEXT] ` + clientoffpeak.ModeFlagUsage + `
 
-Respawn a seat whose agent died outside ` + "`rig seat stop`" + `. The seat must READ dead for
+Respawn a seat whose agent died outside the runtime's own stop. The seat must READ dead for
 --after-seconds (default 30s) before the launch leg is reached, because a seat that has just started reads
 the same way until its runtime hook attaches.
 

@@ -4,6 +4,7 @@ package clientservices
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,22 +38,33 @@ func defaultRigdStatePath() (string, error) {
 	return filepath.Join(store, "rigd.json"), nil
 }
 
-// ReadRigdState reads the state file. A missing or unreadable file answers the empty state rather than
-// an error: a machine whose rigd has never run has no rooms, and `doctor` must be able to say so.
-func ReadRigdState() RigdState {
+// ReadRigdState reads the rooms that are meant to run and answers TWO things: the state, and the error a
+// read that FAILED made. A file that is not there is NOT an error - a machine whose rigd has never run has
+// no rooms, and `doctor` must be able to say so - while a file that is there and could not be read or
+// parsed is exactly an error. That difference is the whole point of the second answer: three callers
+// REWRITE this list with what they read (`room stop` removes a room, `up` records one, the supervisor's own
+// pass keeps the list beside fresh safeguard rows), so collapsing "nothing is meant to run" with "the list
+// could not be read" made one unreadable file erase every room the machine was meant to keep running.
+// Measured 2026-10-14: `not json{` written over a two-room list, then a stop, left the empty state behind
+// and dropped the other room with it. A caller that writes MUST refuse on an error; a caller that only
+// reports may go on, because "no rooms are meant to run" is then still what the file says.
+func ReadRigdState() (RigdState, error) {
 	path, err := RigdStatePath()
 	if err != nil {
-		return RigdState{}
+		return RigdState{}, fmt.Errorf("the rooms meant to run live at a path this machine cannot resolve: %w", err)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return RigdState{}
+		if os.IsNotExist(err) {
+			return RigdState{}, nil
+		}
+		return RigdState{}, fmt.Errorf("cannot read %s: %w", path, err)
 	}
 	var state RigdState
 	if err := json.Unmarshal(raw, &state); err != nil {
-		return RigdState{}
+		return RigdState{}, fmt.Errorf("%s is not readable as the rooms meant to run: %w", path, err)
 	}
-	return state
+	return state, nil
 }
 
 // WriteRigdState writes the state file atomically and with mode 0600, because this is the file a later

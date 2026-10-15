@@ -77,7 +77,7 @@ func TestSendGoesThroughTheRuntimeSocket(t *testing.T) {
 			return `{"ok":true,"data":[{"room":"4genthub-min","seat":"fe-dev",` +
 				`"session_name":"4genthub-min-fe-dev@4genthub-min","runtime":"omp","state":"Running"}]}` + "\n"
 		}
-		return `{"ok":true,"data":{"delivered":"4genthub-min-fe-dev@4genthub-min"}}` + "\n"
+		return `{"ok":true,"data":{"delivered":"4genthub-min-fe-dev@4genthub-min","outcome":"submitted"}}` + "\n"
 	})
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
@@ -130,13 +130,75 @@ func TestSendGoesThroughTheRuntimeSocket(t *testing.T) {
 	}
 }
 
+// TestSendSocketAimsTheVerbAtThatDaemon: `--socket PATH` is the only way to reach a daemon that does not own
+// this machine's own socket, and it has to aim BOTH halves of the verb - the record the seat's name is read
+// from, and the send itself - or the name comes from one runtime while the message goes to another. Measured
+// 2026-10-14: a seat of an isolated run resolved this box's live socket, and its send was refused for a mailbox
+// under the LIVE runtime's state directory.
+//
+// The other daemon (the environment's own) answers every well-formed request here, so a leak to it is not a
+// connection error a test could read past: it lands on its channel, and the check is that its channel is empty.
+func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
+	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
+
+	other, otherSeen := fakeRuntime(t, func(string) string {
+		return `{"ok":true,"data":[]}` + "\n"
+	})
+	t.Setenv(clientruntime.RuntimeSocketEnv, other)
+
+	aimed, aimedSeen := fakeRuntime(t, func(line string) string {
+		if strings.Contains(line, `"GetRoomStatus"`) {
+			// THIS daemon's record, and its own session name for the seat: the name the verb sends with has to
+			// be the one the daemon it writes to uses.
+			return `{"ok":true,"data":[{"room":"isolated","seat":"dev",` +
+				`"session_name":"agenthub--isolated--dev","runtime":"omp","state":"Running"}]}` + "\n"
+		}
+		return `{"ok":true,"data":{"delivered":"agenthub--isolated--dev","outcome":"submitted"}}` + "\n"
+	})
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(),
+		[]string{"isolated-dev@isolated", "probe", "--socket", aimed}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("send exit = %d, stderr = %q", code, errOut.String())
+	}
+	if out.String() != "Sent to agenthub--isolated--dev\n" {
+		t.Errorf("stdout = %q, want the delivery confirmed by the name the AIMED daemon's record carries", out.String())
+	}
+
+	var actions []string
+	timeout := time.After(5 * time.Second)
+	for len(actions) < 2 {
+		select {
+		case line := <-aimedSeen:
+			var frame struct {
+				Action string `json:"action"`
+			}
+			if err := json.Unmarshal([]byte(line), &frame); err != nil {
+				t.Fatalf("the frame the verb wrote is not JSON: %v (%q)", err, line)
+			}
+			actions = append(actions, frame.Action)
+		case <-timeout:
+			t.Fatalf("the aimed socket saw %v, want the record and then the send", actions)
+		}
+	}
+	if actions[0] != "GetRoomStatus" || actions[1] != "SendText" {
+		t.Errorf("the aimed daemon was asked for %v, want the room's record and then the send", actions)
+	}
+	select {
+	case line := <-otherSeen:
+		t.Errorf("the environment's daemon was asked %q: --socket has to aim the WHOLE verb at one daemon", line)
+	default:
+	}
+}
+
 // TestSendJsonPrintsTheRuntimesOwnAnswer: --json is the transport's own document. The runtime path answers
 // with the daemon's SendText document rather than a re-rendering of it.
 func TestSendJsonPrintsTheRuntimesOwnAnswer(t *testing.T) {
 	t.Setenv("AGENTHUB_SESSION_NAME", "4genthub-min-go-dev@4genthub-min")
 
 	sock, _ := fakeRuntime(t, func(string) string {
-		return `{"ok":true,"data":{"delivered":"peer@r"}}` + "\n"
+		return `{"ok":true,"data":{"delivered":"peer@r","outcome":"submitted"}}` + "\n"
 	})
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 
@@ -146,7 +208,7 @@ func TestSendJsonPrintsTheRuntimesOwnAnswer(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("send --json exit = %d, stderr = %q", code, errOut.String())
 	}
-	if strings.TrimSpace(out.String()) != `{"delivered":"peer@r"}` {
+	if strings.TrimSpace(out.String()) != `{"delivered":"peer@r","outcome":"submitted"}` {
 		t.Errorf("stdout = %q, want the runtime's own answer document", out.String())
 	}
 }
@@ -239,7 +301,7 @@ func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *te
 				return `{"ok":true,"data":[{"room":"leg-solo","seat":"solo","session_name":"` + native +
 					`","runtime":"omp","state":"Running"}]}` + "\n"
 			}
-			return `{"ok":true,"data":{}}` + "\n"
+			return `{"ok":true,"data":{"delivered":"` + native + `","outcome":"submitted"}}` + "\n"
 		})
 		t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 

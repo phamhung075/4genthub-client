@@ -300,18 +300,30 @@ func TestRigdStateIsPrivateAndAddsARigOnce(t *testing.T) {
 		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
 	}
 
-	read := ReadRigdState()
+	read, err := ReadRigdState()
+	if err != nil {
+		t.Fatalf("ReadRigdState: %v", err)
+	}
 	if strings.Join(read.Rigs, ",") != "demo,other" {
 		t.Errorf("ReadRigdState = %+v, want the two rigs", read)
 	}
 	if got := RemoveRig(read, "demo"); strings.Join(got.Rigs, ",") != "other" {
 		t.Errorf("RemoveRig = %+v, want demo gone", got.Rigs)
 	}
+	if err := os.WriteFile(path, []byte("not json{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A FILE THAT IS THERE AND COULD NOT BE READ IS AN ERROR, not the empty state: the difference decides
+	// whether the three callers that WRITE this list back may write at all.
+	if _, err := ReadRigdState(); err == nil {
+		t.Error("an unreadable state file answered no error; a writer would take the empty list for the truth")
+	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if got := ReadRigdState(); len(got.Rigs) != 0 {
-		t.Errorf("a missing state file answered %+v, want the empty state", got)
+	// A MISSING FILE IS NOT AN ERROR: a machine whose rigd has never run has no rooms to name.
+	if got, err := ReadRigdState(); err != nil || len(got.Rigs) != 0 {
+		t.Errorf("a missing state file answered %+v (err %v), want the empty state and no error", got, err)
 	}
 }
 

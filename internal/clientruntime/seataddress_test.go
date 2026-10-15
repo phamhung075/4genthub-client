@@ -1,6 +1,10 @@
 package clientruntime
 
-import "testing"
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 // TestCanonicalRigSeatSplitsTheDocumentedFormAndNothingElse pins the split F-B needs: the canonical string is
 // translated, the runtime's own name is not touched, and a string that merely contains an `@` is not guessed
@@ -32,5 +36,62 @@ func TestCanonicalRigSeatSplitsTheDocumentedFormAndNothingElse(t *testing.T) {
 			t.Errorf("CanonicalRigSeat(%q) = (%q, %q, %v), want (%q, %q, %v)",
 				c.session, rig, seat, ok, c.rig, c.seat, c.ok)
 		}
+	}
+}
+
+// TestAFailedReadIsNotTheAnswerNoSuchSeat pins the fault measured live on 2026-10-14: with the shared daemon's
+// socket unlinked, `send 4genthub-min lead` answered "the room's runtime does not list that seat" while the
+// truth was a connect failure. The two send an operator to different places - a room definition versus a dead
+// socket - so a read that could not be made must be reported as the read it is, by its own words.
+func TestAFailedReadIsNotTheAnswerNoSuchSeat(t *testing.T) {
+	t.Setenv(RuntimeSocketEnv, filepath.Join(t.TempDir(), "no-such-runtime.sock"))
+
+	_, err := ResolveSeatAddress("4genthub-min", "lead")
+	if err == nil {
+		t.Fatal("a seat address resolved over a socket that is not there")
+	}
+	if strings.Contains(err.Error(), "does not list that seat") {
+		t.Errorf("a failed read was reported as a room that does not list the seat: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cannot connect to agenthub-runtime") {
+		t.Errorf("the refusal does not name the failed read: %v", err)
+	}
+	if !strings.Contains(err.Error(), "4genthub-min/lead") {
+		t.Errorf("the refusal does not name the seat it was asked about: %v", err)
+	}
+}
+
+// TestTheRoomRecordAnswersBothWays pins that the failed-read fix did not soften the other answer: a runtime
+// that answers and does not list the seat is still refused in this file's own words, and one that lists it
+// still yields the session name and the record it came from.
+func TestTheRoomRecordAnswersBothWays(t *testing.T) {
+	original := seatStatuses
+	t.Cleanup(func() { seatStatuses = original })
+
+	asked := ""
+	seatStatuses = func(socket, room string) ([]SeatStatus, error) {
+		asked = socket
+		return []SeatStatus{{Seat: "reviewer", SessionName: "agenthub--4genthub-min--reviewer"}}, nil
+	}
+
+	address, err := ResolveSeatAddressOn("/tmp/another-daemon.sock", "4genthub-min", "reviewer")
+	if err != nil {
+		t.Fatalf("a seat the record lists did not resolve: %v", err)
+	}
+	if address.SessionName != "agenthub--4genthub-min--reviewer" || address.Source == "" {
+		t.Errorf("address = %+v, want the record's own session name and the source it was read from", address)
+	}
+	// THE SOCKET IS THE CALLER'S. A record read from one daemon while the send goes to another is a pair that
+	// can only be right by luck, so the read has to be made against the socket it will write to.
+	if asked != "/tmp/another-daemon.sock" {
+		t.Errorf("the record was read from %q, want the socket the caller named", asked)
+	}
+
+	_, err = ResolveSeatAddress("4genthub-min", "lead")
+	if err == nil {
+		t.Fatal("a seat the answering room does not list resolved")
+	}
+	if !strings.Contains(err.Error(), "does not list that seat") {
+		t.Errorf("a room that answered without the seat = %v, want the no-record refusal", err)
 	}
 }

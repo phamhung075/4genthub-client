@@ -62,13 +62,21 @@ func seatEnvParts() (room, seat, session string, ok bool) {
 	return room, seat, SeatSessionName(room, seat), true
 }
 
-// RuntimeSendText delivers one message to one session through the runtime socket and returns the runtime's
-// OWN answer document.
+// RuntimeSendText delivers one message to one session through the runtime socket this shell's environment
+// resolves, and returns the runtime's OWN answer document.
 //
 // The text is wrapped in the From/To/Sent envelope unless opts.Raw. `--json` prints the document returned
 // here, which is why the answer is taken at the frame rather than through Client.SendText (that helper drops
 // it): the frame is the identical one SendText writes.
 func RuntimeSendText(session, text string, opts SendOptions) ([]byte, error) {
+	return RuntimeSendTextOn("", session, text, opts)
+}
+
+// RuntimeSendTextOn is the same frame on a NAMED socket, so a verb that can be pointed at another daemon
+// writes to THAT daemon. Sending to one runtime while the address it was resolved from came from another is
+// the pair that produced the measured defect: a seat of an isolated run addressed the box's live runtime and
+// was refused for a mailbox under the live runtime's state directory.
+func RuntimeSendTextOn(socket, session, text string, opts SendOptions) ([]byte, error) {
 	body := text
 	if !opts.Raw {
 		sender := opts.Sender
@@ -77,7 +85,7 @@ func RuntimeSendText(session, text string, opts SendOptions) ([]byte, error) {
 		}
 		body = sendEnvelope(sender, session, text, time.Now())
 	}
-	resp, err := NewClient("").Call("SendText", map[string]string{"session": session, "text": body})
+	resp, err := NewClient(socket).Call("SendText", map[string]string{"session": session, "text": body})
 	if err != nil {
 		return nil, err
 	}
@@ -88,17 +96,39 @@ func RuntimeSendText(session, text string, opts SendOptions) ([]byte, error) {
 	return raw, nil
 }
 
-// RuntimeSendLine is the one line a native send prints for the runtime's answer document. The runtime
-// reports `outcome: "unconfirmed"` when the pane did not change after Enter, so the text may still sit in
-// the seat's input box; that is not claimed as a delivery.
+// RuntimeSendLine is the one line a native send prints for the runtime's answer document.
+//
+// ONLY THE OUTCOME THAT PROVES A SUBMISSION EARNS THE SENT LINE. The runtime has two delivery paths and two
+// vocabularies: a seat it hosts no runner for gets a pane paste, answered `submitted` (the pane changed after
+// Enter) or `unconfirmed` (it did not); a runner seat gets ONE frame into the seat's mailbox, answered
+// `relayed` the moment the runner wrote it into the agent's channel - which is NOT the agent having taken it.
+//
+// MEASURED 2026-10-14 (the live room and the U3 harness): a send to a mid-turn seat printed `Sent to
+// <session>` and exited 0 while the agent refused the prompt (`Agent is already processing. Use steer() or
+// followUp() …`) and the text was dropped - in no surface, not the transcript, the pane, the state file or the
+// queue. The refusal goes to the seat's pane; nothing reports it back to this caller, so `relayed` cannot be
+// printed as a delivery. An answer this build cannot read is not a delivery either, and the old default line
+// claimed the most exactly there (a missing outcome and text that is not JSON both printed `Sent to`).
+//
+// So: every answer except `submitted` takes an unconfirmed branch, each naming the reason that is known.
 func RuntimeSendLine(session string, answer []byte) string {
 	var doc struct {
 		Outcome string `json:"outcome"`
 	}
-	if json.Unmarshal(answer, &doc) == nil && doc.Outcome == "unconfirmed" {
-		return fmt.Sprintf("Pasted to %s, submission unconfirmed: the pane did not change after Enter, so the text may still be staged\n", session)
+	if json.Unmarshal(answer, &doc) != nil {
+		return fmt.Sprintf("Submission unconfirmed for %s: the runtime's answer could not be read as a verdict, so nothing is claimed as delivered\n", session)
 	}
-	return fmt.Sprintf("Sent to %s\n", session)
+	switch doc.Outcome {
+	case "submitted":
+		return fmt.Sprintf("Sent to %s\n", session)
+	case "unconfirmed":
+		return fmt.Sprintf("Pasted to %s, submission unconfirmed: the pane did not change after Enter, so the text may still be staged\n", session)
+	case "relayed":
+		return fmt.Sprintf("Relayed to %s, submission unconfirmed: the seat's runner wrote the frame into the agent's channel and the agent's own answer is not reported back, so the text is not claimed as delivered\n", session)
+	case "":
+		return fmt.Sprintf("Submission unconfirmed for %s: the runtime's answer carries no submission verdict, so nothing is claimed as delivered\n", session)
+	}
+	return fmt.Sprintf("Submission unconfirmed for %s: the runtime answered %q, which is no submission verdict, so nothing is claimed as delivered\n", session, doc.Outcome)
 }
 
 // runtimeJSONDocument renders a value the runtime answered with as the document `--json` prints. The answer
