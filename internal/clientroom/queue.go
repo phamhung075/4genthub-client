@@ -187,6 +187,9 @@ func queueArgumentRefusal(rest []string, wanted []string) string {
 	switch {
 	case len(rest) > len(wanted):
 		return fmt.Sprintf("unexpected argument %q", strings.Join(rest[len(wanted):], " "))
+	case len(rest) > 0 && strings.HasPrefix(rest[0], "qitem-"):
+		// The old `rig queue show <id>` habit: the id came first, but the ROOM is the first argument.
+		return fmt.Sprintf("%q is a queue item id, and the %s comes first (your room is $AGENTHUB_ROOM)", rest[0], wanted[0])
 	case len(rest) == 0:
 		return fmt.Sprintf("a %s is required", wanted[0])
 	case len(rest) < len(wanted):

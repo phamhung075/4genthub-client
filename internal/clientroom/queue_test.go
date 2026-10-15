@@ -299,3 +299,13 @@ func TestRoomQueueRefusalsCarryTheRoomContractsCodes(t *testing.T) {
 	}
 	assertRequests(t, unknown, `{"action":"QueueList","payload":{"filter":{},"room":"nope"}}`)
 }
+
+func TestAQueueItemIdInTheRoomPlaceNamesTheRoomFirstRule(t *testing.T) {
+	got := queueArgumentRefusal([]string{"qitem-20261015190439-d1c2c80b2fb2"}, []string{"ROOM", "QITEM_ID"})
+	if !strings.Contains(got, "queue item id") || !strings.Contains(got, "ROOM comes first") {
+		t.Fatalf("a qitem id where the ROOM belongs must say the room comes first, got %q", got)
+	}
+	if got := queueArgumentRefusal(nil, []string{"ROOM", "QITEM_ID"}); got != "a ROOM is required" {
+		t.Fatalf("no arguments keeps the plain refusal, got %q", got)
+	}
+}
