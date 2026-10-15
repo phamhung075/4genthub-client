@@ -26,6 +26,22 @@ func repoRoot(t *testing.T) string {
 	}
 }
 
+// ownPackageDir is this pin's own directory, repo-relative. The pin is itself a non-test Go file, so the
+// scanner finds its table row and Allowed[0]'s own Program/Match literals; the count in the pin's own test
+// is split along exactly this line so the delivered corpus is visible on its own.
+func ownPackageDir(t *testing.T, root string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		t.Fatalf("rel(%s, %s): %v", root, dir, err)
+	}
+	return filepath.ToSlash(rel)
+}
+
 // allowedReason answers whether an allowlist entry names THIS finding: same file, same command, and the
 // entry's Match present in the text the span was found in.
 func allowedReason(f Finding) (string, bool) {
@@ -47,15 +63,28 @@ func TestTheDeliveredTextNamesNoRetiredCommandAsAnInstruction(t *testing.T) {
 		t.Fatalf("scan %s: %v", root, err)
 	}
 
+	// THE COUNT IS SPLIT ALONG THE LINE THAT MATTERS: the pin's own data is not delivered text. This package
+	// is itself a non-test Go file, so the scanner finds its own table row and Allowed[0]'s own Program/Match
+	// literals - three spans that are statements about the class rather than text a reader is handed. The
+	// delivered count is what this pin protects, and it is reported on its own.
+	ownDir := ownPackageDir(t, root)
 	unexpected := []Finding{}
-	survivors := 0
+	delivered, deliveredAllowed, own := 0, 0, 0
 	for _, f := range findings {
+		isOwn := strings.HasPrefix(f.File, ownDir+"/")
+		if isOwn {
+			own++
+		} else {
+			delivered++
+		}
 		reason, ok := allowedReason(f)
 		if !ok {
 			unexpected = append(unexpected, f)
 			continue
 		}
-		survivors++
+		if !isOwn {
+			deliveredAllowed++
+		}
 		t.Logf("allowlisted: %s: `%s` - %s", f.File, f.Span, reason)
 	}
 	if len(unexpected) > 0 {
@@ -64,8 +93,8 @@ func TestTheDeliveredTextNamesNoRetiredCommandAsAnInstruction(t *testing.T) {
 			t.Errorf("  %s", f)
 		}
 	}
-	t.Logf("%d command spans name a retired program; %d of them are allowlisted with a reason",
-		len(findings), survivors)
+	t.Logf("%d command span(s) name a retired program: %d in the delivered text, %d of them allowlisted with a reason; %d in this pin's own data under %s/",
+		len(findings), delivered, deliveredAllowed, own, ownDir)
 }
 
 // TestEveryAllowlistEntryStillCoversASpan keeps the allowlist from rotting into a licence: an entry whose

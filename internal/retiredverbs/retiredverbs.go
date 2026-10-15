@@ -7,6 +7,12 @@
 // hands to a seat, and this repo's own docs - extracts the command-looking spans, and fails on a span that
 // names a retired program unless an allowlist entry carries it WITH A REASON.
 //
+// THE READ SET HAS A BOUNDARY, and it is stated here rather than left to be inferred from the code: the
+// non-test `*.go` files of this module, every file under `docs/`, and every file under `skills/`. The root
+// README.md and the runtime crate's own usage strings are OUTSIDE it. A repo-wide search for this class
+// currently leaves only the parked patterns in internal/clientpolicy/policy.go, and those escape this pin
+// because their sub-verb carries a `*` - incidentally, not by an allowlist entry.
+//
 // COMMENTS ARE NOT SCANNED, deliberately. The register of this pod's comments is the record of its own
 // removals ("this used to exec `rig ps`", "THE CLI REACH IS RETIRED RATHER THAN WRAPPED"), so a scan over
 // comments would fill the allowlist with the history of the fix instead of finding the defect. What a
@@ -121,9 +127,11 @@ var Allowed = []Allow{
 		File:    "skills/client/spawn-team/SKILL.md",
 		Program: "rig",
 		Subverb: "up",
-		Match:   "<spec>.yaml",
-		Reason: "a negation in the same sentence as what replaces it: a room is created from its local " +
-			"definition instead",
+		Match:   "and no",
+		Reason: "a negation: the sentence that names the retired form says this client has no such verb - " +
+			"and no such way to create a room - and gives the native creation that replaces it. The Match " +
+			"is the negating words only, so an instruction that writes the command without them is not " +
+			"covered by this entry",
 	},
 	{
 		File:    "skills/client/spawn-team/SKILL.md",
