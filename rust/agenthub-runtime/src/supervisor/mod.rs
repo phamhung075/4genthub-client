@@ -40,6 +40,71 @@ const DEFAULT_CAPTURE_LINES: usize = 200;
 /// immediately, so a longer window cannot delay the news that a seat is dead).
 const DEATH_STATES: [&str; 3] = ["agent_socket_closed", "agent_stdio_eof", "agent_exited"];
 
+/// Whether a seat's own word is a death. ONE SPELLING, because three readers ask it - the readiness check, the
+/// freshness check and the publisher check below - and a fourth death state added to one of them and forgotten in
+/// the others is exactly how a dead seat keeps reading `Running`.
+fn is_death_word(word: &str) -> bool {
+    DEATH_STATES.contains(&word)
+}
+
+/// Whether the process that published a seat's state is still there: `Some(true)`, `Some(false)`, or `None` when
+/// this host cannot answer.
+///
+/// `None` IS NOT `false`, and that distinction is the safety of the whole check: it is read from procfs, so a
+/// platform without `/proc` answers `None` and the caller keeps the verdict it would have had - a missing
+/// directory must never be read as a death.
+///
+/// THE LIMIT, named because it is real: pid reuse. A recycled pid makes a stale claim look live, and the cost of
+/// that is the behaviour that predates this check - a stale `working` still shown as `Running`. It never goes the
+/// other way, where a live seat would be called dead and its work killed.
+fn process_is_alive(pid: u32) -> Option<bool> {
+    if !Path::new("/proc/self").exists() {
+        return None;
+    }
+    Some(Path::new(&format!("/proc/{pid}")).exists())
+}
+
+/// The two facts the status reads OUT of a seat's document: the word it claims, and the process that published it.
+/// One reader, so a test of the correction reads the document the same way the status does.
+fn published_claim(doc: Option<&serde_json::Value>) -> (Option<String>, Option<u32>) {
+    let state = doc
+        .and_then(|v| v.get("state").and_then(|s| s.as_str()))
+        .map(str::to_string);
+    let pid = doc
+        .and_then(|v| v.get("pid").and_then(|p| p.as_u64()))
+        .map(|p| p as u32);
+    (state, pid)
+}
+
+/// THE DEATH THE RUNNER COULD NOT PUBLISH, as the sentence a status carries - and `None` when nothing on this side
+/// contradicts the seat's own document.
+///
+/// This is the half of the daemon's own promise that the code did not keep. Its paragraph in `get_room_status`
+/// says a claim left behind by a pane's teardown is "replaced with the death it can actually observe", and it did
+/// that only when the PANE was gone. The measured case is the other one: the agent is killed (SIGHUP) and the pane
+/// outlives it, so the file keeps the last word the runner wrote - `working`, 42 minutes stale - and every reader
+/// of that document, this status and the client's watch alike, is told a seat is working whose agent was killed.
+///
+/// The publisher's pid is what makes it observable: the runner stamps its own pid beside the state it writes, so
+/// `Some(false)` says the author of the claim is not there any more, while `None` says this host cannot tell.
+fn observed_death(facts: &SeatFacts, publishes_readiness: bool) -> Option<String> {
+    let pid = facts.publisher_pid?;
+    if !facts.alive || !publishes_readiness {
+        return None;
+    }
+    if facts.publisher_alive != Some(false) {
+        return None;
+    }
+    if facts.published_state.as_deref().is_some_and(is_death_word) {
+        return None;
+    }
+    Some(format!(
+        "agent_exited: the runner that publishes this seat's state (pid {pid}) is gone while its pane is up, so \
+         its last word `{}` is a claim nobody is left to update",
+        facts.published_state.as_deref().unwrap_or("unknown"),
+    ))
+}
+
 /// The death this generation has already recorded, if any: the seat's own file, written after the launch, and
 /// publishing one of `DEATH_STATES`. `None` if there is no such file - which is the ordinary case while a first
 /// launch is still building its cache, and is why this cannot be inferred from the file being absent.
@@ -144,6 +209,11 @@ struct SeatFacts {
     activity: ActivityWord,
     /// The seat's freshness stamp: the state file's `updated_at`.
     last_active: Option<DateTime<Utc>>,
+    /// The pid the seat's document names as its publisher: the runner that wrote it.
+    publisher_pid: Option<u32>,
+    /// Whether that publisher is still there. `None` when this host cannot answer (no procfs) - which is NOT
+    /// `false`: an unverifiable publisher must never be read as a dead one.
+    publisher_alive: Option<bool>,
     /// The active rail rows addressed to this seat, by qitem id.
     waiting_qitem_ids: Vec<String>,
 }
@@ -840,18 +910,28 @@ impl RoomSupervisor {
             // and its own file names the death.
             let seat_runtime = AgentRuntime::from_str_loose(&seat.runtime);
             let publishes_readiness = seat_runtime.has_runner();
-            let died = facts.published_state.as_deref().is_some_and(|s| {
-                matches!(
-                    s,
-                    "agent_socket_closed" | "agent_stdio_eof" | "agent_exited"
-                )
-            });
-            let state = match (facts.alive, publishes_readiness, died) {
+            let died = facts.published_state.as_deref().is_some_and(is_death_word);
+            let state_path = room_dir.join("run").join(format!("{}.state.json", seat.seat_key));
+            // THE DEATH THIS SIDE CAN OBSERVE, which is not the same as the death the runner published. A pane that
+            // outlived its agent leaves a claim behind, and the daemon owns this file's path - so the claim is
+            // corrected WHERE THE SEAT'S OWN WORDS LIVE, because the readers of that document are not all this
+            // function: the client's watch reads it, and so does anyone with `cat`. Written ONCE, not on every
+            // status call: after the correction the file names a death and a live publisher, so `observed_death`
+            // is silent from then on.
+            let observed = observed_death(&facts, publishes_readiness);
+            if let Some(why) = observed.as_deref() {
+                let _ = crate::runner::write_state(&state_path, "agent_exited", why, 0);
+            }
+            let state = match (facts.alive, publishes_readiness, died, observed.is_some()) {
                 (false, ..) => SeatLifecycleState::Stopped,
-                (true, true, true) => SeatLifecycleState::Dead,
+                (true, true, true, _) => SeatLifecycleState::Dead,
                 // A pane that is up with no readiness document at all has not handshaked YET; calling that
                 // `running` is what let a restart inherit the previous generation's green in 0.03 s.
-                (true, true, false) if facts.published_state.is_none() => SeatLifecycleState::Starting,
+                (true, true, false, false) if facts.published_state.is_none() => SeatLifecycleState::Starting,
+                // AND A CLAIM WHOSE PUBLISHER IS GONE IS A DEATH THE PANE CANNOT SHOW: the runner is the process
+                // that writes this file, and a seat whose agent was killed out from under its pane keeps the last
+                // word it published - `working`, 42 minutes stale, measured.
+                (true, true, false, true) => SeatLifecycleState::Dead,
                 _ => SeatLifecycleState::Running,
             };
 
@@ -859,7 +939,6 @@ impl RoomSupervisor {
             // (`SPEC` §4). The runner publishes the three death facts when it survives to see them; when the
             // pane's teardown kills it first, the state file still claims `idle`/`running` — so the daemon,
             // which owns this file's path too, replaces that claim with the death it can actually observe.
-            let state_path = room_dir.join("run").join(format!("{}.state.json", seat.seat_key));
             // AND THE PROOF, because a state name alone does not say what it rests on. The lead's honesty
             // requirement: the client's own output must show which of the two evidences produced the verdict -
             // the agent's own handshake, or a pane that outlived a grace.
@@ -876,10 +955,13 @@ impl RoomSupervisor {
                 SeatLifecycleState::Starting => Some(
                     "the pane is up and no handshake has been published for it yet".to_string(),
                 ),
+                // THE OBSERVED DEATH COMES FIRST: after a correction, the word still held in `published_state` is
+                // the OLD one (`working`), and printing it as the name of the death would be the same lie in a new
+                // place. `observed` is the sentence that says what actually happened.
                 SeatLifecycleState::Dead => Some(
-                    facts
-                        .published_state
+                    observed
                         .clone()
+                        .or_else(|| facts.published_state.clone())
                         .unwrap_or_else(|| "agent_socket_closed".to_string()),
                 ),
                 _ if facts.alive => Some(format!(
@@ -1176,9 +1258,10 @@ impl RoomSupervisor {
         let published = fs::read_to_string(&state_path)
             .ok()
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
-        let published_state = published
-            .as_ref()
-            .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string));
+        // THE CLAIM AND ITS AUTHOR, read together out of one document: the word decides what the status may say,
+        // and the pid decides whether anything is left standing behind it (see `observed_death` below).
+        let (published_state, publisher_pid) = published_claim(published.as_ref());
+        let publisher_alive = publisher_pid.and_then(process_is_alive);
         // THE WORD, PARSED NOT DERIVED: the runner publishes it beside `state`, so a document without one
         // (an old-format document, or a seat that never published) is `Unknown` - never a re-derivation
         // from `state`, which would be a second mapping, and never `idle`, which would authorise a
@@ -1210,6 +1293,8 @@ impl RoomSupervisor {
             published_state,
             activity,
             last_active,
+            publisher_pid,
+            publisher_alive,
             waiting_qitem_ids,
         }
     }
@@ -2276,6 +2361,8 @@ mod tests {
             activity: ActivityWord::Idle,
             last_active: Some(last_active),
             waiting_qitem_ids: ids.clone(),
+            publisher_pid: None,
+            publisher_alive: None,
         })
         .expect("a live seat with work waiting carries an alert");
         assert_eq!(alert.kind, "seat_up_with_queued_work");
@@ -2291,6 +2378,8 @@ mod tests {
             activity: ActivityWord::Unknown,
             last_active: None,
             waiting_qitem_ids: vec!["qitem-c".to_string()],
+            publisher_pid: None,
+            publisher_alive: None,
         })
         .expect("a live seat with work waiting still gets an alert with no stamp");
         assert_eq!(unknown.quiet_seconds, None);
@@ -2302,6 +2391,8 @@ mod tests {
             activity: ActivityWord::Unknown,
             last_active: Some(last_active),
             waiting_qitem_ids: ids.clone(),
+            publisher_pid: None,
+            publisher_alive: None,
         })
         .is_none());
         // Up with nothing waiting: nothing to be woken for.
@@ -2311,6 +2402,8 @@ mod tests {
             activity: ActivityWord::Idle,
             last_active: Some(last_active),
             waiting_qitem_ids: Vec::new(),
+            publisher_pid: None,
+            publisher_alive: None,
         })
         .is_none());
     }
@@ -2781,6 +2874,191 @@ mod tests {
         assert!(!mine.exists(), "the seat's own sessions are gone");
         assert!(other.join("a.jsonl").exists(), "another seat's sessions are untouched");
         supervisor.clear_saved_sessions("lab", "dev").unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The facts a claim makes, with the three fields this defect turns on: what the seat's document says, who
+    /// published it, and whether that publisher is still there.
+    fn claim_facts(word: Option<&str>, publisher_pid: Option<u32>, publisher_alive: Option<bool>) -> SeatFacts {
+        SeatFacts {
+            alive: true,
+            published_state: word.map(str::to_string),
+            activity: ActivityWord::from_state_document(None),
+            last_active: None,
+            publisher_pid,
+            publisher_alive,
+            waiting_qitem_ids: Vec::new(),
+        }
+    }
+
+    /// A SEAT'S DOCUMENT CARRIES ITS AUTHOR, which is what makes a stale claim detectable at all: the pid is
+    /// written by `write_state` and read by `published_claim`, so the pair is asserted as a pair - a document that
+    /// names no publisher is a claim nothing on this side can check.
+    #[test]
+    fn a_seat_state_document_names_the_process_that_published_it() {
+        let dir = scratch("state-pid");
+        let path = dir.join("dev.state.json");
+        crate::runner::write_state(&path, "working", "a turn is running", 0).expect("write state");
+
+        let doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let (word, pid) = published_claim(Some(&doc));
+        assert_eq!(word.as_deref(), Some("working"));
+        assert_eq!(pid, Some(std::process::id()), "the document must name the process that wrote it");
+        assert_eq!(pid.and_then(process_is_alive), Some(true), "and that process is this test");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// DEFECT 2, and the half of the daemon's own promise that the code did not keep: a claim whose publisher is
+    /// gone. The measured case is a pane that outlived its agent - the file keeps `working`, and every reader of
+    /// that document, this status included, is told a seat is working whose agent was killed.
+    #[test]
+    fn an_observed_death_names_the_claim_whose_publisher_is_gone() {
+        let why = observed_death(&claim_facts(Some("working"), Some(4242), Some(false)), true)
+            .expect("a claim whose publisher is gone is the death this side can observe");
+        assert!(why.contains("pid 4242"), "the sentence must name the publisher: {why}");
+        assert!(why.contains("working"), "the sentence must name the stale word: {why}");
+    }
+
+    /// AND IT SAYS NOTHING IN EVERY OTHER CASE, which is what keeps it from killing live seats: a live publisher; a
+    /// host that cannot answer (`None` from procfs is unverifiable, never `false`); a death the runner published
+    /// itself; a seat whose pane is gone; a runtime that publishes no readiness document; and a seat with no
+    /// document at all, which is the one shape that names no publisher.
+    #[test]
+    fn an_observed_death_is_silent_when_nothing_contradicts_the_claim() {
+        let no_pane = {
+            let mut facts = claim_facts(Some("working"), Some(4242), Some(false));
+            facts.alive = false;
+            facts
+        };
+        let cases: [(&str, SeatFacts, bool); 6] = [
+            ("a runner that is alive", claim_facts(Some("working"), Some(4242), Some(true)), true),
+            ("a host that cannot answer", claim_facts(Some("working"), Some(4242), None), true),
+            (
+                "a death the runner published itself",
+                claim_facts(Some("agent_exited"), Some(4242), Some(false)),
+                true,
+            ),
+            ("a pane that is gone", no_pane, true),
+            (
+                "a runtime that publishes no readiness document",
+                claim_facts(Some("working"), Some(4242), Some(false)),
+                false,
+            ),
+            ("a seat that published nothing", claim_facts(None, None, None), true),
+        ];
+        for (what, facts, publishes) in cases {
+            assert!(
+                observed_death(&facts, publishes).is_none(),
+                "{what} must not be reported as an observed death"
+            );
+        }
+    }
+
+    /// AND THE CORRECTION LANDS IN THE FILE, not only in this function's answer: the defect is that the DOCUMENT
+    /// claims a live seat, and the readers of that document are not all `get_room_status` - the client's watch
+    /// reads it, and so does anyone with `cat`. Corrected once, and the next read sees a death from a live
+    /// publisher, so the correction is not rewritten on every status call.
+    #[test]
+    fn the_observed_death_reaches_the_seat_state_file_and_stays_there() {
+        let dir = scratch("state-corrected");
+        let path = dir.join("reviewer.state.json");
+        crate::runner::write_state(&path, "working", "a turn is running", 0).expect("seed the stale claim");
+
+        let why = observed_death(&claim_facts(Some("working"), Some(4242), Some(false)), true).expect("observed");
+        crate::runner::write_state(&path, "agent_exited", &why, 0).expect("correct the claim");
+
+        let doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc["state"], "agent_exited", "the file must carry the death, not the stale word");
+        assert!(
+            doc["classification"].as_str().is_some_and(|c| c.contains("pid 4242")),
+            "the file must carry the reason the daemon observed: {doc}"
+        );
+
+        // AND IT STAYS CORRECTED: read the file back the way the status does, and nothing contradicts it any more
+        // - the publisher is the process that wrote the correction, and it is alive.
+        let (word, pid) = published_claim(Some(&doc));
+        let reread = SeatFacts {
+            published_state: word,
+            publisher_pid: pid,
+            publisher_alive: pid.and_then(process_is_alive),
+            ..claim_facts(None, None, None)
+        };
+        assert!(observed_death(&reread, true).is_none(), "a corrected file must not be corrected again");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// AND `None` IS NOT `false`: a host that cannot answer must keep the verdict it would have had, so the first
+    /// branch of `process_is_alive` answers `None` rather than inventing a death from a missing directory. On a box
+    /// with procfs the distinction it can show is the other end of it: a live pid is `Some(true)`, and a pid that
+    /// cannot exist is `Some(false)`.
+    #[test]
+    fn process_liveness_separates_a_live_pid_from_one_that_cannot_exist() {
+        if !Path::new("/proc/self").exists() {
+            assert_eq!(
+                process_is_alive(std::process::id()),
+                None,
+                "without procfs the answer is unverifiable, not dead"
+            );
+            return;
+        }
+        assert_eq!(process_is_alive(std::process::id()), Some(true), "this test process is alive");
+        assert_eq!(process_is_alive(u32::MAX), Some(false), "a pid that cannot exist is not alive");
+    }
+
+    /// DEFECT 2, THROUGH THE PATH THAT ACTUALLY RUNS IT. A real pane, a seat whose document claims a turn is
+    /// running, and a publisher that is not there any more - which is what a SIGHUPed agent leaves behind - read
+    /// through `get_room_status`, the surface the client's `ps` and the daemon's own nudge pass read.
+    ///
+    /// TWO THINGS MUST COME OUT OF IT: the seat is not `running`, and the DOCUMENT stops claiming a live seat,
+    /// because the readers of that document are not all this function. This is the case as it was measured: the
+    /// reviewer's file said `working` for a session that had been gone for 42 minutes.
+    #[tokio::test]
+    async fn the_status_corrects_a_claim_whose_publisher_is_gone() {
+        let (_tmux, _server) = crate::pty::test_servers::own("status-stale");
+        let dir = scratch("status-stale");
+        let room = format!("status-stale-{}", std::process::id());
+        let key = seat_key("status-stale");
+        let supervisor = supervisor_at(&dir);
+
+        // A runtime that publishes a readiness document, and a room spec on disk, since the status reads the spec
+        // rather than any in-memory copy.
+        let spec = startable_spec(&room, &key, "omp");
+        let room_dir = dir.join("rooms").join(&room);
+        fs::create_dir_all(room_dir.join("run")).unwrap();
+        fs::write(room_dir.join("spec.json"), serde_json::to_string(&spec).unwrap()).unwrap();
+
+        // A REAL pane under a private tmux server: the seat is up, and its agent is not.
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(&session, &room_dir, "sleep 30", &HashMap::new()).expect("pane");
+        let state_path = room_dir.join("run").join(format!("{key}.state.json"));
+        crate::runner::write_state(&state_path, "working", "a turn is running", 0).expect("the stale claim");
+        // The publisher is then made a pid that cannot exist - the one way to fake a gone runner without killing
+        // one - while the pane stays up.
+        let mut doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+        doc["pid"] = serde_json::json!(u32::MAX);
+        fs::write(&state_path, serde_json::to_string(&doc).unwrap()).unwrap();
+
+        let statuses = supervisor.get_room_status(&room).expect("status");
+        let status = statuses.iter().find(|s| s.seat == key).expect("the seat's row");
+        assert_eq!(
+            status.state,
+            SeatLifecycleState::Dead,
+            "a claim whose publisher is gone is not `running`: {:?}",
+            status.detail
+        );
+        let detail = status.detail.clone().unwrap_or_default();
+        assert!(
+            detail.contains("gone") && detail.contains("working"),
+            "the row must say what happened rather than repeat the word it could not trust: {detail}"
+        );
+
+        let after: serde_json::Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+        assert_eq!(
+            after["state"], "agent_exited",
+            "the document itself must stop claiming a live seat: {after}"
+        );
+
+        let _ = TerminalManager::stop_session(&session);
         let _ = fs::remove_dir_all(&dir);
     }
 }

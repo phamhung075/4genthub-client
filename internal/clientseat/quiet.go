@@ -53,32 +53,55 @@ func NewQuietWaiter(stateRoot string) QuietWaiter {
 func (w QuietWaiter) Wait(rig, seat string) bool {
 	deadline := w.Clock() + w.WaitSeconds
 	unrecognized := ""
-	note := func(word string) {
-		if word != "" && unrecognized == "" {
-			unrecognized = word
+	blind := false
+	// THE FIRST READING THAT CANNOT OPEN IS SAID OUT LOUD, THE MOMENT IT HAPPENS - and this is the whole of the
+	// change here. There are two ways to a wait that never opens: an activity word nobody recognizes, and no
+	// activity read at all. Both used to be discovered only by the deadline - the word was reported once at the
+	// end, and the unreadable case was reported NOWHERE - inside a budget of quietWaitSeconds. So the verb sat
+	// silent for its full budget with nothing to read, and the caller's only evidence was silence.
+	//
+	// ONCE PER REASON: a wait that polls every few seconds must not repeat itself on every poll, so each reason is
+	// said when it is first seen and never again, whichever of the two arrives first.
+	reading := func() (quiet bool) {
+		q, strange, unreadable := w.quietOnce(rig, seat)
+		if strange != "" && unrecognized == "" {
+			unrecognized = strange
+			w.reportf("no quiet for %s/%s: the activity word %q is not one this client recognizes, so the wait "+
+				"cannot tell an idle seat from a dead gate; it will run its full %s and leave the seat running",
+				rig, seat, strange, quietBudget())
 		}
+		if unreadable && !blind {
+			blind = true
+			w.reportf("%s/%s: no activity could be read at all, so this wait cannot open; it will run its full "+
+				"%s and leave the seat running", rig, seat, quietBudget())
+		}
+		return q
 	}
 	for w.Clock() < deadline {
-		quiet, strange := w.quietOnce(rig, seat)
-		note(strange)
-		if quiet {
+		if reading() {
 			w.Sleep(w.PollSeconds)
-			quiet, strange = w.quietOnce(rig, seat)
-			note(strange)
-			if quiet {
+			if reading() {
 				return true
 			}
 		}
 		w.Sleep(w.PollSeconds)
 	}
-	// ONCE, at the end, and only when a word arrived that this client has never seen: a vocabulary growth has to
-	// surface as a sentence rather than as a wait that never opens.
-	if unrecognized != "" && w.Report != nil {
-		w.Report(fmt.Sprintf("no quiet for %s/%s: the activity word %q is not one this client recognizes, so the "+
-			"wait cannot tell an idle seat from a dead gate", rig, seat, unrecognized))
-	}
 	return false
 }
+
+// reportf says one sentence through Report, and nothing when there is no Report: the seam stays a field a test can
+// leave nil, and the call sites stay free of nil checks.
+func (w QuietWaiter) reportf(format string, args ...any) {
+	if w.Report == nil {
+		return
+	}
+	w.Report(fmt.Sprintf(format, args...))
+}
+
+// quietBudget is the wait's budget as a DURATION rather than as a count of minutes: the sentence it replaces
+// divided by 60, so a budget that is not a whole number of minutes printed as a floor and named a window that was
+// not the window.
+func quietBudget() string { return (time.Duration(quietWaitSeconds) * time.Second).String() }
 
 // quietOnce is ONE reading of the two clauses - the seat is not running AND its session has been still for the quiet
 // window - and the activity comparison is NOT written here: it is clientruntime's one allow-set, shared with rigIdle,
@@ -90,16 +113,19 @@ func (w QuietWaiter) Wait(rig, seat string) bool {
 // instead of against one forbidden value: `!= "running"` ACCEPTED every word this client had never seen - `working`,
 // `needs_input`, and any word the daemon adds later - so the stillness clause decided by itself and a reseat could
 // proceed past a seat that was mid-turn. Stillness may DELAY a destroyer; only the allow-set's word releases one.
-func (w QuietWaiter) quietOnce(rig, seat string) (quiet bool, unrecognized string) {
+// The THIRD answer is the second half of the same seam: `unreadable` is true when no activity could be read at all,
+// which is the one case the word cannot report because there is no word - and it is the case this box hits, so the
+// wait must be able to name it instead of only counting the polls.
+func (w QuietWaiter) quietOnce(rig, seat string) (quiet bool, unrecognized string, unreadable bool) {
 	activity, read := w.Activity(rig, seat)
 	if !read {
-		return false, ""
+		return false, "", true
 	}
 	released, unrecognized := clientruntime.ActivityReleasesTheWait(activity)
 	if !released {
-		return false, unrecognized
+		return false, unrecognized, false
 	}
-	return w.Since(rig, seat) >= w.QuietSeconds, ""
+	return w.Since(rig, seat) >= w.QuietSeconds, "", false
 }
 
 func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }

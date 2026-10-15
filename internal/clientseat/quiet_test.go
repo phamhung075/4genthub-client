@@ -177,3 +177,59 @@ func TestWaitUntilQuietDoesNotReportARecognizedWord(t *testing.T) {
 	}
 }
 
+// WHEN THE SENTENCE IS SAID MATTERS AS MUCH AS WHAT IT SAYS. Reported once at the end of the wait, the sentence
+// arrived after the full budget with the caller already gone; reported on the first reading that cannot open, it
+// arrives inside one poll. The elapsed clock is the assertion: the report must land far below WaitSeconds.
+func TestWaitUntilQuietNamesTheWordOnItsFirstReading(t *testing.T) {
+	now := 0.0
+	var saidAt []float64
+	var said []string
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "drifting", true },
+		Since:        func(string, string) float64 { return 999 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		Report:       func(message string) { said = append(said, message); saidAt = append(saidAt, now) },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
+	if waiter.Wait("rig", "s") {
+		t.Fatal("a word nobody recognizes released the wait")
+	}
+	if len(said) != 1 {
+		t.Fatalf("want exactly one sentence, not one per poll: %v", said)
+	}
+	if saidAt[0] > 2*pollSeconds {
+		t.Errorf("the word was named %vs in, at the end of a %v wait rather than on the first reading",
+			saidAt[0], quietWaitSeconds)
+	}
+}
+
+// AND SO IS THE OTHER WAY TO A WAIT THAT NEVER OPENS, which is the one this box hits: with no activity read at all
+// there is no word to name, so the wait used to say NOTHING for its whole budget and the caller's only evidence was
+// silence. Once, on the first reading, with the budget named.
+func TestWaitUntilQuietNamesAnUnreadableActivityOnItsFirstReading(t *testing.T) {
+	now := 0.0
+	var saidAt []float64
+	var said []string
+	waiter := QuietWaiter{
+		Activity:     func(string, string) (string, bool) { return "", false },
+		Since:        func(string, string) float64 { return 0 },
+		Sleep:        func(seconds float64) { now += seconds },
+		Clock:        func() float64 { return now },
+		Report:       func(message string) { said = append(said, message); saidAt = append(saidAt, now) },
+		QuietSeconds: quietSeconds, WaitSeconds: quietWaitSeconds, PollSeconds: pollSeconds,
+	}
+	if waiter.Wait("rig", "s") {
+		t.Fatal("a seat with nothing readable released the wait")
+	}
+	if len(said) != 1 {
+		t.Fatalf("want exactly one sentence, not one per poll: %v", said)
+	}
+	if !strings.Contains(said[0], "no activity could be read at all") || !strings.Contains(said[0], quietBudget()) {
+		t.Errorf("the sentence does not name the unreadable activity and its budget (%s): %q", quietBudget(), said[0])
+	}
+	if saidAt[0] > 2*pollSeconds {
+		t.Errorf("the unreadable activity was named %vs in, at the end of a %v wait", saidAt[0], quietWaitSeconds)
+	}
+}
+

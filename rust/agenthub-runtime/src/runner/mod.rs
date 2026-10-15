@@ -1362,6 +1362,11 @@ pub fn write_state(state_path: &Path, state: &str, classification: &str, attempt
         "activity": crate::types::ActivityWord::from_runner_state(state).as_str(),
         "classification": classification,
         "resume_attempts": attempts,
+        // THE PUBLISHER'S PID, because a claim is only as good as the process that can still update it: without
+        // it a reader cannot tell a seat that IS working from one that WAS working when its runner died. Measured
+        // 2026-10-15: a seat whose agent had been killed out from under its pane kept the word `working` in this
+        // file for 42 minutes, and nothing was left to correct it.
+        "pid": std::process::id(),
         "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     });
     if let Some(parent) = state_path.parent() {

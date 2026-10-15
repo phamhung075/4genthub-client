@@ -2,6 +2,7 @@ package clientseat
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -90,5 +91,54 @@ func TestReseatTakesTheRigBeforeItsSeatFlags(t *testing.T) {
 	}
 	if code := runReseat([]string{"r"}, &out, &errOut); code != clientcmd.ExitUsage {
 		t.Fatalf("a rig with no --seat must be refused with usage, got %d", code)
+	}
+}
+
+// THE VERB IS LEGIBLE WHILE IT WAITS, which is the defect this lane started from: `seat reseat` printed NOTHING
+// from the moment it began to wait until a seat was quiet, inside a budget of up to quietWaitSeconds, so a seat
+// being waited for and a verb that had hung were the same terminal. Measured live 2026-10-15: the verb was killed
+// at 300s inside that wait having printed nothing at all.
+//
+// The assertions are about the SHAPE of the three lines, because the order is the information: the wait before it
+// begins (with its budget as a duration), the restart before the call that stops a session and starts another, and
+// the answer after it.
+func TestReseatSaysWhatItWaitsForAndThatItRestarts(t *testing.T) {
+	var said []string
+	deps, _ := reseatFixture(true)
+	deps.logf = func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
+
+	if code, err := reseatSeats("r", []string{"lead"}, false, deps); err != nil || code != clientcmd.ExitOK {
+		t.Fatalf("code %d err %v", code, err)
+	}
+	if len(said) != 3 {
+		t.Fatalf("the verb said %d lines, want the wait, the restart and the answer: %v", len(said), said)
+	}
+	if !strings.Contains(said[0], "waiting for quiet") || !strings.Contains(said[0], quietBudget()) {
+		t.Errorf("the wait is not announced with its own budget (%s): %q", quietBudget(), said[0])
+	}
+	if !strings.Contains(said[1], "restarting") {
+		t.Errorf("the restart is not announced before it happens: %q", said[1])
+	}
+	if !strings.Contains(said[2], "restarted") {
+		t.Errorf("the sequence does not end with the answer: %q", said[2])
+	}
+}
+
+// AND A SEAT THAT MISSED THE BUDGET IS NAMED WITH THE SAME DURATION, not with a floor of minutes: the sentence this
+// replaces divided quietWaitSeconds by 60, so a budget that is not a whole number of minutes named a window that
+// was not the window.
+func TestReseatNamesTheBudgetASeatMissedWithADuration(t *testing.T) {
+	var said []string
+	deps, _ := reseatFixture(false)
+	deps.logf = func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
+
+	if code, err := reseatSeats("r", []string{"lead"}, false, deps); err != nil || code != ExitFailed {
+		t.Fatalf("code %d err %v", code, err)
+	}
+	if len(said) != 2 {
+		t.Fatalf("want the wait and the outcome, got %v", said)
+	}
+	if !strings.Contains(said[1], quietBudget()) || !strings.Contains(said[1], "left running") {
+		t.Errorf("the missed budget is not named with the duration (%s): %q", quietBudget(), said[1])
 	}
 }

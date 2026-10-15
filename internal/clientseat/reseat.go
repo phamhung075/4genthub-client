@@ -114,11 +114,21 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 	}
 	failed := 0
 	for _, seat := range seats {
+		// THE WAIT IS ANNOUNCED BEFORE IT BEGINS, and that is the half of this fix a caller feels: the quiet
+		// wait is up to quietWaitSeconds, it used to print NOTHING until it ended, and with nothing said a seat
+		// being waited for and a verb that has hung are the same thing on the terminal. Measured live
+		// 2026-10-15: `seat reseat` was killed at 300s inside this wait having printed nothing at all, and the
+		// reading was "the verb never returns".
+		deps.logf("%s: waiting for quiet (up to %s), then the seat is restarted", seat, quietBudget())
 		if !deps.waitQuiet(rig, seat) {
-			deps.logf("%s: not quiet within %d minutes, left running", seat, int(quietWaitSeconds/60))
+			deps.logf("%s: not quiet within %s, left running", seat, quietBudget())
 			failed++
 			continue
 		}
+		// AND THE RESTART IS ANNOUNCED BEFORE THE CALL, because that call stops a session and starts another:
+		// the line after it is the answer, and with no line before it `restarting` is indistinguishable from the
+		// silence this verb was reported for.
+		deps.logf("%s: restarting - the runtime stops the session and starts it again", seat)
 		if err := deps.relaunch(rig, seat); err != nil {
 			return 0, err
 		}
