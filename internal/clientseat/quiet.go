@@ -158,15 +158,10 @@ var restartSeat = func(rig, seat string) error {
 	return err
 }
 
-// deliverSeatSkills is a variable because the function it stands for writes into the REAL account's seat store
-// (~/.config/4genthub/seats), which is resolved from the passwd entry rather than $HOME - so a test that ran the real
-// one would write into the owner's tree. Everything else about it is deliverSkillsDefault's.
-var deliverSeatSkills = deliverSkillsDefault
-
 // relaunch stops the seat's session and asks the runtime to start it again, so it loads the snapshot it is
 // now pinned to.
 //
-// THE RUNTIME TAKES THE RESTART OVER, and four pieces of the old code are DELETED rather than kept around the new call:
+// THE RUNTIME TAKES THE RESTART OVER, and five pieces of the old code are DELETED rather than kept around the new call:
 //
 //   - `rig launch <rigId> <rig.seat>` becomes the runtime's RestartSeat, which is stop_seat followed by start_seat
 //     from the room's own spec - the same two steps, taken by the party that owns the session.
@@ -180,10 +175,13 @@ var deliverSeatSkills = deliverSkillsDefault
 //     call has no such failure mode - the reply IS the outcome, or the call reports why - so a failure is now the
 //     runtime's own reason instead of being inferred from a session appearing, which is the shape that let a no-op
 //     look like a success elsewhere this evening.
+//   - THE CLIENT'S SKILL DELIVERY IS GONE (`clientseat/deliverSkills`). It copied `<store>/<rig>/rig/agents/<seat>/skills`
+//     into the seat's own directory, a store only the removed `sync room` verb ever wrote, and it treated a missing source
+//     as a refusal - so `4genteam seat reseat`, the surviving verb that reaches relaunch, failed at that step and never
+//     restarted anything. THE RUNTIME INSTALLS THE SEAT'S SKILLS ITSELF at every start (`install_seat_skills`,
+//     `rust/agenthub-runtime/src/supervisor/mod.rs:258`, from the tree `AGENTHUB_CLIENT_SKILLS` names), so the client has
+//     nothing left to deliver and no store to read.
 func relaunch(rig, seat string) error {
-	if err := deliverSeatSkills(rig, seat); err != nil {
-		return err
-	}
 	if err := restartSeat(rig, seat); err != nil {
 		return &clientcmd.CodedError{
 			Message: fmt.Sprintf("could not relaunch %s/%s: %v", rig, seat, err),

@@ -48,9 +48,11 @@ install -m 0755 4genteam ~/.local/bin/     # or any directory that is already on
 4genteam version                           # the binary's own version
 ```
 
-A binary installed on its own has no `skills/` tree beside it, and a seat's restart refuses until it finds
-the tree it delivers to the seat: set `AGENTHUB_CLIENT_SKILLS=/path/to/4genthub-client/skills`, or
-pass `--skills-root DIR` to that verb. A checkout has it at `skills/`.
+A binary installed on its own has no `skills/` tree beside it, and the runtime installs a seat's skills
+from the tree `AGENTHUB_CLIENT_SKILLS` names at every start: set
+`AGENTHUB_CLIENT_SKILLS=/path/to/4genthub-client/skills` in the state root's `.env`, or in the
+daemon's own environment. With neither set a seat starts with no skills, which is not an error. A
+checkout has the tree at `skills/`.
 
 **From source, with Go 1.26 or newer.** One module, one dependency (`gopkg.in/yaml.v3`):
 
@@ -346,7 +348,7 @@ This tree is the one source of skills. A project does not keep its own copy.
 | `error: team apply: --team DIR is required (the directory that holds team.json)` | no default team exists | pass the team directory |
 | `error: team publish-skills: --inventory FILE is required (the skill library inventory JSON)` | no default inventory exists | pass the inventory file |
 | `the room has a provider/model seat and … does not exist: omp reads the key from the launch directory's .env` | this client's env file is missing, so the room's `.env` has nothing to link to | create `~/.config/4genthub/.env`, then rebuild the room with `4genteam up ROOM --team DIR` |
-| `the client's skill tree is not at … (no share/ directory)` | a seat's restart delivers this client's own skills into it (`seat reseat`, or a relaunch), and the tree was not found | pass `--skills-root DIR`, or set `AGENTHUB_CLIENT_SKILLS` to a tree that holds `share/` |
+| a seat starts with no skills | the runtime found no tree to install for that seat | point `AGENTHUB_CLIENT_SKILLS` at a tree that holds `share/`, in the state root's `.env` or the daemon's environment |
 | `seatcheck does not resolve to … on PATH` | the seat checker is not where the seats will look for it | run `4genteam sync install-checker --go-dir .` and put that directory on `PATH` |
 | a seat's working directory shows `(deleted)` | the room was built by an older client | rebuild the room with `4genteam up ROOM --team DIR`, then relaunch the seat |
 | a seat waits at an approval prompt | the room was not materialized by this client | rebuild the room with `4genteam up ROOM --team DIR` |

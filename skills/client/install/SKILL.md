@@ -147,7 +147,6 @@ echo "=== 4. Running Safeguards Doctor ==="
 | Symptom | Cause | Remedy |
 |---|---|---|
 | `[omp-runner] ERROR rpc: No API key found for deepseek` | `DEEPSEEK_API_KEY` missing from tmux environment or launch `.env` | Ensure key is in `~/.config/deepseek/env`, `~/.config/4genthub/.env`, and set in tmux with `tmux set-environment -g DEEPSEEK_API_KEY <key>` |
-| `seat <seat> has no skills to deliver` | The store's `<store>/<room>/rig/agents/<seat>/skills` is missing, and nothing writes it since the `sync room` verb was removed (2026-10-15) | Populate that directory from the client's own skill tree (`AGENTHUB_CLIENT_SKILLS`, else `skills/` beside the binary), then restart the seat so it reloads them: `4genteam seat reseat <rig> --seat <seat>` |
 | `Cannot determine identity. Run inside an managed seat session` | Running `4genteam whoami` from host shell instead of inside a seat pane | Use `4genteam whoami --session <session-name> --json` or run from inside a tmux seat pane |
 | `bridge: silent, age unknown` | Client background bridge is stopped or unauthenticated | Start client bridge with `4genteam bridge` or check `AGENTHUB_TOKEN` in `~/.config/4genthub/.env` |
 | `Exit 3: at PEAK` | Attempted to start DeepSeek seats during peak pricing | Run `4genteam offpeak` to check window, or use `4genteam up <rig> --allow-peak` if authorized |

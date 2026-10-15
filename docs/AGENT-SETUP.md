@@ -228,30 +228,30 @@ without one is a seat folder.** So `skills/rooms/<room>/<name>` is a room-level 
 `SKILL.md` and the seat folder `<name>` when it does not. A shared or client skill stays generic — no
 rig, seat, host or personal path in it.
 
-**The client also delivers this tree itself.** A seat's restart (`4genteam seat reseat`, or the relaunch it
-performs) is the step that writes that seat's agent directory, so it is also the step that gives the seat
-the skills it resolves to: it copies
-them into that seat's skills path (`<out>/<room>/rig/agents/<seat>/skills/<skill>/`) and declares the
-ids in that seat's `agent.yaml` — `resources.skills[]` and each profile's `uses.skills` — because the
-declaration is what the runtime loads from, exactly as below. The tree is found at `--skills-root`,
-else `$AGENTHUB_CLIENT_SKILLS`, else `skills/` beside the binary, and a tree that is not there is
-refused by name rather than skipped. This route needs no cloud module and no overlay: a seat receives
-`share/`, then its room's room-level skills, then its own seat-level skills, and nothing from another
-room, another seat or `client/`.
+**The RUNTIME installs this tree, not the client.** A seat's skills are installed by the runtime at
+every start (`install_seat_skills`, `rust/agenthub-runtime/src/supervisor/mod.rs:258`): it rebuilds
+that seat's skills directory and copies into it the tree `AGENTHUB_CLIENT_SKILLS` names — read from the
+state root's `.env` first, else from the daemon's own environment, and a machine with neither set has no
+skills installed, which the runtime states as not an error rather than a refusal. The client
+neither copies this tree into a seat nor resolves it: a seat's restart (`4genteam seat reseat`, or the
+relaunch it performs) stops the session and asks the runtime to start it again, and that is the whole
+of the client's part. This route needs no cloud module and no overlay: a seat receives `share/`,
+then its room's room-level skills, then its own seat-level skills, and nothing from another room,
+another seat or `client/`.
 
 Two facts about the publish route, because they decide which tree to point it at: `team
 import-project` reads a **project's** own tree at `.claude/skills`, one directory per skill, each
 holding `SKILL.md`, and refuses a directory that has none — so it publishes a flat tree, not a
 four-kind one.
 
-**Where a skill lands, and what makes it count: the seat's own spec.** Publishing puts the file in
-place; the install is the seat spec naming it. The render declares every skill under
-`resources.skills[]` with the module's `id` and the `path` it is delivered at (`skills/<slug>`), and
-that declaration is what the runtime loads from — and it lists the same ids in the profile's
-`uses.skills` (`profiles.default.uses.skills`, built in the same loop), which is the half that
-activates them. A copy on disk that the spec does not declare is inert, and so is a pool entry no
-profile uses: an install has two halves, the file at the spec's path and the `id` in the spec that
-names it.
+**Where a skill lands, and what makes it count.** Publishing puts the module version in the store;
+the install on this machine is the runtime's copy into the seat's skills directory at every start
+(above). Nothing writes a seat's `agent.yaml` any more: the declaration this paragraph used to
+describe — `resources.skills[]`, and the same ids in each profile's `uses.skills` — was the client's
+own tree install, and it went with the tree locator in the skills cut. The hub's `AGENTS.md` §2
+records the same state: "the seat's `agent.yaml` has no writer at all today". What an install has on
+this machine is the tree the runtime rebuilds at each start, and which of those skills a seat is then
+told about is the open half.
 
 ### 2.2 Write `<TEAM-DIR>/team.json`
 
