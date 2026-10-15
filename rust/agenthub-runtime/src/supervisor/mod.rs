@@ -2073,6 +2073,7 @@ mod tests {
     /// which proof it was.
     #[tokio::test]
     async fn an_omp_seat_reports_the_proof_its_state_rests_on() {
+        let (_tmux, _server) = crate::pty::test_servers::own("omp-proof");
         let dir = scratch("omp-proof");
         let room = format!("omp-proof-{}", std::process::id());
         let key = seat_key("omp-proof");
@@ -2156,6 +2157,7 @@ mod tests {
     /// just watched, alive, on the iteration before.
     #[tokio::test]
     async fn a_live_non_omp_seat_is_running_once_its_grace_has_passed() {
+        let (_tmux, _server) = crate::pty::test_servers::own("probe-live");
         let dir = scratch("probe-live");
         let room = format!("probe-live-{}", std::process::id());
         let key = seat_key("probe-live");

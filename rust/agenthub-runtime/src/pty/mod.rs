@@ -349,6 +349,7 @@ mod launch_env_tests {
 
     #[test]
     fn each_session_gets_its_own_env_not_the_servers() {
+        let (_tmux, _server) = super::test_servers::own("launch-env");
         let dir = std::env::temp_dir().join(format!("pty-launch-env-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let sessions: Vec<(String, std::path::PathBuf)> = ["first", "second"]
@@ -374,5 +375,40 @@ mod launch_env_tests {
             let _ = TerminalManager::stop_session(session);
         }
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+/// ONE lock over the process-wide `TMUX_TMPDIR`, and a tmux server directory of the caller's own.
+///
+/// The shared state is not a tmux quirk, it is `own_tmux_root`'s write to `std::env`: every tmux client this
+/// runtime starts resolves WHICH server it talks to from that variable **at exec time**. Measured 2026-10-15 by
+/// pointing one client at another directory while its session was alive: `tmux ls` answers "error connecting to
+/// <dir>/tmux-1000/default (No such file or directory)" - a live session reported as gone. So tests that open
+/// real panes share one server, and
+/// `main::tests::the_tmux_root_is_derived_from_the_state_dir_and_created_private` moves the variable to its own
+/// scratch directory and DELETES that directory when it finishes. Under the harness's default parallelism that
+/// is what made the two pane-spawning supervisor tests report "its pane is gone and no ready frame ever
+/// arrived": their session was fine, their NEXT tmux client was looking somewhere else.
+///
+/// The lock is the fix, and it lives in the TESTS' own setup rather than in the suite invocation: a test that
+/// owns a root for its scratch state dir takes this first, points the process at a server of its own, and no
+/// other pane test is in flight while it does.
+#[cfg(test)]
+pub(crate) mod test_servers {
+    use std::path::PathBuf;
+    use std::sync::{Mutex, MutexGuard};
+
+    static TMUX_ENV: Mutex<()> = Mutex::new(());
+
+    /// Hold the process's tmux root for the rest of the test, pointed at a scratch server of this test's own.
+    /// The returned guard must stay alive while the test opens panes, and the directory outlives the test only
+    /// because tmux removes its own socket.
+    pub(crate) fn own(tag: &str) -> (MutexGuard<'static, ()>, PathBuf) {
+        let guard = TMUX_ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let root = std::env::temp_dir().join(format!("agenthub-tmux-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch tmux server dir");
+        std::env::set_var("TMUX_TMPDIR", &root);
+        (guard, root)
     }
 }
