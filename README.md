@@ -167,7 +167,7 @@ Every key lives in `~/.config/4genthub/.env` or the environment; only the first 
 | `AGENTHUB_TOKEN` | your key; the one credential |
 | `TYPESAFE_API_KEY` | TypeSafe AI System One token. Jev runs on this machine, never on the server: `4genteam decide` and `4genteam complete` call it from here (model `jev-1.13.0`) |
 | `TYPESAFE_BASE_URL` | TypeSafe AI base endpoint (default `https://api.typesafe.ai/v1`) |
-| `JEV_DECISION_THRESHOLD` | confidence at or above which a seat or lead decides for itself (0.8) |
+| `JEV_DECISION_THRESHOLD` | confidence at or above which a seat or lead decides for itself; the value set in the config is the one used |
 | `JEV_DECISION_MODEL` | the Jev model (`jev-1.13.0`) |
 | `JEV_DECISION_LOG_PATH` | the Jev decision log (`~/.config/4genthub/jev_decisions.log`) |
 | `DECISION_OWNER_ONLY_CATEGORIES` | comma list of categories that always go to the owner, added to `credentials` and `spend` |

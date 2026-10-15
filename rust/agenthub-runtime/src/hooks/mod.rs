@@ -17,43 +17,6 @@ pub enum SeatEvent {
         pid: u32,
         timestamp: DateTime<Utc>,
     },
-    PreTurn {
-        room: String,
-        seat: String,
-        turn_id: String,
-        tokens: usize,
-        timestamp: DateTime<Utc>,
-    },
-    PostTurn {
-        room: String,
-        seat: String,
-        turn_id: String,
-        tokens: usize,
-        duration_ms: u64,
-        timestamp: DateTime<Utc>,
-    },
-    ToolRequested {
-        room: String,
-        seat: String,
-        tool: String,
-        args_summary: String,
-        timestamp: DateTime<Utc>,
-    },
-    ToolCompleted {
-        room: String,
-        seat: String,
-        tool: String,
-        is_error: bool,
-        duration_ms: u64,
-        timestamp: DateTime<Utc>,
-    },
-    ContextLimitReached {
-        room: String,
-        seat: String,
-        tokens: usize,
-        threshold: usize,
-        timestamp: DateTime<Utc>,
-    },
     SessionTerminated {
         room: String,
         seat: String,
@@ -108,11 +71,6 @@ impl HookBus {
                 };
                 let (room, seat) = match &event {
                     SeatEvent::SessionStarted { room, seat, .. } => (room, seat),
-                    SeatEvent::PreTurn { room, seat, .. } => (room, seat),
-                    SeatEvent::PostTurn { room, seat, .. } => (room, seat),
-                    SeatEvent::ToolRequested { room, seat, .. } => (room, seat),
-                    SeatEvent::ToolCompleted { room, seat, .. } => (room, seat),
-                    SeatEvent::ContextLimitReached { room, seat, .. } => (room, seat),
                     SeatEvent::SessionTerminated { room, seat, .. } => (room, seat),
                 };
 

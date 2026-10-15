@@ -1,6 +1,9 @@
 package clientjev
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -54,6 +57,21 @@ func TestParseQuestionsLimits(t *testing.T) {
 	} {
 		if _, err := ParseQuestions([]byte(bad)); err == nil {
 			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
+// The criteria check accepts at the CONFIGURED threshold, not at a number of its own.
+func TestEvaluateCriteriaFollowsTheConfiguredThreshold(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"answers":{"criterion_1":{"noul":0.77}}}`))
+	}))
+	defer server.Close()
+	for threshold, want := range map[float64]Verdict{0.75: Accept, 0.9: Uncertain} {
+		cfg := Config{APIKey: "k", Model: "m", BaseURL: server.URL, Threshold: threshold}
+		got, reason, err := cfg.EvaluateCriteria(context.Background(), []string{"c"}, nil)
+		if err != nil || got != want {
+			t.Fatalf("threshold %v: verdict %q (%s), err %v, want %q", threshold, got, reason, err, want)
 		}
 	}
 }

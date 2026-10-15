@@ -204,7 +204,7 @@ func (c Config) SelectChoices(ctx context.Context, summary, detail string, qs []
 }
 
 // EvaluateCriteria asks whether each acceptance criterion holds for the evidence. Any answer at or
-// below 0.3 rejects, all at or above 0.8 accept, anything else is uncertain; a missing answer or an
+// below 0.3 rejects, all at or above the configured threshold accept, anything else is uncertain; a missing answer or an
 // error is never an accept.
 func (c Config) EvaluateCriteria(ctx context.Context, criteria []string, evidence any) (Verdict, string, error) {
 	questions := make(map[string]any, len(criteria))
@@ -226,7 +226,7 @@ func (c Config) EvaluateCriteria(ctx context.Context, criteria []string, evidenc
 			value = *a.Noul
 		}
 		parts = append(parts, fmt.Sprintf("%s: %.2f", id, value))
-		allHigh = allHigh && value >= 0.8
+		allHigh = allHigh && value >= c.Threshold
 		anyLow = anyLow || value <= 0.3
 	}
 	sort.Strings(parts)

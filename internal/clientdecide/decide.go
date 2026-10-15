@@ -42,7 +42,7 @@ Ask one step of the decision ladder. Jev is asked from this machine; the JSON ou
   --detail-file     The same text read from a file: use it for anything with quotes, newlines or a $, which a shell breaks.
 
 Configuration, from ~/.config/4genthub/.env or the environment: TYPESAFE_API_KEY (required), TYPESAFE_BASE_URL,
-JEV_DECISION_MODEL (jev-1.13.0), JEV_DECISION_THRESHOLD (0.8), JEV_DECISION_LOG_PATH. Every outcome is appended
+JEV_DECISION_MODEL (jev-1.13.0), JEV_DECISION_THRESHOLD (the confidence a tier needs to decide; the value is the one set in the config), JEV_DECISION_LOG_PATH. Every outcome is appended
 to the Jev decision log (~/.config/4genthub/jev_decisions.log). No server call is made.
 Exit: 0 this tier decided, 5 escalated to the next tier (see escalate_to), 1 the evaluation could not be recorded, 2 usage.
 `

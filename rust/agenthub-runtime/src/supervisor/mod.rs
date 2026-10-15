@@ -654,6 +654,7 @@ impl RoomSupervisor {
                 for seat in spec.seats {
                     let session_name = Self::session_name(room, &seat.seat_key);
                     let _ = TerminalManager::stop_session(&session_name);
+                    self.emit_terminated(room, &seat.seat_key);
                 }
             }
         }
@@ -670,7 +671,20 @@ impl RoomSupervisor {
     /// Stop one seat.
     pub fn stop_seat(&self, room: &str, seat: &str) -> Result<(), String> {
         let session = Self::session_name(room, seat);
-        TerminalManager::stop_session(&session)
+        TerminalManager::stop_session(&session)?;
+        self.emit_terminated(room, seat);
+        Ok(())
+    }
+
+    /// A stop the runtime was asked for. A seat that dies on its own is not seen here: the runtime learns of
+    /// it only when a status read finds the death state, so no exit code is known and none is claimed.
+    fn emit_terminated(&self, room: &str, seat: &str) {
+        self.hook_bus.emit(SeatEvent::SessionTerminated {
+            room: room.to_string(),
+            seat: seat.to_string(),
+            exit_code: None,
+            timestamp: Utc::now(),
+        });
     }
 
     /// Record the model one seat starts with, in the room's own spec. A running agent keeps the model it
@@ -1932,6 +1946,22 @@ mod tests {
         assert_eq!(answer["outcome"], "relayed");
         assert_eq!(answer["runner"]["relayed"], "prompt");
 
+        let _ = fs::remove_dir_all(&state_dir);
+    }
+
+    #[tokio::test]
+    async fn stopping_a_room_announces_each_seat_it_stopped() {
+        let state_dir = scratch("terminated");
+        write_spec(&state_dir, "demo", "dev");
+        let supervisor = supervisor_at(&state_dir);
+        let mut events = supervisor.hook_bus.subscribe();
+        supervisor.stop_room("demo").expect("stopped");
+        match events.recv().await.expect("an event") {
+            SeatEvent::SessionTerminated { room, seat, exit_code, .. } => {
+                assert_eq!((room.as_str(), seat.as_str(), exit_code), ("demo", "dev", None));
+            }
+            other => panic!("expected SessionTerminated, got {other:?}"),
+        }
         let _ = fs::remove_dir_all(&state_dir);
     }
 

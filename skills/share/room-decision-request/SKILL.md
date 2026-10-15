@@ -37,7 +37,7 @@ Jev answers on your own machine (it needs `TYPESAFE_API_KEY` in `~/.config/4gent
 - **Seat**: `escalate_to: "lead"` means send the lead the question with the recommended option, so the answer is one word. The lead repeats the call with `--tier lead`.
 - **Lead**: `escalate_to: "owner"` means the owner decides. Stop the branch that depends on it, put the brief and questions in a `4genteam room queue create` row to the room's principal session tagged `owner-decision`, and say so in your report. The owner answers on the dashboard under **Decision Requests**.
 
-The threshold is `JEV_DECISION_THRESHOLD` (default 0.8) at every tier. **Category** is a free token (`a-z`, `0-9`, `_`, `-`); omit it for `general`. `credentials` and `spend`, and the categories in `DECISION_OWNER_ONLY_CATEGORIES` (for example `omp_cap`), go to the owner whatever the confidence, decided by code with no Jev call. Every step is appended to `~/.config/4genthub/jev_decisions.log`.
+The threshold is `JEV_DECISION_THRESHOLD` from `~/.config/4genthub/.env` at every tier (read the value there; this text carries none). **Category** is a free token (`a-z`, `0-9`, `_`, `-`); omit it for `general`. `credentials` and `spend`, and the categories in `DECISION_OWNER_ONLY_CATEGORIES` (for example `omp_cap`), go to the owner whatever the confidence, decided by code with no Jev call. Every step is appended to `~/.config/4genthub/jev_decisions.log`.
 
 ## Checklist
 
