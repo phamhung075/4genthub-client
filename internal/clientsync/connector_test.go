@@ -7,17 +7,21 @@
 package clientsync
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The seat identity travels as a pair or not at all: a client that cannot name its seat still
@@ -251,4 +255,25 @@ func (l *upgradeListener) arrived() (*http.Request, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.request, l.tlsSeen
+}
+
+// A drain's 1 ms read deadline must not become a write deadline: net.Conn.SetDeadline sets both, and the
+// expired write deadline made the next ping or events frame fail with `i/o timeout`, so the agent's socket
+// never stayed up after its handshake.
+func TestSetDeadlineBoundsReadsOnlyAndLeavesWritesOpen(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	conn := &connectorConn{conn: client, r: bufio.NewReader(client)}
+
+	if err := conn.SetDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ReadFrame(); err == nil {
+		t.Fatal("a read past its deadline must time out")
+	}
+	go func() { _, _ = io.Copy(io.Discard, server) }()
+	if err := conn.WriteFrame(map[string]any{"type": "ping"}); err != nil {
+		t.Fatalf("a write after a read deadline expired must still succeed: %v", err)
+	}
 }

@@ -244,8 +244,9 @@ func DialConnector(ctx context.Context, baseURL, token string) (*connectorConn, 
 func (c *connectorConn) Close() error { return c.conn.Close() }
 
 // SetDeadline bounds the next read, which is how the daemon gets an ack timeout and a drain that cannot
-// block a tick.
-func (c *connectorConn) SetDeadline(t time.Time) error { return c.conn.SetDeadline(t) }
+// block a tick. It sets the READ deadline only: net.Conn.SetDeadline also sets the write deadline, and the
+// drain's 1 ms deadline then stayed expired, so the next ping or events write failed with `i/o timeout`.
+func (c *connectorConn) SetDeadline(t time.Time) error { return c.conn.SetReadDeadline(t) }
 
 // writeText sends one masked text frame. A client MUST mask; the server rejects unmasked frames.
 func (c *connectorConn) writeText(payload []byte) error {
