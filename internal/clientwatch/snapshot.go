@@ -22,7 +22,7 @@ func SeatSnapshot(root, room, seat string) Snapshot {
 		snap.Runtime = ""
 		return snap
 	}
-	snap.Model = seatModel(logPath)
+	snap.Model = seatModelOf(root, room, seat, logPath)
 	lines := readLines(logPath)
 	for i := len(lines) - 1; i >= 0; i-- {
 		if tokens := contextTokens(lines[i]); tokens != nil {

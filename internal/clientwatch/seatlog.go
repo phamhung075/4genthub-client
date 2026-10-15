@@ -16,10 +16,7 @@ import (
 // clientruntime.SeatSessionsDir. An agy seat keeps its transcript in agy's own home, under the conversation id
 // the runtime records in the seat directory's `agy-conversation` file.
 
-var (
-	modelInLog       = regexp.MustCompile(`"model":"([^"]+)"`)
-	geminiModelInLog = regexp.MustCompile(`(Gemini [0-9.]+ Flash(?:\s*\([^)]+\))?)`)
-)
+var modelInLog = regexp.MustCompile(`"model":"([^"]+)"`)
 
 // newestSession is the most recently written *.jsonl in a seat's sessions directory. The directory also
 // holds one artifact subdirectory per session, named like its log without the extension; the pattern
@@ -186,9 +183,32 @@ func seatModel(logPath string) string {
 	if len(found) > 0 {
 		return found[len(found)-1][1]
 	}
-	foundGemini := geminiModelInLog.FindAllStringSubmatch(string(raw[:read]), -1)
-	if len(foundGemini) > 0 {
-		return foundGemini[len(foundGemini)-1][1]
+	return ""
+}
+
+// seatModelOf is the model a seat runs: the one that answered last in its log, else the one the room's spec.json
+// declares for it. An agy transcript names no model, so for an agy seat the spec is the only record.
+func seatModelOf(root, room, seat, logPath string) string {
+	if model := seatModel(logPath); model != "" {
+		return model
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "rooms", room, "spec.json"))
+	if err != nil {
+		return ""
+	}
+	var spec struct {
+		Seats []struct {
+			SeatKey string `json:"seat_key"`
+			Model   string `json:"model"`
+		} `json:"seats"`
+	}
+	if json.Unmarshal(raw, &spec) != nil {
+		return ""
+	}
+	for _, entry := range spec.Seats {
+		if entry.SeatKey == seat {
+			return entry.Model
+		}
 	}
 	return ""
 }

@@ -40,7 +40,7 @@ func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
 	var header *Header
 	if len(seats) == 1 {
 		logPath, _ := seatLog(root, s.rig, seats[0])
-		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModel(logPath),
+		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModelOf(root, s.rig, seats[0], logPath),
 			func(line string) { fmt.Fprintln(out, line) })
 		if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
 			header.pane = func(title string) { _, _ = herdr(ctx, "pane", "rename", paneID, title) }

@@ -730,3 +730,25 @@ func TestAPaneIsNeverGivenABareNameForItsShellToResolve(t *testing.T) {
 		t.Errorf("command = %q, want the absolute path of THIS binary and the verb", command)
 	}
 }
+
+// An agy transcript names no model, so the seat's model is the one its room's spec.json declares.
+func TestSeatModelOfFallsBackToTheRoomSpec(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "rooms", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := `{"seats":[{"seat_key":"lead","model":"deepseek/deepseek-flash"},{"seat_key":"reviewer","model":"gemini-3.8-flash-low"}]}`
+	if err := os.WriteFile(filepath.Join(root, "rooms", "r", "spec.json"), []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(log, []byte(`{"type":"PLANNER_RESPONSE","content":"hi"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := seatModelOf(root, "r", "reviewer", log); got != "gemini-3.8-flash-low" {
+		t.Errorf("seatModelOf = %q, want the spec's model", got)
+	}
+	if got := seatModelOf(root, "r", "nobody", log); got != "" {
+		t.Errorf("seatModelOf of an unlisted seat = %q, want empty", got)
+	}
+}
