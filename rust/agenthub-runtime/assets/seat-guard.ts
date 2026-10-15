@@ -2,8 +2,8 @@
 // from there because the seat dir is its agent dir (PI_CODING_AGENT_DIR).
 //
 // It does two jobs and nothing else:
-//   1. GUARD: block the three calls the owner's standing rules forbid a seat - printing a secret from a `.env`
-//      file, running Docker, and pushing (a push to main deploys production, and the owner approves every one).
+//   1. GUARD: block the calls the owner's standing rules forbid a seat - printing a secret from a `.env`
+//      file, running Docker, pushing (a push to main deploys production, and the owner approves every one), and changing the room's own tmux server.
 //   2. LOG: append ONE line per tool call to <seat dir>/tool-calls.jsonl, so "what did this seat do, and was it
 //      refused" is one `jq` away instead of a transcript read.
 //
@@ -40,6 +40,11 @@ function describe(tool: string, input: Record<string, unknown>): string {
 // template (`.env.sample`, `.env.example`), which hold no secret.
 const ENV_FILE = /(^|[\s/"'=])\.env(?!\.(sample|example|template)\b)(\.[\w-]+)?(?=$|[\s"'|;&)])/;
 
+// A tmux invocation as the COMMAND of a statement, after env/sudo/VAR= noise: `tmux ...` and `env -u TMUX tmux ...`
+// match, `echo tmux is nice` does not.
+const TMUX_CALL =
+  /^\s*(?:(?:env|sudo|command|exec|nohup)\s+(?:-\S+\s+(?:[A-Za-z_]+\s+)?|[A-Za-z_]+=\S+\s+)*|[A-Za-z_]+=\S+\s+)*tmux\b(.*)$/s;
+
 // The rules. Each returns the reason a call is refused, or "" to let it through.
 const RULES: { rule: string; check: (tool: string, input: Record<string, unknown>) => string }[] = [
   {
@@ -66,6 +71,26 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     check: (tool, input) =>
       tool === "bash" && /(^|[;&|(]\s*|\n\s*)(sudo\s+)?docker(-compose)?\b/.test(String(input.command ?? ""))
         ? "Docker is not run from a seat; production updates by a push the owner approves"
+        : "",
+  },
+  {
+    // $TMUX is set inside a seat's pane, so a bare tmux command that CHANGES something talks to THE ROOM'S OWN
+    // server: `tmux kill-server` there ended every seat (fe-dev's repro, 2026-10-15), and `new-session` or
+    // `send-keys` would write into the seats' own panes. `TMUX_TMPDIR` does not help, because $TMUX wins. A
+    // command that names a server with -S or -L, or reads only (list-*, display-message, capture-pane, show-*),
+    // passes.
+    rule: "tmux-mutate",
+    check: (tool, input) =>
+      tool === "bash" &&
+      String(input.command ?? "")
+        .split(/&&|\|\||;|\n|\|/)
+        .some((part) => {
+          const call = part.match(TMUX_CALL);
+          if (!call || /\s-[SL]\s/.test(call[1])) return false;
+          const verb = call[1].match(/\b([a-z][a-z-]+)\b/);
+          return !verb || !/^(list-[a-z]+|ls|display-message|display|capture-pane|show-[a-z]+|has-session|info|-V)$/.test(verb[1]);
+        })
+        ? "a bare tmux command that changes anything acts on the room's own tmux server, because $TMUX points there; use `env -u TMUX tmux -L <scratch-name> ...`, or read with list-*, display-message or capture-pane"
         : "",
   },
   {

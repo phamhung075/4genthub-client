@@ -2540,7 +2540,7 @@ mod tests {
     /// run unguarded and unrecorded with nothing failing.
     #[test]
     fn the_seat_tool_hook_guards_and_logs() {
-        for needle in ["\"tool_call\"", "\"tool_result\"", "block: true", "tool-calls.jsonl", "env-secret", "docker", "push"] {
+        for needle in ["\"tool_call\"", "\"tool_result\"", "block: true", "tool-calls.jsonl", "env-secret", "docker", "tmux-mutate", "push"] {
             assert!(SEAT_TOOL_HOOK.contains(needle), "the hook lost {needle}");
         }
     }
