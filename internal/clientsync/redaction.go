@@ -45,6 +45,11 @@ const (
 	// entropyTokenAlphabet, whose Shannon entropy is at or above this many bits per character.
 	unsureMinTokenLen = 32
 	unsureMinEntropy  = 4.0
+
+	// A token that is a run of short segments joined by `/`, `-` or `_` is a path or an identifier, not a
+	// secret: no segment is longer than unsureMaxSegment and the separators come at least once per
+	// unsureMaxSegment characters. A random base64 secret rarely has separators that dense.
+	unsureMaxSegment = 16
 )
 
 // EventRedactor holds the state one event stream needs BETWEEN lines: the ids of tool calls that
@@ -163,6 +168,11 @@ const entropyTokenAlphabet = `[A-Za-z0-9+/=_-]`
 
 var entropyTokenPattern = regexp.MustCompile(entropyTokenAlphabet + `{32,}`)
 
+// toolCallIDPattern is a tool-call id as the runtimes mint it (`call_00_<random>` from the deepseek route,
+// `toolu_<random>` from Anthropic). Each carries a random body by design, appears in every tool call and
+// result, and is a pairing key, not a credential, so it is removed before the entropy test.
+var toolCallIDPattern = regexp.MustCompile(`\b(?:call_\d{2}_|toolu_)[A-Za-z0-9]+`)
+
 // envPathPattern is 4.3.3's path rule: a path naming a `.env` file or a dot-variant of one, either at
 // the start of the string or right after a path separator.
 var envPathPattern = regexp.MustCompile(`(^|/)\.env(\..*)?$`)
@@ -224,12 +234,34 @@ func withheldEvent(reason string, bytes int) map[string]any {
 // entropyTokenAlphabet whose SHANNON ENTROPY, computed over the token's own character frequencies,
 // is at or above unsureMinEntropy bits per character.
 func highEntropyToken(text string) (string, bool) {
+	text = toolCallIDPattern.ReplaceAllString(text, "")
 	for _, token := range entropyTokenPattern.FindAllString(text, -1) {
-		if shannonEntropy(token) >= unsureMinEntropy {
+		if shannonEntropy(token) >= unsureMinEntropy && !isSegmentedName(token) {
 			return token, true
 		}
 	}
 	return "", false
+}
+
+// isSegmentedName reports whether token is a path or identifier: every segment between `/`, `-` and `_`
+// is at most unsureMaxSegment characters, and there are enough separators to say so (at least one per
+// unsureMaxSegment characters, never fewer than two). Such names carry the high entropy of the words
+// and ids in them, which is what withheld nearly every line of an omp seat's transcript.
+func isSegmentedName(token string) bool {
+	separators := 0
+	run := 0
+	for _, r := range token {
+		if r == '/' || r == '-' || r == '_' {
+			separators++
+			run = 0
+			continue
+		}
+		run++
+		if run > unsureMaxSegment {
+			return false
+		}
+	}
+	return separators >= 2 && separators >= len(token)/unsureMaxSegment
 }
 
 // shannonEntropy is H = -sum(p * log2 p) over the characters of s, in bits per character.

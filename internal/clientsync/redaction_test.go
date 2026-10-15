@@ -187,6 +187,30 @@ func TestEventWithholdsOnAHighEntropyToken(t *testing.T) {
 	}
 }
 
+// A path or a queue-item id is a run of short segments joined by separators; it has high entropy and is
+// not a secret, so it must not withhold the line. A secret with the same alphabet and the same length
+// still does.
+func TestEventKeepsPathsAndIdsButWithholdsSecrets(t *testing.T) {
+	for _, name := range []string{
+		"/home/daihu/__projects__/4genthub/agenthub_client/internal/clientsync/redaction.go",
+		"see qitem-20261015050158-c8120a7112fb for the ruling",
+		"agenthub_client/internal/clientseat/sendpolicy_test.go",
+		`{"type":"toolCall","id":"call_00_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5","name":"read"}`,
+	} {
+		if _, reason := NewEventRedactor().Event(name); reason != "" {
+			t.Errorf("%q was withheld: reason=%q", name, reason)
+		}
+	}
+	for _, secret := range []string{
+		"the session token is Qw9_xK2mP7vB4nR8tY6uI3oL5aZ1sD0fH",
+		"blob Qw9xK2mP7vB4nR8tY6uI3oL5aZ1sD0fHjG-eW3qC/x end",
+	} {
+		if _, reason := NewEventRedactor().Event(secret); reason != reasonUnsure {
+			t.Errorf("%q: reason=%q, want %q", secret, reason, reasonUnsure)
+		}
+	}
+}
+
 // The fail-closed rule for a broken redactor: replacing the seam to panic must yield the placeholder
 // and must not leak the raw line.
 func TestEventWithholdsWhenTheRedactorPanics(t *testing.T) {
