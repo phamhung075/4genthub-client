@@ -195,6 +195,12 @@ fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
 const SEAT_MCP_CONFIG: &str = r#"{"mcpServers":{"agenthub_http":{"type":"http","url":"${AGENTHUB_URL}/mcp","headers":{"Accept":"application/json, text/event-stream","Authorization":"Bearer ${AGENTHUB_TOKEN}"}}}}
 "#;
 
+/// The seat's tool hook: omp loads `hooks/pre/*.ts` from its agent dir, and this one refuses the calls the owner's
+/// rules forbid a seat (printing a `.env`, Docker, a push) and appends one line per tool call to the seat's
+/// `tool-calls.jsonl`. The runtime owns it because the seat dir is the runtime's: a hook a seat or an operator had
+/// to remember to install is a hook that is missing on the next seat.
+const SEAT_TOOL_HOOK: &str = include_str!("../../assets/seat-guard.ts");
+
 /// The variable that names the client's skill tree (`share/`, `rooms/<room>/`, `rooms/<room>/<seat>/`). It is
 /// read from the state root's `.env`, else from the daemon's own environment.
 const SKILLS_ROOT_ENV: &str = "AGENTHUB_CLIENT_SKILLS";
@@ -482,6 +488,10 @@ impl RoomSupervisor {
         fs::create_dir_all(&seat_dir).map_err(|e| format!("cannot create seat dir: {e}"))?;
         fs::write(seat_dir.join("mcp.json"), SEAT_MCP_CONFIG)
             .map_err(|e| format!("cannot write the seat's mcp.json: {e}"))?;
+        let hook_dir = seat_dir.join("hooks").join("pre");
+        fs::create_dir_all(&hook_dir).map_err(|e| format!("cannot create the seat's hook dir: {e}"))?;
+        fs::write(hook_dir.join("seat-guard.ts"), SEAT_TOOL_HOOK)
+            .map_err(|e| format!("cannot write the seat's tool hook: {e}"))?;
         install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
 
         // Determine working directory
@@ -2524,6 +2534,15 @@ mod tests {
         let server = &parsed["mcpServers"]["agenthub_http"];
         assert_eq!(server["url"], "${AGENTHUB_URL}/mcp");
         assert_eq!(server["headers"]["Authorization"], "Bearer ${AGENTHUB_TOKEN}");
+    }
+
+    /// The hook the runtime writes is the one that blocks and logs: if it lost its guard or its log the seat would
+    /// run unguarded and unrecorded with nothing failing.
+    #[test]
+    fn the_seat_tool_hook_guards_and_logs() {
+        for needle in ["\"tool_call\"", "\"tool_result\"", "block: true", "tool-calls.jsonl", "env-secret", "docker", "push"] {
+            assert!(SEAT_TOOL_HOOK.contains(needle), "the hook lost {needle}");
+        }
     }
 
     /// The seat's own folder is nested one level deeper than the room's skills, and a seat receives share +
