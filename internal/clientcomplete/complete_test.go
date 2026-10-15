@@ -101,8 +101,8 @@ func TestCriteriaVerdicts(t *testing.T) {
 	if got := evaluate(context.Background(), cfg, []string{"a"}, passing()); got.Verdict != clientjev.Uncertain {
 		t.Errorf("no key must be uncertain, got %+v", got)
 	}
-	if got := evaluate(context.Background(), cfg, nil, passing()); got.Verdict != clientjev.Accept {
-		t.Errorf("no criteria and clean checks must accept, got %+v", got)
+	if got := evaluate(context.Background(), cfg, nil, passing()); got.Verdict != clientjev.Uncertain {
+		t.Errorf("no criteria and clean checks must be uncertain, got %+v", got)
 	}
 }
 

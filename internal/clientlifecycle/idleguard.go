@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"time"
 
@@ -62,6 +63,11 @@ type IdleGuard struct {
 
 	State   map[string]*stallState
 	decided float64 // the newest log time of the quiet already decided, so one quiet is decided once
+	// asked is the open rail the last verdict was asked about. The guard's own message wakes the lead, whose
+	// log then makes a new "quiet" five minutes later; with the same rail the answer cannot change, so the
+	// room is not asked again until the rail does.
+	asked    string
+	hasAsked bool
 }
 
 // NewIdleGuard is a guard wired to the real world.
@@ -105,7 +111,7 @@ func askJev(ctx context.Context, summary, detail string, q clientjev.Question) (
 	picks, askErr := cfg.SelectChoices(ctx, summary, detail, []clientjev.Question{q})
 	pick := picks[q.ID]
 	entry := clientjev.LogEntry{Timestamp: time.Now(), Kind: "decision", Summary: summary, Detail: detail,
-		Choices: picks, Tier: "room", Category: "idle-room", Outcome: "decided"}
+		Choices: picks, Questions: []clientjev.Question{q}, Tier: "room", Category: "idle-room", Outcome: "decided"}
 	if askErr != nil || pick.OptionID == "" || pick.Confidence < cfg.Threshold {
 		entry.Outcome = "escalated-to-lead"
 	}
@@ -189,6 +195,12 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 		g.Log("room quiet, the rail could not be read: " + err.Error())
 		return
 	}
+	signature := railSignature(rows)
+	if g.hasAsked && signature == g.asked {
+		g.Log("room still idle, the open rail is unchanged since the last verdict: Jev not asked again")
+		return
+	}
+	g.asked, g.hasAsked = signature, true
 	var detail strings.Builder
 	fmt.Fprintf(&detail, "Every seat of room %s is idle; the newest activity was %.0f minutes ago.\n", g.Rig, (g.Now()-newest)/60)
 	fmt.Fprintf(&detail, "Open rail items (pending, in-progress, blocked): %d\n", len(rows))
@@ -232,6 +244,16 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 	}
 	g.Say(g.Rig, g.Lead, message, false)
 	g.Log(fmt.Sprintf("room idle: lead told (%s, %.2f)", pick.OptionID, pick.Confidence))
+}
+
+// railSignature identifies a set of open rail items by their ids, whatever order the rail lists them in.
+func railSignature(rows []clientruntime.QueueRow) string {
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = row.QitemID + ":" + row.State
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
 }
 
 type idleRunCommand struct{}

@@ -249,10 +249,12 @@ type LogEntry struct {
 	Summary             string               `json:"summary"`
 	Detail              string               `json:"detail,omitempty"`
 	Choices             map[string]Selection `json:"choices,omitempty"`
-	Tier                string               `json:"tier,omitempty"`
-	Category            string               `json:"category,omitempty"`
-	Outcome             string               `json:"outcome"`
-	Error               string               `json:"error,omitempty"`
+	// Questions keeps the options each pick was made from, so a logged decision can be audited later.
+	Questions []Question `json:"questions,omitempty"`
+	Tier      string     `json:"tier,omitempty"`
+	Category  string     `json:"category,omitempty"`
+	Outcome   string     `json:"outcome"`
+	Error     string     `json:"error,omitempty"`
 }
 
 // Log appends the entry as one JSON line, so the log is a benchmark of what Jev decided and how.

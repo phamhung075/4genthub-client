@@ -62,6 +62,25 @@ func TestALowConfidenceAnswerSendsTheLeadToTheOwner(t *testing.T) {
 	}
 }
 
+func TestTheSameOpenRailIsNotAskedAgainWhenTheLeadsOwnReplyMakesANewQuiet(t *testing.T) {
+	r := newGuardRig(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.5})
+	r.guard.Step(context.Background())
+	r.modified["/log/lead"] = 9500 // the lead answered the message: a later log time, so a new quiet
+	r.now = 10000
+	r.guard.Step(context.Background())
+	if r.asked != 1 {
+		t.Fatalf("Jev asked %d times for an unchanged rail, want 1", r.asked)
+	}
+	r.modified["/log/lead"] = 9700
+	r.guard.Active = func(string) ([]clientruntime.QueueRow, error) {
+		return []clientruntime.QueueRow{{QitemID: "q2", State: "pending", DestinationSession: "go-dev", Summary: "new"}}, nil
+	}
+	r.guard.Step(context.Background())
+	if r.asked != 2 {
+		t.Errorf("a changed rail must be asked again, asked = %d", r.asked)
+	}
+}
+
 func TestAWorkingSeatMeansTheRoomIsNotAsked(t *testing.T) {
 	r := newGuardRig(t, map[string]bool{"lead": true, "go-dev": false}, clientjev.Selection{OptionID: "stop", Confidence: 0.9})
 	r.modified["/log/go-dev"] = 9900

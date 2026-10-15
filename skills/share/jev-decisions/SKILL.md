@@ -44,10 +44,12 @@ Use it instead of marking the task done by hand.
   --summary "<what changed>" --test "<the test command>"
 ```
 
-It collects the evidence (diff, commits, the test run), checks it deterministically (a passing test command is required, keep-out paths, diff size), puts the task's acceptance criteria to Jev, posts the evidence and then completes the task. Pass `--test` or the check fails. Exit `0` completed; `5` completed but your test command failed; `6` the gate refused (when `VALIDATION_GATE_ENFORCEMENT=true`): fix what the verdict names and run it again.
+It collects the evidence (diff, commits, the test run), checks it deterministically (a passing test command is required, keep-out paths, diff size), puts the task's acceptance criteria to Jev (a task with no criteria is `uncertain`, so give every task criteria when you create it), posts the evidence and then completes the task. Pass `--test` or the check fails. Exit `0` completed; `5` completed but your test command failed; `6` the gate refused (when `VALIDATION_GATE_ENFORCEMENT=true`): fix what the verdict names and run it again.
+
+The idle-room guard also asks Jev, once per set of open rail items: when every seat is idle and the rail is unchanged since the last verdict it does not ask again, so a guard message to the lead cannot start a loop. Each decision-log line keeps the questions and their options beside the pick, so a decision can be audited.
 
 ## Checklist
 
 - [ ] A decision was asked through `decide` before it went to the lead.
-- [ ] The task was closed through `complete`, with `--base` and `--test`.
+- [ ] The task was closed through `complete`, with `--base` and `--test`, and it had acceptance criteria.
 - [ ] Nothing about credentials or spend was decided by a seat.

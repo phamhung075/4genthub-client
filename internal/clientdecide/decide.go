@@ -129,7 +129,7 @@ func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 
 	result, picks, evalErr := ladder(ctx, cfg, opts.tier, category, summary, detail, questions)
 	entry := clientjev.LogEntry{
-		Timestamp: time.Now(), Kind: "decision", Summary: summary, Detail: detail, Choices: picks,
+		Timestamp: time.Now(), Kind: "decision", Summary: summary, Detail: detail, Choices: picks, Questions: questions,
 		Tier: opts.tier, Category: category, Outcome: "decided",
 	}
 	if !result.Decided {

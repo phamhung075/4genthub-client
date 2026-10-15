@@ -43,7 +43,8 @@ const usage = `usage: 4genteam complete --task <id> --base <sha> --summary <text
 
 Complete a task after the completion gate passes. The gate runs on this machine: the evidence (diff numstat,
 SHAs, test run) is collected like 4genteam evidence, checked deterministically (D3 tests, D4 keep-out paths,
-D5 diff size), then the task's acceptance criteria are put to Jev. The server is not asked to judge.
+D5 diff size), then the task's acceptance criteria are put to Jev. A task with no acceptance criteria is uncertain, never
+accepted: the checks alone are not a verdict. The server is not asked to judge.
 
   --task     REQUIRED. The task id.
   --base     REQUIRED. The commit the change is measured from.

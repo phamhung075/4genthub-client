@@ -33,8 +33,8 @@ type result struct {
 }
 
 // evaluate runs the gate: the deterministic checks first, which reject without calling Jev, then the
-// task's acceptance criteria through Jev. A missing key, a Jev error or an unanswered criterion is
-// uncertain, never accept.
+// task's acceptance criteria through Jev. A missing key, a Jev error, an unanswered criterion or a task
+// with no criteria at all is uncertain, never accept: passing the deterministic checks alone is not a verdict.
 func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body clientevidence.Body) result {
 	c := checks{D3Tests: true, D4Clean: true, D5Numstat: true}
 	var failures []string
@@ -68,7 +68,7 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 		return result{Verdict: clientjev.Reject, Reasons: strings.Join(failures, "; "), Checks: c, Evaluator: "deterministic"}
 	}
 	if len(criteria) == 0 {
-		return result{Verdict: clientjev.Accept, Reasons: "deterministic checks passed; the task has no acceptance criteria", Checks: c, Evaluator: "deterministic"}
+		return result{Verdict: clientjev.Uncertain, Reasons: "the task has no acceptance criteria, so Jev has nothing to judge: add criteria to the task, then complete it", Checks: c, Evaluator: "deterministic"}
 	}
 	verdict, reasons, _ := cfg.EvaluateCriteria(ctx, criteria, body)
 	return result{Verdict: verdict, Reasons: reasons, Checks: c, Evaluator: "jev"}
