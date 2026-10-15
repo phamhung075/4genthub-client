@@ -80,10 +80,11 @@ where the seats find it:
 ```
 
 It stays a **second** binary rather than a subcommand of `4genteam`, and that is a decision this section
-records rather than an accident of the port: `install-checker` compiles `cmd/seatcheck` with
-`-ldflags -X main.installedPinsDir=<store>`, so each installed checker carries the pins directory of the seat
-store it was built for, and the seat cannot choose that directory at run time. The operator's own `4genteam`
-must not carry a per-seat build input, so the two builds stay separate. The guard itself has **one source** —
+records rather than an accident of the port: `install-checker` compiles `cmd/seatcheck`, installs that binary
+in the seat store and links it where seats resolve the name, so the operator's own `4genteam` carries no
+per-seat build input and the two builds stay separate. **Nothing is baked into the checker's build**: the
+`-ldflags -X main.installedPinsDir=<store>` this section used to promise is gone with the `send` verb that was
+its only reader, so one build serves every seat. The guard itself has **one source** —
 this repository's `cmd/seatcheck`, which is the copy `install-checker` builds; the server no longer tracks a
 second one — and one name: it must be the bare `seatcheck` on the seat's `PATH`, and `pull` fails loudly when
 `seatcheck` does not resolve to the binary this client built. The checker no longer sends: `4genteam send` is

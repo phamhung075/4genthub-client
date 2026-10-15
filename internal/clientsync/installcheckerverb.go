@@ -199,9 +199,10 @@ func removePath(path string) {
 // installCheckerUsage is what `sync install-checker --help` prints.
 const installCheckerUsage = `usage: 4genteam sync install-checker --go-dir DIR [--out DIR]
 
-Build <GO_DIR>/cmd/seatcheck with the pinned store compiled in, install it at <OUT>/bin/seatcheck
-(OUT defaults to the seat store) and link it where seats resolve it. The install is finished only
-when the NAME resolves on the PATH a seat inherits.
+Build <GO_DIR>/cmd/seatcheck, install it at <OUT>/bin/seatcheck (OUT defaults to the seat store) and
+link it where seats resolve it. Nothing is baked into that build: the ldflag that carried the pins
+directory went with the deleted send verb, which was its only reader, so one build serves every seat.
+The install is finished only when the NAME resolves on the PATH a seat inherits.
 `
 
 // RunInstallCheckerVerb is `sync install-checker`: build cmd/seatcheck from the Go module that holds
@@ -282,7 +283,6 @@ func installChecker(out, goDir string, stdout, stderr io.Writer) int {
 	}
 	command := []string{
 		"go", "build",
-		"-ldflags", "-X main.installedPinsDir=" + resolvedOut,
 		"-o", binary,
 		"./cmd/seatcheck",
 	}

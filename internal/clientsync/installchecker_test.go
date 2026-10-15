@@ -41,7 +41,7 @@ func installCheckerFixtures(t *testing.T) (binDir, link string) {
 func compiling(command *[]string, cwd *string, env *[]string) func([]string, string, []string) error {
 	return func(asked []string, where string, environment []string) error {
 		*command, *cwd, *env = asked, where, environment
-		output := asked[5] // go build -ldflags <flags> -o <output> <package>
+		output := asked[3] // go build -o <output> <package>
 		if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 			return err
 		}
@@ -89,7 +89,7 @@ func TestInstallCheckerBuildsAndLinksOnPath(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := RunInstallCheckerVerb(context.Background(), []string{"--go-dir", goDir, "--out", out}, &stdout, &stderr)
 
-	pins, binary := mustAbs(t, out), CheckerBinary(mustAbs(t, out))
+	binary := CheckerBinary(mustAbs(t, out))
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr.String())
 	}
@@ -102,7 +102,6 @@ func TestInstallCheckerBuildsAndLinksOnPath(t *testing.T) {
 	}
 	want := []string{
 		"go", "build",
-		"-ldflags", "-X main.installedPinsDir=" + pins,
 		"-o", binary,
 		"./cmd/seatcheck",
 	}
