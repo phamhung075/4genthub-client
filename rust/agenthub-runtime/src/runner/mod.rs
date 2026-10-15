@@ -25,6 +25,7 @@ mod claude;
 use crate::types::{AgentRuntime, RoomSpec, SeatSpec};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use crate::frame::{self, SpillTarget};
@@ -286,7 +287,12 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     // The text a prompt refused mid-turn left behind, waiting for the seat to be free again. It sits beside
     // the pending slot because the mailbox (which relays the daemon's prompts) writes that slot and the
     // reader (which sees the refusal) owns both.
-    let held: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    //
+    // A QUEUE, not a slot (reviewer, 2026-10-15, `GATE-c0ffbe8-refused-send`): two prompts refused inside
+    // one turn both have to survive, and a single slot silently overwrote the first with the second - the
+    // same lost-message class this hold exists to remove. Order is the order they were refused, and one
+    // text is delivered per turn end, so a delivery never races the turn it opens.
+    let held: Arc<Mutex<VecDeque<(String, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
 
     let mailbox = target.mailbox(state_dir);
     // The mailbox relays prompts, so it is given the same pending slot the pane's own input uses: a relayed
@@ -468,7 +474,17 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                                 mirror(&format!(
                                                     "held for the next turn: {reason} :: {err}"
                                                 ));
-                                                *held_reader.lock() = Some((id.to_string(), text));
+                                                let refused_id = id.to_string();
+                                                let waiting = hold_text(&held_reader, &refused_id, text);
+                                                if waiting > 1 {
+                                                    // The second refusal must be visible as a queue, not
+                                                    // as a replacement: the text in front of it is still
+                                                    // waiting and will be delivered first.
+                                                    mirror(&format!(
+                                                        "the text {refused_id} waits behind {} held text(s); they are delivered in the order they were refused",
+                                                        waiting - 1
+                                                    ));
+                                                }
                                                 let _ = write_state(
                                                     &state_path,
                                                     "working",
@@ -551,7 +567,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                 // `idle` is a seat at its prompt, and this arm may have just handed the held
                                 // text back: a prompt in flight — or a text still waiting for the next turn —
                                 // is not that, so only a seat with neither reads as idle here.
-                                if pending_reader.lock().is_some() || held_reader.lock().is_some() {
+                                if pending_reader.lock().is_some() || !held_reader.lock().is_empty() {
                                     let _ = write_state(&state_path, "working", "", attempts);
                                 } else {
                                     let _ = write_state(&state_path, "idle", "", attempts);
@@ -1424,22 +1440,35 @@ pub fn decide_resume(
     }
 }
 
+/// Hold `text` for the next free turn, behind whatever is already held, and return the queue's length.
+///
+/// The queue is the required edit on `c0ffbe8` (reviewer, 2026-10-15): the hold was a single slot and the
+/// second refusal inside one turn overwrote the first silently, so the first text appeared in no surface.
+/// A text is appended here and leaves only through `deliver_held`, in the order it was refused.
+fn hold_text(held: &Arc<Mutex<VecDeque<(String, String)>>>, refused_id: &str, text: String) -> usize {
+    let mut queue = held.lock();
+    queue.push_back((refused_id.to_string(), text));
+    queue.len()
+}
+
 /// Deliver the text a refused prompt left held, when the seat is free again.
 ///
 /// The other half of `Resume::Hold`: the decision says the text must not be dropped, and this is where it
 /// comes back. It is called from the two arms that mark a turn over (`turn_end`, `agent_end` /
-/// `session_settled`) and is the only taker of the held slot, so one held text cannot be delivered twice.
-/// It is bounded exactly like the resume ladder: a seat whose agent refuses the held text every turn ends up
-/// `blocked`, named, rather than looping — and until then the text is published in the state file's
-/// classification, so the queue is visible while it waits.
+/// `session_settled`) and is the only taker of the held queue, so one held text cannot be delivered twice.
+/// It takes ONE text — the front of the queue, the one refused first — so two texts held in one turn come
+/// back in order, one turn apart, rather than racing the turn the first delivery opens. It is bounded
+/// exactly like the resume ladder: a seat whose agent refuses the held text every turn ends up `blocked`,
+/// named, rather than looping — and until then the text is published in the state file's classification,
+/// so the queue is visible while it waits.
 fn deliver_held(
-    held: &Arc<Mutex<Option<(String, String)>>>,
+    held: &Arc<Mutex<VecDeque<(String, String)>>>,
     pending: &Arc<Mutex<Option<(String, String)>>>,
     to_child: &Sender<String>,
     state_path: &Path,
     attempts: &mut u32,
 ) {
-    let Some((refused_id, text)) = held.lock().take() else {
+    let Some((refused_id, text)) = held.lock().pop_front() else {
         return;
     };
     *attempts += 1;
@@ -2076,10 +2105,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let state_path = dir.join("dev.state.json");
         let (to_child, from_threads) = mpsc::channel::<String>();
-        let held: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let held: Arc<Mutex<VecDeque<(String, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
         let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
         let mut attempts: u32 = 0;
-        *held.lock() = Some(("send-1-1".to_string(), "the text the agent refused".to_string()));
+        assert_eq!(
+            hold_text(&held, "send-1-1", "the text the agent refused".to_string()),
+            1
+        );
         deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
         let line = from_threads
             .recv_timeout(Duration::from_secs(1))
@@ -2087,7 +2119,7 @@ mod tests {
         let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
         assert_eq!(frame["type"], "prompt");
         assert_eq!(frame["message"], "the text the agent refused");
-        assert!(held.lock().is_none(), "the slot is emptied: nothing is delivered twice");
+        assert!(held.lock().is_empty(), "the queue is emptied: nothing is delivered twice");
         assert!(pending.lock().is_some(), "the redelivered prompt is ours to watch");
         assert_eq!(attempts, 1);
         let published: serde_json::Value =
@@ -2097,7 +2129,7 @@ mod tests {
 
         // Bounded, like the resume ladder: past the bound the seat is `blocked` with the reason and nothing
         // more is sent.
-        *held.lock() = Some(("send-1-2".to_string(), "refused again".to_string()));
+        hold_text(&held, "send-1-2", "refused again".to_string());
         attempts = MAX_RESUME_ATTEMPTS;
         deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
         assert_eq!(attempts, MAX_RESUME_ATTEMPTS + 1);
@@ -2108,6 +2140,68 @@ mod tests {
         let published: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
         assert_eq!(published["state"], "blocked");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE REQUIRED EDIT, pinned (reviewer, 2026-10-15, `GATE-c0ffbe8-refused-send`): the hold is a QUEUE,
+    /// not a single slot. Two prompts refused inside ONE turn are both kept — the second must not write over
+    /// the first — and they come back in the order they were refused, one per turn end. With the slot the
+    /// first text was in no surface at all: not delivered, not held, not named.
+    #[test]
+    fn two_refusals_in_one_turn_keep_both_texts_in_order() {
+        let dir = std::env::temp_dir().join(format!("runner-held-queue-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state_path = dir.join("dev.state.json");
+        let (to_child, from_threads) = mpsc::channel::<String>();
+        let held: Arc<Mutex<VecDeque<(String, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let mut attempts: u32 = 0;
+
+        assert_eq!(
+            hold_text(&held, "send-1-1", "the first refused text".to_string()),
+            1
+        );
+        assert_eq!(
+            hold_text(&held, "send-1-2", "the second refused text".to_string()),
+            2
+        );
+        assert_eq!(
+            held.lock().len(),
+            2,
+            "the second refusal is queued behind the first, not written over it"
+        );
+
+        // The turn both were refused in ends: the text in front comes back and the second keeps waiting.
+        deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
+        let first: serde_json::Value = serde_json::from_str(
+            from_threads
+                .recv_timeout(Duration::from_secs(1))
+                .expect("the first text is delivered")
+                .trim(),
+        )
+        .expect("a JSON frame");
+        assert_eq!(first["message"], "the first refused text");
+        assert_eq!(
+            held.lock().len(),
+            1,
+            "the text still waiting is not delivered along with the one in front"
+        );
+
+        // ... and the turn that delivery opened ends: the second follows, in the order it was refused.
+        deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
+        let second: serde_json::Value = serde_json::from_str(
+            from_threads
+                .recv_timeout(Duration::from_secs(1))
+                .expect("the second text is delivered")
+                .trim(),
+        )
+        .expect("a JSON frame");
+        assert_eq!(second["message"], "the second refused text");
+        assert!(held.lock().is_empty(), "both texts left the queue exactly once");
+        assert_eq!(attempts, 2);
+        let published: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+        assert_eq!(published["state"], "working");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
