@@ -308,6 +308,26 @@ func TestBypassSuspected(t *testing.T) {
 		{"empty", "", false},
 		{"case sensitive", "RIG send bob", false},
 		{"subcommand prefix", "rig sends bob", false},
+
+		// The native client, which is what a seat on this host actually types:
+		// the retired `rig` spellings above no longer name a file the client owns.
+		{"native send to a session", "4genteam send agenthub--r--bob hello", true},
+		{"native send by rig and seat", "4genteam send 4genthub-min bob hello", true},
+		{"native send absolute", "/usr/local/bin/4genteam send bob hello", true},
+		{"native send after env", "AGENTHUB_URL=http://x 4genteam send bob hello", true},
+		{"native collapsed spaces", "4genteam   send bob hello", true},
+		{"native input sends to a seat", "4genteam input --seat bob", true},
+		{"native rail create", "4genteam room queue create 4genthub-min --to agenthub--r--bob --summary s", true},
+		{"native rail create collapsed", "4genteam room   queue   create 4genthub-min --to s", true},
+		{"native seatcheck is the checked path", "4genteam seatcheck send bob hello", false},
+		{"native seatcheck audit-scan reads, it does not send", "4genteam seatcheck audit-scan --file obs.txt", false},
+		{"native rail list is not a send", "4genteam room queue list 4genthub-min", false},
+		{"native rail claim is not a send", "4genteam room queue claim 4genthub-min qitem-1", false},
+		{"native room stop is not a send", "4genteam room stop 4genthub-min", false},
+		{"native verb that reads", "4genteam ps 4genthub-min --nodes --json", false},
+		{"native alone", "4genteam", false},
+		{"native truncated rail", "4genteam room queue", false},
+		{"prefix only, native", "echo 4genteam send bob", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -318,8 +338,38 @@ func TestBypassSuspected(t *testing.T) {
 	}
 }
 
+// A known entry that names a SHAPE allows that shape alone: the checker's own
+// spelling must never become a licence for the send beside it (the same hole the
+// retired-verb pin hit, where an allowlist entry matched the verb's own form).
+func TestBypassSuspectedKnownShapeIsNotALicence(t *testing.T) {
+	known := []string{"4genteam seatcheck", "seatcheck"}
+	if BypassSuspected(known, "4genteam seatcheck send bob hello") {
+		t.Fatal("the checker's own spelling must not be flagged")
+	}
+	if !BypassSuspected(known, "4genteam send bob hello") {
+		t.Fatal("naming 4genteam seatcheck must not allow 4genteam send")
+	}
+	if !BypassSuspected(known, "4genteam input --seat bob") {
+		t.Fatal("naming 4genteam seatcheck must not allow 4genteam input")
+	}
+	if !BypassSuspected(known, "4genteam room queue create 4genthub-min --to s") {
+		t.Fatal("naming 4genteam seatcheck must not allow the rail's create")
+	}
+	// A bare program name keeps its old, whole-program meaning.
+	if BypassSuspected([]string{"4genteam"}, "4genteam send bob hello") {
+		t.Fatal("a bare known program name allows every invocation of it")
+	}
+	// And an entry for another program's shape does not touch this one.
+	if !BypassSuspected([]string{"seatcheck"}, "4genteam send bob hello") {
+		t.Fatal("a known entry for seatcheck must not allow 4genteam send")
+	}
+}
+
 func TestBypassSuspectedNilKnown(t *testing.T) {
 	if !BypassSuspected(nil, "rig send bob") {
 		t.Fatal("nil known list should still flag a direct rig send")
+	}
+	if !BypassSuspected(nil, "4genteam send bob hello") {
+		t.Fatal("nil known list should still flag a direct native send")
 	}
 }
