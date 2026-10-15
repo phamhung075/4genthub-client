@@ -20,12 +20,19 @@ import (
 // THE SOURCE IS THE ROOM'S DECLARED LINKS AS THE RUNTIME SERVES THEM, read at send time and never cached: a
 // cached source is a stale source.
 //
-// MEASURED 2026-10-15, BEFORE WIRING, because the source decides the ordering: for 4genthub-min that source is
-// EMPTY. The runtime's `spec.json` declares no links, the cloud's room record carries none that any client
-// route can read, and the room definition has declared none in any revision. A fail-closed gate over an empty
-// source therefore refuses the room's own traffic - which is why the SOURCE ERROR and the DENIAL are two
-// different messages here: a reader must be able to tell "this room declares no link for that pair" apart from
-// "the source could not be read", or the gate is indistinguishable from a broken wire.
+// MEASURED 2026-10-15, BEFORE WIRING: for 4genthub-min that source was EMPTY THEN. The runtime's `spec.json`
+// declared no links, the cloud's room record carried none that any client route we had probed could read, and
+// the room definition had declared none in any revision. A fail-closed gate over an empty source refuses the
+// room's own traffic - which is why the SOURCE ERROR and the DENIAL are two different messages here: a reader
+// must be able to tell "this room declares no link for that pair" apart from "the source could not be read", or
+// the gate is indistinguishable from a broken wire.
+//
+// MEASURED AGAIN THE SAME DAY, AFTER THE SOURCE EXISTED, so neither half above is read as today's state: the
+// room definition declares its links (scripts/team/4genthub-min/team.json, 23 of them) and the surface does
+// read them (GET /rooms/<room>/seats/<seat>/links answers 200 - the architect's measurement at 05:13Z, which
+// corrected the "no route can read them" half). GetRoomLinks therefore answers a non-empty list for this room
+// and this gate decides real traffic. Read the live room's spec.json - the file the runtime reads - before
+// concluding either way, and read these links before declaring any pair licensed.
 var (
 	sendRoomLinks = func(socket, room string) ([]clientruntime.SeatLink, error) {
 		return clientruntime.NewClient(socket).RoomLinks(room)
