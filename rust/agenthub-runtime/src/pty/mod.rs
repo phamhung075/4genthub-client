@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 pub struct TerminalManager;
 
@@ -148,6 +148,75 @@ fn ensure_server() -> Result<(), String> {
     Ok(())
 }
 
+/// What tmux said about the pane it created: the pid when it gave one, and the read's OWN failure in its own
+/// words when it did not.
+///
+/// A PID OF 0 IS A PID, NOT "UNKNOWN", and this type exists because the two were the same value. Measured
+/// 2026-10-15 in a C4 acceptance run: `list-panes` answered an unparsable line 2.09ms after the session was
+/// created, `unwrap_or(0)` collapsed it to 0, the log printed `started with pane pid 0`, and the supervisor
+/// then reported `its pane is gone` - tmux's refusal went to stderr, was never read, and a read that failed
+/// looked exactly like a dead pane. The failure now travels as `unread`, and every reader of this record is
+/// expected to say WHICH of the two facts it has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneRecord {
+    pub pid: Option<u32>,
+    pub unread: Option<String>,
+}
+
+impl PaneRecord {
+    /// The pid as a sentence for a log line or a refusal: never a bare 0 manufactured from a parse failure.
+    pub fn describe(&self) -> String {
+        match (self.pid, self.unread.as_deref()) {
+            (Some(pid), _) => format!("pane pid {pid}"),
+            (None, Some(reason)) => format!("no readable pane pid ({reason})"),
+            (None, None) => "no pane pid recorded".to_string(),
+        }
+    }
+}
+
+impl From<Result<u32, String>> for PaneRecord {
+    /// The ONE place a read becomes a record, so that "the read failed" and "the pid is 0" cannot be confused
+    /// by a caller writing its own match.
+    fn from(read: Result<u32, String>) -> Self {
+        match read {
+            Ok(pid) => PaneRecord { pid: Some(pid), unread: None },
+            Err(reason) => PaneRecord { pid: None, unread: Some(reason) },
+        }
+    }
+}
+
+/// The pane pid tmux reports for a session, or the read's failure in words a reader can act on.
+///
+/// The exit status is CHECKED and tmux's stderr is carried: `list-panes` refusing (a session that is not there,
+/// a server that is not answering) and a pane whose pid is genuinely 0 are different facts, and only one of them
+/// means the pane is gone.
+pub fn pane_pid(session_name: &str) -> Result<u32, String> {
+    let out = tmux_command()
+        .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])
+        .output()
+        .map_err(|e| format!("tmux list-panes could not be run: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("tmux list-panes exited {} with nothing on stderr", out.status)
+        } else {
+            format!("tmux list-panes refused: {stderr}")
+        });
+    }
+    parse_pane_pid(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The one line `list-panes -F #{pane_pid}` is expected to answer, parsed without inventing a value.
+///
+/// Separate from the process call so both branches can be tested without a tmux server: "0" is a pane whose
+/// process is gone and parses, and anything tmux might print instead is a FAILED READ rather than a pid.
+fn parse_pane_pid(stdout: &str) -> Result<u32, String> {
+    let answer = stdout.lines().next().unwrap_or("").trim();
+    answer
+        .parse::<u32>()
+        .map_err(|_| format!("tmux list-panes answered {answer:?}, which is not a pane pid"))
+}
+
 impl TerminalManager {
     /// Launch an agent runtime inside a dedicated tmux session.
     pub fn launch_session(
@@ -155,7 +224,7 @@ impl TerminalManager {
         cwd: &Path,
         runtime_cmd: &str,
         env_vars: &HashMap<String, String>,
-    ) -> Result<u32, String> {
+    ) -> Result<PaneRecord, String> {
         info!("launching session {} in cwd {}", session_name, cwd.display());
 
         // The server first, and from a client that carries none of this seat's environment: whoever creates it
@@ -229,17 +298,15 @@ impl TerminalManager {
             return Err(format!("tmux new-session failed: {stderr}"));
         }
 
-        // Get the pane PID
-        let pid_out = tmux_command()
-            .args(["list-panes", "-t", session_name, "-F", "#{pane_pid}"])
-            .output()
-            .map_err(|e| format!("failed to list pane pid: {e}"))?;
+        // What tmux says about the pane it created: the pid, or the read's failure in its own words. Never a
+        // bare 0 - see PaneRecord.
+        let pane = PaneRecord::from(pane_pid(session_name));
+        if let Some(reason) = pane.unread.as_deref() {
+            warn!("session {session_name} was created but its pane pid could not be read: {reason}");
+        }
 
-        let pid_str = String::from_utf8_lossy(&pid_out.stdout).trim().to_string();
-        let pid: u32 = pid_str.lines().next().and_then(|l| l.parse().ok()).unwrap_or(0);
-
-        info!("session {} started with pane pid {}", session_name, pid);
-        Ok(pid)
+        info!("session {} started with {}", session_name, pane.describe());
+        Ok(pane)
     }
 
     /// Stop an active session.
@@ -694,5 +761,92 @@ pub(crate) mod test_servers {
             root,
             previous,
         }
+    }
+}
+
+#[cfg(test)]
+mod pane_pid_tests {
+    use super::*;
+
+    /// THE FALSIFICATION THE ORDER ASKS FOR: the read fails, and the failure is not a pid.
+    ///
+    /// Both halves of the boundary are pinned here, because they were one value: an answer tmux might give
+    /// instead of a pid is a FAILED READ, and a pane whose process is gone - 0 - is a PID that parses.
+    #[test]
+    fn an_unparsable_answer_is_a_failed_read_not_a_pid_of_zero() {
+        for answer in ["", "\n", "no server running on /tmp/tmux-1000/default", "not-a-pid", "7958 extra"] {
+            let err = parse_pane_pid(answer).expect_err("this is not a pane pid");
+            assert!(err.contains("which is not a pane pid"), "{err}");
+            assert!(!err.contains("pane pid 0"), "{err}");
+        }
+        assert_eq!(parse_pane_pid("0\n"), Ok(0));
+        assert_eq!(parse_pane_pid("7958\n"), Ok(7958));
+        assert_eq!(parse_pane_pid(" 8167 "), Ok(8167));
+    }
+
+    /// Against real tmux: a session that is not there is refused in TMUX'S OWN WORDS, and the refusal does not
+    /// read as a pane pid of 0.
+    #[test]
+    fn a_session_that_is_not_there_is_refused_in_tmuxs_own_words() {
+        let session = format!("pane-pid-absent-{}", std::process::id());
+        let err = pane_pid(&session).expect_err("a session that does not exist has no pane pid");
+        assert!(
+            err.contains("tmux list-panes refused") || err.contains("could not be run"),
+            "the read's failure must travel in its own words: {err}"
+        );
+        assert!(!err.contains("pane pid 0"), "{err}");
+    }
+
+    /// And a session that IS there hands back a pid the record describes as one - the value the supervisor now
+    /// reports instead of a manufactured 0.
+    #[test]
+    fn a_live_session_answers_a_pid_and_the_record_describes_it() {
+        let dir = std::env::temp_dir().join(format!("pty-pane-pid-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let session = format!("pane-pid-live-{}", std::process::id());
+        let record = TerminalManager::launch_session(&session, &dir, "sleep 5", &HashMap::new()).unwrap();
+        assert!(record.pid.is_some(), "a live pane must answer a pid: {record:?}");
+        assert!(record.unread.is_none(), "{record:?}");
+        assert!(record.describe().starts_with("pane pid "), "{}", record.describe());
+        let _ = TerminalManager::stop_session(&session);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The description never invents a pid: an unknown pid says so and does not print a 0.
+    #[test]
+    fn an_unknown_pid_describes_its_failure() {
+        let record = PaneRecord {
+            pid: None,
+            unread: Some("tmux list-panes refused: no server running".into()),
+        };
+        let described = record.describe();
+        assert!(described.contains("no readable pane pid"), "{described}");
+        assert!(described.contains("no server running"), "{described}");
+        assert!(!described.contains('0'), "{described}");
+    }
+
+    /// A READ THAT FAILED BECOMES THE RECORD'S OWN WORDS, and a read that succeeded becomes a pid - the one
+    /// boundary the supervisor and the log both read, so neither can turn a failure into a 0 on its own.
+    #[test]
+    fn a_failed_read_becomes_words_and_a_successful_one_becomes_a_pid() {
+        let failed = PaneRecord::from(Err("tmux list-panes refused: can't find session".to_string()));
+        assert_eq!(failed.pid, None);
+        assert_eq!(
+            failed.unread.as_deref(),
+            Some("tmux list-panes refused: can't find session")
+        );
+        assert!(failed.describe().contains("can't find session"), "{}", failed.describe());
+
+        let read = PaneRecord::from(Ok(8167));
+        assert_eq!(read.pid, Some(8167));
+        assert_eq!(read.unread, None);
+        assert_eq!(read.describe(), "pane pid 8167");
+
+        // The value the old code manufactured: a genuine 0 is a PID, and it stays distinguishable from a
+        // failed read because it arrives as Ok.
+        let zero = PaneRecord::from(Ok(0));
+        assert_eq!(zero.pid, Some(0));
+        assert_eq!(zero.unread, None);
+        assert_eq!(zero.describe(), "pane pid 0");
     }
 }

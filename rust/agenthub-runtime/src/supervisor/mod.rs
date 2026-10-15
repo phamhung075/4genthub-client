@@ -703,11 +703,16 @@ impl RoomSupervisor {
         // inherited death record: this instant is what does. Taken BEFORE the launch, so a state file written
         // by this generation's runner is necessarily newer than it.
         let launched_at = std::time::SystemTime::now();
+        // The wait the death message reports is MEASURED, so it needs a clock that cannot fail to subtract:
+        // the message used to claim the window it was given, which the reader could not tell from a wait that
+        // never happened.
+        let launched = std::time::Instant::now();
 
         // Launch tmux session
-        let pid = TerminalManager::launch_session(&session_name, &cwd, &cmd, &env)?;
+        let pane = TerminalManager::launch_session(&session_name, &cwd, &cmd, &env)?;
 
-        // A launch is not liveness. The pid tmux just handed back is a **record** of the session it created,
+        // A launch is not liveness. What tmux just handed back - a pid, or the read's OWN failure, and never a
+        // bare 0 manufactured from a parse failure - is a **record** of the session it created,
         // and the pane's process may already be gone - a seat whose runtime command does not exist came back
         // `running` with a pid and no session seconds later. So wait for proof that the seat actually got up
         // before saying so. An omp seat proves it with its state file
@@ -741,16 +746,34 @@ impl RoomSupervisor {
                 break;
             }
             if !TerminalManager::is_session_alive(&session_name) {
-                return Err(format!(
-                    "seat {room}/{} died before it reported readiness (its pane is gone and no ready frame ever \
-                     arrived: waited up to {}; pid {pid} was the session record tmux returned)",
-                    seat.seat_key,
-                    if signal.is_some() {
-                        format!("{SEAT_READY_WINDOW_SECS}s")
-                    } else {
-                        format!("{NON_OMP_READY_GRACE_MS}ms")
-                    }
-                ));
+                // A DEATH VERDICT IS NOT BUILT ON A READ THAT FAILED. `is_session_alive` answers false for a
+                // session that is gone AND for a tmux that would not answer, and the pane-pid read above can
+                // fail the same way; the message that followed used to report both as `its pane is gone` with
+                // a pid of 0, so a read that failed and a pane that died were one sentence. Ask again - the
+                // SAME read, immediately, not after a sleep: a delay would hide the race instead of asking a
+                // second time - and refuse only when the second answer agrees.
+                if TerminalManager::is_session_alive(&session_name) {
+                    warn!(
+                        "seat {room}/{}: one session read said the pane was gone and the next said it is there; \
+                         keeping the wait ({})",
+                        seat.seat_key,
+                        pane.describe()
+                    );
+                } else {
+                    return Err(format!(
+                        "seat {room}/{} died before it reported readiness: two reads of the session agree its \
+                         pane is gone, {} after the launch, and no ready frame ever arrived (the readiness \
+                         window was {}; {})",
+                        seat.seat_key,
+                        launched.elapsed().as_millis(),
+                        if signal.is_some() {
+                            format!("{SEAT_READY_WINDOW_SECS}s")
+                        } else {
+                            format!("{NON_OMP_READY_GRACE_MS}ms")
+                        },
+                        pane.describe()
+                    ));
+                }
             }
             // A DEATH THE SEAT ITSELF RECORDED ENDS THE WAIT NOW, not at the deadline. The runner publishes
             // `agent_socket_closed` and friends when it survives to see the agent go; a pane that outlives its
@@ -789,7 +812,7 @@ impl RoomSupervisor {
             session_name: session_name.clone(),
             runtime: seat.runtime.clone(),
             model: seat.model.clone(),
-            pid: Some(pid),
+            pid: pane.pid,
             state: SeatLifecycleState::Running,
             // The pane is up; the agent has not published a turn yet, so there is no activity word to
             // report and `Unknown` says exactly that. It is not `idle`: a seat that has not spoken has not
@@ -823,7 +846,7 @@ impl RoomSupervisor {
             room: room.to_string(),
             seat: seat.seat_key.clone(),
             session_name,
-            pid,
+            pid: pane.pid,
             timestamp: Utc::now(),
         });
 
@@ -2482,6 +2505,102 @@ mod tests {
             !err.contains("pane is gone within"),
             "naming the window as an elapsed time reads as though the pane survived it and then went, when the \
              window is the bound the wait was judged against, got: {err}"
+        );
+        assert!(
+            err.contains("two reads of the session agree"),
+            "a death verdict is two agreeing reads, not one read that failed - the measured defect reported a \
+             pid of 0 manufactured from a parse failure, got: {err}"
+        );
+        assert!(
+            !err.contains("waited up to"),
+            "the message must report the wait PERFORMED, not the window it was given: the measured defect read \
+             `waited up to 60s` 2.09ms after the launch, got: {err}"
+        );
+
+        let _ = supervisor.stop_seat(&room, &key);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE RE-READ, FALSIFIED WITH A TRANSIENT SESSION READ - the C4 run's race, forced.
+    ///
+    /// A `tmux` ahead of the real one on PATH lets `new-session` through and then fails the FIRST `has-session`
+    /// for THIS test's session: that is the read which said `its pane is gone` 2.09ms after the launch, with the
+    /// 60s budget unused. The seat must still come up, which can only happen if the supervisor asked a second
+    /// time, and the shim's own refusal is the one the log names.
+    ///
+    /// The shim acts only on a session whose name carries this test's pid, so every other test in the suite -
+    /// which runs in parallel - passes through it to the real tmux unchanged. PATH is restored before the
+    /// assertions, so a failure below cannot leave the suite on a shim.
+    #[tokio::test]
+    async fn a_transient_session_read_does_not_kill_the_seat() {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = scratch("probe-flake");
+        // This case needs a LIVE session for the whole read window, so it holds the process's tmux root for a
+        // scratch server of its own the way every other pane-opening case in this file does: `TMUX_TMPDIR` is
+        // process-wide, and without the guard a parallel test's own root lands on this process mid-wait and the
+        // session this case is watching reads as gone.
+        let _server = crate::pty::test_servers::own("probe-flake");
+        let room = format!("probe-flake-{}", std::process::id());
+        let key = seat_key("probe-flake");
+        // Main's rule (the seat-cwd scope): a seat whose spec names no `cwd` starts in the room's own
+        // `wt/<seat>` and does not start AT ALL without it, so a case that launches one leaves the room that
+        // directory, the way a room that holds a worktree does.
+        seat_worktree(&dir, &room, &key);
+        let spec = startable_spec(&room, &key, "sleep 30");
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+
+        let real = String::from_utf8(
+            std::process::Command::new("sh")
+                .args(["-c", "command -v tmux"])
+                .output()
+                .expect("this test needs a shell")
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+        assert!(!real.is_empty(), "this test needs the real tmux on PATH");
+
+        let bin = dir.join("shim-bin");
+        fs::create_dir_all(&bin).unwrap();
+        let launched = dir.join("launched");
+        let script = format!(
+            "#!/bin/sh\n\
+             case \"$*\" in\n\
+             *{session}*)\n\
+             \x20 if [ \"$1\" = \"new-session\" ]; then : > {launched}; fi\n\
+             \x20 if [ \"$1\" = \"has-session\" ] && [ -e {launched} ] && [ ! -e {launched}.used ]; then\n\
+             \x20   : > {launched}.used\n\
+             \x20   echo \"shim: refusing one session read\" >&2\n\
+             \x20   exit 1\n\
+             \x20 fi\n\
+             \x20 ;;\n\
+             esac\n\
+             exec {real} \"$@\"\n",
+            session = session,
+            launched = launched.display(),
+            real = real,
+        );
+        let shim = bin.join("tmux");
+        fs::write(&shim, script).unwrap();
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let previous_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{}:{previous_path}", bin.display()));
+        let started = supervisor.start_seat(&room, &spec.seats[0], &spec);
+        std::env::set_var("PATH", previous_path);
+
+        let status = started.expect(
+            "the seat must come up: the second read of the session said the pane is there, and the first \
+             one's refusal is the race this case forces",
+        );
+        assert_eq!(status.state, SeatLifecycleState::Running);
+        assert!(
+            dir.join("launched.used").exists(),
+            "the shim must have refused exactly one session read, or this case proved nothing"
         );
 
         let _ = supervisor.stop_seat(&room, &key);

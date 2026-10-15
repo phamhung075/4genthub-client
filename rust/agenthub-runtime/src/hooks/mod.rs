@@ -14,7 +14,10 @@ pub enum SeatEvent {
         room: String,
         seat: String,
         session_name: String,
-        pid: u32,
+        /// The pid tmux reported for the pane, or `None` when tmux would not answer: a 0 manufactured from a
+        /// failed read is not a pid, and a consumer that receives `null` must read it as "not known", not as a
+        /// pane whose process is 0.
+        pid: Option<u32>,
         timestamp: DateTime<Utc>,
     },
     SessionTerminated {
@@ -107,7 +110,7 @@ mod tests {
             room: "r".into(),
             seat: seat.into(),
             session_name: "s".into(),
-            pid: 1,
+            pid: Some(1),
             timestamp: Utc::now(),
         }
     }
