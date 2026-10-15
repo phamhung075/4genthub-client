@@ -12,8 +12,9 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
-// Where a seat's session log lives. A native room's omp seat keeps one under the state root, at
-// clientruntime.SeatSessionsDir. The runtime runs omp only, so that is the only log a seat can have.
+// Where a seat's session log lives. An omp seat keeps one under the state root, at
+// clientruntime.SeatSessionsDir. An agy seat keeps its transcript in agy's own home, under the conversation id
+// the runtime records in the seat directory's `agy-conversation` file.
 
 var (
 	modelInLog       = regexp.MustCompile(`"model":"([^"]+)"`)
@@ -46,13 +47,37 @@ func newestByModTime(paths []string) string {
 	return paths[len(paths)-1]
 }
 
-// seatLog is (the newest session log, the runtime) of a seat in a native room. A seat with no log yields
-// an empty path and no runtime.
-func seatLog(root, room, seat string) (string, string) {
-	if session := newestSession(clientruntime.SeatSessionsDir(root, room, seat)); session != "" {
-		return session, "omp"
+// agyTranscript is the transcript of the conversation the seat's agy runs, or "" when the seat has none.
+func agyTranscript(root, room, seat string) string {
+	id, err := os.ReadFile(filepath.Join(clientruntime.SeatDir(root, room, seat), "agy-conversation"))
+	home, homeErr := os.UserHomeDir()
+	if err != nil || homeErr != nil || strings.TrimSpace(string(id)) == "" {
+		return ""
 	}
-	return "", ""
+	path := filepath.Join(home, ".gemini", "antigravity-cli", "brain", strings.TrimSpace(string(id)),
+		".system_generated", "logs", "transcript.jsonl")
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
+}
+
+// seatLog is (the newest session log, the runtime) of a seat in a native room. A seat that switched runtime
+// keeps the old runtime's log, so the newer of the omp log and the agy transcript is the live one. A seat with
+// no log yields an empty path and no runtime.
+func seatLog(root, room, seat string) (string, string) {
+	omp := newestSession(clientruntime.SeatSessionsDir(root, room, seat))
+	agy := agyTranscript(root, room, seat)
+	switch {
+	case agy == "":
+		if omp == "" {
+			return "", ""
+		}
+		return omp, "omp"
+	case omp == "" || newestByModTime([]string{omp, agy}) == agy:
+		return agy, "agy"
+	}
+	return omp, "omp"
 }
 
 // contextTokens is the tokens in the context after this record's reply, or nil when the record carries

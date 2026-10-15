@@ -587,6 +587,37 @@ func TestSeatLogReadsTheNativeSessionsDirectory(t *testing.T) {
 	}
 }
 
+// A seat switched to agy keeps its old omp log; the agy transcript, once newer, is the seat's log.
+func TestSeatLogFollowsTheAgyTranscriptOnceItIsNewer(t *testing.T) {
+	root, home := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	seat := filepath.Join(root, "rooms", "R", "seats", "S")
+	if err := os.MkdirAll(filepath.Join(seat, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	omp := filepath.Join(seat, "sessions", "x.jsonl")
+	logs := filepath.Join(home, ".gemini", "antigravity-cli", "brain", "conv-1", ".system_generated", "logs")
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agy := filepath.Join(logs, "transcript.jsonl")
+	for path, body := range map[string]string{omp: "{}\n", agy: "{}\n", filepath.Join(seat, "agy-conversation"): "conv-1\n"} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old, now := time.Now().Add(-time.Hour), time.Now()
+	_ = os.Chtimes(omp, old, old)
+	_ = os.Chtimes(agy, now, now)
+	if path, runtime := seatLog(root, "R", "S"); runtime != "agy" || path != agy {
+		t.Errorf("a seat on agy resolved to (%q, %q), want (%q, agy)", path, runtime, agy)
+	}
+	_ = os.Chtimes(omp, now.Add(time.Hour), now.Add(time.Hour))
+	if path, runtime := seatLog(root, "R", "S"); runtime != "omp" || path != omp {
+		t.Errorf("a seat back on omp resolved to (%q, %q), want (%q, omp)", path, runtime, omp)
+	}
+}
+
 // Mirrors test_seat_model_is_the_last_model_in_the_log_tail: the model the header shows is the one that
 // answered last. The reading is the LAST match in the log (and in its tail on a large log), never the
 // first, so a seat that switched models reads as the new one.
