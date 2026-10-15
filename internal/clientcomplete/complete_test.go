@@ -228,6 +228,10 @@ func TestFailingTestRunInShadowCompletesWithExitFive(t *testing.T) {
 	base := repo(t)
 	taskServer(t, `[]`)
 	jevConfig(t, 200, `{}`)
+	// SHADOW means `VALIDATION_GATE_ENFORCEMENT` unset, and the test must say so rather than read the
+	// machine it happens to run on: the state root's `.env` sets it `true` for every seat's shell, so this
+	// test exited `ExitGateRefused` (6) here while asking for the shadow path's 5 (lead ruling, 2026-10-15).
+	t.Setenv(enforcementEnv, "")
 	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git no-such-subcommand")
 	if code != 5 || !strings.Contains(errs, "gate (shadow) reject") {
 		t.Errorf("exit %d err %q", code, errs)
