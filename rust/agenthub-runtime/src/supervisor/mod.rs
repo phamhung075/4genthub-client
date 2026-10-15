@@ -360,6 +360,11 @@ fn seat_env(
     if let Some(m) = &seat.model {
         env.insert("AGENTHUB_MODEL".into(), m.clone());
     }
+    // The connector credential never enters a seat's environment, and the filter sits HERE - the one place a
+    // seat's environment is decided - rather than downstream: this map IS the pane's `-e` list, so a key
+    // dropped only at that point is a key that had already reached the seat's contract. Nothing a seat does
+    // reads the connector token (a seat addresses its own daemon through `AGENTHUB_URL`/`AGENTHUB_TOKEN`).
+    env.retain(|k, _| !crate::ENV_DENY_NAMES.contains(&k.as_str()));
     env
 }
 
@@ -2548,6 +2553,31 @@ mod tests {
             Some("agenthub--isolated--dev"),
             "the session name the seat's own client sends as"
         );
+    }
+
+    /// The connector credential is the one key a seat's environment must not hold, wherever it is named: the
+    /// state root's `.env` is the client's own configuration file and does carry it, and the ruling is that it
+    /// does not travel to a seat. Everything else in the contract survives the filter.
+    #[test]
+    fn a_seats_env_never_carries_the_connector_credential() {
+        let dir = scratch("seat-env-connector");
+        fs::write(
+            dir.join(".env"),
+            "AGENTHUB_CONNECTOR_TOKEN=from-the-file\nAGENTHUB_MCP_URL=http://127.0.0.1:8000/mcp\n",
+        )
+        .expect("write .env");
+        let seat: SeatSpec = serde_json::from_value(serde_json::json!({
+            "seat_key": "dev", "seat_type": "developer", "runtime": "omp",
+            "env": {"AGENTHUB_CONNECTOR_TOKEN": "from-the-spec"}
+        }))
+        .expect("seat");
+        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir);
+        assert!(
+            !env.contains_key("AGENTHUB_CONNECTOR_TOKEN"),
+            "the credential must not reach a seat, from the file ({env:?})"
+        );
+        assert_eq!(env.get("AGENTHUB_MCP_URL").map(String::as_str), Some("http://127.0.0.1:8000/mcp"));
+        assert_eq!(env.get("AGENTHUB_SEAT").map(String::as_str), Some("dev"));
     }
 
     /// The state root's `.env` reaches every seat: the MCP URL and token are configured once, and a seat that

@@ -82,6 +82,24 @@ fn pane_command(denied: &[String], runtime_cmd: &str) -> String {
     wrapped
 }
 
+/// The `-e KEY=VALUE` arguments for one session, minus every denied key.
+///
+/// `-e` is what gives a seat its own identity instead of the server's, so the list itself is not optional; what
+/// the deny filter adds is the credential half. A seat's env map is the state root's whole `.env`, so without
+/// the filter `AGENTHUB_CONNECTOR_TOKEN` rides `tmux new-session -e AGENTHUB_CONNECTOR_TOKEN=<value>` into `ps`
+/// - measured on this box 2026-10-15.
+fn pane_env_args(env_vars: &HashMap<String, String>) -> Vec<String> {
+    let mut args = Vec::new();
+    for (k, v) in env_vars {
+        if crate::env_is_denied(k) {
+            continue;
+        }
+        args.push("-e".to_string());
+        args.push(format!("{k}={v}"));
+    }
+    args
+}
+
 fn tmux_command() -> Command {
     let mut cmd = Command::new("tmux");
     crate::scrub_env(&mut cmd);
@@ -110,6 +128,24 @@ impl TerminalManager {
             }
         }
 
+        // The tmux SERVER's global environment is the half no client-side scrub can reach, and the `-e` list
+        // cannot out-vote it: a server that already exists keeps whatever it was created with, a pane takes the
+        // server's environment, and a key merely left out of `-e` still arrives. Measured on this box
+        // 2026-10-15 with the server up: `tmux show-environment -g` held AGENTHUB_CONNECTOR_TOKEN while this
+        // runtime was the only thing creating sessions. The server exists by this point - the `has-session`
+        // call above creates it, from an already-scrubbed client, when it is not there - so this loop can only
+        // ever clean a server, never make a dirty one. A key the server never held is not an error.
+        //
+        // The credential class is cleaned HERE rather than by the `env -u` wrapper below: the wrapper prints the
+        // key's NAME on the pane's command line for the seat's whole life, which is the surface the owner's own
+        // measurement greps, and a deny list that names the credential would publish it. Prefix keys carry no
+        // such cost, and the wrapper is what covers them.
+        for key in crate::denied_name_keys() {
+            let _ = tmux_command()
+                .args(["set-environment", "-g", "-u", &key])
+                .output();
+        }
+
         // Prepare new tmux session detached
         let mut cmd = tmux_command();
         cmd.args(["new-session", "-d", "-s", session_name, "-c"]);
@@ -121,12 +157,7 @@ impl TerminalManager {
         // AGENTHUB_SEAT/ROLE/SESSION_NAME (measured: dev and reviewer ran as `lead`). A denied key is
         // dropped even when a caller supplied it: the default deny is the point, and "this seat needs to
         // address another rig" is the case being closed.
-        for (k, v) in env_vars {
-            if crate::env_is_denied(k) {
-                continue;
-            }
-            cmd.arg("-e").arg(format!("{k}={v}"));
-        }
+        cmd.args(pane_env_args(env_vars));
 
         // The pane command is exec'd through `env -u <key>` for every denied variable this process carries,
         // so the runner — and every agent it spawns, which is what `scrub_env` covers — starts without the
@@ -345,6 +376,38 @@ mod launch_env_tests {
             "env -u RIGGED_A -u TMUX -u TMUX_PANE /bin/runner x"
         );
         assert_eq!(pane_command(&[], "/bin/runner x"), "env -u TMUX -u TMUX_PANE /bin/runner x");
+    }
+
+    /// The two mechanisms are kept apart on purpose. The credential is denied by NAME and cleaned off the tmux
+    /// SERVER, so it must never appear in `denied_env_keys`: that list is what the `env -u` wrapper prints on
+    /// the pane's command line, and the owner's measurement greps exactly that line. A credential routed to the
+    /// wrong mechanism breaks the property the fix is for.
+    #[test]
+    fn the_credential_is_cleaned_by_the_server_and_never_named_on_the_pane_command() {
+        std::env::set_var("AGENTHUB_CONNECTOR_TOKEN", "set-by-this-test");
+        assert!(crate::env_is_denied("AGENTHUB_CONNECTOR_TOKEN"));
+        assert!(crate::denied_name_keys().contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()));
+        assert!(!crate::denied_env_keys().contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()));
+        assert!(!pane_command(&crate::denied_env_keys(), "/bin/runner x").contains("CONNECTOR_TOKEN"));
+        std::env::remove_var("AGENTHUB_CONNECTOR_TOKEN");
+    }
+
+    /// The `-e` list is the leak's other half: a seat's env map is the state root's whole `.env`, so the
+    /// credential would ride `tmux new-session -e AGENTHUB_CONNECTOR_TOKEN=<value>` where `ps` reads it - while
+    /// the keys a seat actually reads (`AGENTHUB_TOKEN` for its own MCP config) survive the filter.
+    #[test]
+    fn a_denied_credential_never_becomes_a_pane_env_argument() {
+        let env = HashMap::from([
+            ("AGENTHUB_CONNECTOR_TOKEN".to_string(), "connector".to_string()),
+            ("AGENTHUB_TOKEN".to_string(), "mcp".to_string()),
+            ("AGENTHUB_SEAT".to_string(), "dev".to_string()),
+            ("RIGGED_SESSION_NAME".to_string(), "elsewhere".to_string()),
+        ]);
+        let args = pane_env_args(&env);
+        assert!(!args.iter().any(|a| a.contains("AGENTHUB_CONNECTOR_TOKEN")), "{args:?}");
+        assert!(!args.iter().any(|a| a.contains("RIGGED_SESSION_NAME")), "{args:?}");
+        assert!(args.contains(&"AGENTHUB_SEAT=dev".to_string()), "{args:?}");
+        assert!(args.contains(&"AGENTHUB_TOKEN=mcp".to_string()), "{args:?}");
     }
 
     #[test]

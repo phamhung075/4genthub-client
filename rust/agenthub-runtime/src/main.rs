@@ -39,21 +39,53 @@ use supervisor::RoomSupervisor;
 /// agent may hold an inherited cloud token is a design question. Named on U6's row, not decided here.
 pub const ENV_DENY_PREFIXES: [&str; 1] = ["RIGGED_"];
 
+/// Keys denied by their EXACT name, because a prefix cannot name a credential without over-removing.
+///
+/// `AGENTHUB_CONNECTOR_TOKEN` is the pairing token the local client uses against the cloud connector, and
+/// nothing a seat does reads it: a seat addresses its own daemon (`AGENTHUB_URL`, `AGENTHUB_TOKEN`). Handing
+/// every seat in a room the connector credential is a leak with no consumer, and it left the room twice over,
+/// measured on this box 2026-10-15 - on the `tmux new-session … -e AGENTHUB_CONNECTOR_TOKEN=<value>` argv, and
+/// in the tmux server's global environment, where both `ps -eo args` and `tmux show-environment -g` read it.
+///
+/// The boundary is exact-name and deliberate: `AGENTHUB_TOKEN` (the seat's own MCP credential, named by its
+/// mcp.json) and `DEEPSEEK_API_KEY` (the provider key its model calls need) are NOT denied - a seat breaks
+/// without them, so what is wrong there is the argv class, not the key. Named on U6's row, not decided here.
+pub const ENV_DENY_NAMES: [&str; 1] = ["AGENTHUB_CONNECTOR_TOKEN"];
+
 pub fn env_is_denied(key: &str) -> bool {
-    ENV_DENY_PREFIXES.iter().any(|p| key.starts_with(p))
+    ENV_DENY_PREFIXES.iter().any(|p| key.starts_with(p)) || ENV_DENY_NAMES.contains(&key)
 }
 
-/// The denied keys actually present in this process's environment.
+/// The denied keys actually present in this process's environment, for the exec wrapper.
 ///
 /// Used to launch a seat's pane through `env -u <key> …`, which is the only mechanism that satisfies the
 /// design's predicate — "no orchestrator state path in any room pid's argv or environ" — for *every* process the
 /// room owns, not just the agent: `/proc/<pid>/environ` is the environment the kernel was given at `exec`,
 /// so removing a variable from a running process would not be visible where the predicate is measured, and
 /// tmux gives a pane its session environment from the tmux *server* when the variable is not in the client's.
+///
+/// PREFIX keys only. An exact-name credential is removed before the pane exists — out of the seat's own
+/// environment and off the tmux server's global one, see `denied_name_keys` — so there is nothing left for a
+/// wrapper to unset, and naming it here would print the name on the pane's command line for the seat's whole
+/// life, which is the surface the owner's own measurement reads.
 pub fn denied_env_keys() -> Vec<String> {
     std::env::vars()
         .map(|(key, _)| key)
-        .filter(|key| env_is_denied(key))
+        .filter(|key| ENV_DENY_PREFIXES.iter().any(|p| key.starts_with(p)))
+        .collect()
+}
+
+/// The exact-name denied keys present in this process's environment: the credential class, cleaned off the
+/// tmux server's global environment before a pane is created.
+///
+/// A server that already exists keeps the environment it was created with, and a pane takes the SERVER's
+/// environment - so dropping the key from the seat's env map and from the `-e` list is not enough: measured on
+/// this box 2026-10-15, `tmux show-environment -g` held `AGENTHUB_CONNECTOR_TOKEN` while this runtime was the
+/// only thing creating sessions, and the panes inherited it from there.
+pub fn denied_name_keys() -> Vec<String> {
+    std::env::vars()
+        .map(|(key, _)| key)
+        .filter(|key| ENV_DENY_NAMES.contains(&key.as_str()))
         .collect()
 }
 
@@ -357,6 +389,44 @@ mod tests {
                 "{kept} is either this room's own or not ours to remove"
             );
         }
+    }
+
+    /// The exact-name half of the predicate. The connector credential is denied by name - and the keys a seat
+    /// actually reads are not, which is why this is a name list and not a wider prefix: `AGENTHUB_TOKEN` is
+    /// named by the seat's own mcp.json and `DEEPSEEK_API_KEY` is what its model calls carry.
+    #[test]
+    fn the_connector_token_is_denied_by_name_while_a_seats_own_keys_are_not() {
+        assert!(env_is_denied("AGENTHUB_CONNECTOR_TOKEN"));
+        for kept in [
+            "AGENTHUB_TOKEN",
+            "AGENTHUB_URL",
+            "AGENTHUB_ROOM",
+            "DEEPSEEK_API_KEY",
+            "HOME",
+        ] {
+            assert!(!env_is_denied(kept), "{kept} is what a seat works with");
+        }
+    }
+
+    /// The two classes are handled by two mechanisms, and a key that reached the wrong one would break the
+    /// owner's measurement: the credential is cleaned off the tmux server and must never be WRAPPED, because a
+    /// wrapper prints the name on the pane's own command line for the seat's whole life, while a prefix key is
+    /// wrapped and published nowhere.
+    #[test]
+    fn the_credential_is_removed_by_the_server_and_never_by_a_wrapper() {
+        std::env::set_var("AGENTHUB_CONNECTOR_TOKEN", "sentinel");
+        std::env::set_var("RIGGED_TESTONLY_CLASS", "poison");
+        let named = denied_name_keys();
+        let wrapped = denied_env_keys();
+        std::env::remove_var("AGENTHUB_CONNECTOR_TOKEN");
+        std::env::remove_var("RIGGED_TESTONLY_CLASS");
+
+        assert!(named.contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()), "{named:?}");
+        assert!(
+            !wrapped.contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()),
+            "the credential would be named on every pane's command line: {wrapped:?}"
+        );
+        assert!(wrapped.contains(&"RIGGED_TESTONLY_CLASS".to_string()), "{wrapped:?}");
     }
 
     /// The mechanism rather than the list: a denied variable is REMOVED from the child's environment, and a
