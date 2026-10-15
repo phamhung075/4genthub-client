@@ -7,6 +7,10 @@
 //   2. LOG: append ONE line per tool call to <seat dir>/tool-calls.jsonl, so "what did this seat do, and was it
 //      refused" is one `jq` away instead of a transcript read.
 //
+// The same file is also the agy seat's guard: agy's global `hooks.json` runs it as `node seat-guard.ts --agy-hook
+// pre|post`, with the hook payload on stdin (see agyHook below). omp never passes that argument, so it loads the
+// default export as before. One file keeps the rules, the log line and the redaction in one place.
+//
 // A line is {at, seat, tool, target, outcome, ms, rule?, error?}. `outcome` is "ok", "error" or
 // "blocked"; a blocked call carries the `rule` that refused it. An MCP call is the tool mcp__<server>_<tool>
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
@@ -148,3 +152,46 @@ export default function hook(pi: ExtensionAPI): void {
     });
   });
 }
+
+// ---- agy ----------------------------------------------------------------------------------------------------
+// agy runs a hook command with a JSON payload on stdin and reads a JSON answer from stdout. `pre` runs before a
+// tool step: it answers {"decision":"deny"} for a refused call, "allow" for the rest. `post` runs after: it logs
+// the outcome and answers {}. A payload carries toolCall {name, args}, and an agy tool is not an omp tool, so the
+// two it shares the rules' vocabulary with are mapped: run_command is bash and view_file is read.
+
+type AgyCall = { name?: string; args?: Record<string, unknown> };
+
+function fromAgy(call: AgyCall): { tool: string; input: Record<string, unknown> } {
+  const args = call.args ?? {};
+  const name = call.name ?? "";
+  if (name === "run_command") return { tool: "bash", input: { command: args.CommandLine } };
+  if (name === "view_file") return { tool: "read", input: { path: args.AbsolutePath } };
+  const key = ["AbsolutePath", "TargetFile", "SearchPath", "DirectoryPath", "Query", "Pattern"].find((k) => args[k]);
+  return { tool: name, input: { path: key ? args[key] : "" } };
+}
+
+async function agyHook(phase: string): Promise<void> {
+  let raw = "";
+  for await (const chunk of process.stdin) raw += chunk;
+  const payload = JSON.parse(raw || "{}") as { toolCall?: AgyCall; error?: string };
+  const { tool, input } = fromAgy(payload.toolCall ?? {});
+  const full = redact(describe(tool, input));
+  if (phase === "post") {
+    record({ tool, target: full.slice(0, MAX_TARGET), outcome: payload.error ? "error" : "ok",
+      ...(payload.error ? { error: redact(payload.error).slice(0, MAX_TARGET) } : {}) });
+    console.log("{}");
+    return;
+  }
+  for (const { rule, check } of RULES) {
+    const reason = check(tool, input);
+    if (reason) {
+      record({ tool, target: full.slice(0, MAX_BLOCKED), outcome: "blocked", rule, error: reason });
+      console.log(JSON.stringify({ decision: "deny", reason: `blocked by seat guard (${rule}): ${reason}` }));
+      return;
+    }
+  }
+  console.log(JSON.stringify({ decision: "allow" }));
+}
+
+const agyFlag = process.argv.indexOf("--agy-hook");
+if (agyFlag >= 0) await agyHook(process.argv[agyFlag + 1] ?? "");

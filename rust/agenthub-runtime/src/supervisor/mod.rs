@@ -201,6 +201,51 @@ const SEAT_MCP_CONFIG: &str = r#"{"mcpServers":{"agenthub_http":{"type":"http","
 /// to remember to install is a hook that is missing on the next seat.
 const SEAT_TOOL_HOOK: &str = include_str!("../../assets/seat-guard.ts");
 
+/// The name of the entry the runtime owns in agy's global `hooks.json`.
+const AGY_GUARD_HOOK: &str = "seat-guard";
+
+/// The entry agy runs around every tool step. agy reads its hooks from `~/.gemini/config/hooks.json` for every
+/// session on the machine, so the command answers for both kinds: a seat (`AGENTHUB_SEAT` is set) runs the seat
+/// guard from its own agent dir, and any other session gets agy's own default, "ask" before a tool and `{}` after
+/// one. agy treats an answer with no decision as a refusal, which is why the other session cannot simply print `{}`.
+fn agy_guard_entry() -> serde_json::Value {
+    let command = |phase: &str, otherwise: &str| {
+        format!(
+            "if [ -n \"$AGENTHUB_SEAT\" ]; then exec node \"$PI_CODING_AGENT_DIR/hooks/pre/seat-guard.ts\" --agy-hook {phase}; else echo '{otherwise}'; fi"
+        )
+    };
+    serde_json::json!({
+        "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "timeout": 10,
+            "command": command("pre", "{\"decision\":\"ask\"}")}]}],
+        "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "timeout": 10,
+            "command": command("post", "{}")}]}],
+    })
+}
+
+/// Make sure agy's global `hooks.json` carries the seat guard, and touch nothing else in it: the file also holds
+/// other tools' hooks. A file that is not a JSON object is an error rather than a file to overwrite.
+fn install_agy_guard_hook(home: &Path) -> Result<(), String> {
+    let path = home.join(".gemini").join("config").join("hooks.json");
+    let mut hooks = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .filter(serde_json::Value::is_object)
+            .ok_or_else(|| format!("{} is not a JSON object; the agy seat guard was not installed", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    let entry = agy_guard_entry();
+    if hooks.get(AGY_GUARD_HOOK) == Some(&entry) {
+        return Ok(());
+    }
+    hooks[AGY_GUARD_HOOK] = entry;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    let text = serde_json::to_string_pretty(&hooks).map_err(|e| e.to_string())?;
+    fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
 /// The variable that names the client's skill tree (`share/`, `rooms/<room>/`, `rooms/<room>/<seat>/`). It is
 /// read from the state root's `.env`, else from the daemon's own environment.
 const SKILLS_ROOT_ENV: &str = "AGENTHUB_CLIENT_SKILLS";
@@ -493,6 +538,10 @@ impl RoomSupervisor {
         fs::write(hook_dir.join("seat-guard.ts"), SEAT_TOOL_HOOK)
             .map_err(|e| format!("cannot write the seat's tool hook: {e}"))?;
         install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
+        if matches!(AgentRuntime::from_str_loose(&seat.runtime), AgentRuntime::Agy) {
+            let home = std::env::var_os("HOME").ok_or("HOME is not set, so agy's hooks.json cannot be found")?;
+            install_agy_guard_hook(Path::new(&home))?;
+        }
 
         // Determine working directory
         let cwd_str = seat.cwd.as_deref().or(spec.cwd.as_deref()).unwrap_or(".");
@@ -2543,6 +2592,28 @@ mod tests {
         for needle in ["\"tool_call\"", "\"tool_result\"", "block: true", "tool-calls.jsonl", "env-secret", "docker", "tmux-mutate", "push"] {
             assert!(SEAT_TOOL_HOOK.contains(needle), "the hook lost {needle}");
         }
+    }
+
+    /// The agy guard is added beside another tool's hook without touching it, is idempotent, and a file that is not a
+    /// JSON object is refused rather than overwritten.
+    #[test]
+    fn the_agy_guard_hook_joins_the_global_file_and_leaves_the_rest() {
+        let home = scratch("agy-guard");
+        let path = home.join(".gemini/config/hooks.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"herdr":{"PreInvocation":[{"command":"x"}]}}"#).unwrap();
+        install_agy_guard_hook(&home).unwrap();
+        let first = fs::read_to_string(&path).unwrap();
+        install_agy_guard_hook(&home).unwrap();
+        assert_eq!(first, fs::read_to_string(&path).unwrap(), "a second install changed the file");
+        let hooks: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(hooks["herdr"]["PreInvocation"][0]["command"], "x");
+        let pre = hooks[AGY_GUARD_HOOK]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
+        assert!(pre.contains("--agy-hook pre") && pre.contains(r#"{"decision":"ask"}"#), "{pre}");
+        fs::write(&path, "[1]").unwrap();
+        assert!(install_agy_guard_hook(&home).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[1]");
+        let _ = fs::remove_dir_all(&home);
     }
 
     /// The seat's own folder is nested one level deeper than the room's skills, and a seat receives share +
