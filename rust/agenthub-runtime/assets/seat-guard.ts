@@ -36,6 +36,10 @@ function describe(tool: string, input: Record<string, unknown>): string {
   return String(input.path ?? input.pattern ?? "");
 }
 
+// A .env FILE NAME: `.env` or `.env.<suffix>` standing alone as a path segment, not `import.meta.env` and not a
+// template (`.env.sample`, `.env.example`), which hold no secret.
+const ENV_FILE = /(^|[\s/"'=])\.env(?!\.(sample|example|template)\b)(\.[\w-]+)?(?=$|[\s"'|;&)])/;
+
 // The rules. Each returns the reason a call is refused, or "" to let it through.
 const RULES: { rule: string; check: (tool: string, input: Record<string, unknown>) => string }[] = [
   {
@@ -47,7 +51,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
       const cmd = String(input.command ?? "");
       // A command that names a .env file and prints from it. `grep -c/-q/-l/-o` and `source` print no value.
       for (const part of cmd.split(/&&|\|\||;|\n/)) {
-        if (!/\.env\b/.test(part)) continue;
+        if (!ENV_FILE.test(part)) continue;
         if (/\b(cat|head|tail|less|more|bat|sed|awk|cut|od|xxd|strings)\b/.test(part))
           return "this command prints a .env file; check a name with `grep -c NAME FILE` instead";
         const grep = part.match(/\bgrep\s+((?:-[A-Za-z]+\s+)*)/);
