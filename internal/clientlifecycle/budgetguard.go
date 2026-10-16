@@ -43,8 +43,14 @@ type BudgetGuard struct {
 	Seats  func(rig string) []string
 	Limits func(rig string) (roombudget.Limits, error)
 	Usage  func(rig, seat string) (roombudget.Usage, bool)
-	Park   func(rig, seat string) error
-	Record func(rig, seat string, parked roombudget.Parked) error
+	// SeatDir is the seat's own directory, where its guard log and its park record live. Every path below
+	// resolves through it, so one field moves the whole guard's files in a test.
+	SeatDir func(rig, seat string) string
+	Park    func(rig, seat string) error
+	Record  func(rig, seat string, parked roombudget.Parked) error
+	// Parked reads the record back. It is what makes a park idempotent: the record outlives this process, so a
+	// guard that restarted must not stop and file the same seat again.
+	Parked func(rig, seat string) (roombudget.Parked, bool)
 	Row    func(rig string, row clientruntime.QueueCreateInput) error
 	Log    func(text string)
 
@@ -77,8 +83,9 @@ func NewBudgetGuard(rig, lead, stateRoot string, out io.Writer) *BudgetGuard {
 	g.Limits = func(r string) (roombudget.Limits, error) {
 		return roombudget.Load(filepath.Join(stateRoot, "rooms", r))
 	}
+	g.SeatDir = func(r, seat string) string { return clientruntime.SeatDir(stateRoot, r, seat) }
 	g.Usage = func(r, seat string) (roombudget.Usage, bool) {
-		dir := clientruntime.SeatDir(stateRoot, r, seat)
+		dir := g.SeatDir(r, seat)
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			return roombudget.Usage{}, false
 		}
@@ -86,7 +93,10 @@ func NewBudgetGuard(rig, lead, stateRoot string, out io.Writer) *BudgetGuard {
 	}
 	g.Park = func(r, seat string) error { return clientruntime.NewClient("").StopSeat(r, seat) }
 	g.Record = func(r, seat string, parked roombudget.Parked) error {
-		return roombudget.WriteParked(clientruntime.SeatDir(stateRoot, r, seat), parked)
+		return roombudget.WriteParked(g.SeatDir(r, seat), parked)
+	}
+	g.Parked = func(r, seat string) (roombudget.Parked, bool) {
+		return roombudget.ReadParked(g.SeatDir(r, seat))
 	}
 	g.Row = func(r string, row clientruntime.QueueCreateInput) error {
 		_, err := clientruntime.NewClient("").QueueCreate(r, row)
@@ -136,22 +146,37 @@ func (g *BudgetGuard) Step(ctx context.Context) {
 	g.beat()
 }
 
-// park stops the seat, records why in its own directory, and files the row that names it. The order is the
-// contract: nothing is recorded and no row is filed until the stop was ACCEPTED, because a seat that is still
-// running is a seat that was not parked, and a record saying otherwise would outlive the truth.
+// park records the park, stops the seat and files the row that names it. THE RECORD IS THE PARK: the client's
+// routes refuse a parked seat work by reading that file (seatpark's gate, and the row a client prints), so the
+// record is written FIRST and the seat is only stopped once it exists. The order is the contract, both ways:
+//
+//   - A record that could not be written leaves the seat RUNNING, with no row, and the next pass tries again.
+//     Stopping it anyway would leave a seat no route refuses and nobody can explain, and - the reason this is
+//     the first step rather than the second - a recorded park is what a restart and every later pass read back.
+//   - A record that landed IS a park, whatever the stop does next: a refused StopSeat is logged and the row is
+//     still filed, because the park is already real: the seat is refused work either way.
+//
+// A seat that already carries a record is left alone. The record outlives this process, so a guard that
+// restarted must not stop and file the same seat again on its first pass.
 func (g *BudgetGuard) park(seat string, usage roombudget.Usage, reason string) {
-	if err := g.Park(g.Rig, seat); err != nil {
-		g.Log(fmt.Sprintf("%s is over its ceiling (%s) and the stop was refused: %v", seat, reason, err))
+	if _, ok := g.Parked(g.Rig, seat); ok {
+		delete(g.over, seat)
 		return
 	}
-	delete(g.over, seat)
 	parked := roombudget.Parked{Seat: seat, Reason: reason, At: g.Now().UTC().Format(time.RFC3339),
 		Cost: usage.Cost, Calls: usage.Calls}
 	if err := g.Record(g.Rig, seat, parked); err != nil {
-		g.Log(fmt.Sprintf("%s: stopped, and the park record could not be written: %v", seat, err))
+		g.Log(fmt.Sprintf("%s is over its ceiling (%s) and its park record could not be written, so it was NOT "+
+			"stopped - the record is the park, and the next pass tries again: %v", seat, reason, err))
+		return
+	}
+	delete(g.over, seat)
+	if err := g.Park(g.Rig, seat); err != nil {
+		g.Log(fmt.Sprintf("%s: parked and recorded, and the stop was refused (%v); the record refuses it work "+
+			"until it is removed", seat, err))
 	}
 	if err := g.Row(g.Rig, g.row(seat, usage, reason)); err != nil {
-		g.Log(fmt.Sprintf("%s: stopped and recorded, and the rail row was refused: %v", seat, err))
+		g.Log(fmt.Sprintf("%s: parked and recorded, and the rail row was refused: %v", seat, err))
 		return
 	}
 	g.Log(fmt.Sprintf("%s: PARKED (%s)", seat, reason))
@@ -165,10 +190,13 @@ func (g *BudgetGuard) row(seat string, usage roombudget.Usage, reason string) cl
 		SourceSession:      "budget@" + g.Rig,
 		DestinationSession: clientruntime.SeatSessionName(g.Rig, g.Lead),
 		Summary:            fmt.Sprintf("BUDGET: seat %s parked - %s", seat, reason),
-		Body: fmt.Sprintf("The budget safeguard stopped seat %s: it %s.\nMeasured %s: %.2f USD over 24h, %d tool calls in the last minute.\n"+
-			"StopSeat was accepted and its park record is written. Start it again with `4genteam room reseat %s %s` once the work is "+
-			"re-planned, or change the ceiling with `4genteam room limits %s`.",
-			seat, reason, g.Now().UTC().Format(time.RFC3339), usage.Cost, usage.Calls, g.Rig, seat, g.Rig),
+		Body: fmt.Sprintf("The budget safeguard parked seat %s: it %s.\nMeasured %s: %.2f USD over 24h, %d tool calls in the last minute.\n"+
+			"Its park record is %s, and the record IS the park: the client's routes that would hand the seat work read it "+
+			"and refuse (send, the restore brief, a revive), so a bare `4genteam room reseat %s %s` restarts it while the "+
+			"record still refuses it work. Remove the record once the cause is understood; `4genteam room limits %s` changes "+
+			"the ceiling.",
+			seat, reason, g.Now().UTC().Format(time.RFC3339), usage.Cost, usage.Calls,
+			roombudget.ParkedPath(g.SeatDir(g.Rig, seat)), g.Rig, seat, g.Rig),
 		Tags: []string{budgetRowTag},
 	}
 }

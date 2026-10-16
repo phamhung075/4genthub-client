@@ -1,11 +1,13 @@
 // The budget guard's DECISION is what these tests pin, one pass at a time and with no rig, no socket and no
-// clock: a seat over its USD ceiling is stopped, recorded and named on the rail exactly once; a seat over the
-// call ceiling is stopped only after the breach held for a second pass; limits that are off measure nothing;
-// and a stop the runtime refused is not recorded as a park.
+// clock: a seat over its USD ceiling is recorded, stopped and named on the rail exactly once; a seat over the
+// call ceiling is parked only after the breach held for a second pass; limits that are off measure nothing; a
+// record that could not be written leaves the seat running and is retried; and a stop the runtime refused still
+// leaves a park, because the record is the park.
 package clientlifecycle
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -16,16 +18,17 @@ import (
 )
 
 type budgetFixture struct {
-	guard   *BudgetGuard
-	limits  roombudget.Limits
-	usage   map[string]roombudget.Usage
-	seats   []string
-	refuse  map[string]bool
-	parks   []string
-	records map[string]roombudget.Parked
-	rows    []clientruntime.QueueCreateInput
-	logs    []string
-	beats   int
+	guard       *BudgetGuard
+	limits      roombudget.Limits
+	usage       map[string]roombudget.Usage
+	seats       []string
+	refuse      map[string]bool
+	recordFails bool
+	parks       []string
+	records     map[string]roombudget.Parked
+	rows        []clientruntime.QueueCreateInput
+	logs        []string
+	beats       int
 }
 
 // newBudgetFixture wires a guard to the test's own room: the seats it measures, their usage, the parks the
@@ -61,6 +64,9 @@ func newBudgetFixture(t *testing.T) *budgetFixture {
 		return nil
 	}
 	guard.Record = func(_, seat string, parked roombudget.Parked) error {
+		if f.recordFails {
+			return errors.New("the state root is not writable")
+		}
 		f.records[seat] = parked
 		return nil
 	}
@@ -69,6 +75,11 @@ func newBudgetFixture(t *testing.T) *budgetFixture {
 		return nil
 	}
 	guard.Log = func(text string) { f.logs = append(f.logs, text) }
+	guard.SeatDir = func(_, seat string) string { return "/state/rooms/room-a/seats/" + seat }
+	guard.Parked = func(_, seat string) (roombudget.Parked, bool) {
+		parked, ok := f.records[seat]
+		return parked, ok
+	}
 	f.guard = guard
 
 	previous := clientservices.WriteHeartbeat
@@ -101,6 +112,11 @@ func TestASeatOverItsUSDBudgetIsParkedOnceAndNamedOnce(t *testing.T) {
 	}
 	if len(row.Summary) > 120 || len(row.Body) > 600 {
 		t.Errorf("row is %d/%d chars, over the rail's own caps (120/600)", len(row.Summary), len(row.Body))
+	}
+	// The row must not send the reader to a reseat as the way back: the record is what refuses the seat work, so
+	// removing it is the way out, and the row names the path it lives at.
+	if !strings.Contains(row.Body, "Remove the record") || !strings.Contains(row.Body, "seats/dev/parked.json") {
+		t.Errorf("body = %q, want the record named as the way back, at its path", row.Body)
 	}
 	parked, ok := f.records["dev"]
 	if !ok {
@@ -160,18 +176,61 @@ func TestLimitsThatAreOffMeasureNothing(t *testing.T) {
 	}
 }
 
-// TestARefusedStopIsNeitherRecordedNorFiled: the order is the contract. A seat the runtime would not stop is a
-// seat that was NOT parked, so the record and the row would be a claim about a stop that did not happen.
-func TestARefusedStopIsNeitherRecordedNorFiled(t *testing.T) {
+// TestARefusedStopStillParksTheSeat: THE RECORD IS THE PARK, so the record and the row stand even when the
+// runtime would not stop the seat - the seat is refused work either way, and a park that vanished because a
+// stop failed is a park nobody can act on. What the refusal costs is named in the log.
+func TestARefusedStopStillParksTheSeat(t *testing.T) {
 	f := newBudgetFixture(t)
 	f.refuse["dev"] = true
 	f.usage["dev"] = roombudget.Usage{Cost: 40}
 
 	f.guard.Step(context.Background())
-	if len(f.records) != 0 || len(f.rows) != 0 {
-		t.Fatalf("a refused stop was recorded or filed: records=%v rows=%d", f.records, len(f.rows))
+	if got, ok := f.records["dev"]; !ok || got.Cost != 40 {
+		t.Fatalf("records = %v, want dev recorded: the record is the park and the stop did not happen", f.records)
+	}
+	if len(f.rows) != 1 {
+		t.Fatalf("rows = %d, want one: the lead is told about a park the stop refused", len(f.rows))
+	}
+	if f.parks == nil && len(f.parks) != 0 {
+		t.Errorf("parks = %v, want none: the runtime refused it", f.parks)
 	}
 	if !strings.Contains(strings.Join(f.logs, "\n"), "the stop was refused") {
 		t.Errorf("logs = %v, want the refusal named", f.logs)
+	}
+
+	// The seat is still running, and the next pass finds its record: it is not stopped or filed a second time.
+	f.usage["dev"] = roombudget.Usage{Cost: 41}
+	f.guard.Step(context.Background())
+	if len(f.rows) != 1 {
+		t.Errorf("rows = %d, want still one: a seat already carrying a record is left alone", len(f.rows))
+	}
+}
+
+// TestAParkRecordThatCouldNotBeWrittenLeavesTheSeatRunningAndRetries: with no record there is no park - no route
+// refuses the seat work and nobody can read why it stopped - so the seat keeps running and the next pass tries
+// again, which is the only reason g.over is not cleared on this path.
+func TestAParkRecordThatCouldNotBeWrittenLeavesTheSeatRunningAndRetries(t *testing.T) {
+	f := newBudgetFixture(t)
+	f.recordFails = true
+	f.usage["dev"] = roombudget.Usage{Cost: 40, Calls: 12}
+
+	f.guard.Step(context.Background())
+	if len(f.parks) != 0 || len(f.rows) != 0 {
+		t.Fatalf("parks=%v rows=%d, want none: the record is the park and it was not written", f.parks, len(f.rows))
+	}
+	if len(f.seats) != 2 {
+		t.Errorf("seats = %v, want dev still running: a seat with no record is left alone", f.seats)
+	}
+	if !strings.Contains(strings.Join(f.logs, "\n"), "it was NOT stopped") {
+		t.Errorf("logs = %v, want the failed write and the reason named", f.logs)
+	}
+
+	f.recordFails = false
+	f.guard.Step(context.Background())
+	if len(f.parks) != 1 || f.parks[0] != "dev" {
+		t.Errorf("parks = %v, want dev parked on the pass after the record landed", f.parks)
+	}
+	if _, ok := f.records["dev"]; !ok {
+		t.Errorf("records = %v, want dev recorded", f.records)
 	}
 }
