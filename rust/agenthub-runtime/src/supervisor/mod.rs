@@ -3422,6 +3422,18 @@ mod tests {
             "a parked seat must not be prepared for a start"
         );
 
+        // AND THE PARK LIFTS WHEN THE RECORD GOES, IN THIS PROCESS. The record's EXISTENCE is the park (see
+        // park.rs), nothing above caches that answer, and no restart is needed to stop refusing - an exit that
+        // only takes effect once the daemon is replaced is not an exit, and a park remembered past the record's
+        // removal is how a seat that was let back in stays out. This is the runtime's half of the round trip
+        // the way back depends on: the same route that just refused answers for itself again.
+        fs::remove_file(seat_dir.join("parked.json")).expect("the record is the whole park");
+        let after = supervisor.deliver_text(&session, "hi");
+        assert!(
+            !matches!(&after, Err(e) if e.contains("PARKED")),
+            "with the record gone the same send must answer for itself again: {after:?}"
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 }

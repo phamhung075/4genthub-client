@@ -2357,6 +2357,22 @@ mod tests {
             !nudge_log_path(&dir, "lab", "dev").exists(),
             "a refused nudge must record no attempt: a parked seat does not spend the ladder"
         );
+
+        // AND THE WAY BACK IS THE RECORD'S ABSENCE: the nudge is the route that hands a waiting seat the work
+        // its rail holds, so the exit has to restore IT first. Nothing above caches the park, so a seat let back
+        // in is reachable on the next tick rather than the next daemon, and the attempt the refusal withheld is
+        // recorded now - the ladder's half of the round trip, and the inverse of the assertion above.
+        std::fs::remove_file(seat_dir.join("parked.json")).expect("the record is the whole park");
+        let after = nudge_seat(&dir, "lab", "dev", "agenthub--lab--dev", &["qitem-1".to_string()], 1);
+        assert!(
+            !matches!(&after, Err(e) if e.contains("PARKED")),
+            "with the record gone the same nudge must answer for itself again: {after:?}"
+        );
+        assert!(
+            nudge_log_path(&dir, "lab", "dev").exists(),
+            "an unparked seat spends the ladder: the attempt the park withheld is recorded again"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
