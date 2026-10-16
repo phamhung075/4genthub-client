@@ -46,6 +46,13 @@ func TestSetKeepsEveryOtherByteAndTheModeItFound(t *testing.T) {
 	if err := os.WriteFile(path, []byte(original), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	// THE MODE IS SET, NOT ASKED FOR: `os.WriteFile`'s 0640 is a request the process umask clamps, and
+	// every seat's tree takes umask 077 at its entry (see `RestrictUmask`), so a case that asked for 0640
+	// would be handed 0600 and would then fail on a mode the file never had. What this case is about is
+	// the mode the file ALREADY has, so it is put there explicitly.
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	if err := Set(path, "OFFPEAK_ONLY", "0"); err != nil {
 		t.Fatal(err)
 	}
