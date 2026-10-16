@@ -19,11 +19,13 @@ const (
 	// Name is the limits file inside the ROOM's own directory.
 	Name = "limits.json"
 	// ParkedName is the record a safeguard leaves in the SEAT's own directory. The record is load-bearing - it is
-	// what the routes that refuse a parked seat work read - so the guard names it in its PROTECTED PATHS: an edit
-	// tool's path, a redirect, `tee`, `cp`/`mv`/`install`/`rsync`/`ln`, `rm`/`unlink`/`truncate`/`shred`,
-	// `sed -i`/`perl -i` and `dd of=` on it are all refused. What it does NOT see is a path opened from inside a
-	// program (`python3 -c`, `node -e`) or spelled through a variable - measured 2026-10-16, both pass - so a seat
-	// that wants to unpark itself still has a route the guard cannot read.
+	// what the routes that refuse a parked seat work read - so the REPO's guard names it in its PROTECTED PATHS and
+	// refuses every write shape it parses on it (edit path, redirect, `tee`, cp/mv/install/rsync/ln,
+	// rm/unlink/truncate/shred, `sed -i`/`perl -i`, `dd of=`). The copy a seat RUNS - the one the runtime binary
+	// embeds and writes into <seat dir>/hooks/pre/seat-guard.ts when it prepares the seat - is the asset as of
+	// 194343c (blob d18048e5) and refuses NONE of them here, so a seat can still unpark itself by hand until the
+	// runtime is rebuilt, installed and the seats restarted. Neither copy sees a path opened from inside a program
+	// (`python3 -c`, `node -e`) or spelled through a variable.
 	ParkedName = "parked.json"
 
 	// SpendWindow and RateWindow are the two windows the ceilings are counted over, and they are the

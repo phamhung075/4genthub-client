@@ -1,12 +1,23 @@
 // The budget a room runs under: the ceilings the room's safeguard enforces, written by the owner and read by
-// `budget-run`. The file is the room's own - rooms/<room>/limits.json - and a SEAT may not raise what bounds it.
-// Two independent layers refuse a seat's write, and neither is the other's: THIS VERB refuses a raise, or
-// `--off`, asked for by a seat, naming $AGENTHUB_SESSION_NAME (raisesTheCeiling; the usage carries the matrix),
-// and the SEAT GUARD refuses the write SHAPES it parses on the room's limits.json (an edit tool's path, a
-// redirect, `tee`, cp/mv/install/rsync/ln, rm/unlink/truncate/shred, `sed -i`/`perl -i`, `dd of=`). What neither
-// sees is a path opened from inside a program (`python3 -c "open(...)"`, `node -e "writeFileSync(...)"`) or
-// spelled through a variable: measured 2026-10-16 at bf43cce, both pass. The marker is a speed bump rather than
-// a wall - a seat that unsets $AGENTHUB_SESSION_NAME claims to be the owner.
+// `budget-run`. The file is the room's own - rooms/<room>/limits.json - and a SEAT may not raise what bounds it:
+// THIS VERB refuses a raise, or `--off`, asked for by a seat, naming $AGENTHUB_SESSION_NAME (raisesTheCeiling;
+// the usage carries the matrix). The SEAT GUARD is the second layer, and it is at TWO STATES: the repo's asset
+// (rust/agenthub-runtime/assets/seat-guard.ts, blob 2e978d1 at main) refuses every write shape it parses on this
+// file, while the copy a seat actually RUNS is the one the RUNTIME BINARY embeds and writes into
+// <seat dir>/hooks/pre/seat-guard.ts when it prepares the seat (supervisor/mod.rs:272,641) - the installed binary
+// still embeds the asset as of 194343c (blob d18048e5), which refuses only an edit tool's path, a redirect, `tee`
+// and `cp` here, so `sed -i`, `rm`, `truncate` and `dd of=` pass until the runtime is rebuilt, installed and the
+// seats restarted; a RESEAT re-installs that same older copy, because it comes from the same binary. Measured
+// 2026-10-16 by driving all three copies; both share one residual: a path opened from INSIDE a program
+// (`python3 -c "open(...)"`, `node -e "writeFileSync(...)"`) or spelled through a variable.
+//
+// The marker is a SPEED BUMP, not a wall, and that is measured too: with 25/300 in force and a seat's marker
+// set, `--usd 777` exits 3 and leaves the file alone, but the SAME seat writes 777 through an EMPTY marker
+// (`AGENTHUB_SESSION_NAME= 4genteam ...`), 888 through `env --unset=AGENTHUB_SESSION_NAME` and 889 through a
+// variable holding the name; a program that cleans its own environment and execs the verb writes 999. The
+// guard's hook-bypass rule refuses only the two literal spellings, `env -u AGENTHUB_SESSION_NAME` and
+// `unset AGENTHUB_SESSION_NAME`. So the refusal stops the honest route, not a determined one; what bounds a
+// seat regardless of who wrote the file is the safeguard itself (`budget-run`), not this verb.
 package clientroom
 
 import (
@@ -40,10 +51,18 @@ and OFF is how a room says it has none.
 
 A SEAT MAY NOT RAISE A CEILING OR TURN THE CEILINGS OFF: this verb refuses that, naming $AGENTHUB_SESSION_NAME,
 because a ceiling exists to stop the seat it is measured against. A seat may still LOWER one or turn them ON, and
-the OWNER raises one by running this with $AGENTHUB_SESSION_NAME unset. Writing the FILE directly is refused by a
-SECOND layer, the SEAT GUARD: it refuses an edit tool's path, a redirect, tee, cp/mv/install/rsync/ln,
-rm/unlink/truncate/shred, sed -i/perl -i and dd of= on this file. What it does not see is a path opened from
-inside a program (python3 -c, node -e) or spelled through a variable - measured 2026-10-16.`
+the OWNER raises one by running this with $AGENTHUB_SESSION_NAME unset. The FILE itself is the SEAT GUARD's second
+layer, and its two copies differ: the REPO's asset refuses an edit tool's path, a redirect, tee, cp/mv/install/
+rsync/ln, rm/unlink/truncate/shred, sed -i/perl -i and dd of= on this file, while the copy a seat RUNS - the one
+the runtime binary embeds, written into the seat's hooks/pre directory when it prepares the seat - is the asset as
+of 194343c and refuses only an edit path, a redirect, tee and cp. So sed -i, rm, truncate and dd of= still pass
+here until the runtime is rebuilt, installed and the seats restarted; a reseat re-installs the same older copy.
+Neither copy sees a path opened from inside a program (python3 -c, node -e) or spelled through a variable.
+
+THE MARKER IS A SPEED BUMP, NOT A WALL: with 25/300 in force and a seat's marker set, a raise exits 3 and leaves
+the file alone, but the same seat writes the raise through an EMPTY marker (AGENTHUB_SESSION_NAME= 4genteam ...),
+through env --unset=AGENTHUB_SESSION_NAME, or through a variable holding the name - measured 2026-10-16; the
+guard refuses only the literal "env -u AGENTHUB_SESSION_NAME" and "unset AGENTHUB_SESSION_NAME".`
 
 func runLimits(args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {

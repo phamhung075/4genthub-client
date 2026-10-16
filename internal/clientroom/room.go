@@ -141,11 +141,14 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "\nlimits reads or writes the room's budget file, rooms/<room>/limits.json, which `4genteam budget-run")
 	fmt.Fprintln(out, "--room ROOM` enforces: the ceilings a seat may spend in 24h and make in a minute. The limits SHIP OFF,")
 	fmt.Fprintln(out, "and while they are off the safeguard measures nothing. A SEAT MAY NOT RAISE a ceiling or turn the ceilings")
-	fmt.Fprintln(out, "off - this verb refuses that, naming $AGENTHUB_SESSION_NAME, while a seat may still LOWER one or turn them")
-	fmt.Fprintln(out, "ON; the OWNER raises one, running this with that variable unset. The FILE is the seat guard's second layer:")
-	fmt.Fprintln(out, "it refuses an edit tool's path, a redirect, `tee`, `cp`/`mv`/`install`/`rsync`/`ln`,")
-	fmt.Fprintln(out, "`rm`/`unlink`/`truncate`/`shred`, `sed -i`/`perl -i` and `dd of=` on this file. It does NOT see a path")
-	fmt.Fprintln(out, "opened from inside a program (`python3 -c`, `node -e`) or spelled through a variable (measured 2026-10-16).")
+	fmt.Fprintln(out, "off - this verb refuses that, naming $AGENTHUB_SESSION_NAME - while a seat may still LOWER one or turn them")
+	fmt.Fprintln(out, "ON; the OWNER raises one with that variable unset. The FILE is the seat guard's second layer, and its two")
+	fmt.Fprintln(out, "copies differ: the repo's asset refuses an edit tool's path, a redirect, `tee`, `cp`/`mv`/`install`/")
+	fmt.Fprintln(out, "`rsync`/`ln`, `rm`/`unlink`/`truncate`/`shred`, `sed -i`/`perl -i` and `dd of=`, while the copy a seat")
+	fmt.Fprintln(out, "RUNS (the runtime binary embeds it; the seat's hooks/pre copy is the asset as of 194343c) refuses only")
+	fmt.Fprintln(out, "an edit path, a redirect, `tee` and `cp`, so `sed -i`, `rm`, `truncate` and `dd of=` pass until the")
+	fmt.Fprintln(out, "runtime is rebuilt, installed and the seats restarted - a reseat re-installs the same older copy. Neither")
+	fmt.Fprintln(out, "sees a path opened from inside a program (`python3 -c`, `node -e`) or spelled through a variable.")
 }
 
 // invocation is one sub-verb's resolved arguments: the room as the caller named it, the seat for the one
