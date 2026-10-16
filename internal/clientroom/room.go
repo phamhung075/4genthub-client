@@ -70,12 +70,14 @@ func (RoomCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 		return runQueue(args[1:], stdout, stderr)
 	case "report":
 		return runReport(args[1:], stdout, stderr)
+	case "metrics":
+		return runMetrics(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "4genteam room: unknown verb %q; the verbs are status, stop, reseat, compact\n", args[0])
 	return clientcmd.ExitRoomRefused
 }
 
-const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM SEAT | compact ROOM | report ROOM) [--state-dir DIR] [--socket PATH]"
+const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM SEAT | compact ROOM | report ROOM | metrics ROOM) [--state-dir DIR] [--socket PATH]"
 
 // subUsages is one line per sub-verb, so a usage error prints the shape of the verb the caller actually
 // typed instead of the whole group's grammar.
@@ -85,6 +87,7 @@ var subUsages = map[string]string{
 	"reseat":  "usage: 4genteam room reseat ROOM SEAT [--state-dir DIR] [--socket PATH]",
 	"compact": "usage: 4genteam room compact ROOM [--state-dir DIR] [--socket PATH]",
 	"report":  reportUsage,
+	"metrics": metricsUsage,
 }
 
 func subUsage(verb string) string {

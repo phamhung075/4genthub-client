@@ -297,6 +297,8 @@ type commitRecord struct {
 	SHA      string
 	Title    string
 	TaskID   string // the hub task its `Task:` trailer names, "" when none
+	Time     time.Time
+	Files    int
 }
 
 var taskIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -311,7 +313,7 @@ const (
 func gitCommits(repo, room string, cutoff time.Time) ([]commitRecord, error) {
 	out, err := exec.Command("git", "-C", repo, "log", "--since="+cutoff.Format(time.RFC3339), "--name-only",
 		"--format="+recordSep+"%H"+fieldSep+"%s"+fieldSep+"%(trailers:key=Seat,valueonly,separator=%x2c)"+fieldSep+
-			"%(trailers:key=Task,valueonly,separator=%x2c)"+fieldSep).Output()
+			"%(trailers:key=Task,valueonly,separator=%x2c)"+fieldSep+"%cI"+fieldSep).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log in %s: %w", repo, err)
 	}
@@ -322,12 +324,13 @@ func parseGitLog(out, room string) []commitRecord {
 	prefix := "agenthub--" + room + "--"
 	var commits []commitRecord
 	for _, record := range strings.Split(out, recordSep)[1:] {
-		fields := strings.SplitN(record, fieldSep, 5)
-		for len(fields) < 5 {
+		fields := strings.SplitN(record, fieldSep, 6)
+		for len(fields) < 6 {
 			fields = append(fields, "")
 		}
 		rec := commitRecord{SHA: fields[0], Title: fields[1]}
-		files := fields[4]
+		files := fields[5]
+		rec.Time, _ = time.Parse(time.RFC3339, fields[4])
 		if seat, ok := strings.CutPrefix(strings.TrimSpace(fields[2]), prefix); ok {
 			rec.Seat = seat
 		}
@@ -341,6 +344,7 @@ func parseGitLog(out, room string) []commitRecord {
 		for _, file := range strings.Split(files, "\n") {
 			if file = strings.TrimSpace(file); file != "" {
 				touched = true
+				rec.Files++
 				allDocs = allDocs && docPath(file)
 			}
 		}

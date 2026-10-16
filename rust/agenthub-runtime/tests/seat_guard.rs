@@ -41,6 +41,42 @@ fn verdict(name: &str, args: serde_json::Value) -> Option<String> {
     })
 }
 
+/// The one log line a call through the guard produced.
+fn logged(name: &str, args: serde_json::Value) -> serde_json::Value {
+    let dir = std::env::temp_dir().join(format!("seat-guard-log-{}-{}", std::process::id(), CALLS.fetch_add(1, Ordering::Relaxed)));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut child = Command::new("node")
+        .arg(guard())
+        .args(["--agy-hook", "pre"])
+        .env("AGENTHUB_SEAT", "dev")
+        .env("AGENTHUB_SESSION_NAME", "agenthub--room--dev")
+        .env("AGENTHUB_WORKTREE", WORKTREE)
+        .env("PI_CODING_AGENT_DIR", &dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("node is needed to run the seat guard");
+    let payload = serde_json::json!({"toolCall": {"name": name, "args": args}});
+    child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
+    child.wait().unwrap();
+    let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap();
+    serde_json::from_str(log.lines().next().expect("a refusal is logged")).unwrap()
+}
+
+#[test]
+fn a_log_line_carries_the_session_the_target_class_and_the_blocked_rule() {
+    let line = logged("run_command", serde_json::json!({ "CommandLine": "cd /x && git push origin main" }));
+    assert_eq!(line["session"], "agenthub--room--dev");
+    assert_eq!(line["target_class"], "git push");
+    assert_eq!(line["blocked_rule"], "push");
+    assert_eq!(line["rule"], "push", "the existing field stays");
+    assert_eq!(line["outcome"], "blocked");
+    let secret = logged("run_command", serde_json::json!({ "CommandLine": "docker run -e API_KEY=hunter2 x" }));
+    assert_eq!(secret["target_class"], "docker run");
+    assert!(!secret["target_class"].as_str().unwrap().contains("hunter2"));
+}
+
 fn bash(cmd: &str) -> Option<String> {
     verdict("run_command", serde_json::json!({ "CommandLine": cmd }))
 }

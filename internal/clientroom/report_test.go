@@ -73,17 +73,22 @@ func TestParseSince(t *testing.T) {
 
 func TestParseGitLogReadsSeatTrailerAndDocsOnly(t *testing.T) {
 	const id = "0b6c1c4e-8f1d-4f0e-9a52-0123456789ab"
-	out := recordSep + "s1" + fieldSep + "t1" + fieldSep + "agenthub--room-a--go-dev" + fieldSep + id + fieldSep + "\n\nx.go\nCHANGELOG/a.md\n" +
-		recordSep + "s2" + fieldSep + "t2" + fieldSep + "agenthub--room-a--lead" + fieldSep + "not-a-uuid" + fieldSep + "\n\nREADME.md\nai_docs/y.txt\n" +
-		recordSep + "s3" + fieldSep + "t3" + fieldSep + "agenthub--other--lead" + fieldSep + fieldSep + "\n\nz.md\n" +
-		recordSep + "s4" + fieldSep + "t4" + fieldSep + fieldSep + fieldSep + "\n"
+	out := recordSep + "s1" + fieldSep + "t1" + fieldSep + "agenthub--room-a--go-dev" + fieldSep + id + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\nx.go\nCHANGELOG/a.md\n" +
+		recordSep + "s2" + fieldSep + "t2" + fieldSep + "agenthub--room-a--lead" + fieldSep + "not-a-uuid" + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\nREADME.md\nai_docs/y.txt\n" +
+		recordSep + "s3" + fieldSep + "t3" + fieldSep + "agenthub--other--lead" + fieldSep + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\nz.md\n" +
+		recordSep + "s4" + fieldSep + "t4" + fieldSep + fieldSep + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n"
 	got := parseGitLog(out, "room-a")
-	want := []commitRecord{{"go-dev", false, "s1", "t1", id}, {"lead", true, "s2", "t2", ""}, {"", true, "s3", "t3", ""}, {"", false, "s4", "t4", ""}}
+	want := []commitRecord{{Seat: "go-dev", SHA: "s1", Title: "t1", TaskID: id}, {Seat: "lead", DocsOnly: true, SHA: "s2", Title: "t2"}, {DocsOnly: true, SHA: "s3", Title: "t3"}, {SHA: "s4", Title: "t4"}}
 	if len(got) != len(want) {
 		t.Fatalf("got %d commits, want %d: %v", len(got), len(want), got)
 	}
+	if got[0].Files != 2 || !got[0].Time.Equal(time.Date(2026, 10, 16, 10, 0, 0, 0, time.UTC)) {
+		t.Errorf("commit 0 has %d files at %v", got[0].Files, got[0].Time)
+	}
 	for i := range want {
-		if got[i] != want[i] {
+		plain := got[i]
+		plain.Time, plain.Files = time.Time{}, 0
+		if plain != want[i] {
 			t.Errorf("commit %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}

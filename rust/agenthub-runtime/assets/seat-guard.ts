@@ -13,7 +13,7 @@
 // pre|post`, with the hook payload on stdin (see agyHook below). omp never passes that argument, so it loads the
 // default export as before. One file keeps the rules, the log line and the redaction in one place.
 //
-// A line is {at, seat, tool, target, outcome, ms, rule?, error?}. `outcome` is "ok", "error" or
+// A line is {at, seat, session, tool, target, target_class, outcome, ms, bytes_out?, rule?, blocked_rule?, error?}. `outcome` is "ok", "error" or
 // "blocked"; a blocked call carries the `rule` that refused it. An MCP call is the tool mcp__<server>_<tool>
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
@@ -301,9 +301,29 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
   },
 ];
 
+// The class of a call's target, safe to analyse and to keep: a bash command's verb (`git commit`, `grep`), an MCP
+// call's tool.action, a file tool's doc or code. The Go metrics extractor derives the same class for older lines.
+const LEADING = /^((cd|export|echo)\s+("[^"]*"|'[^']*'|[^;&]*?)\s*(&&|;)\s*|[A-Z_][A-Z0-9_]*=\S*\s+)+/;
+const VERBED = new Set(["git", "4genteam", "go", "cargo", "npm", "docker", "tmux"]);
+function targetClass(tool: string, target: string): string {
+  if (!target) return "";
+  if (tool.startsWith("mcp__")) return target;
+  if (tool === "bash") {
+    const words = target.trim().replace(LEADING, "").split(/\s+/).filter(Boolean);
+    if (!words.length) return "";
+    const verb = basename(words[0]);
+    if (!/^[A-Za-z0-9_.+-]+$/.test(verb)) return "other";
+    return VERBED.has(verb) && /^[a-z][a-z-]*$/.test(words[1] ?? "") ? `${verb} ${words[1]}` : verb;
+  }
+  return /\.md$|CHANGELOG|NEXT-GEN|ai_docs\//.test(target) ? "doc" : "code";
+}
+
 function record(line: Record<string, unknown>): void {
   try {
-    appendFileSync(logPath, JSON.stringify({ at: new Date().toISOString(), seat, ...line }) + "\n");
+    const target_class = targetClass(String(line.tool ?? ""), String(line.target ?? ""));
+    const blocked = line.rule ? { blocked_rule: line.rule } : {};
+    const session = process.env.AGENTHUB_SESSION_NAME ?? "";
+    appendFileSync(logPath, JSON.stringify({ at: new Date().toISOString(), seat, session, ...line, target_class, ...blocked }) + "\n");
   } catch {
     // A log that cannot be written must not stop the seat's work.
   }
@@ -337,6 +357,7 @@ export default function hook(pi: ExtensionAPI): void {
       target: call.target,
       outcome: event.isError ? "error" : "ok",
       ms: Date.now() - call.at,
+      bytes_out: Buffer.byteLength(text),
       ...(event.isError ? { error: redact(text).slice(0, MAX_TARGET) } : {}),
     });
   });
