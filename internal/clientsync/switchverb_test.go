@@ -381,10 +381,16 @@ func TestSwitchRestartStillRunsOnTheRuntimeTheMachineNames(t *testing.T) {
 
 // The other half of the machine read: a read that FAILS names no runtime, and the verb then keeps the cloud's
 // record instead of inventing a change it cannot see - so a machine it cannot read does not turn a model-only
-// request into a runtime change (and does not fail the switch either).
+// request into a runtime change (and does not fail the switch either). The stub carries a DECOY seat list
+// beside the error, naming a runtime the request does not ask for: with only the error set, a read that
+// returned the (empty) list instead of checking the error would answer the same way and the case would pass
+// while the err != nil line was gone.
 func TestSwitchFailedMachineReadKeepsTheCloudsRecord(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("agy", "old-model")}}
-	stub := &switchSeatStub{statusErr: errors.New("daemon unreachable at /tmp/agenthub.sock")}
+	stub := &switchSeatStub{
+		seats:     []clientruntime.SeatStatus{switchStatus("seat1", "omp")},
+		statusErr: errors.New("daemon unreachable at /tmp/agenthub.sock"),
+	}
 	switchStubSeats(t, stub)
 
 	code, out, errOut := switchRun(t, cloud, []string{
