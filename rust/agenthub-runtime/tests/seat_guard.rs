@@ -7,7 +7,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::process::{Command, Stdio};
 
 static CALLS: AtomicUsize = AtomicUsize::new(0);
+/// The directory the seat starts in: the first entry of the list the launcher names, and what a relative path in
+/// a tool call resolves against.
 const WORKTREE: &str = "/work/wt/dev";
+/// The list the launcher names, as `AGENTHUB_WORKTREES`: the seat's start directory first, then the rest of its own
+/// worktrees - the ones the room holds under `<room>/wt/`, one per repo the seat edits. Another seat's worktree
+/// and the checkout the seats on this host share are not in it, so they are out of scope by construction.
+const WORKTREES: &str = "/work/wt/dev:/work/wt/dev-client";
 
 fn guard() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/seat-guard.ts")
@@ -26,12 +32,28 @@ fn verdict(name: &str, args: serde_json::Value) -> Option<String> {
 /// The same verdict with the seat's own directory - the one the guard logs to, and the one whose config it must
 /// refuse to let the seat edit - pinned to `dir`.
 fn verdict_in(dir: &std::path::Path, name: &str, args: serde_json::Value) -> Option<String> {
+    verdict_with(dir, WORKTREES, name, args)
+}
+
+/// The same verdict with the launcher's list spelled out, so a case can show that the LIST is what the guard
+/// honors: the seat's own worktrees go in, another seat's does not.
+fn verdict_with(dir: &std::path::Path, worktrees: &str, name: &str, args: serde_json::Value) -> Option<String> {
+    refusal(dir, worktrees, name, args).map(|r| {
+        let rule = r.split(['(', ')']).nth(1).unwrap_or_default().to_owned();
+        let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap_or_default();
+        assert!(log.contains(&format!("\"rule\":\"{rule}\"")), "a refusal is logged as blocked: {log}");
+        rule
+    })
+}
+
+/// What the guard answered, whole: the reason a seat reads, which names the directories it may write.
+fn refusal(dir: &std::path::Path, worktrees: &str, name: &str, args: serde_json::Value) -> Option<String> {
     std::fs::create_dir_all(dir).unwrap();
     let mut child = Command::new("node")
         .arg(guard())
         .args(["--agy-hook", "pre"])
         .env("AGENTHUB_SEAT", "dev")
-        .env("AGENTHUB_WORKTREE", WORKTREE)
+        .env("AGENTHUB_WORKTREES", worktrees)
         .env("PI_CODING_AGENT_DIR", dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -42,13 +64,7 @@ fn verdict_in(dir: &std::path::Path, name: &str, args: serde_json::Value) -> Opt
     child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
     let out = child.wait_with_output().unwrap();
     let answer: serde_json::Value = serde_json::from_slice(&out.stdout).expect("the guard answers JSON");
-    let reason = answer["reason"].as_str().map(str::to_owned);
-    reason.map(|r| {
-        let rule = r.split(['(', ')']).nth(1).unwrap_or_default().to_owned();
-        let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap_or_default();
-        assert!(log.contains(&format!("\"rule\":\"{rule}\"")), "a refusal is logged as blocked: {log}");
-        rule
-    })
+    answer["reason"].as_str().map(str::to_owned)
 }
 
 /// The one log line a call through the guard produced.
@@ -60,7 +76,7 @@ fn logged(name: &str, args: serde_json::Value) -> serde_json::Value {
         .args(["--agy-hook", "pre"])
         .env("AGENTHUB_SEAT", "dev")
         .env("AGENTHUB_SESSION_NAME", "agenthub--room--dev")
-        .env("AGENTHUB_WORKTREE", WORKTREE)
+        .env("AGENTHUB_WORKTREES", WORKTREES)
         .env("PI_CODING_AGENT_DIR", &dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -268,21 +284,59 @@ fn an_ordinary_deletion_still_stays_the_seat_s_own() {
     }
 }
 
-/// A seat's worktrees sit under <room>/wt/ outside its start directory, so worktree-scope names them: `<seat>` and
-/// `<seat>-<repo>` are the seat's own, another seat's and a longer seat name are not.
+/// The launcher names the directories a seat may write, and the list IS the scope: both of the seat's worktrees
+/// answered, another seat's worktree and the checkout the seats on this host share refused. The guard derives none
+/// of it - the runtime owns the room layout - so the case runs the guard with a list spelled out.
 #[test]
-fn a_seat_writes_its_own_worktrees_under_the_room_and_no_other_seats() {
-    // Under target/, not the temp dir: worktree-scope already allows every path under the temp dir.
-    let room = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("seat-guard-room-{}", std::process::id()));
-    let seat_dir = room.join("seats/dev");
-    let wt = room.join("wt");
-    let write_to = |name: &str| {
-        verdict_in(&seat_dir, "write_to_file", serde_json::json!({ "TargetFile": wt.join(name).join("a.go").display().to_string() }))
+fn the_scope_is_the_list_the_launcher_names_and_nothing_else() {
+    let seat = fresh_dir("scope");
+    let write_in = |worktrees: &str, path: String| {
+        verdict_with(&seat, worktrees, "write_to_file", serde_json::json!({ "TargetFile": path }))
     };
+    let list = "/work/wt/dev:/work/wt/dev-client";
+    assert_eq!(write_in(list, "/work/wt/dev/a.go".into()), None);
+    assert_eq!(write_in(list, "/work/wt/dev-client/rust/x.rs".into()), None, "a seat's second worktree is its own");
+    assert_eq!(write_in(list, "a.go".into()), None, "a relative path is the first directory's");
+    assert_eq!(write_in(list, "/tmp/scratch.txt".into()), None);
+    assert_eq!(
+        write_in(list, "/work/wt/other/a.go".into()).as_deref(),
+        Some("worktree-scope"),
+        "another seat's worktree is not named, so it is not in scope"
+    );
+    assert_eq!(
+        write_in(list, "/home/daihu/__projects__/4genthub/agenthub-frontend/e2e/x.ts".into()).as_deref(),
+        Some("worktree-scope"),
+        "the checkout every seat on this host shares is not named either"
+    );
 
-    assert_eq!(write_to("dev"), None);
-    assert_eq!(write_to("dev-client"), None);
-    assert_eq!(write_to("dev-root"), None);
-    assert_eq!(write_to("other").as_deref(), Some("worktree-scope"));
-    assert_eq!(write_to("device").as_deref(), Some("worktree-scope"));
+    // The refusal says where the seat may write, because the directories are the launcher's to name and the seat's
+    // to read: a refusal that named only one of them sent a seat to the wrong half of its own work.
+    let reason = refusal(&seat, list, "write_to_file", serde_json::json!({ "TargetFile": "/work/wt/other/a.go" }))
+        .expect("a path outside the list is refused");
+    assert!(reason.contains("/work/wt/dev-client"), "the reason names the whole list: {reason}");
+}
+
+/// A guard whose launcher named no directory allows the seat's own directory and the temp dir and nothing else. The
+/// session environment decides the workspace, so a list that never arrived must fail CLOSED: the version this
+/// replaces answered `return ""` - every write allowed, including into the shared checkout (measured 2026-10-16:
+/// five omp seats rooted at the daemon's own directory).
+#[test]
+fn a_guard_with_no_list_allows_only_the_seat_directory_and_the_temp_dir() {
+    let seat = fresh_dir("no-list");
+    let write_with = |worktrees: &str, path: String| {
+        verdict_with(&seat, worktrees, "write_to_file", serde_json::json!({ "TargetFile": path }))
+    };
+    assert_eq!(
+        write_with("", "/home/daihu/__projects__/4genthub/agenthub-frontend/e2e/x.ts".into()).as_deref(),
+        Some("worktree-scope")
+    );
+    assert_eq!(write_with("", "/work/wt/dev/a.go".into()).as_deref(), Some("worktree-scope"));
+    assert_eq!(write_with("", seat.join("sessions/x.jsonl").display().to_string()), None);
+    assert_eq!(write_with("", "/tmp/scratch.txt".into()), None);
+    // A relative path is still judged, against the seat's own directory - which a seat may always write.
+    assert_eq!(
+        write_with("", "a.go".into()),
+        None,
+        "with no list a relative path resolves inside the seat directory, which is always the seat's own"
+    );
 }

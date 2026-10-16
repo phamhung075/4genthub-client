@@ -4,8 +4,9 @@
 // It does two jobs and nothing else:
 //   1. GUARD: block the calls the owner's standing rules forbid a seat - printing a secret from a `.env`
 //      file, running Docker, pushing (a push to main deploys production, and the owner approves every one), changing the room's own tmux server,
-//      bypassing the git hooks, destructive git, killing processes by pattern, and writing outside the seat's own worktree
-//      ($AGENTHUB_WORKTREE, set by the supervisor) or into the frozen plan files and the guard's own sources.
+//      bypassing the git hooks, destructive git, killing processes by pattern, and writing outside the directories
+//      the launcher names for the seat ($AGENTHUB_WORKTREES, set by the supervisor from the room spec) or into the
+//      frozen plan files and the guard's own sources.
 //   2. LOG: append ONE line per tool call to <seat dir>/tool-calls.jsonl, so "what did this seat do, and was it
 //      refused" is one `jq` away instead of a transcript read.
 //
@@ -185,8 +186,15 @@ function writeTargets(tool: string, input: Record<string, unknown>): string[] {
   return raw.filter((p) => p && p !== "/dev/null" && !/^(""|'')$/.test(p) && !/[$`]/.test(p));
 }
 
-const worktree = process.env.AGENTHUB_WORKTREE ?? "";
-const absolute = (path: string): string => resolve(worktree || process.cwd(), path.replace(/^~(?=\/|$)/, homedir()));
+// The directories the launcher gives this seat, `AGENTHUB_WORKTREES`: the room spec's own directory for it first -
+// where its pane starts, and what a relative path is resolved against - then the seat's own worktrees under the
+// room's wt/, one per repo it edits. The guard derives none of it: the runtime owns the room layout, and a guard
+// that had to guess could not know which checkout is the one every seat on this host shares. A list that never
+// arrived leaves the seat its own directory and the temp dir and nothing else: the session environment decides the
+// workspace, so failing closed is the only honest reading.
+const worktrees = (process.env.AGENTHUB_WORKTREES ?? "").split(":").filter(Boolean).map((p) => resolve(p));
+const absolute = (path: string): string =>
+  resolve(worktrees[0] ?? process.env.PI_CODING_AGENT_DIR ?? ".", path.replace(/^~(?=\/|$)/, homedir()));
 const within = (path: string, root: string): boolean => path === root || path.startsWith(root + "/");
 
 // The plan files are frozen: NEXT-GEN*.md, GATE-*.md and ai_docs/reports-status/ were written by a past review and
@@ -201,14 +209,6 @@ const frozen = (abs: string): boolean =>
 const seatDir = resolve(process.env.PI_CODING_AGENT_DIR ?? ".");
 // `parked.json` is the breaker's record that this seat is stopped, in the seat's own directory; the ROOM's
 // limits.json is the budget the breaker enforces and the guard derives from the same seat dir (two levels up).
-// A seat's worktrees live under <room>/wt/ (seat dir is <room>/seats/<seat>) and are named <seat> or <seat>-<repo>,
-// so a seat may write its own and no other seat's.
-const ownWorktree = (abs: string): boolean => {
-  const wtRoot = resolve(seatDir, "../../wt");
-  if (!seat || !within(abs, wtRoot)) return false;
-  const name = abs.slice(wtRoot.length + 1).split("/")[0];
-  return name === seat || name.startsWith(seat + "-");
-};
 const SEAT_FILES: Record<string, true> = { "config.yml": true, "tool-calls.jsonl": true, "parked.json": true };
 const roomBudget = resolve(seatDir, "..", "..", "limits.json");
 const protectedPath = (abs: string): boolean =>
@@ -318,14 +318,18 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
         : "",
   },
   {
-    // The supervisor sets AGENTHUB_WORKTREE to the directory the seat starts in. Writes may go there, to the seat's own
-    // dir and to the temp dir, nowhere else: the main checkout belongs to the lead's gated merge.
+    // The launcher names the directories this seat may write, its own first (AGENTHUB_WORKTREES, set by the
+    // supervisor from the room spec): the spec's directory for the seat and its worktrees under the room's wt/.
+    // Writes may go there, to the seat's own dir and to the temp dir, nowhere else. Another seat's worktree and the
+    // checkout every seat on this host shares are simply not in the list - the guard is never told which checkout
+    // is main, and does not have to be, because it never has to judge one by name.
     rule: "worktree-scope",
     check: (tool, input) => {
-      if (!worktree) return "";
-      const roots = [worktree, process.env.PI_CODING_AGENT_DIR ?? "", tmpdir()].filter(Boolean).map((r) => resolve(r));
-      const outside = writeTargets(tool, input).find((p) => !roots.some((r) => within(absolute(p), r)) && !ownWorktree(absolute(p)));
-      return outside ? `${outside} is outside your worktree ${worktree}; edit inside it and report the commit to the lead` : "";
+      const roots = [...worktrees, process.env.PI_CODING_AGENT_DIR ?? "", tmpdir()].filter(Boolean).map((r) => resolve(r));
+      const outside = writeTargets(tool, input).find((p) => !roots.some((r) => within(absolute(p), r)));
+      return outside
+        ? `${outside} is outside your worktrees ${worktrees.join(", ") || "(none named for this seat)"}; edit inside them and report the commit to the lead`
+        : "";
     },
   },
   {
