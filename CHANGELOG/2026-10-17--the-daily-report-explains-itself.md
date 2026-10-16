@@ -14,8 +14,9 @@ compact and limits, and its sibling `metrics` carries a body of its own.
   trailer names its seat and `Task:` names a hub task), that the window is LIVE so two runs minutes apart
   answer differently and that `--json` prints the same answer as one object, the columns printed per seat
   and for the room, and the five targets with their thresholds - plus the sixth check the verb adds on its
-  own (tasks closed after a commit that cites them, wanted 0). The usage line itself is unchanged, so a
-  caller who mis-types a flag still reads the same one-line grammar.
+  own (tasks closed after a commit that cites them, wanted 0). The usage line itself is unchanged, but a
+  caller who mis-types a flag now reads that line followed by the whole body, on stderr, exit 3 - the same
+  exit and the same first line as at the base, which printed the usage line alone.
 
 ### Testing
 
@@ -24,8 +25,8 @@ compact and limits, and its sibling `metrics` carries a body of its own.
   the printed lines and that a queue body is never printed - so the help change is covered by the same
   suite that covers the verb.
 - The changed surface, run against a client built from this tree: `4genteam room report --help` answers with
-  23 lines instead of 1, and `4genteam room report 4genthub-min --since 24h` still exits 0 and prints the
-  two tables, the six verdicts and the findings.
+  22 lines (1611 B) instead of 1 (90 B), and `4genteam room report 4genthub-min --since 24h` still exits 0
+  and prints the two tables, the six verdicts and the findings.
 
 ### What this does not do
 
