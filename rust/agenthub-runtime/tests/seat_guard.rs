@@ -340,3 +340,28 @@ fn a_guard_with_no_list_allows_only_the_seat_directory_and_the_temp_dir() {
         "with no list a relative path resolves inside the seat directory, which is always the seat's own"
     );
 }
+
+/// A SEAT DOES NOT RAISE ITS OWN CEILING. The verb writes the room's limits THROUGH the client, so it never names a
+/// file and no path rule can see it: measured 2026-10-16 at 6492b77, `4genteam room limits <rig> --usd 999` was
+/// allowed while every FILE shape against the same ceiling (rm, sed -i, truncate -s 0, dd, the write tool) was
+/// refused. Reading the ceilings stays the seat's business.
+#[test]
+fn a_seat_cannot_raise_its_own_budget() {
+    refused(
+        "budget-ceiling",
+        &[
+            "4genteam room limits 4genthub-min --usd 999",
+            "4genteam room limits 4genthub-min --calls 1000000",
+            "4genteam room limits 4genthub-min --off",
+            "4genteam room limits 4genthub-min --on",
+            "env -u TMUX 4genteam room limits 4genthub-min --usd 999",
+            "cd /tmp && /opt/4gh/bin/4genteam room limits 4genthub-min --usd 999",
+        ],
+    );
+    allowed(&[
+        "4genteam room limits 4genthub-min",
+        "4genteam room limits 4genthub-min --json",
+        "4genteam room status 4genthub-min",
+        "echo '4genteam room limits 4genthub-min --usd 999'",
+    ]);
+}

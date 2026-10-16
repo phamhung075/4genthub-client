@@ -92,6 +92,13 @@ const DD_CALL = callOf("dd");
 const IN_PLACE = /(^|\s)(-\S*i\S*|--in-place)\s/;
 const DD_OF = /\bof=(\S+)/g;
 
+// The verb that WRITES the room's ceilings. It goes through the client and never names a file, so no path rule can
+// see it: measured 2026-10-16, `4genteam room limits <rig> --usd 999` was allowed while every FILE shape against
+// the same ceiling (rm, sed -i, truncate -s 0, dd, the write tool) was refused. The binary may be reached by path,
+// so its name is matched after any leading path segment.
+const ROOM_LIMITS_CALL = callOf("(?:\\S*\\/)?4genteam\\s+room\\s+limits");
+const LIMITS_WRITE = /(^|\s)--(?:usd|calls|on|off)(?:\s|=|$)/;
+
 // A git statement as verb and arguments, after the global options (`-C dir`, `-c k=v`, `--no-pager`, ...).
 function gitOf(part: string): { verb: string; args: string[] } | null {
   const call = part.match(GIT_CALL);
@@ -338,6 +345,20 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
       tool === "bash" && statements(input).some((part) => GIT_PUSH_CALL.test(part))
         ? "a seat does not push: a push to main deploys production and the owner approves every one. Report the commit to the lead"
         : "",
+  },
+  {
+    // A ceiling a seat can raise is not a ceiling. READING the room's limits stays the seat's business - it should
+    // know what it may spend - and the write flags are the owner's.
+    rule: "budget-ceiling",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      for (const part of statements(input)) {
+        const call = part.match(ROOM_LIMITS_CALL);
+        if (call && LIMITS_WRITE.test(call[1]))
+          return "the room's ceilings are the owner's: a seat does not raise its own budget (--usd/--calls/--on/--off)";
+      }
+      return "";
+    },
   },
 ];
 
