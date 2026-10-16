@@ -65,10 +65,16 @@ type SeatSpec struct {
 	// means the documented unattended default, and an empty string is refused BY NAME by the runtime. A plain
 	// string with omitempty cannot say both on the wire, so this is a pointer: nil omits the key, and a
 	// pointer to "" sends it.
-	PermissionPolicy *string           `json:"permission_policy,omitempty"`
-	Cwd              *string           `json:"cwd,omitempty"`
-	AgentDir         *string           `json:"agent_dir,omitempty"`
-	Env              map[string]string `json:"env,omitempty"`
+	PermissionPolicy *string `json:"permission_policy,omitempty"`
+	Cwd              *string `json:"cwd,omitempty"`
+	AgentDir         *string `json:"agent_dir,omitempty"`
+	// PolicyDocument is the document the runtime installs as this seat's own `config.yml`: the hub's rendered
+	// `runtime/omp-config.yml` for the seat, with the client's own non-policy keys added (see clientpolicy
+	// and clientsync.SeatRender). nil omits the key, and a seat with no document gets NO file - the absence
+	// rule the seat dir already follows for mcp.json. It rides the spec because the hub's render is fetched by
+	// the client and the runtime must not derive a second copy of it.
+	PolicyDocument *string           `json:"policy_document,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
 }
 
 // SeatLink is an edge between seats.

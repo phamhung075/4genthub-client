@@ -641,6 +641,18 @@ impl RoomSupervisor {
         fs::create_dir_all(&seat_dir).map_err(|e| format!("cannot create seat dir: {e}"))?;
         fs::write(seat_dir.join("mcp.json"), SEAT_MCP_CONFIG)
             .map_err(|e| format!("cannot write the seat's mcp.json: {e}"))?;
+        // THE SEAT'S POLICY FILE LANDS HERE, in the same window as mcp.json and for the same reason: omp reads
+        // `<PI_CODING_AGENT_DIR>/config.yml` when the agent starts, so a file written after the pane exists is a
+        // file nothing read. The text is the HUB's render, delivered with the spec (the client fetched it); the
+        // runtime does not derive it, which is what keeps the file and the render from disagreeing. A seat whose
+        // document is absent gets NO file - the absence rule mcp.json follows - and only an omp seat is written
+        // for: another runtime's config is not this document's destination.
+        if matches!(AgentRuntime::from_str_loose(&seat.runtime), AgentRuntime::Omp) {
+            if let Some(document) = seat.policy_document.as_deref() {
+                fs::write(seat_dir.join("config.yml"), document)
+                    .map_err(|e| format!("cannot write the seat's config.yml: {e}"))?;
+            }
+        }
         let hook_dir = seat_dir.join("hooks").join("pre");
         fs::create_dir_all(&hook_dir).map_err(|e| format!("cannot create the seat's hook dir: {e}"))?;
         fs::write(hook_dir.join("seat-guard.ts"), SEAT_TOOL_HOOK)
@@ -896,7 +908,19 @@ impl RoomSupervisor {
 
     /// Restart one seat. `fresh` removes the seat's saved agent sessions after the stop, so the agent that
     /// starts has none of the previous one's context.
-    pub fn restart_seat(&self, room: &str, seat: &str, fresh: bool) -> Result<SeatStatus, String> {
+    ///
+    /// `policy_document` is the document the caller has for this seat, if any (the client fetches the hub's
+    /// render before a reseat, which is the act that installs a policy change). It is written into the room's
+    /// own spec BEFORE the start, so the record every later route starts from carries it too - a heal, a
+    /// restore or a restart from a caller with no document then installs the same file instead of a stale one.
+    /// `None` leaves the record as it is.
+    pub fn restart_seat(
+        &self,
+        room: &str,
+        seat: &str,
+        fresh: bool,
+        policy_document: Option<&str>,
+    ) -> Result<SeatStatus, String> {
         // The refusal comes BEFORE the stop: a parked seat is not brought back, and a restart that stopped
         // first would have changed the seat's state on its way to refusing.
         crate::park::refuse(self.state_dir(), room, seat, "nothing was restarted")?;
@@ -907,8 +931,24 @@ impl RoomSupervisor {
         let room_dir = self.room_dir(room);
         let spec_file = room_dir.join("spec.json");
         let content = fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
-        let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
-        let seat_spec = spec.seats.iter().find(|s| s.seat_key == seat)
+        let mut spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        if let Some(document) = policy_document {
+            let entry = spec
+                .seats
+                .iter_mut()
+                .find(|s| s.seat_key == seat)
+                .ok_or_else(|| format!("seat {seat} not found in room {room}"))?;
+            entry.policy_document = Some(document.to_string());
+            // Same shape as set_seat_model: the document is computed before the file is opened, so a failed
+            // serialize cannot leave the room's only spec truncated.
+            let spec_json =
+                serde_json::to_string_pretty(&spec).map_err(|e| format!("serialize spec: {e}"))?;
+            fs::write(&spec_file, spec_json).map_err(|e| format!("cannot write room spec: {e}"))?;
+        }
+        let seat_spec = spec
+            .seats
+            .iter()
+            .find(|s| s.seat_key == seat)
             .ok_or_else(|| format!("seat {seat} not found in room {room}"))?;
         self.start_seat(room, seat_spec, &spec)
     }
@@ -2982,6 +3022,126 @@ mod tests {
         }
     }
 
+    /// THE SEAT'S POLICY FILE IS ON DISK BEFORE THE RUNNER IS.
+    ///
+    /// `start_seat` prepares the seat dir and only then builds the pane's command and launches the pane, so a
+    /// file written in the preparation block is in place before the agent that reads it exists. The instrument
+    /// is the launch itself failing: an omp seat's pane runs THIS binary as its runner, and a test binary does
+    /// not speak the runner's CLI, so the pane is gone at once and `start_seat` refuses - while the document is
+    /// on disk anyway. That is exactly the ordering the change is for: a write moved after the launch could not
+    /// reach this file on a start that never came up.
+    #[tokio::test]
+    async fn the_seats_policy_document_is_written_before_the_runner_starts() {
+        let _server = crate::pty::test_servers::own("seat-policy");
+        let dir = scratch("seat-policy");
+        let room = format!("seat-policy-{}", std::process::id());
+        let key = seat_key("seat-policy");
+        let _ = seat_worktree(&dir, &room, &key);
+        let mut spec = startable_spec(&room, &key, "omp");
+        let document = "bash:\n  allowCompoundCommands: true\ncompaction:\n  keepRecentTokens: 8000\ntools:\n  approval:\n    edit: deny\n";
+        spec.seats[0].policy_document = Some(document.to_string());
+        let supervisor = supervisor_at(&dir);
+
+        let _ = supervisor.start_seat(&room, &spec.seats[0], &spec);
+
+        let installed = room_dir_of(&dir, &room).join("seats").join(&key).join("config.yml");
+        assert_eq!(
+            fs::read_to_string(&installed).expect("the seat's config.yml"),
+            document,
+            "the document the spec carried is installed verbatim, before the pane is up"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A DOCUMENT IS NOT A LICENSE TO WRITE ANOTHER RUNTIME'S FILE. The field travels on every seat of a room,
+    /// and only an omp seat's directory is its destination: a claude-code, agy or codex seat whose spec carries
+    /// a document gets no `config.yml` from it.
+    #[tokio::test]
+    async fn a_seat_of_another_runtime_is_given_no_config_document() {
+        let _server = crate::pty::test_servers::own("seat-policy-other");
+        let dir = scratch("seat-policy-other");
+        let room = format!("seat-policy-other-{}", std::process::id());
+        let key = seat_key("seat-policy-other");
+        let _ = seat_worktree(&dir, &room, &key);
+        let mut spec = startable_spec(&room, &key, "sleep 30");
+        spec.seats[0].policy_document = Some("tools:\n  approval:\n    edit: deny\n".to_string());
+        let supervisor = supervisor_at(&dir);
+
+        let _ = supervisor.start_seat(&room, &spec.seats[0], &spec);
+
+        let installed = room_dir_of(&dir, &room).join("seats").join(&key).join("config.yml");
+        assert!(
+            !installed.exists(),
+            "a seat of another runtime must not receive an omp config: {}",
+            installed.display()
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A RESTART THAT BROUGHT A FRESH DOCUMENT INSTALLS IT AND KEEPS IT IN THE ROOM'S OWN RECORD.
+    ///
+    /// The reseat is the act that applies a policy change to a running room, so the document has to reach the
+    /// seat dir (the file the agent reads) AND `spec.json`: every later route - a heal, a restore, a plain
+    /// restart from a caller with no document - starts from that record, and one that still held the old
+    /// document would quietly put the seat back on it.
+    #[tokio::test]
+    async fn a_restart_installs_the_document_it_was_given_and_records_it() {
+        let _server = crate::pty::test_servers::own("seat-policy-restart");
+        let dir = scratch("seat-policy-restart");
+        let room = format!("seat-policy-restart-{}", std::process::id());
+        let key = seat_key("seat-policy-restart");
+        let worktree = seat_worktree(&dir, &room, &key);
+        let spec = startable_spec(&room, &key, "omp");
+        let room_dir = room_dir_of(&dir, &room);
+        fs::create_dir_all(&room_dir).expect("room dir");
+        fs::write(
+            room_dir.join("spec.json"),
+            serde_json::to_string_pretty(&spec).expect("spec json"),
+        )
+        .expect("spec file");
+        let supervisor = supervisor_at(&dir);
+        let first = "tools:\n  approval:\n    edit: deny\n";
+        let document = "tools:\n  approval:\n    edit: deny\n    ast_edit: deny\n";
+        // A FIRST START, on a document the restart has to REPLACE. It also gives the room the seat dir and the
+        // file whose content the assertion below reads back.
+        let mut first_spec = spec.clone();
+        first_spec.seats[0].policy_document = Some(first.to_string());
+        let _ = supervisor.start_seat(&room, &first_spec.seats[0], &first_spec);
+        let installed = room_dir.join("seats").join(&key).join("config.yml");
+        assert_eq!(
+            fs::read_to_string(&installed).expect("the first start's config.yml"),
+            first
+        );
+
+        // THE SEAT IS UP, as far as the restart's first step is concerned. That pane is a stand-in for the
+        // running seat: an omp seat's pane runs THIS binary as its runner and a test binary does not speak the
+        // runner's CLI, so a real one would be gone before the restart read its document - and stopping a
+        // session that never existed is a different failure ("no current target") than the one under test.
+        TerminalManager::launch_session(
+            &RoomSupervisor::session_name(&room, &key),
+            &worktree,
+            "sleep 300",
+            &HashMap::new(),
+        )
+        .expect("the seat's session");
+
+        let _ = supervisor.restart_seat(&room, &key, false, Some(document));
+
+        assert_eq!(
+            fs::read_to_string(&installed).expect("the seat's config.yml"),
+            document,
+            "a reseat installs the document it was handed, replacing the one the seat started on"
+        );
+        let recorded: RoomSpec =
+            serde_json::from_str(&fs::read_to_string(room_dir.join("spec.json")).expect("spec")).expect("spec");
+        assert_eq!(
+            recorded.seats[0].policy_document.as_deref(),
+            Some(document),
+            "the room's own record carries it, so a later route cannot install the old document"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// The agy guard is added beside another tool's hook without touching it, is idempotent, and a file that is not a
     /// JSON object is refused rather than overwritten.
     #[test]
@@ -3402,7 +3562,7 @@ mod tests {
         );
 
         let restarted = supervisor
-            .restart_seat(&room, &key, false)
+            .restart_seat(&room, &key, false, None)
             .expect_err("a restart must refuse");
         assert!(
             restarted.contains("PARKED") && restarted.contains("nothing was restarted"),

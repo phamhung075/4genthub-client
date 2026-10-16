@@ -78,8 +78,12 @@ func (s *switchSeatStub) setModel(room, seat, model string) error {
 	return s.failure
 }
 
-func (s *switchSeatStub) restartFresh(room, seat string) error {
-	s.calls = append(s.calls, []string{"restart-fresh", room, seat})
+func (s *switchSeatStub) restartFresh(room, seat string, document *string) error {
+	carried := ""
+	if document != nil {
+		carried = *document
+	}
+	s.calls = append(s.calls, []string{"restart-fresh", room, seat, carried})
 	return s.failure
 }
 
@@ -230,7 +234,10 @@ func TestSwitchRestartSetsTheModelThenRestartsFreshWithWarning(t *testing.T) {
 	}
 	want := [][]string{
 		{"set-model", "room1", "seat1", "new-model"},
-		{"restart-fresh", "room1", "seat1"},
+		// The document is EMPTY here on purpose: this stub cloud answers the switch's own routes and no
+		// resolved seat, so there is no render to fetch and the restart travels with the room's own record -
+		// which is the case the note on stderr names.
+		{"restart-fresh", "room1", "seat1", ""},
 	}
 	if got := stub.calls; !reflect.DeepEqual(got, want) {
 		t.Errorf("runtime calls = %v, want %v", got, want)

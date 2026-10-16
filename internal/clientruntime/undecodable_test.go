@@ -60,7 +60,7 @@ func undecodableCalls() []undecodableCall {
 			return sliceValue(statuses), err
 		}},
 		{"RestartSeat", func(c *Client) (any, error) {
-			status, err := c.RestartSeat(queueTestRoom, "seat-1")
+			status, err := c.RestartSeat(queueTestRoom, "seat-1", nil)
 			return ptrValue(status), err
 		}},
 		{"GetRoomStatus", func(c *Client) (any, error) {

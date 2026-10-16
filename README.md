@@ -21,7 +21,7 @@ its own skills path.
 - reports this machine's rigs and seat status to the server (`bridge`),
 - shows the whole room live in a terminal grid (`watch`, `grid`, `feed`, `inputs`, `input`),
 - creates the cloud room from a definition and pushes a project's MCP servers and skills as modules
-  (`team`), shows and applies the per-seat policy (`policy`), and sends friction reports (`feedback`).
+  (`team`), prints the per-seat policy the hub renders (`policy`), and sends friction reports (`feedback`).
 
 The server is hosted. The seats run in the rig orchestrator (local) and are not part of this
 repository.
@@ -138,7 +138,7 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `offpeak` | is DeepSeek billing at off-peak right now: exit 0 off-peak, 1 peak, so it works as a gate; `status` prints the setting, `set on\|off` writes it |
 | `seat` | status, sync and watch of a room's seats |
 | `send` | send one signed message to one seat |
-| `policy` | per-seat policy: `show`, `apply` |
+| `policy` | per-seat policy: `render` (the document the hub would install) |
 | `team` | create the cloud room: `apply`, `import-project`, `publish-skills`, `drift-check` |
 | `watch` | the live view of a room: the seat grid and the lead window |
 | `grid` | open the seat grid alone |

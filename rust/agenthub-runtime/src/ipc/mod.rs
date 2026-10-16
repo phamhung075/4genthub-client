@@ -140,10 +140,12 @@ impl IpcServer {
                 Err(e) => IpcResponse::err(e),
             },
 
-            IpcRequest::RestartSeat { room, seat, fresh } => match supervisor.restart_seat(&room, &seat, fresh) {
-                Ok(status) => IpcResponse::success(serde_json::to_value(status).unwrap()),
-                Err(e) => IpcResponse::err(e),
-            },
+            IpcRequest::RestartSeat { room, seat, fresh, policy_document } => {
+                match supervisor.restart_seat(&room, &seat, fresh, policy_document.as_deref()) {
+                    Ok(status) => IpcResponse::success(serde_json::to_value(status).unwrap()),
+                    Err(e) => IpcResponse::err(e),
+                }
+            }
 
             IpcRequest::SetSeatModel { room, seat, model } => match supervisor.set_seat_model(&room, &seat, &model) {
                 Ok(_) => IpcResponse::success(serde_json::json!({"seat": seat, "model": model})),

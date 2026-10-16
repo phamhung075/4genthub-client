@@ -335,22 +335,34 @@ func (c *Client) StopSeat(room, seat string) error {
 	return err
 }
 
-func (c *Client) RestartSeat(room, seat string) (*SeatStatus, error) {
-	resp, err := c.CallWithDeadline("RestartSeat", map[string]string{"room": room, "seat": seat}, seatStartDeadline)
-	if err != nil {
-		return nil, err
-	}
-	var status SeatStatus
-	if err := decodeAnswer("RestartSeat", resp.Data, &status); err != nil {
-		return nil, err
-	}
-	return &status, nil
+// RestartSeat stops the seat and starts it again from the room's own spec.
+//
+// policyDocument is the seat's config document when the CALLER has a fresh one - the client fetched the
+// hub's render for this restart, which is what a reseat is for - and nil when it has nothing newer than the
+// room's record. It is omitted from the frame rather than sent as null in that case, so a runtime that has
+// the field keeps whatever the room's spec already holds.
+func (c *Client) RestartSeat(room, seat string, policyDocument *string) (*SeatStatus, error) {
+	return c.restartSeat(room, seat, false, policyDocument)
 }
 
 // RestartSeatFresh is RestartSeat with the seat's saved agent sessions dropped before the start, so the agent that
 // comes up has none of the previous one's context. The plain RestartSeat wire is unchanged: `fresh` is only sent here.
-func (c *Client) RestartSeatFresh(room, seat string) (*SeatStatus, error) {
-	resp, err := c.CallWithDeadline("RestartSeat", map[string]any{"room": room, "seat": seat, "fresh": true}, seatStartDeadline)
+func (c *Client) RestartSeatFresh(room, seat string, policyDocument *string) (*SeatStatus, error) {
+	return c.restartSeat(room, seat, true, policyDocument)
+}
+
+// restartSeat is the ONE builder of the RestartSeat frame, so the two verbs above cannot drift in what they
+// send. Every key is added only when it is set: `fresh` false is the wire older callers already write, and a
+// document the caller does not have must not be sent as an empty one.
+func (c *Client) restartSeat(room, seat string, fresh bool, policyDocument *string) (*SeatStatus, error) {
+	payload := map[string]any{"room": room, "seat": seat}
+	if fresh {
+		payload["fresh"] = true
+	}
+	if policyDocument != nil {
+		payload["policy_document"] = *policyDocument
+	}
+	resp, err := c.CallWithDeadline("RestartSeat", payload, seatStartDeadline)
 	if err != nil {
 		return nil, err
 	}

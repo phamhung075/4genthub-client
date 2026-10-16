@@ -99,6 +99,14 @@ pub struct SeatSpec {
     pub permission_policy: Option<String>,
     pub cwd: Option<String>,
     pub agent_dir: Option<String>,
+    /// The document to install as this seat's own `config.yml`: the hub's rendered `runtime/omp-config.yml`,
+    /// which the client fetched with the rest of the spec. The client adds its own non-policy keys to the
+    /// text and the runtime installs it verbatim, so the file, the hub's render and the seat's own limits
+    /// text cannot disagree about what the seat may do. `None` means NO document was delivered - a seat whose
+    /// render carries none, or a room whose spec was written before this field existed - and no file is
+    /// written. It travels in the spec rather than being re-derived here: the render is the hub's, and a
+    /// second derivation is the second source of truth this field exists to remove.
+    pub policy_document: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
 }
@@ -404,11 +412,18 @@ pub enum IpcRequest {
     StopSeat { room: String, seat: String },
     /// `fresh` drops the seat's saved agent sessions before the start, so the new agent begins without the
     /// old one's context; absent means a plain restart (the wire older callers already write).
+    ///
+    /// `policy_document` is the seat's `config.yml` when the CALLER has a fresh one: the client fetched the
+    /// hub's render for this restart, and the document is written into the room's own spec BEFORE the seat
+    /// starts from it, so every later route that starts this seat - a heal, a restore, a restart from a
+    /// caller with no document - installs the same file instead of the one the room was last defined with.
+    /// Absent leaves the room's record alone, which is what a caller that has nothing newer must send.
     RestartSeat {
         room: String,
         seat: String,
         #[serde(default)]
         fresh: bool,
+        policy_document: Option<String>,
     },
     /// Record the model a seat starts with. It is written to the room's own spec, so it applies to the
     /// seat's NEXT start (a running agent keeps the model it was spawned with).
@@ -479,7 +494,7 @@ impl IpcResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::ActivityWord;
+    use super::{ActivityWord, IpcRequest, SeatSpec};
 
     /// THE VOCABULARY IS THE DAEMON'S, spelled the same way, because a second vocabulary is the defect this
     /// type exists to remove: these four strings are what a reader compares against `agentActivity.state`,
@@ -566,5 +581,57 @@ mod tests {
             ActivityWord::from_state_document(Some(&with)),
             ActivityWord::Idle
         );
+    }
+
+    /// THE WIRE NAME IS THE CONTRACT, and no test on either side can see a rename on the other: the client
+    /// writes `policy_document` in Go and this parses it in Rust, so a field renamed here and not there is a
+    /// document that silently never arrives - every unit test still green, every seat ungoverned. This parses
+    /// the frames the client ACTUALLY writes, both spellings of the restart.
+    #[test]
+    fn the_policy_document_travels_under_the_clients_own_key() {
+        let document = "tools:\n  approval:\n    edit: deny\n";
+        let spec: SeatSpec = serde_json::from_str(
+            r#"{"seat_key":"dev","seat_type":"developer","runtime":"omp","model":null,
+                "permission_policy":null,"cwd":null,"agent_dir":null,"env":{},
+                "policy_document":"tools:\n  approval:\n    edit: deny\n"}"#,
+        )
+        .expect("a spec carrying a document");
+        assert_eq!(spec.policy_document.as_deref(), Some(document));
+
+        let older: SeatSpec = serde_json::from_str(
+            r#"{"seat_key":"dev","seat_type":"developer","runtime":"omp","model":null,
+                "permission_policy":null,"cwd":null,"agent_dir":null,"env":{}}"#,
+        )
+        .expect("a spec written before this field existed must still parse");
+        assert_eq!(older.policy_document, None);
+
+        let frame: IpcRequest = serde_json::from_str(
+            r#"{"action":"RestartSeat","payload":{"room":"room1","seat":"dev",
+                "policy_document":"tools:\n  approval:\n    edit: deny\n"}}"#,
+        )
+        .expect("the restart frame the client writes");
+        match frame {
+            IpcRequest::RestartSeat {
+                room,
+                seat,
+                fresh,
+                policy_document,
+            } => {
+                assert_eq!((room.as_str(), seat.as_str()), ("room1", "dev"));
+                assert!(!fresh, "an absent `fresh` key is a plain restart");
+                assert_eq!(policy_document.as_deref(), Some(document));
+            }
+            other => panic!("expected RestartSeat, got {other:?}"),
+        }
+
+        // AND THE FRAME WITH NO DOCUMENT: the key is absent rather than null, which is what leaves the room's
+        // own record alone instead of overwriting it with an empty document.
+        let plain: IpcRequest =
+            serde_json::from_str(r#"{"action":"RestartSeat","payload":{"room":"room1","seat":"dev"}}"#)
+                .expect("the restart frame a caller with nothing newer writes");
+        match plain {
+            IpcRequest::RestartSeat { policy_document, .. } => assert_eq!(policy_document, None),
+            other => panic!("expected RestartSeat, got {other:?}"),
+        }
     }
 }
