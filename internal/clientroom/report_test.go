@@ -72,12 +72,13 @@ func TestParseSince(t *testing.T) {
 }
 
 func TestParseGitLogReadsSeatTrailerAndDocsOnly(t *testing.T) {
-	out := recordSep + "agenthub--room-a--go-dev" + fieldSep + "\n\nx.go\nCHANGELOG/a.md\n" +
-		recordSep + "agenthub--room-a--lead" + fieldSep + "\n\nREADME.md\nai_docs/y.txt\n" +
-		recordSep + "agenthub--other--lead" + fieldSep + "\n\nz.md\n" +
-		recordSep + fieldSep + "\n"
+	const id = "0b6c1c4e-8f1d-4f0e-9a52-0123456789ab"
+	out := recordSep + "s1" + fieldSep + "t1" + fieldSep + "agenthub--room-a--go-dev" + fieldSep + id + fieldSep + "\n\nx.go\nCHANGELOG/a.md\n" +
+		recordSep + "s2" + fieldSep + "t2" + fieldSep + "agenthub--room-a--lead" + fieldSep + "not-a-uuid" + fieldSep + "\n\nREADME.md\nai_docs/y.txt\n" +
+		recordSep + "s3" + fieldSep + "t3" + fieldSep + "agenthub--other--lead" + fieldSep + fieldSep + "\n\nz.md\n" +
+		recordSep + "s4" + fieldSep + "t4" + fieldSep + fieldSep + fieldSep + "\n"
 	got := parseGitLog(out, "room-a")
-	want := []commitRecord{{"go-dev", false}, {"lead", true}, {"", true}, {"", false}}
+	want := []commitRecord{{"go-dev", false, "s1", "t1", id}, {"lead", true, "s2", "t2", ""}, {"", true, "s3", "t3", ""}, {"", false, "s4", "t4", ""}}
 	if len(got) != len(want) {
 		t.Fatalf("got %d commits, want %d: %v", len(got), len(want), got)
 	}
@@ -176,6 +177,76 @@ func reportFixture(t *testing.T, now time.Time) (roomDir, repo string) {
 	return roomDir, repo
 }
 
+func noTaskStatus(string) (string, error) { return "", fmt.Errorf("no hub") }
+
+const (
+	openTaskID   = "11111111-1111-4111-8111-111111111111"
+	closedTaskID = "22222222-2222-4222-8222-222222222222"
+)
+
+func TestBuildReportListsTasksCommittedAgainstButStillOpen(t *testing.T) {
+	now := time.Now().UTC()
+	roomDir, repo := reportFixture(t, now)
+	for i, message := range []string{
+		"feat: first\n\nTask: " + openTaskID,
+		"fix: second\n\nTask: " + openTaskID,
+		"feat: closed work\n\nTask: " + closedTaskID,
+	} {
+		file := fmt.Sprintf("t%d.go", i)
+		if err := os.WriteFile(filepath.Join(repo, file), []byte("package x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, args := range [][]string{{"add", file}, {"commit", "-q", "-m", message}} {
+			cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v\n%s", args, err, out)
+			}
+		}
+	}
+	statuses := map[string]string{openTaskID: "in_progress", closedTaskID: "done"}
+	report, err := buildReport("room-a", roomDir, 24*time.Hour, now,
+		func() ([]clientruntime.QueueRow, error) { return nil, nil },
+		func() ([]staleTask, error) { return nil, nil },
+		func(id string) (string, error) { return statuses[id], nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.CommittedOpen) != 1 || report.CommittedOpen[0].ID != openTaskID || report.CommittedOpen[0].Status != "in_progress" ||
+		report.CommittedOpen[0].Commits != 2 || report.CommittedOpen[0].Title != "fix: second" || len(report.CommittedOpen[0].LastSHA) != 40 {
+		t.Fatalf("committed but open = %+v", report.CommittedOpen)
+	}
+	if report.NoTrailer != 2 {
+		t.Errorf("commits without trailer = %d, want the 2 fixture commits", report.NoTrailer)
+	}
+	var out strings.Builder
+	report.renderText(&out)
+	for _, want := range []string{"committed but still open: 1", openTaskID, "commits without Task trailer: 2", "FAIL tasks closed after commit"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("text lacks %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), closedTaskID) {
+		t.Errorf("a closed task was listed:\n%s", out.String())
+	}
+
+	statuses[openTaskID] = "cancelled"
+	report, _ = buildReport("room-a", roomDir, 24*time.Hour, now,
+		func() ([]clientruntime.QueueRow, error) { return nil, nil },
+		func() ([]staleTask, error) { return nil, nil },
+		func(id string) (string, error) { return statuses[id], nil })
+	if len(report.CommittedOpen) != 0 {
+		t.Errorf("all tasks closed, still listed: %+v", report.CommittedOpen)
+	}
+	report, _ = buildReport("room-a", roomDir, 24*time.Hour, now,
+		func() ([]clientruntime.QueueRow, error) { return nil, nil },
+		func() ([]staleTask, error) { return nil, nil }, noTaskStatus)
+	out.Reset()
+	report.renderText(&out)
+	if !strings.Contains(out.String(), "committed but still open: unavailable (no hub)") || report.Targets[len(report.Targets)-1].Result != "n/a" {
+		t.Errorf("unreachable hub not marked unavailable / n/a:\n%s", out.String())
+	}
+}
+
 func TestBuildReportMeasuresTheWindowOnly(t *testing.T) {
 	now := time.Now().UTC()
 	roomDir, repo := reportFixture(t, now)
@@ -186,7 +257,7 @@ func TestBuildReportMeasuresTheWindowOnly(t *testing.T) {
 	}
 	report, err := buildReport("room-a", roomDir, 24*time.Hour, now,
 		func() ([]clientruntime.QueueRow, error) { return rows, nil },
-		func() ([]staleTask, error) { return nil, fmt.Errorf("no hub") })
+		func() ([]staleTask, error) { return nil, fmt.Errorf("no hub") }, noTaskStatus)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +291,7 @@ func TestBuildReportMarksAnUnreadableQueueUnavailableNotZero(t *testing.T) {
 	roomDir, _ := reportFixture(t, now)
 	report, err := buildReport("room-a", roomDir, 24*time.Hour, now,
 		func() ([]clientruntime.QueueRow, error) { return nil, fmt.Errorf("daemon down") },
-		func() ([]staleTask, error) { return nil, nil })
+		func() ([]staleTask, error) { return nil, nil }, noTaskStatus)
 	if err != nil {
 		t.Fatal(err)
 	}

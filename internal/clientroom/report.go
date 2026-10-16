@@ -294,7 +294,12 @@ func readBlocked(seatDir string, cutoff time.Time) int {
 type commitRecord struct {
 	Seat     string
 	DocsOnly bool
+	SHA      string
+	Title    string
+	TaskID   string // the hub task its `Task:` trailer names, "" when none
 }
+
+var taskIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 const (
 	recordSep = "\x1e"
@@ -305,7 +310,8 @@ const (
 // `agenthub--<room>--<seat>`; only a trailer naming this room's prefix is mapped to a seat.
 func gitCommits(repo, room string, cutoff time.Time) ([]commitRecord, error) {
 	out, err := exec.Command("git", "-C", repo, "log", "--since="+cutoff.Format(time.RFC3339), "--name-only",
-		"--format="+recordSep+"%(trailers:key=Seat,valueonly,separator=%x2c)"+fieldSep).Output()
+		"--format="+recordSep+"%H"+fieldSep+"%s"+fieldSep+"%(trailers:key=Seat,valueonly,separator=%x2c)"+fieldSep+
+			"%(trailers:key=Task,valueonly,separator=%x2c)"+fieldSep).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log in %s: %w", repo, err)
 	}
@@ -316,10 +322,20 @@ func parseGitLog(out, room string) []commitRecord {
 	prefix := "agenthub--" + room + "--"
 	var commits []commitRecord
 	for _, record := range strings.Split(out, recordSep)[1:] {
-		trailer, files, _ := strings.Cut(record, fieldSep)
-		rec := commitRecord{DocsOnly: false}
-		if seat, ok := strings.CutPrefix(strings.TrimSpace(trailer), prefix); ok {
+		fields := strings.SplitN(record, fieldSep, 5)
+		for len(fields) < 5 {
+			fields = append(fields, "")
+		}
+		rec := commitRecord{SHA: fields[0], Title: fields[1]}
+		files := fields[4]
+		if seat, ok := strings.CutPrefix(strings.TrimSpace(fields[2]), prefix); ok {
 			rec.Seat = seat
+		}
+		for _, id := range strings.Split(fields[3], ",") {
+			if id = strings.ToLower(strings.TrimSpace(id)); taskIDPattern.MatchString(id) {
+				rec.TaskID = id
+				break
+			}
 		}
 		touched, allDocs := false, true
 		for _, file := range strings.Split(files, "\n") {
@@ -428,6 +444,19 @@ func findStaleTasks(list func(status string) (map[string]any, error), get func(i
 // hubTasks reads the stale tasks through the client's authenticated hub transport. Its URL and credential
 // come from the process environment through clientsync.RequireEnv; this file never reads or prints them.
 func hubTasks(ctx context.Context, now time.Time) ([]staleTask, error) {
+	hubGet, err := hubGetter(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return findStaleTasks(func(status string) (map[string]any, error) {
+		return hubGet("/api/v2/tasks/?limit=500&task_status=" + status)
+	}, func(id string) (map[string]any, error) {
+		return hubGet("/api/v2/tasks/" + id)
+	}, now)
+}
+
+// hubGetter returns a GET against the hub through the client's authenticated transport.
+func hubGetter(ctx context.Context) (func(path string) (map[string]any, error), error) {
 	baseURL, err := clientsync.RequireEnv("AGENTHUB_URL")
 	if err != nil {
 		return nil, err
@@ -436,11 +465,73 @@ func hubTasks(ctx context.Context, now time.Time) ([]staleTask, error) {
 	if err != nil {
 		return nil, err
 	}
-	return findStaleTasks(func(status string) (map[string]any, error) {
-		return clientsync.RequestJSON(ctx, "GET", baseURL, token, "/api/v2/tasks/?limit=500&task_status="+status, nil)
-	}, func(id string) (map[string]any, error) {
-		return clientsync.RequestJSON(ctx, "GET", baseURL, token, "/api/v2/tasks/"+id, nil)
-	}, now)
+	return func(path string) (map[string]any, error) {
+		return clientsync.RequestJSON(ctx, "GET", baseURL, token, path, nil)
+	}, nil
+}
+
+// hubTaskStatus reads one task's status from the hub.
+func hubTaskStatus(ctx context.Context, id string) (string, error) {
+	hubGet, err := hubGetter(ctx)
+	if err != nil {
+		return "", err
+	}
+	answer, err := hubGet("/api/v2/tasks/" + id)
+	if err != nil {
+		return "", err
+	}
+	task, _ := answer["task"].(map[string]any)
+	status, _ := task["status"].(string)
+	if status == "" {
+		return "", fmt.Errorf("task %s has no readable status", id)
+	}
+	return status, nil
+}
+
+// closedStatuses end a task's work; any other status is still open.
+var closedStatuses = map[string]bool{"done": true, "cancelled": true, "archived": true}
+
+// committedOpenTask is a hub task a commit in the window names in its `Task:` trailer that is not closed.
+type committedOpenTask struct {
+	ID      string `json:"id"`
+	Status  string `json:"status"`
+	Commits int    `json:"commits"`
+	LastSHA string `json:"last_sha"`
+	Title   string `json:"last_title"`
+}
+
+// findCommittedOpen looks up each distinct task id the commits name (newest commit first, as git log
+// prints them) and lists those still open, plus the number of commits with no Task trailer.
+func findCommittedOpen(commits []commitRecord, status func(id string) (string, error)) ([]committedOpenTask, int, error) {
+	var order []string
+	byID := map[string]*committedOpenTask{}
+	noTrailer := 0
+	for _, c := range commits {
+		if c.TaskID == "" {
+			noTrailer++
+			continue
+		}
+		entry, seen := byID[c.TaskID]
+		if !seen {
+			entry = &committedOpenTask{ID: c.TaskID, LastSHA: c.SHA, Title: c.Title}
+			byID[c.TaskID] = entry
+			order = append(order, c.TaskID)
+		}
+		entry.Commits++
+	}
+	var open []committedOpenTask
+	for _, id := range order {
+		state, err := status(id)
+		if err != nil {
+			return nil, 0, err
+		}
+		if closedStatuses[state] {
+			continue
+		}
+		byID[id].Status = state
+		open = append(open, *byID[id])
+	}
+	return open, noTrailer, nil
 }
 
 // targetResult is one target's verdict.
@@ -493,6 +584,9 @@ type Report struct {
 	Targets []targetResult    `json:"targets"`
 	Sources map[string]string `json:"sources"`
 	Stale   []staleTask       `json:"stale_tasks"`
+
+	CommittedOpen []committedOpenTask `json:"committed_but_open"`
+	NoTrailer     int                 `json:"commits_without_task_trailer"`
 }
 
 // sinceLabel prints a window the way it is typed: 24h, 90m, 7d.
@@ -521,7 +615,8 @@ func parseSince(raw string) (time.Duration, error) {
 
 // buildReport measures the room. queueRows and its error come from the daemon; fetchTasks from the hub.
 func buildReport(room, roomDir string, window time.Duration, now time.Time,
-	queueRows func() ([]clientruntime.QueueRow, error), tasks func() ([]staleTask, error)) (*Report, error) {
+	queueRows func() ([]clientruntime.QueueRow, error), tasks func() ([]staleTask, error),
+	taskStatus func(id string) (string, error)) (*Report, error) {
 	cutoff := now.Add(-window)
 	seatDirs, err := filepath.Glob(filepath.Join(roomDir, "seats", "*"))
 	if err != nil {
@@ -563,6 +658,15 @@ func buildReport(room, roomDir string, window time.Duration, now time.Time,
 				stats.DocsOnly++
 			}
 		}
+		report.CommittedOpen, report.NoTrailer, err = findCommittedOpen(commits, taskStatus)
+		if err != nil {
+			report.Sources["commit_tasks"] = "unavailable (" + err.Error() + ")"
+		} else {
+			report.Sources["commit_tasks"] = "ok"
+		}
+	}
+	if report.Sources["commit_tasks"] == "" {
+		report.Sources["commit_tasks"] = "unavailable (" + report.Sources["git"] + ")"
 	}
 
 	rows, err := queueRows()
@@ -594,6 +698,11 @@ func buildReport(room, roomDir string, window time.Duration, now time.Time,
 	}
 	report.Total.finish()
 	report.Targets = evaluateTargets(report.Total, window.Hours()/24, report.Sources["git"] == "ok", report.Sources["queue"] == "ok")
+	closed := targetResult{Name: "tasks closed after commit", Value: float64(len(report.CommittedOpen)), Limit: "0", Result: "n/a"}
+	if report.Sources["commit_tasks"] == "ok" {
+		closed.Result = verdict(len(report.CommittedOpen) == 0)
+	}
+	report.Targets = append(report.Targets, closed)
 	return report, nil
 }
 
@@ -633,6 +742,16 @@ func (r *Report) renderText(out io.Writer) {
 			fmt.Fprintf(out, "  %s %-11s %s  %s\n", t.ID, t.Status, t.CreatedAt, t.Title)
 		}
 	}
+	fmt.Fprintln(out)
+	if r.Sources["commit_tasks"] != "ok" {
+		fmt.Fprintf(out, "committed but still open: %s\n", r.Sources["commit_tasks"])
+		return
+	}
+	fmt.Fprintf(out, "committed but still open: %d\n", len(r.CommittedOpen))
+	for _, t := range r.CommittedOpen {
+		fmt.Fprintf(out, "  %s %-11s %3d commits  %.10s  %s\n", t.ID, t.Status, t.Commits, t.LastSHA, t.Title)
+	}
+	fmt.Fprintf(out, "commits without Task trailer: %d\n", r.NoTrailer)
 }
 
 func runReport(args []string, stdout, stderr io.Writer) int {
@@ -671,7 +790,8 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		func() ([]clientruntime.QueueRow, error) {
 			return inv.client.QueueList(inv.room, clientruntime.QueueListFilter{})
 		},
-		func() ([]staleTask, error) { return hubTasks(context.Background(), now) })
+		func() ([]staleTask, error) { return hubTasks(context.Background(), now) },
+		func(id string) (string, error) { return hubTaskStatus(context.Background(), id) })
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam room report: %v\n", err)
 		return clientcmd.ExitRoomRefused
