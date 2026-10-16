@@ -140,8 +140,11 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "usage error, or a room the daemon does not know.")
 	fmt.Fprintln(out, "\nlimits reads or writes the room's budget file, rooms/<room>/limits.json, which `4genteam budget-run")
 	fmt.Fprintln(out, "--room ROOM` enforces: the ceilings a seat may spend in 24h and make in a minute. The limits SHIP OFF,")
-	fmt.Fprintln(out, "and while they are off the safeguard measures nothing. This is the verb an OWNER uses: the guard refuses")
-	fmt.Fprintln(out, "a seat a write to that file, so it cannot be raised by the seat it bounds.")
+	fmt.Fprintln(out, "and while they are off the safeguard measures nothing. The file is the OWNER's to change by CONVENTION,")
+	fmt.Fprintln(out, "not by enforcement: this verb writes it from any seat (`room limits --usd 999` passes the seat guard), or")
+	fmt.Fprintln(out, "any shape the guard does not parse (`sed -i`, `rm`, `truncate`, `dd of=`, any program). Only an edit tool")
+	fmt.Fprintln(out, "and a redirect are refused, and only because the state root lies outside a seat's worktree. Measured")
+	fmt.Fprintln(out, "2026-10-16; the rules that would refuse the rest are written and parked for the owner.")
 }
 
 // invocation is one sub-verb's resolved arguments: the room as the caller named it, the seat for the one

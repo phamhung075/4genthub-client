@@ -1,6 +1,8 @@
 // The budget a room runs under: the ceilings the room's safeguard enforces, written by the owner and read by
-// `budget-run`. The file is the room's own - rooms/<room>/limits.json - and the guard refuses a seat a write
-// to it, so an owner changes it here rather than a seat changing it under itself.
+// `budget-run`. The file is the room's own - rooms/<room>/limits.json - and nothing enforces that split: the
+// seat guard has no rule about it, so any seat may write it, with `room limits` itself or with any shape the
+// guard does not parse (measured 2026-10-16; `room limits --help` carries the matrix). The rules that would
+// refuse those shapes are written and parked for the owner.
 package clientroom
 
 import (
@@ -30,7 +32,10 @@ The limits SHIP OFF: while they are off the safeguard measures nothing, whatever
 
 A number that is not named keeps the value the file already carries, and a file that does not exist yet starts at
 25 USD/24h and 300 calls/min - the ceilings this room agreed. Zero is refused: a ceiling of zero is not a ceiling,
-and OFF is how a room says it has none.`
+and OFF is how a room says it has none.
+
+The file is the OWNER's to change by convention, NOT by enforcement: the seat guard does not refuse this verb from
+any seat, and the rules it does have judge the shape of a write, never who is asking.`
 
 func runLimits(args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
