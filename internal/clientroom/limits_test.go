@@ -57,6 +57,9 @@ func TestRoomLimitsWritesKeepsAndTurnsOff(t *testing.T) {
 	daemon := newFakeDaemon(t, map[string]string{})
 	stateDir := daemon.stateDir
 	dir := roomDir(t, stateDir)
+	// The verb reads the CALLER's identity, and these are the OWNER's writes (25 -> 40 is a raise): pinned
+	// rather than inherited from the shell, so a run from a seat's shell asserts the same thing as a bare one.
+	t.Setenv(sessionEnv, "")
 	load := func() roombudget.Limits {
 		t.Helper()
 		limits, err := roombudget.Load(dir)
@@ -116,5 +119,107 @@ func TestRoomLimitsRefusesACeilingOfZeroAndTwoAnswers(t *testing.T) {
 	}
 	if _, err := os.Stat(roombudget.Path(dir)); !os.IsNotExist(err) {
 		t.Errorf("a refused write wrote the file: %v", err)
+	}
+}
+
+// loadLimits is the file's own state, read back the way the safeguard reads it: a test that asserts what a verb
+// LEFT is asserting the file, not the verb's rendering of it.
+func loadLimits(t *testing.T, dir string) roombudget.Limits {
+	t.Helper()
+	limits, err := roombudget.Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return limits
+}
+
+// TestASeatDoesNotRaiseTheCeilingThatBoundsIt closes the hole this change exists for, measured on the real
+// binary before it: a seat ran `room limits --usd 999` and the file went to 999 (and `--off` disabled the
+// ceilings), so the seat a ceiling exists to stop was the one who could lift it. The refusal names the marker
+// and the OWNER, writes nothing, and leaves TIGHTENING allowed - a lower number, or --on.
+func TestASeatDoesNotRaiseTheCeilingThatBoundsIt(t *testing.T) {
+	daemon := newFakeDaemon(t, map[string]string{})
+	dir := roomDir(t, daemon.stateDir)
+	t.Setenv(sessionEnv, testSeat)
+	// The agreed ceilings, written by the seat itself: there is no file yet, so nothing is being raised.
+	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--usd", "25", "--calls", "300", "--on")...); code != clientcmd.ExitOK {
+		t.Fatalf("setup: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	want := roombudget.Limits{Enabled: true, USDPerSeat24h: 25, CallsPerSeatMin: 300}
+
+	for _, flags := range [][]string{
+		{"--usd", "999"},
+		{"--usd", "25.01"},
+		{"--calls", "301"},
+		{"--off"},
+		{"--usd", "999", "--calls", "400"},
+	} {
+		code, stdout, stderr := runRoom(t, append(daemon.args("limits", testRoom), flags...)...)
+		if code != clientcmd.ExitRoomRefused {
+			t.Errorf("%v exited %d, want %d (stderr %q)", flags, code, clientcmd.ExitRoomRefused, stderr)
+		}
+		if !strings.Contains(stderr, sessionEnv) || !strings.Contains(stderr, "OWNER") {
+			t.Errorf("%v refused with %q, want the marker and who may raise it named", flags, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("%v printed %q, want nothing: nothing was written", flags, stdout)
+		}
+		if got := loadLimits(t, dir); got != want {
+			t.Fatalf("%v left %+v, want the ceilings unchanged at %+v", flags, got, want)
+		}
+	}
+
+	// Tightening is not the hole: a lower number, a lower call ceiling, and --on (already on) all pass.
+	for _, c := range []struct {
+		flags []string
+		want  roombudget.Limits
+	}{
+		{[]string{"--usd", "10"}, roombudget.Limits{Enabled: true, USDPerSeat24h: 10, CallsPerSeatMin: 300}},
+		{[]string{"--calls", "100"}, roombudget.Limits{Enabled: true, USDPerSeat24h: 10, CallsPerSeatMin: 100}},
+		{[]string{"--on"}, roombudget.Limits{Enabled: true, USDPerSeat24h: 10, CallsPerSeatMin: 100}},
+	} {
+		code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), c.flags...)...)
+		if code != clientcmd.ExitOK {
+			t.Errorf("%v exited %d, want %d: a seat may tighten what bounds it (stderr %q)", c.flags, code, clientcmd.ExitOK, stderr)
+		}
+		if got := loadLimits(t, dir); got != c.want {
+			t.Errorf("%v left %+v, want %+v", c.flags, got, c.want)
+		}
+	}
+}
+
+// TestTheOwnerRaisesTheCeilingAndAnAlreadyOffCeilingIsNotARaise pins the two edges of the rule: the marker IS
+// the whole check, so with $AGENTHUB_SESSION_NAME unset (the owner's own shell, which is where the owner runs
+// it) a raise is written; and a seat asking --off for a room that is ALREADY off loosens nothing, because
+// nothing is in force to lose.
+func TestTheOwnerRaisesTheCeilingAndAnAlreadyOffCeilingIsNotARaise(t *testing.T) {
+	daemon := newFakeDaemon(t, map[string]string{})
+	dir := roomDir(t, daemon.stateDir)
+
+	t.Setenv(sessionEnv, "")
+	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--usd", "25", "--calls", "300", "--on")...); code != clientcmd.ExitOK {
+		t.Fatalf("setup: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--usd", "999")...); code != clientcmd.ExitOK {
+		t.Fatalf("the owner raising: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	if got := loadLimits(t, dir); got.USDPerSeat24h != 999 {
+		t.Fatalf("limits = %+v, want the owner's 999 written", got)
+	}
+
+	t.Setenv(sessionEnv, testSeat)
+	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--off")...); code != clientcmd.ExitRoomRefused {
+		t.Errorf("--off from a seat with the ceilings ON: exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, stderr)
+	}
+	t.Setenv(sessionEnv, "")
+	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--off")...); code != clientcmd.ExitOK {
+		t.Fatalf("the owner turning them off: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	t.Setenv(sessionEnv, testSeat)
+	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--off")...); code != clientcmd.ExitOK {
+		t.Errorf("--off from a seat with the ceilings already OFF: exit %d, want %d - nothing in force is lost (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	if got := loadLimits(t, dir); got.Enabled {
+		t.Errorf("limits = %+v, want them still off", got)
 	}
 }
