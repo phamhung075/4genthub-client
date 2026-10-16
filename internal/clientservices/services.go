@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -402,15 +403,15 @@ func verifyRow(env Env, safeguard, rig string) Health {
 		// rather than a healthy one. 7.7's rule is explicit - a missing signal is not evidence of work.
 		row.State = Silent
 		row.PID = live[0]
-	case beat.PID != live[0]:
+	case !slices.Contains(live, beat.PID):
 		row.State = Silent
 		row.PID = live[0]
 	case age > env.threshold(safeguard):
 		row.State = Silent
-		row.PID = live[0]
+		row.PID = beat.PID
 	default:
 		row.State = Running
-		row.PID = live[0]
+		row.PID = beat.PID
 	}
 	return row
 }

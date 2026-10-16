@@ -124,6 +124,16 @@ func TestTheProcessDecidesRunningAgainstStopped(t *testing.T) {
 		}
 	})
 
+	t.Run("two live matches and the beat names the second", func(t *testing.T) {
+		f := newReportFixture(t)
+		f.live[Pattern(Compact, "demo")] = []int{66, 77}
+		f.beat(Compact, "demo", time.Second, 77)
+		got := f.row(Compact, "demo", env)
+		if got.State != Running || got.PID != 77 {
+			t.Errorf("row = %+v, want running on the beating pid 77 though 66 matches first", got)
+		}
+	})
+
 	t.Run("live but the beat names another pid", func(t *testing.T) {
 		f := newReportFixture(t)
 		f.live[Pattern(Compact, "demo")] = []int{88}
