@@ -666,7 +666,10 @@ impl RoomSupervisor {
         };
 
         // Build environment variables
-        let env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket, &self.base_state_dir);
+        let mut env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket, &self.base_state_dir);
+        // The seat guard refuses writes outside this directory: the seat's own worktree, where the seat starts.
+        let worktree = cwd.canonicalize().map_err(|e| format!("cannot resolve the seat's directory {}: {e}", cwd.display()))?;
+        env.insert("AGENTHUB_WORKTREE".into(), worktree.to_string_lossy().to_string());
 
         // WHEN THIS GENERATION'S PANE WAS CREATED. The readiness proof below is a file the previous
         // generation's teardown also writes into, so existence alone cannot separate a handshake from an

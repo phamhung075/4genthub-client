@@ -3,7 +3,9 @@
 //
 // It does two jobs and nothing else:
 //   1. GUARD: block the calls the owner's standing rules forbid a seat - printing a secret from a `.env`
-//      file, running Docker, pushing (a push to main deploys production, and the owner approves every one), and changing the room's own tmux server.
+//      file, running Docker, pushing (a push to main deploys production, and the owner approves every one), changing the room's own tmux server,
+//      bypassing the git hooks, destructive git, killing processes by pattern, and writing outside the seat's own worktree
+//      ($AGENTHUB_WORKTREE, set by the supervisor) or into the frozen plan files and the guard's own sources.
 //   2. LOG: append ONE line per tool call to <seat dir>/tool-calls.jsonl, so "what did this seat do, and was it
 //      refused" is one `jq` away instead of a transcript read.
 //
@@ -15,7 +17,8 @@
 // "blocked"; a blocked call carries the `rule` that refused it. An MCP call is the tool mcp__<server>_<tool>
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const seat = process.env.AGENTHUB_SEAT ?? "";
@@ -70,6 +73,112 @@ const callOf = (name: string): RegExp =>
 const TMUX_CALL = callOf("tmux");
 const DOCKER_CALL = callOf("docker(?:-compose)?");
 const GIT_PUSH_CALL = callOf("git\\s+(?:-C\\s+\\S+\\s+)?push");
+const GIT_CALL = callOf("git");
+const PKILL_CALL = callOf("(?:pkill|killall)");
+const PGREP_CALL = callOf("pgrep");
+const KILL_CALL = callOf("kill");
+const XARGS_CALL = callOf("xargs");
+const TEE_CALL = callOf("tee");
+const COPY_CALL = callOf("(?:cp|mv|install|rsync)");
+
+// A git statement as verb and arguments, after the global options (`-C dir`, `-c k=v`, `--no-pager`, ...).
+function gitOf(part: string): { verb: string; args: string[] } | null {
+  const call = part.match(GIT_CALL);
+  if (!call) return null;
+  let rest = call[1];
+  for (let next = rest.replace(/^\s*(?:-C\s+\S+|-c\s+\S+|--no-pager|-P|--git-dir=\S+|--work-tree=\S+)/, ""); next !== rest; ) {
+    rest = next;
+    next = rest.replace(/^\s*(?:-C\s+\S+|-c\s+\S+|--no-pager|-P|--git-dir=\S+|--work-tree=\S+)/, "");
+  }
+  const [verb = "", ...args] = rest.trim().split(/\s+/);
+  return { verb, args };
+}
+
+const hasShort = (args: string[], letter: string): boolean => args.some((a) => new RegExp(`^-[A-Za-z]*${letter}[A-Za-z]*$`).test(a));
+
+// What a git statement destroys, or "" when it destroys nothing: work in the tree, the index, history or the remote.
+function destroys({ verb, args }: { verb: string; args: string[] }): string {
+  if (verb === "reset" && args.includes("--hard")) return "git reset --hard discards every uncommitted change in the tree";
+  if (verb === "clean" && (args.includes("--force") || hasShort(args, "f"))) return "git clean -f deletes untracked files";
+  if (verb === "checkout" && (args[0] === "." || args.join(" ").includes("-- ."))) return "git checkout -- . discards every uncommitted change in the tree";
+  if (verb === "restore" && args.includes(".")) return "git restore . discards every uncommitted change in the tree";
+  if (verb === "stash" && /^(drop|clear)$/.test(args[0] ?? "")) return "git stash drop/clear deletes stashed work";
+  if (verb === "push" && (args.some((a) => /^--force/.test(a) || a.startsWith("+")) || hasShort(args, "f"))) return "a force push rewrites the remote";
+  if (verb === "add" && (args.includes("--all") || args.includes(".") || hasShort(args, "A"))) return "git add -A/. stages other seats' and stray files; stage paths: git add -- <paths>";
+  if (verb === "commit" && args.includes("--amend")) return "git commit --amend rewrites a commit; make a new commit";
+  return "";
+}
+
+// A pid is owned when it descends from the guard's process or its parent (the seat's agent): a seat may stop what
+// it started, not another seat's processes or a daemon.
+const parentOf = (pid: number): number => {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  } catch {
+    return 0;
+  }
+};
+const owned = (pid: number): boolean => {
+  const roots = new Set([process.pid, process.ppid]);
+  for (let p = pid, hops = 0; p > 1 && hops < 64; p = parentOf(p), hops++) if (roots.has(p)) return true;
+  return false;
+};
+
+// Why a statement kills processes by pattern or kills a pid the seat does not own, or "".
+function killReason(part: string): string {
+  if (PKILL_CALL.test(part)) return "pkill/killall kill by name and take other seats' processes with them";
+  const pgrep = part.match(PGREP_CALL);
+  if (pgrep && (/(^|\s)--full\b/.test(pgrep[1]) || hasShort(pgrep[1].trim().split(/\s+/), "f")))
+    return "pgrep -f matches every seat's command line";
+  const xargs = part.match(XARGS_CALL);
+  if (xargs && /(^|\s)kill\b/.test(xargs[1])) return "kill fed from a pipe kills pids nobody checked";
+  const kill = part.match(KILL_CALL);
+  if (!kill) return "";
+  const args = kill[1].trim().split(/\s+/).filter(Boolean);
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "-s" || args[i] === "-n") i++;
+    else if (args[i].startsWith("-")) continue;
+    else if (!/^\d+$/.test(args[i])) return "kill takes literal pids; a pid from a pattern or substitution can be another seat's process";
+    else if (!owned(Number(args[i]))) return `pid ${args[i]} was not started by this seat`;
+  }
+  return "";
+}
+
+// ---- writes ---------------------------------------------------------------------------------------------------
+// The paths a call writes: an edit tool's path, and from a bash statement the target of a redirect, `tee`, and the
+// last argument of cp/mv/install/rsync. A path with a variable or a substitution cannot be judged and is not.
+const WRITE_TOOLS = new Set(["edit", "write", "ast_edit", "write_to_file", "replace_file_content", "multi_replace_file_content"]);
+const REDIRECT = /(?<![-=>])>>?\s*([^\s|;&<>()]+)/g;
+
+function writeTargets(tool: string, input: Record<string, unknown>): string[] {
+  const raw: string[] = [];
+  if (WRITE_TOOLS.has(tool)) raw.push(String(input.path ?? ""));
+  else if (tool === "bash") {
+    for (const part of statements(input)) {
+      for (const m of part.matchAll(REDIRECT)) raw.push(m[1]);
+      const operands = (rest: string) => rest.trim().split(/\s+/).filter((a) => a && !a.startsWith("-"));
+      const tee = part.match(TEE_CALL);
+      if (tee) raw.push(...operands(tee[1]));
+      const copy = part.match(COPY_CALL);
+      if (copy) raw.push(...operands(copy[1]).slice(-1));
+    }
+  }
+  return raw.filter((p) => p && p !== "/dev/null" && !/^(""|'')$/.test(p) && !/[$`]/.test(p));
+}
+
+const worktree = process.env.AGENTHUB_WORKTREE ?? "";
+const absolute = (path: string): string => resolve(worktree || process.cwd(), path.replace(/^~(?=\/|$)/, homedir()));
+const within = (path: string, root: string): boolean => path === root || path.startsWith(root + "/");
+
+// The plan files are frozen: NEXT-GEN*.md, GATE-*.md and ai_docs/reports-status/ were written by a past review and
+// a seat that edits them is writing a report instead of shipping.
+const frozen = (abs: string): boolean =>
+  /^NEXT-GEN.*\.md$/.test(basename(abs)) || /^GATE-.*\.md$/.test(basename(abs)) || abs.includes("/ai_docs/reports-status/");
+// What enforces the rules is not the seat's to edit: the git hooks, the guard source, the installed guard, agy's hook list.
+const protectedPath = (abs: string): boolean =>
+  abs.includes("/scripts/git-hooks/") || abs.includes("/.git/hooks/") || basename(abs) === "seat-guard.ts" ||
+  abs.includes("/hooks/pre/") || abs.endsWith("/.gemini/config/hooks.json");
 
 // The rules. Each returns the reason a call is refused, or "" to let it through.
 const RULES: { rule: string; check: (tool: string, input: Record<string, unknown>) => string }[] = [
@@ -116,6 +225,72 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
         })
         ? "a bare tmux command that changes anything acts on the room's own tmux server, because $TMUX points there; use `env -u TMUX tmux -L <scratch-name> ...`, or read with list-*, display-message or capture-pane"
         : "",
+  },
+  {
+    rule: "hook-bypass",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      for (const part of statements(input)) {
+        const git = gitOf(part);
+        if (/\bOWNER_DOCS_COMMIT\s*=/.test(part))
+          return "OWNER_DOCS_COMMIT belongs to the owner: the docs-only commit hook is how the owner's rule is enforced";
+        if (/\b(?:env\b.*\s-u\s*|unset\s+)AGENTHUB_SESSION_NAME\b/.test(part))
+          return "AGENTHUB_SESSION_NAME is the seat's identity for the commit hooks; do not remove it";
+        if (git && /\bcore\.hooksPath\b/i.test(part)) return "core.hooksPath turns the git hooks off; they are not the seat's to change";
+        if (git?.verb === "commit" && (git.args.includes("--no-verify") || hasShort(git.args, "n")))
+          return "git commit --no-verify skips the hooks; fix what the hook reports";
+        if (git?.verb === "merge" && git.args.includes("--no-verify")) return "git merge --no-verify skips the hooks";
+      }
+      return "";
+    },
+  },
+  {
+    rule: "git-destructive",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      for (const part of statements(input)) {
+        const git = gitOf(part);
+        const reason = git ? destroys(git) : "";
+        if (reason) return reason;
+      }
+      return "";
+    },
+  },
+  {
+    rule: "process-kill",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      for (const part of statements(input)) {
+        const reason = killReason(part);
+        if (reason) return reason;
+      }
+      return "";
+    },
+  },
+  {
+    rule: "frozen-paths",
+    check: (tool, input) =>
+      writeTargets(tool, input).some((p) => frozen(absolute(p)))
+        ? "NEXT-GEN*.md, GATE-*.md and ai_docs/reports-status/ are frozen; record the result in the task, not in a file"
+        : "",
+  },
+  {
+    rule: "protected-paths",
+    check: (tool, input) =>
+      writeTargets(tool, input).some((p) => protectedPath(absolute(p)))
+        ? "the git hooks and the seat guard are the owner's to change"
+        : "",
+  },
+  {
+    // The supervisor sets AGENTHUB_WORKTREE to the directory the seat starts in. Writes may go there, to the seat's own
+    // dir and to the temp dir, nowhere else: the main checkout belongs to the lead's gated merge.
+    rule: "worktree-scope",
+    check: (tool, input) => {
+      if (!worktree) return "";
+      const roots = [worktree, process.env.PI_CODING_AGENT_DIR ?? "", tmpdir()].filter(Boolean).map((r) => resolve(r));
+      const outside = writeTargets(tool, input).find((p) => !roots.some((r) => within(absolute(p), r)));
+      return outside ? `${outside} is outside your worktree ${worktree}; edit inside it and report the commit to the lead` : "";
+    },
   },
   {
     rule: "push",
