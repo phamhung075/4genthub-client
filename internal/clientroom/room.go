@@ -33,7 +33,6 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
-	"github.com/phamhung075/4genthub-client/internal/roombudget"
 )
 
 // closeWatch closes the room's herdr watch workspaces, whose panes run the feed and input helpers; a var so
@@ -117,8 +116,7 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "machine's own.")
 	fmt.Fprintln(out, "\nstatus reads GetRoomStatus and prints one line per seat: SEAT RUNTIME STATE SESSION, plus an")
 	fmt.Fprintln(out, "ALERT segment when the runtime flagged the seat - alert=<kind> quiet_seconds=<secs|unknown>")
-	fmt.Fprintln(out, "waiting_qitem_ids=<id,id|none> - and a PARKED segment when the budget safeguard stopped the seat:")
-	fmt.Fprintln(out, "parked=<at> reason=<why>. A seat with neither prints the four fields and nothing else, and")
+	fmt.Fprintln(out, "waiting_qitem_ids=<id,id|none>. A seat with no alert prints the four fields and nothing else, and")
 	fmt.Fprintln(out, "`unknown` is a seat that published no freshness stamp: unknown quiet time is NOT zero seconds.")
 	fmt.Fprintln(out, "stop sends StopRoom: exactly that room's own sessions. The room's directory (spec.json, seats/,")
 	fmt.Fprintln(out, "logs/) is LEFT IN PLACE so the room can be started again; nothing outside the room is touched.")
@@ -327,24 +325,11 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	// One line per seat, and the SEAT's own rows in the daemon's order: the state word and the session name
 	// are the daemon's, not this client's, so a reader can compare this output with the room's own reading.
-	// A seat the runtime flagged carries its alert as the row's last segment (see seatRow/alertNote), and a
-	// seat the budget safeguard parked carries that too - a stopped seat whose reason nobody can read is a
-	// seat an operator will start again.
+	// A seat the runtime flagged carries its alert as the row's last segment (see seatRow/alertNote).
 	for _, seat := range seats {
-		fmt.Fprintln(stdout, seatRow(seat)+parkedNote(inv, seat))
+		fmt.Fprintln(stdout, seatRow(seat))
 	}
 	return clientcmd.ExitOK
-}
-
-// parkedNote is the trailing segment of a seat's row for the record the budget safeguard leaves in the seat's
-// own directory, or the empty string when the seat is not parked. The reason is quoted because it is a
-// sentence with spaces and commas in it, and the row's fields are space-separated.
-func parkedNote(inv invocation, seat clientruntime.SeatStatus) string {
-	parked, ok := roombudget.ReadParked(clientruntime.SeatDir(inv.stateDir, inv.room, seat.Seat))
-	if !ok {
-		return ""
-	}
-	return fmt.Sprintf(" parked=%s reason=%q", parked.At, parked.Reason)
 }
 
 // runStop sends StopRoom and closes the room's own herdr watch workspaces, whose feed and input helpers would

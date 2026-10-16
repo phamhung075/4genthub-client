@@ -1,6 +1,7 @@
 // What these tests pin is the verb's CONTRACT rather than its rendering: a read writes nothing, a write keeps
-// the numbers it does not name, OFF is not a ceiling of zero, and a seat the safeguard parked is named by
-// `room status` with the reason that stopped it.
+// the numbers it does not name, and OFF is not a ceiling of zero.
+// The park's own rendering on a seat's row belongs to the park-semantics lane (clientroom/parkNote, which reads
+// the same roombudget record and prints it for `status` and `reseat` alike), so nothing here asserts it.
 package clientroom
 
 import (
@@ -116,34 +117,4 @@ func TestRoomLimitsRefusesACeilingOfZeroAndTwoAnswers(t *testing.T) {
 	if _, err := os.Stat(roombudget.Path(dir)); !os.IsNotExist(err) {
 		t.Errorf("a refused write wrote the file: %v", err)
 	}
-}
-
-// TestRoomStatusNamesAParkedSeat: the park record is what makes a stopped seat legible, so status carries it -
-// and a seat with no record carries no segment at all, because an empty segment reads as a parked seat with an
-// empty reason.
-func TestRoomStatusNamesAParkedSeat(t *testing.T) {
-	daemon := newFakeDaemon(t, map[string]string{
-		"GetRoomStatus": okData("[" + seatJSON("dev", "omp", "stopped") + "," + seatJSON("lead", "omp", "running") + "]"),
-	})
-	parked := roombudget.Parked{Seat: "dev", Reason: "spent 31.40 USD in the last 24h, over the 25.00 USD ceiling",
-		At: "2026-10-16T12:00:00Z", Cost: 31.4}
-	seatDir := filepath.Join(daemon.stateDir, "rooms", testRoom, "seats", "dev")
-	if err := os.MkdirAll(seatDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := roombudget.WriteParked(seatDir, parked); err != nil {
-		t.Fatalf("WriteParked: %v", err)
-	}
-
-	code, stdout, stderr := runRoom(t, daemon.args("status", testRoom)...)
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
-	}
-	if !strings.Contains(stdout, `dev omp stopped agenthub--room-a--dev parked=2026-10-16T12:00:00Z reason="spent 31.40 USD`) {
-		t.Errorf("stdout = %q, want dev's row carrying the park record", stdout)
-	}
-	if strings.Contains(stdout, "parked=") && strings.Count(stdout, "parked=") != 1 {
-		t.Errorf("stdout = %q, want the park segment on the parked seat only", stdout)
-	}
-	assertRequests(t, daemon, `{"action":"GetRoomStatus","payload":{"room":"room-a"}}`)
 }
