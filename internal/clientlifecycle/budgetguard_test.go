@@ -75,7 +75,9 @@ func newBudgetFixture(t *testing.T) *budgetFixture {
 		return nil
 	}
 	guard.Log = func(text string) { f.logs = append(f.logs, text) }
-	guard.SeatDir = func(_, seat string) string { return "/state/rooms/room-a/seats/" + seat }
+	guard.SeatDir = func(_, seat string) string {
+		return "/home/daihu/.config/4genthub/rooms/room-a/seats/" + seat
+	}
 	guard.Parked = func(_, seat string) (roombudget.Parked, bool) {
 		parked, ok := f.records[seat]
 		return parked, ok
@@ -173,6 +175,27 @@ func TestLimitsThatAreOffMeasureNothing(t *testing.T) {
 	f.guard.Step(context.Background())
 	if got := strings.Count(strings.Join(f.logs, "\n"), "limits are OFF"); got != 1 {
 		t.Errorf("the OFF line was logged %d times, want once: a line a pass would bury the park it exists beside", got)
+	}
+}
+
+// TestTheParkRowFitsTheRailsCapsAtItsWorstCase: the rail REFUSES a body over 600 and a summary over 120, so a
+// park whose row cannot be filed is a park nobody is told about. The seat's own directory is what varies in the
+// body (its length is the state root's, not ours) and the numbers grow with the spend, so the case is driven at
+// a production-length seat dir and eleven-digit numbers rather than at the fixture's tidy ones. The reviewer's
+// note on the budget change measured the old body as over long before that: the prose was 626 chars at a
+// production path with an ORDINARY cost.
+func TestTheParkRowFitsTheRailsCapsAtItsWorstCase(t *testing.T) {
+	f := newBudgetFixture(t)
+	f.usage["dev"] = roombudget.Usage{Cost: 99999999999.99, Calls: 999999999}
+
+	f.guard.Step(context.Background())
+	if len(f.rows) != 1 {
+		t.Fatalf("rows = %d, want one", len(f.rows))
+	}
+	row := f.rows[0]
+	if len(row.Summary) > 120 || len(row.Body) > 600 {
+		t.Errorf("row is %d/%d chars, over the rail's own caps (120/600); the park would be recorded and the "+
+			"lead never told:\n%s", len(row.Summary), len(row.Body), row.Body)
 	}
 }
 

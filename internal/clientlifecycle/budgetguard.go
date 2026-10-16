@@ -190,11 +190,10 @@ func (g *BudgetGuard) row(seat string, usage roombudget.Usage, reason string) cl
 		SourceSession:      "budget@" + g.Rig,
 		DestinationSession: clientruntime.SeatSessionName(g.Rig, g.Lead),
 		Summary:            fmt.Sprintf("BUDGET: seat %s parked - %s", seat, reason),
-		Body: fmt.Sprintf("The budget safeguard parked seat %s: it %s.\nMeasured %s: %.2f USD over 24h, %d tool calls in the last minute.\n"+
-			"Its park record is %s, and the record IS the park: the client's routes that would hand the seat work read it "+
-			"and refuse (send, the restore brief, a revive), so a bare `4genteam room reseat %s %s` restarts it while the "+
-			"record still refuses it work. Remove the record once the cause is understood; `4genteam room limits %s` changes "+
-			"the ceiling.",
+		Body: fmt.Sprintf("Parked seat %s: it %s.\nMeasured %s: %.2f USD over 24h, %d tool calls in the last minute.\n"+
+			"Record: %s. THE RECORD IS THE PARK - the routes that would hand the seat work read it and refuse, so "+
+			"`4genteam room reseat %s %s` alone restarts a seat still refused work. Remove the record once the cause is "+
+			"understood; `4genteam room limits %s` changes the ceiling.",
 			seat, reason, g.Now().UTC().Format(time.RFC3339), usage.Cost, usage.Calls,
 			roombudget.ParkedPath(g.SeatDir(g.Rig, seat)), g.Rig, seat, g.Rig),
 		Tags: []string{budgetRowTag},

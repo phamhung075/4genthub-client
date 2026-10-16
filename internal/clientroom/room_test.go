@@ -465,3 +465,67 @@ func TestRoomStopRefusesToWriteAListItCouldNotRead(t *testing.T) {
 	// have agent bring it straight back, which is the lie the ordering in `runStop` exists to prevent.
 	assertRequests(t, daemon)
 }
+
+// TestEveryDispatchedRoomVerbIsAnnounced: the group's announcements are what a caller reads when they guess
+// wrong, so a verb the dispatcher accepts must be named by all three of them - and a name in the list must
+// reach the dispatcher. `queue`, `report`, `metrics` and `limits` all shipped while every announcement still
+// said four verbs, which is the drift this pins (the reviewer measured it as F2 on the budget change).
+//
+// Each verb is driven with NO room, which is what keeps this off the socket: a dispatched verb prints its own
+// shape, while a name the switch does not know prints "unknown verb". Driving one WITH a room would resolve
+// this machine's daemon and answer on the live room, which no test may do.
+func TestEveryDispatchedRoomVerbIsAnnounced(t *testing.T) {
+	code, _, pick := runRoom(t)
+	if code != clientcmd.ExitRoomRefused {
+		t.Fatalf("room with no verb: exit %d, want %d", code, clientcmd.ExitRoomRefused)
+	}
+	code, _, bogus := runRoom(t, "nosuchverb")
+	if code != clientcmd.ExitRoomRefused {
+		t.Fatalf("room nosuchverb: exit %d, want %d", code, clientcmd.ExitRoomRefused)
+	}
+	for _, verb := range roomVerbs {
+		for _, text := range []string{pick, bogus} {
+			if !strings.Contains(text, verb) {
+				t.Errorf("announcement %q does not name the verb %q", text, verb)
+			}
+		}
+		if !strings.Contains(groupUsage, verb) {
+			t.Errorf("group usage %q does not name the verb %q", groupUsage, verb)
+		}
+		if _, ok := subUsages[verb]; !ok {
+			t.Errorf("subUsages has no shape for %q, so a usage error over it prints the group's grammar", verb)
+		}
+		if _, _, stderr := runRoom(t, verb); strings.Contains(stderr, "unknown verb") {
+			t.Errorf("the dispatcher does not know %q, which roomVerbs announces: %s", verb, stderr)
+		} else if !strings.Contains(stderr, "4genteam room "+verb) {
+			t.Errorf("room %s answered %q, want the verb's own shape: it was not dispatched", verb, stderr)
+		}
+	}
+	// And the list must carry every verb the group has a SHAPE for. That is the direction this test exists for:
+	// `limits` had a shape in subUsages while the announcements still said four verbs, and a check that walks
+	// roomVerbs alone cannot see an omission from the list itself.
+	for verb := range subUsages {
+		listed := false
+		for _, known := range roomVerbs {
+			if known == verb {
+				listed = true
+				break
+			}
+		}
+		if !listed {
+			t.Errorf("subUsages has a shape for %q and roomVerbs does not announce it: the list is incomplete", verb)
+		}
+	}
+}
+
+// TestARoomVerbOutsideTheListIsRefusedByName: the other direction - a name that roomVerbs does not carry is
+// refused together with the list, so the list is the announcement and not a decoration.
+func TestARoomVerbOutsideTheListIsRefusedByName(t *testing.T) {
+	code, _, stderr := runRoom(t, "queues", testRoom)
+	if code != clientcmd.ExitRoomRefused {
+		t.Fatalf("room queues: exit %d, want %d", code, clientcmd.ExitRoomRefused)
+	}
+	if !strings.Contains(stderr, roomVerbList()) {
+		t.Errorf("stderr = %q, want the whole verb list %q", stderr, roomVerbList())
+	}
+}

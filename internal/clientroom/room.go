@@ -1,6 +1,8 @@
 // Package clientroom is the `room` verb group: one room's lifecycle, over the runtime's own IPC.
 //
-// `room status|stop|reseat|compact` is the client half of the native cutover. Each sub-verb asks the runtime
+// The group's sub-verbs are ONE list (roomVerbs) and every announcement is built from it. The four cutover
+// verbs - `status|stop|reseat|compact` - are the client half of the native cutover; `queue` works the room's
+// own rail, and `report`, `metrics` and `limits` read and set the room's own state. Each sub-verb asks the runtime
 // daemon for something the wire already carries - GetRoomStatus, StopRoom, StopSeat and RestartSeat,
 // ForceCompact - so this package is a FRAME over clientruntime.Client rather than a second implementation of
 // any of it. Nothing here shells out to tmux, and nothing here resolves the rig orchestrator's paths.
@@ -39,23 +41,31 @@ import (
 // the tests need no herdr.
 var closeWatch = clientwatch.CloseRigWorkspaces
 
-// Commands is what the dispatcher registers from this package: one verb, `room`, whose Run switches over
-// the four sub-verbs - the shape clientseat and clientteam already register, so the dispatcher's own list
-// gains one line rather than four.
+// Commands is what the dispatcher registers from this package: one verb, `room`, whose Run switches over the
+// sub-verbs in roomVerbs - the shape clientseat and clientteam already register, so the dispatcher's own list
+// gains one line rather than eight.
 func Commands() []clientcmd.Command { return []clientcmd.Command{RoomCommand{}} }
 
 // RoomCommand is the `room` verb group. Exported because the dispatcher registers the value by name and a
 // reader of cmd/4genteam/main.go should be able to follow it to the type without a grep.
 type RoomCommand struct{}
 
+// roomVerbs is the ONE list of this group's sub-verbs, in the order the usage line prints them. It exists
+// because the group's own announcements were four hand-written copies of the same four names, and `queue`,
+// `report`, `metrics` and `limits` all shipped while every copy still said four: a ninth verb is now one line
+// here, and TestEveryDispatchedRoomVerbIsAnnounced fails if the dispatcher and this list ever part company.
+var roomVerbs = []string{"status", "stop", "reseat", "compact", "queue", "report", "metrics", "limits"}
+
+func roomVerbList() string { return strings.Join(roomVerbs, ", ") }
+
 func (RoomCommand) Name() string { return "room" }
 func (RoomCommand) Summary() string {
-	return "one room's lifecycle over the runtime's own socket: status, stop, reseat, compact"
+	return "one room's lifecycle over the runtime's own socket: " + roomVerbList()
 }
 
 func (RoomCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "4genteam room: pick a verb: status, stop, reseat, compact")
+		fmt.Fprintln(stderr, "4genteam room: pick a verb: "+roomVerbList())
 		return clientcmd.ExitRoomRefused
 	}
 	if args[0] == "-h" || args[0] == "--help" {
@@ -80,11 +90,11 @@ func (RoomCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	case "limits":
 		return runLimits(args[1:], stdout, stderr)
 	}
-	fmt.Fprintf(stderr, "4genteam room: unknown verb %q; the verbs are status, stop, reseat, compact\n", args[0])
+	fmt.Fprintf(stderr, "4genteam room: unknown verb %q; the verbs are %s\n", args[0], roomVerbList())
 	return clientcmd.ExitRoomRefused
 }
 
-const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM SEAT | compact ROOM | report ROOM | metrics ROOM) [--state-dir DIR] [--socket PATH]"
+const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM SEAT | compact ROOM | queue SUB-VERB ROOM | report ROOM | metrics ROOM | limits ROOM) [--state-dir DIR] [--socket PATH]"
 
 // subUsages is one line per sub-verb, so a usage error prints the shape of the verb the caller actually
 // typed instead of the whole group's grammar.
@@ -93,6 +103,7 @@ var subUsages = map[string]string{
 	"stop":    "usage: 4genteam room stop ROOM [--state-dir DIR] [--socket PATH]",
 	"reseat":  "usage: 4genteam room reseat ROOM SEAT [--state-dir DIR] [--socket PATH]",
 	"compact": "usage: 4genteam room compact ROOM [--state-dir DIR] [--socket PATH]",
+	"queue":   queueGroupUsage,
 	"report":  reportUsage,
 	"metrics": metricsUsage,
 	"limits":  limitsUsage,
@@ -105,7 +116,7 @@ func subUsage(verb string) string {
 	return groupUsage
 }
 
-// printUsage prints the group's shape, or one sub-verb's, and then the rules that are the same for all four.
+// printUsage prints the group's shape, or one sub-verb's, and then the rules that are the same for every one.
 // The pair's resolution is spelled out with the variable each half falls back to, because "optional flag"
 // is only honest when the reader is told what fills the gap.
 func printUsage(out io.Writer, verb string) {

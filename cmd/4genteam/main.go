@@ -101,7 +101,8 @@ func refuse(stderr io.Writer, name, owner string) int {
 func commands() []clientcmd.Command {
 	registry := append(clientsync.Commands(), clientbridge.Commands()...)
 	registry = append(registry, clientlifecycle.Commands()...)
-	// The room-scoped sibling of the lifecycle verbs: `room status|stop|reseat|compact` over the same IPC,
+	// The room-scoped sibling of the lifecycle verbs: `room <sub-verb>` over the same IPC (the cutover four,
+	// the rail's queue, and the report/metrics/limits readings; see clientroom's roomVerbs for the list),
 	// with the pair (state dir + socket) printed on every run. `up` is the room's own start path and stays
 	// where it is, in clientlifecycle.
 	registry = append(registry, clientroom.Commands()...)
