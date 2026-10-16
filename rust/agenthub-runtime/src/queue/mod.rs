@@ -122,6 +122,10 @@ pub struct ListFilter {
     pub active_only: bool,
     #[serde(default)]
     pub limit: Option<usize>,
+    /// The seat asking. Set, the read is rate-limited (`list_rate_limited`); unset (the daemon's own
+    /// reads), it is not.
+    #[serde(default)]
+    pub requester_session: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -164,6 +168,35 @@ const ROW_COLUMNS: &str = "qitem_id, state, summary, body, source_session, desti
      chain_of_record, reply_to, blocked_on, wake_after_seconds, closure_reason, closure_target, \
      priority, tags, tier, ts_created, ts_updated";
 
+/// The priorities a row may carry. `high` is reserved for production breakage (`PROD_BREAK_TAG`).
+const PRIORITIES: [&str; 3] = ["low", "normal", "high"];
+const PROD_BREAK_TAG: &str = "prod-break";
+const SUMMARY_MAX_CHARS: usize = 120;
+const BODY_MAX_CHARS: usize = 600;
+/// Lowercase-kebab tags a row may carry: the kinds of row the rail is used for.
+const ALLOWED_TAGS: [&str; 18] = [
+    "prod-break",
+    "gate",
+    "ruling",
+    "status",
+    "owner-decision",
+    "report",
+    "finding",
+    "guide",
+    "docs",
+    "defect",
+    "skill-check",
+    "landing",
+    "ack",
+    "assignment",
+    "handoff",
+    "board",
+    "checkpoint",
+    "reseat",
+];
+/// A repeated identical `list` by one session inside this window, with no new row, is answered "no change".
+const LIST_REPEAT_WINDOW_SECS: i64 = 300;
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS queue_rows (
     qitem_id            TEXT PRIMARY KEY,
@@ -195,6 +228,14 @@ CREATE TABLE IF NOT EXISTS queue_transitions (
     closure_reason  TEXT,
     closure_target  TEXT
 );
+CREATE TABLE IF NOT EXISTS queue_list_marks (
+    session       TEXT NOT NULL,
+    filter_key    TEXT NOT NULL,
+    listed_at     INTEGER NOT NULL,
+    newest_qitem  TEXT NOT NULL,
+    row_count     INTEGER NOT NULL,
+    PRIMARY KEY (session, filter_key)
+);
 CREATE INDEX IF NOT EXISTS idx_queue_rows_destination ON queue_rows (destination_session, ts_created);
 CREATE INDEX IF NOT EXISTS idx_queue_rows_source ON queue_rows (source_session, ts_created);
 CREATE INDEX IF NOT EXISTS idx_queue_rows_state ON queue_rows (state, ts_created);
@@ -212,6 +253,53 @@ fn new_qitem_id() -> String {
     let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     let hex = uuid::Uuid::new_v4().simple().to_string();
     format!("qitem-{}-{}", stamp, &hex[..12])
+}
+
+/// The typed-row rules, checked before anything is written. Each refusal is one line naming the rule and its cap.
+fn validate_typed_fields(input: &CreateInput) -> Result<String, String> {
+    let priority = input.priority.as_deref().unwrap_or("normal");
+    if !PRIORITIES.contains(&priority) {
+        return Err(format!(
+            "priority rule: '{}' is not one of {}",
+            priority,
+            PRIORITIES.join(", ")
+        ));
+    }
+    for tag in &input.tags {
+        if !ALLOWED_TAGS.contains(&tag.as_str()) {
+            return Err(format!(
+                "tag rule: '{}' is not an allowed tag; allowed (lowercase kebab): {}",
+                tag,
+                ALLOWED_TAGS.join(", ")
+            ));
+        }
+    }
+    if priority == "high" && !input.tags.iter().any(|t| t == PROD_BREAK_TAG) {
+        return Err(format!(
+            "priority rule: 'high' requires tag '{}'",
+            PROD_BREAK_TAG
+        ));
+    }
+    check_summary(&input.summary)?;
+    let body_chars = input.body.chars().count();
+    if body_chars > BODY_MAX_CHARS {
+        return Err(format!(
+            "body cap: {} chars exceeds the {}-char cap",
+            body_chars, BODY_MAX_CHARS
+        ));
+    }
+    Ok(priority.to_string())
+}
+
+fn check_summary(summary: &str) -> Result<(), String> {
+    let chars = summary.chars().count();
+    if chars > SUMMARY_MAX_CHARS {
+        return Err(format!(
+            "summary cap: {} chars exceeds the {}-char cap",
+            chars, SUMMARY_MAX_CHARS
+        ));
+    }
+    Ok(())
 }
 
 fn unknown_state(value: &str) -> String {
@@ -327,11 +415,7 @@ impl QueueStore {
             .map_err(|e| format!("cannot encode chain_of_record: {}", e))?;
         let tags =
             serde_json::to_string(&input.tags).map_err(|e| format!("cannot encode tags: {}", e))?;
-        let priority = input
-            .priority
-            .clone()
-            .filter(|p| !p.trim().is_empty())
-            .unwrap_or_else(|| "normal".to_string());
+        let priority = validate_typed_fields(&input)?;
 
         let tx = self
             .conn
@@ -383,6 +467,70 @@ impl QueueStore {
         tx.commit()
             .map_err(|e| format!("cannot commit create for '{}': {}", qitem_id, e))?;
         self.show(&qitem_id)
+    }
+
+    /// `list` for a seat: the same identical read by the same session within five minutes, with no row
+    /// created since, is refused with the newest row's id instead of re-sending the rail.
+    pub fn list_rate_limited(
+        &self,
+        session: &str,
+        filter: &ListFilter,
+    ) -> Result<Vec<Row>, String> {
+        self.list_rate_limited_at(session, filter, chrono::Utc::now().timestamp())
+    }
+
+    fn list_rate_limited_at(
+        &self,
+        session: &str,
+        filter: &ListFilter,
+        now: i64,
+    ) -> Result<Vec<Row>, String> {
+        let key = serde_json::to_string(&ListFilter {
+            requester_session: None,
+            ..filter.clone()
+        })
+        .map_err(|e| format!("cannot encode list filter: {}", e))?;
+        let (newest, count): (Option<String>, i64) = self
+            .conn
+            .query_row(
+                "SELECT (SELECT qitem_id FROM queue_rows ORDER BY ts_created DESC, qitem_id DESC LIMIT 1), \
+                 COUNT(*) FROM queue_rows",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| format!("cannot read queue head: {}", e))?;
+        let newest = newest.unwrap_or_default();
+        let mark: Option<(i64, String, i64)> = self
+            .conn
+            .query_row(
+                "SELECT listed_at, newest_qitem, row_count FROM queue_list_marks \
+                 WHERE session = ?1 AND filter_key = ?2",
+                rusqlite::params![session, key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .ok();
+        if let Some((at, prev_newest, prev_count)) = mark {
+            if !newest.is_empty()
+                && now - at < LIST_REPEAT_WINDOW_SECS
+                && prev_newest == newest
+                && prev_count == count
+            {
+                return Err(format!(
+                    "list rate limit: no change since {} (same list by this session within {} min, no new rows)",
+                    newest,
+                    LIST_REPEAT_WINDOW_SECS / 60
+                ));
+            }
+        }
+        let rows = self.list(filter)?;
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO queue_list_marks (session, filter_key, listed_at, newest_qitem, row_count) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![session, key, now, newest, count],
+            )
+            .map_err(|e| format!("cannot record list mark: {}", e))?;
+        Ok(rows)
     }
 
     pub fn list(&self, filter: &ListFilter) -> Result<Vec<Row>, String> {
@@ -495,6 +643,9 @@ impl QueueStore {
             return Err("closure_reason 'handed_off_to' requires a non-empty closure_target".into());
         }
 
+        if let Some(summary) = &input.summary {
+            check_summary(summary)?;
+        }
         let has_fields = input.summary.is_some()
             || input.blocked_on.is_some()
             || input.wake_after_seconds.is_some()
@@ -1090,7 +1241,7 @@ mod tests {
                 summary: "lineage".into(),
                 chain_of_record: vec!["qitem-1".into(), "qitem-2".into()],
                 reply_to: Some("qitem-2".into()),
-                tags: vec!["ops".into(), "urgent".into()],
+                tags: vec!["status".into(), "prod-break".into()],
                 priority: Some("high".into()),
                 tier: Some("T1".into()),
                 ..Default::default()
@@ -1100,7 +1251,7 @@ mod tests {
         let shown = store.show(&row.qitem_id).expect("show");
         assert_eq!(shown.chain_of_record, vec!["qitem-1", "qitem-2"]);
         assert_eq!(shown.reply_to.as_deref(), Some("qitem-2"));
-        assert_eq!(shown.tags, vec!["ops", "urgent"]);
+        assert_eq!(shown.tags, vec!["status", "prod-break"]);
         assert_eq!(shown.priority, "high");
         assert_eq!(shown.tier.as_deref(), Some("T1"));
     }
@@ -1280,5 +1431,95 @@ mod tests {
         let from_first = first.show(&row.qitem_id).expect("show");
         assert_eq!(from_first.state, "in-progress");
         assert_eq!(from_first.transitions.len(), 2);
+    }
+
+    fn typed(priority: Option<&str>, tags: &[&str], summary: &str, body: &str) -> CreateInput {
+        CreateInput {
+            source_session: "seat-a".into(),
+            destination_session: "seat-b".into(),
+            summary: summary.into(),
+            body: body.into(),
+            priority: priority.map(|p| p.into()),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn priority_outside_the_enum_is_refused_naming_the_rule() {
+        let (_dir, store) = temp_store();
+        let err = store.create(typed(Some("urgent"), &[], "s", "")).unwrap_err();
+        assert!(err.contains("priority rule") && err.contains("low, normal, high"), "{err}");
+        assert!(store.list(&ListFilter::default()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn high_requires_the_prod_break_tag() {
+        let (_dir, store) = temp_store();
+        let err = store.create(typed(Some("high"), &["status"], "s", "")).unwrap_err();
+        assert!(err.contains("'high' requires tag 'prod-break'"), "{err}");
+        let row = store
+            .create(typed(Some("high"), &["prod-break"], "s", ""))
+            .expect("high with prod-break");
+        assert_eq!(row.priority, "high");
+    }
+
+    #[test]
+    fn summary_over_120_chars_is_refused() {
+        let (_dir, store) = temp_store();
+        store.create(typed(None, &[], &"a".repeat(120), "")).expect("120 fits");
+        let err = store.create(typed(None, &[], &"a".repeat(121), "")).unwrap_err();
+        assert!(err.contains("summary cap") && err.contains("120"), "{err}");
+    }
+
+    #[test]
+    fn summary_update_over_120_chars_is_refused() {
+        let (_dir, store) = temp_store();
+        let row = new_row(&store, "seat-a", "seat-b", "short");
+        let err = store
+            .update(UpdateInput {
+                qitem_id: row.qitem_id,
+                actor_session: "seat-a".into(),
+                summary: Some("a".repeat(121)),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.contains("summary cap"), "{err}");
+    }
+
+    #[test]
+    fn body_over_600_chars_is_refused() {
+        let (_dir, store) = temp_store();
+        store.create(typed(None, &[], "s", &"b".repeat(600))).expect("600 fits");
+        let err = store.create(typed(None, &[], "s", &"b".repeat(601))).unwrap_err();
+        assert!(err.contains("body cap") && err.contains("600"), "{err}");
+    }
+
+    #[test]
+    fn tags_outside_the_allowed_kebab_set_are_refused() {
+        let (_dir, store) = temp_store();
+        for bad in ["urgent", "GATE", "Owner_Decision"] {
+            let err = store.create(typed(None, &[bad], "s", "")).unwrap_err();
+            assert!(err.contains("tag rule") && err.contains(bad), "{err}");
+        }
+        store.create(typed(None, &["gate", "owner-decision"], "s", "")).expect("allowed tags");
+    }
+
+    #[test]
+    fn repeated_identical_list_with_no_new_row_is_answered_no_change() {
+        let (_dir, store) = temp_store();
+        let first = new_row(&store, "seat-a", "seat-b", "one");
+        let filter = ListFilter::default();
+        assert_eq!(store.list_rate_limited_at("seat-x", &filter, 1000).unwrap().len(), 1);
+        let err = store.list_rate_limited_at("seat-x", &filter, 1100).unwrap_err();
+        assert!(err.contains(&format!("no change since {}", first.qitem_id)), "{err}");
+        // another session, another filter, and a later window are each answered in full
+        assert!(store.list_rate_limited_at("seat-y", &filter, 1100).is_ok());
+        let other = ListFilter { active_only: true, ..Default::default() };
+        assert!(store.list_rate_limited_at("seat-x", &other, 1100).is_ok());
+        assert!(store.list_rate_limited_at("seat-x", &filter, 1000 + LIST_REPEAT_WINDOW_SECS).is_ok());
+        // a new row ends the limit
+        new_row(&store, "seat-a", "seat-b", "two");
+        assert_eq!(store.list_rate_limited_at("seat-x", &filter, 1400).unwrap().len(), 2);
     }
 }

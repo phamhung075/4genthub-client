@@ -56,7 +56,7 @@ const queueGroupUsage = `usage: 4genteam room queue (list ROOM | show ROOM QITEM
 var queueSubUsages = map[string]string{
 	"list":   "usage: 4genteam room queue list ROOM [--destination SESSION] [--source SESSION] [--state S[,S]] [--active-only] [--limit N] [--state-dir DIR] [--socket PATH]",
 	"show":   "usage: 4genteam room queue show ROOM QITEM_ID [--state-dir DIR] [--socket PATH]",
-	"create": "usage: 4genteam room queue create ROOM --to SESSION --summary TEXT [--body TEXT] [--priority P] [--reply-to QITEM_ID] [--tag T] [--state-dir DIR] [--socket PATH]",
+	"create": "usage: 4genteam room queue create ROOM --to SESSION --summary TEXT<=120 [--body TEXT<=600] [--priority low|normal|high] [--reply-to QITEM_ID] [--tag T] [--state-dir DIR] [--socket PATH]",
 	"update": "usage: 4genteam room queue update ROOM QITEM_ID [--state S] [--note TEXT] [--summary TEXT] [--closure-reason R] [--closure-target SESSION] [--blocked-on QITEM_ID] [--wake-after SECONDS] [--state-dir DIR] [--socket PATH]",
 	"claim":  "usage: 4genteam room queue claim ROOM QITEM_ID [--state-dir DIR] [--socket PATH]",
 	"close":  "usage: 4genteam room queue close ROOM QITEM_ID --reason R [--target SESSION] [--note TEXT] [--state-dir DIR] [--socket PATH]",
@@ -111,6 +111,11 @@ func printQueueUsage(out io.Writer, sub string) {
 	fmt.Fprintln(out, "re-read from its store, so the state printed is the state the next read shows. list prints")
 	fmt.Fprintln(out, "<qitem_id> <state> <priority|-> <summary>, one row per line; show prints a row's own fields and then")
 	fmt.Fprintln(out, "its transitions oldest to newest.")
+	fmt.Fprintln(out, "\nRows are typed; the daemon refuses a create that breaks a rule and names the rule and its cap: priority is")
+	fmt.Fprintln(out, "low, normal or high (default normal); high requires --tag prod-break; summary <= 120 chars, body <= 600;")
+	fmt.Fprintln(out, "tags are lowercase kebab from "+strings.Join(clientruntime.QueueTags, ", ")+".")
+	fmt.Fprintln(out, "A repeated identical list by the same session within 5 minutes with no new row is answered")
+	fmt.Fprintln(out, "`no change since <qitem>` (exit 2); wake on pushes instead of polling.")
 	fmt.Fprintln(out, "\ncreate, update, claim and close act as THE SEAT'S OWN SESSION, read from $"+sessionEnv+". When that variable")
 	fmt.Fprintln(out, "is unset the verb refuses and asks nothing of the daemon: the actor is never guessed and never taken")
 	fmt.Fprintln(out, "from a flag. A write prints the row it was answered with and the transition it appended, because a")
@@ -436,6 +441,9 @@ func runQueueList(args []string, stdout, stderr io.Writer) int {
 			return clientcmd.ExitRoomRefused
 		}
 		filter.Limit = &limit
+	}
+	if session := strings.TrimSpace(os.Getenv(sessionEnv)); session != "" {
+		filter.RequesterSession = &session
 	}
 	run.printPair(stdout)
 	rows, err := run.client.QueueList(run.room, filter)

@@ -223,7 +223,10 @@ impl IpcServer {
             },
 
             IpcRequest::QueueList { room, filter } => match supervisor.queue_store(&room) {
-                Ok(store) => match store.list(&filter) {
+                Ok(store) => match match filter.requester_session.clone() {
+                    Some(session) => store.list_rate_limited(&session, &filter),
+                    None => store.list(&filter),
+                } {
                     Ok(rows) => serde_json::to_value(rows)
                         .map(IpcResponse::success)
                         .unwrap_or_else(|e| IpcResponse::err(format!("serialize rows: {e}"))),

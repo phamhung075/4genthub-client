@@ -16,6 +16,9 @@ import "encoding/json"
 //     `#[serde(default)]`. Everything else always rides the frame, because the daemon's deserializer treats
 //     those as required and a shorter struct is a different request than the caller meant.
 
+// QueueTags are the tags a row may carry, the daemon's own list (queue/mod.rs ALLOWED_TAGS).
+var QueueTags = []string{"prod-break", "gate", "ruling", "status", "owner-decision", "report", "finding", "guide", "docs", "defect", "skill-check", "landing", "ack", "assignment", "handoff", "board", "checkpoint", "reseat"}
+
 // QueueStates are the five states a row may occupy, in the daemon's own order: handed-off is intermediate
 // (acceptance pending), done is terminal.
 var QueueStates = []string{"pending", "in-progress", "blocked", "handed-off", "done"}
@@ -98,6 +101,8 @@ type QueueListFilter struct {
 	// ActiveOnly reads the states an owner still owes something on: pending, in-progress, blocked.
 	ActiveOnly bool   `json:"active_only,omitempty"`
 	Limit      *int64 `json:"limit,omitempty"`
+	// RequesterSession is the seat asking; set, the daemon rate-limits an identical repeat inside 5 minutes.
+	RequesterSession *string `json:"requester_session,omitempty"`
 }
 
 // QueueUpdateInput appends a transition to a row and returns the row as the store now holds it. A

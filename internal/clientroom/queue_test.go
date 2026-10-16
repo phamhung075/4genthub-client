@@ -46,6 +46,7 @@ func queueTransitionFrame(id int64, ts, from, state, actor, note string) string 
 // <priority|-> <summary>` per row IN THE ORDER THE DAEMON SENT THEM, with an empty priority rendered as `-`
 // rather than as a gap a reader would take for a missing field.
 func TestRoomQueueListPrintsOneLinePerRow(t *testing.T) {
+	t.Setenv(sessionEnv, "")
 	daemon := newFakeDaemon(t, map[string]string{
 		"QueueList": okData("[" +
 			queueRowFrame("qitem-bbb", "in-progress", "high", "second seat's row") + "," +
@@ -286,6 +287,7 @@ func TestRoomQueueRefusalsCarryTheRoomContractsCodes(t *testing.T) {
 	assertRequests(t, refused, `{"action":"QueueClaim","payload":{"actor_session":"`+testSeat+`","qitem_id":"qitem-x","room":"room-a"}}`)
 
 	const roomRefusal = "no such room 'nope': /tmp/rooms/nope is not a room directory"
+	t.Setenv(sessionEnv, testSeat)
 	unknown := newFakeDaemon(t, map[string]string{"QueueList": daemonError(roomRefusal)})
 	code, stdout, stderr = runRoom(t, unknown.args("queue", "list", "nope")...)
 	if code != clientcmd.ExitRoomRefused {
@@ -297,7 +299,7 @@ func TestRoomQueueRefusalsCarryTheRoomContractsCodes(t *testing.T) {
 	if !strings.Contains(stdout, "room: nope@"+unknown.stateDir) {
 		t.Errorf("stdout = %q, want the pair for the room that was asked about", stdout)
 	}
-	assertRequests(t, unknown, `{"action":"QueueList","payload":{"filter":{},"room":"nope"}}`)
+	assertRequests(t, unknown, `{"action":"QueueList","payload":{"filter":{"requester_session":"`+testSeat+`"},"room":"nope"}}`)
 }
 
 func TestAQueueItemIdInTheRoomPlaceNamesTheRoomFirstRule(t *testing.T) {
@@ -307,5 +309,28 @@ func TestAQueueItemIdInTheRoomPlaceNamesTheRoomFirstRule(t *testing.T) {
 	}
 	if got := queueArgumentRefusal(nil, []string{"ROOM", "QITEM_ID"}); got != "a ROOM is required" {
 		t.Fatalf("no arguments keeps the plain refusal, got %q", got)
+	}
+}
+
+// TestRoomQueueListNamesTheSeatSoTheDaemonCanRateLimit pins that a seat's own list carries its session as
+// requester_session: without it the daemon cannot tell a polling seat from its own internal reads.
+func TestRoomQueueListNamesTheSeatSoTheDaemonCanRateLimit(t *testing.T) {
+	t.Setenv(sessionEnv, testSeat)
+	daemon := newFakeDaemon(t, map[string]string{"QueueList": okData("[]")})
+	code, _, stderr := runRoom(t, daemon.args("queue", "list", testRoom)...)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d (stderr %q)", code, stderr)
+	}
+	assertRequests(t, daemon, `{"action":"QueueList","payload":{"filter":{"requester_session":"`+testSeat+`"},"room":"room-a"}}`)
+}
+
+// TestQueueUsageStatesTheTypedRowRules pins that the help names the caps a create is refused on.
+func TestQueueUsageStatesTheTypedRowRules(t *testing.T) {
+	var out strings.Builder
+	printQueueUsage(&out, "create")
+	for _, want := range []string{"low|normal|high", "prod-break", "<= 120", "body <= 600", "no change since"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("usage lacks %q:\n%s", want, out.String())
+		}
 	}
 }
