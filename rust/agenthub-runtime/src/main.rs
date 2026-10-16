@@ -135,6 +135,24 @@ pub fn own_tmux_root(state_dir: &std::path::Path) -> std::io::Result<std::path::
     Ok(root)
 }
 
+/// Take the group's and the world's bits out of everything this runtime creates, once, before anything
+/// creates anything.
+///
+/// WHY ONE CALL AND NOT A MODE PER SITE: the state root holds the seats' own words - a transcript is a
+/// durable copy of whatever a seat printed - and the transcript is written by the AGENT inside a pane, not by
+/// this runtime, so no mode set here could reach it. The umask IS reachable, because it is inherited: this
+/// process, the tmux client it starts, the server that client creates, each pane's shell and the agent in it.
+/// Measured 2026-10-16: the daemon and every seat ran with `0022`, so `run/<seat>.state.json`, the nudge logs,
+/// `rooms/<room>/logs/<seat>.jsonl`, `queue.sqlite`, `spec.json` and `seats/<seat>/mcp.json` were `0644`,
+/// 138 of 163 seat transcripts were `0644` over `0755` directories, and 13712 of 20937 files under the state
+/// root were readable by every local user on the box. The client sets the same bits for its own files
+/// (`clientenv.RestrictUmask`); the two calls are the whole tree, because every other writer is a child of one
+/// of these processes.
+pub fn restrict_umask() {
+    #[cfg(unix)]
+    nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
+}
+
 #[derive(Parser)]
 #[command(name = "agenthub-runtime")]
 #[command(about = "Native Rust execution engine for 4genthub seats")]
@@ -187,6 +205,10 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Before anything creates anything: see `restrict_umask` for the measurement and for why one call here
+    // covers the transcripts the agents write, which no per-site mode could.
+    restrict_umask();
+
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
         .finish();

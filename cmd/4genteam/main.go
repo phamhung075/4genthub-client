@@ -126,6 +126,10 @@ func commands() []clientcmd.Command {
 }
 
 func main() {
+	// Before anything creates anything, and before the env file is read: every file this client writes - the
+	// safeguard heartbeats, the logs, the seat directories, and through the runtime it starts, the agents'
+	// transcripts - takes its mode bits from this one call. See `clientenv.RestrictUmask`.
+	clientenv.RestrictUmask()
 	// The client's ONE env file, loaded once, with a variable already in the environment winning.
 	if path, err := clientenv.DefaultPath(); err == nil {
 		_ = clientenv.Load(path)

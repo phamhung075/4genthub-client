@@ -202,6 +202,10 @@ var WriteHeartbeat = writeHeartbeatFile
 
 // writeHeartbeatFile is the write itself. It goes through a temporary file and a rename: a reader must
 // never observe a half-written beat and read "no heartbeat" where there is one.
+//
+// 0600, not 0644: a heartbeat is state under the state root like any other file there, and an explicit mode is
+// the one thing the process umask (`clientenv.RestrictUmask`) cannot clamp - 0644 here stayed 0644 whatever the
+// umask said. Measured 2026-10-16: the guard heartbeats were world-readable with everything else.
 func writeHeartbeatFile(safeguard, rig string) error {
 	path, err := HeartbeatPath(safeguard, rig)
 	if err != nil {
@@ -225,7 +229,7 @@ func writeHeartbeatFile(safeguard, rig string) error {
 	if _, err := temp.Write(body); err != nil {
 		return err
 	}
-	if err := temp.Chmod(0o644); err != nil {
+	if err := temp.Chmod(0o600); err != nil {
 		return err
 	}
 	if err := temp.Close(); err != nil {

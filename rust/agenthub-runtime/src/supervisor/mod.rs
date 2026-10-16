@@ -355,6 +355,12 @@ fn install_seat_skills(state_dir: &Path, room: &str, seat: &str, seat_dir: &Path
 
 /// Copy a directory tree, replacing what is at `to`. Every file under a skill goes with it (a skill may
 /// carry baselines and references beside its SKILL.md).
+///
+/// THE COPY DECIDES THESE MODES, NOT THE PROCESS'S UMASK: `fs::copy` carries the SOURCE's permission bits
+/// across, so a skill that ships `0644` in the rig landed `0644` in the seat's own tree whatever the umask
+/// said - measured on a scratch room 2026-10-16, `rooms/<room>/seats/<seat>/skills/**` was the one part of
+/// the state root `restrict_umask` did not reach. The group's and the world's bits are dropped here and the
+/// owner's are kept, so an asset that ships executable stays executable for its owner and nothing more.
 fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
     if to.exists() {
         fs::remove_dir_all(to)?;
@@ -367,6 +373,12 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
             copy_dir(&entry.path(), &dest)?;
         } else {
             fs::copy(entry.path(), &dest)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(entry.path())?.permissions().mode() & 0o700;
+                fs::set_permissions(&dest, fs::Permissions::from_mode(mode))?;
+            }
         }
     }
     Ok(())
@@ -2790,6 +2802,46 @@ mod tests {
         names.sort();
         assert_eq!(names, ["both", "common", "own-skill", "room-skill"], "no stale, no other seat's skill");
         assert!(seat_dir.join("skills/own-skill/baseline.json").is_file(), "files beside SKILL.md go too");
+    }
+
+    /// A skill file's mode comes from the COPY, not from this process's umask: the source's bits are decided by
+    /// whoever wrote it in the rig, and a rig that ships `0644` shipped it into every seat's own tree -
+    /// measured on a scratch room 2026-10-16, `rooms/<room>/seats/<seat>/skills/**` was the one part of the
+    /// state root the umask did not reach. The source's bits are set explicitly here so the case means the same
+    /// thing whatever this test process's umask happens to be.
+    #[cfg(unix)]
+    #[test]
+    fn an_installed_skill_keeps_the_owners_bits_and_drops_the_rest() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &Path, bits: u32| {
+            fs::set_permissions(path, fs::Permissions::from_mode(bits)).expect("set the source mode");
+        };
+        let perm = |path: PathBuf| fs::metadata(path).expect("mode").permissions().mode() & 0o777;
+
+        let state = scratch("skills-modes");
+        let tree = scratch("skills-modes-tree");
+        let source = tree.join("share/common");
+        fs::create_dir_all(&source).expect("dir");
+        fs::write(source.join("SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n").expect("skill");
+        fs::write(source.join("polluter.sh"), "#!/bin/sh\n").expect("script");
+        mode(&source.join("SKILL.md"), 0o644);
+        mode(&source.join("polluter.sh"), 0o755);
+        fs::write(state.join(".env"), format!("{SKILLS_ROOT_ENV}={}\n", tree.display())).expect("env");
+
+        let seat_dir = state.join("rooms/r/seats/dev");
+        install_seat_skills(&state, "r", "dev", &seat_dir).expect("install");
+
+        let installed = seat_dir.join("skills/common");
+        assert_eq!(
+            perm(installed.join("SKILL.md")),
+            0o600,
+            "a copied skill's file must not keep the rig's 0644"
+        );
+        assert_eq!(
+            perm(installed.join("polluter.sh")),
+            0o700,
+            "the owner's execute bit is kept, and nothing beyond it"
+        );
     }
 
     /// The nudge pass enumerates the rooms that are on disk. With no tmux session behind any seat, no seat

@@ -548,6 +548,40 @@ mod launch_env_tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    /// The umask the runtime takes reaches a pane's command, and through it the agent that writes the
+    /// transcripts.
+    ///
+    /// WHY THE PANE AND NOT THIS PROCESS: the runtime's own files are the small half of the state root. The
+    /// large half is written by the AGENT inside a pane - a seat's transcript is the newest `*.jsonl` under its
+    /// sessions directory, and it records whatever the seat printed - so the honest measurement is what a
+    /// command RUN IN A PANE reports, not what this test process holds. The chain the assertion rides is
+    /// fork/exec: this process, the tmux client it starts, the server that client creates, the pane's shell.
+    #[test]
+    fn a_pane_runs_under_the_umask_the_runtime_took() {
+        crate::restrict_umask();
+        let _server = super::test_servers::own("umask-chain");
+        let dir = std::env::temp_dir().join(format!("pty-umask-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let session = format!("pty-umask-{}", std::process::id());
+        let reported = dir.join("umask");
+        let cmd = format!("sh -c 'umask > {}; sleep 5'", reported.display());
+        TerminalManager::launch_session(&session, &dir, &cmd, &HashMap::new()).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !reported.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            fs::read_to_string(&reported).unwrap_or_default().trim(),
+            "0077",
+            "a pane's command must create nothing the group or another user can read"
+        );
+
+        let _ = TerminalManager::stop_session(&session);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// The owner's own predicate, kept as written: a `KEY=VALUE` whose key names a `TOKEN`, `KEY`, `SECRET` or
     /// `PASSWORD`. The bootstrap's own command has no `=` on it at all, so a hit here is a seat's environment.
     fn credential_shaped(arg: &str) -> bool {

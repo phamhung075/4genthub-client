@@ -236,6 +236,11 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	if _, err := os.Stat(rigScoped); err != nil {
 		t.Errorf("the rig-scoped beat is not at %s: %v", rigScoped, err)
 	}
+	// The beat is state under the state root, and an explicit mode is what a process umask cannot clamp: this
+	// was 0644 - readable by every local user - until the room's whole tree went private.
+	if info, err := os.Stat(rigScoped); err == nil && info.Mode().Perm() != 0o600 {
+		t.Errorf("the heartbeat's mode = %v, want 0600", info.Mode().Perm())
+	}
 	machine := filepath.Join(f.dir, "heartbeat", "agent.json")
 	if _, err := os.Stat(machine); err != nil {
 		t.Errorf("agent's own beat is not at %s: %v", machine, err)
