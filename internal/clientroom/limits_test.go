@@ -248,7 +248,9 @@ func TestTheOwnerRaisesTheCeilingAndAnAlreadyOffCeilingIsNotARaise(t *testing.T)
 // command line - `AGENTHUB_SESSION_NAME= 4genteam room limits ROOM --usd 999`, which every shell accepts - is
 // still a seat. Measured 2026-10-16 at d964b8b: through an empty marker the same seat wrote 777 while its own
 // set-value attempt was refused, because the check read os.Getenv and could not tell an empty marker from an
-// absent one. The guard's `FOO= ` hole is the same three characters seen from the other side.
+// absent one. The guard's `FOO= ` hole is the same three characters seen from the other side. A WHITESPACE-ONLY
+// marker is the same class and is pinned with it: the check trimmed before comparing, so `'   '` was the owner
+// too, and what decides now is whether the marker is THERE, not what it holds.
 func TestAnEmptyMarkerIsStillASeat(t *testing.T) {
 	daemon := newFakeDaemon(t, map[string]string{})
 	dir := roomDir(t, daemon.stateDir)
@@ -258,28 +260,34 @@ func TestAnEmptyMarkerIsStillASeat(t *testing.T) {
 	}
 	want := roombudget.Limits{Enabled: true, USDPerSeat24h: 25, CallsPerSeatMin: 300}
 
-	t.Setenv(sessionEnv, "")
-	for _, flags := range [][]string{{"--usd", "999"}, {"--calls", "301"}, {"--off"}} {
-		code, stdout, stderr := runRoom(t, append(daemon.args("limits", testRoom), flags...)...)
-		if code != clientcmd.ExitRoomRefused {
-			t.Errorf("an empty marker asking %v: exit %d, want %d (stderr %q)", flags, code, clientcmd.ExitRoomRefused, stderr)
-		}
-		if !strings.Contains(stderr, sessionEnv) || !strings.Contains(stderr, "OWNER") {
-			t.Errorf("an empty marker refusing %v said %q, want the marker and who may raise it named", flags, stderr)
-		}
-		if stdout != "" {
-			t.Errorf("an empty marker asking %v printed %q, want nothing", flags, stdout)
-		}
-		if got := loadLimits(t, dir); got != want {
-			t.Fatalf("an empty marker asking %v left %+v, want the ceilings unchanged at %+v", flags, got, want)
+	for _, spelling := range []string{"", "   "} {
+		t.Setenv(sessionEnv, spelling)
+		for _, flags := range [][]string{{"--usd", "999"}, {"--calls", "301"}, {"--off"}} {
+			code, stdout, stderr := runRoom(t, append(daemon.args("limits", testRoom), flags...)...)
+			if code != clientcmd.ExitRoomRefused {
+				t.Errorf("a marker of %q asking %v: exit %d, want %d (stderr %q)", spelling, flags, code, clientcmd.ExitRoomRefused, stderr)
+			}
+			if !strings.Contains(stderr, sessionEnv) || !strings.Contains(stderr, "OWNER") {
+				t.Errorf("a marker of %q refusing %v said %q, want the marker and who may raise it named", spelling, flags, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("a marker of %q asking %v printed %q, want nothing", spelling, flags, stdout)
+			}
+			if got := loadLimits(t, dir); got != want {
+				t.Fatalf("a marker of %q asking %v left %+v, want the ceilings unchanged at %+v", spelling, flags, got, want)
+			}
 		}
 	}
 
-	// Tightening through the same empty marker still passes: the rule is about a RAISE, not about the marker.
-	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--usd", "10")...); code != clientcmd.ExitOK {
-		t.Errorf("an empty marker LOWERING the ceiling: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
-	}
-	if got := loadLimits(t, dir); got.USDPerSeat24h != 10 {
-		t.Errorf("limits = %+v, want the seat's own 10 written through an empty marker", got)
+	// Tightening through the same blank markers still passes: the rule is about a RAISE, not about the marker.
+	// The second run writes the same 10 over the same 10, which raises nothing either.
+	for _, spelling := range []string{"", "   "} {
+		t.Setenv(sessionEnv, spelling)
+		if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--usd", "10")...); code != clientcmd.ExitOK {
+			t.Errorf("a marker of %q LOWERING the ceiling: exit %d, want %d (stderr %q)", spelling, code, clientcmd.ExitOK, stderr)
+		}
+		if got := loadLimits(t, dir); got.USDPerSeat24h != 10 {
+			t.Errorf("limits = %+v, want the seat's own 10 written through a marker of %q", got, spelling)
+		}
 	}
 }
