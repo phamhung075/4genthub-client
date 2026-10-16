@@ -95,6 +95,21 @@ func closeWorkspaces(ctx context.Context, label string) error {
 	return nil
 }
 
+// CloseRigWorkspaces closes the grid and lead workspaces of a rig. Their panes run the `feed` and `input`
+// helpers, which poll forever, so a stop that leaves the workspaces open leaves those helpers running. A
+// machine without herdr has no such workspaces.
+func CloseRigWorkspaces(ctx context.Context, rig string) error {
+	if requireHerdr() != nil {
+		return nil
+	}
+	for _, label := range []string{rig + " grid", rig + " lead"} {
+		if err := closeWorkspaces(ctx, label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func objectList(result map[string]any, key string) []map[string]any {
 	raw, ok := result[key].([]any)
 	if !ok {

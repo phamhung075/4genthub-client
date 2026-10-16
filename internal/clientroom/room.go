@@ -32,7 +32,12 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 )
+
+// closeWatch closes the room's herdr watch workspaces, whose panes run the feed and input helpers; a var so
+// the tests need no herdr.
+var closeWatch = clientwatch.CloseRigWorkspaces
 
 // Commands is what the dispatcher registers from this package: one verb, `room`, whose Run switches over
 // the four sub-verbs - the shape clientseat and clientteam already register, so the dispatcher's own list
@@ -48,7 +53,7 @@ func (RoomCommand) Summary() string {
 	return "one room's lifecycle over the runtime's own socket: status, stop, reseat, compact"
 }
 
-func (RoomCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
+func (RoomCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "4genteam room: pick a verb: status, stop, reseat, compact")
 		return clientcmd.ExitRoomRefused
@@ -61,7 +66,7 @@ func (RoomCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 	case "status":
 		return runStatus(args[1:], stdout, stderr)
 	case "stop":
-		return runStop(args[1:], stdout, stderr)
+		return runStop(ctx, args[1:], stdout, stderr)
 	case "reseat":
 		return runReseat(args[1:], stdout, stderr)
 	case "compact":
@@ -320,7 +325,8 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	return clientcmd.ExitOK
 }
 
-// runStop sends StopRoom and NOTHING ELSE.
+// runStop sends StopRoom and closes the room's own herdr watch workspaces, whose feed and input helpers would
+// otherwise outlive it; it does nothing else.
 //
 // One request is the whole contract, and the reason is the must-not list (design §3): StopRoom kills exactly
 // the sessions of the room's own spec.json - `agenthub--<room>--<seat>`, one by one - so this verb must not
@@ -329,7 +335,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 //
 // The room's directory is left in place and the report says so: spec.json, seats/ and logs/ are what makes
 // the room startable again, and deleting them is a separate verb's business, not a stop's.
-func runStop(args []string, stdout, stderr io.Writer) int {
+func runStop(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	inv, code, ok := parseInvocation("stop", args, 1, stdout, stderr)
 	if !ok {
 		return code
@@ -353,6 +359,9 @@ func runStop(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := inv.client.StopRoom(inv.room); err != nil {
 		return reportDaemon(stderr, "stop", err)
+	}
+	if err := closeWatch(ctx, inv.room); err != nil {
+		fmt.Fprintf(stderr, "4genteam room stop: the watch workspaces of %s could not be closed: %v\n", inv.room, err)
 	}
 	fmt.Fprintf(stdout, "room %s: stopped, and no longer meant to run\n", inv.room)
 	fmt.Fprintf(stdout, "the room's directory was left in place under %s: spec.json, seats/ and logs/ are still there, so the room can be started again\n", inv.stateDir)

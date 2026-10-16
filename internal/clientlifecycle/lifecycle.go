@@ -30,6 +30,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/clientteam"
+	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
 
@@ -772,7 +773,10 @@ func (stopCommand) Summary() string {
 	return "stop agent and its children (a machine-wide stop: compact, watchdog, messages, bridge)"
 }
 
-func (stopCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
+// closeWatch closes the rig's herdr watch workspaces; a var so the tests need no herdr.
+var closeWatch = clientwatch.CloseRigWorkspaces
+
+func (stopCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, stopUsage,
 			"Stop agent. Its children - the compaction supervisors, the watchdogs and the bridge - stop with it,\n"+
@@ -785,6 +789,9 @@ func (stopCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 		return clientcmd.ExitUsage
 	}
 	stopAgent(name, stdout)
+	if err := closeWatch(ctx, name); err != nil {
+		fmt.Fprintf(stderr, "4genteam stop: the watch workspaces of %s could not be closed: %v\n", name, err)
+	}
 	return clientcmd.ExitOK
 }
 
