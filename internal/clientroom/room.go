@@ -142,11 +142,10 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "--room ROOM` enforces: the ceilings a seat may spend in 24h and make in a minute. The limits SHIP OFF,")
 	fmt.Fprintln(out, "and while they are off the safeguard measures nothing. A SEAT MAY NOT RAISE a ceiling or turn the ceilings")
 	fmt.Fprintln(out, "off - this verb refuses that, naming $AGENTHUB_SESSION_NAME, while a seat may still LOWER one or turn them")
-	fmt.Fprintln(out, "ON; the OWNER raises one, running this with that variable unset. Writing the FILE is not closed by that:")
-	fmt.Fprintln(out, "the seat guard judges the shape of a write and never who is asking, so the shapes it does not parse (`sed")
-	fmt.Fprintln(out, "-i`, `rm`, `truncate`, `dd of=`, any program) pass, and only an edit tool and a redirect are refused -")
-	fmt.Fprintln(out, "by worktree-scope, because the state root lies outside a seat's worktree. The rules that would refuse the")
-	fmt.Fprintln(out, "rest are written and parked for the owner.")
+	fmt.Fprintln(out, "ON; the OWNER raises one, running this with that variable unset. The FILE is the seat guard's second layer:")
+	fmt.Fprintln(out, "it refuses an edit tool's path, a redirect, `tee`, `cp`/`mv`/`install`/`rsync`/`ln`,")
+	fmt.Fprintln(out, "`rm`/`unlink`/`truncate`/`shred`, `sed -i`/`perl -i` and `dd of=` on this file. It does NOT see a path")
+	fmt.Fprintln(out, "opened from inside a program (`python3 -c`, `node -e`) or spelled through a variable (measured 2026-10-16).")
 }
 
 // invocation is one sub-verb's resolved arguments: the room as the caller named it, the seat for the one

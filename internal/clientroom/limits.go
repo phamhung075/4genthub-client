@@ -1,10 +1,12 @@
 // The budget a room runs under: the ceilings the room's safeguard enforces, written by the owner and read by
-// `budget-run`. The file is the room's own - rooms/<room>/limits.json - and the SEAT the ceilings bind may not
-// RAISE them: this verb refuses a raise, and `--off`, when a seat asks (raisesTheCeiling; the usage carries the
-// matrix), because a ceiling the runaway can lift in one command stops nobody. What is NOT closed is the file
-// itself - the seat guard judges the SHAPE of a write and never who is asking, so every shape it does not parse
-// passes - and the rules that would refuse those are written and parked for the owner. The marker is
-// $AGENTHUB_SESSION_NAME: a speed bump, not a wall, since a seat that unsets it claims to be the owner.
+// `budget-run`. The file is the room's own - rooms/<room>/limits.json - and a SEAT may not raise what bounds it.
+// Two independent layers refuse a seat's write, and neither is the other's: THIS VERB refuses a raise, or
+// `--off`, asked for by a seat, naming $AGENTHUB_SESSION_NAME (raisesTheCeiling; the usage carries the matrix),
+// and the SEAT GUARD refuses the write SHAPES it parses on the room's limits.json (an edit tool's path, a
+// redirect, `tee`, cp/mv/install/rsync/ln, rm/unlink/truncate/shred, `sed -i`/`perl -i`, `dd of=`). What neither
+// sees is a path opened from inside a program (`python3 -c "open(...)"`, `node -e "writeFileSync(...)"`) or
+// spelled through a variable: measured 2026-10-16 at bf43cce, both pass. The marker is a speed bump rather than
+// a wall - a seat that unsets $AGENTHUB_SESSION_NAME claims to be the owner.
 package clientroom
 
 import (
@@ -38,9 +40,10 @@ and OFF is how a room says it has none.
 
 A SEAT MAY NOT RAISE A CEILING OR TURN THE CEILINGS OFF: this verb refuses that, naming $AGENTHUB_SESSION_NAME,
 because a ceiling exists to stop the seat it is measured against. A seat may still LOWER one or turn them ON, and
-the OWNER raises one by running this with $AGENTHUB_SESSION_NAME unset. Writing the FILE directly is a different
-matter and is NOT closed: the seat guard judges the shape of a write, never who is asking, so the shapes it does
-not parse (sed -i, rm, truncate, dd of=, any program) pass until the parked patch lands.`
+the OWNER raises one by running this with $AGENTHUB_SESSION_NAME unset. Writing the FILE directly is refused by a
+SECOND layer, the SEAT GUARD: it refuses an edit tool's path, a redirect, tee, cp/mv/install/rsync/ln,
+rm/unlink/truncate/shred, sed -i/perl -i and dd of= on this file. What it does not see is a path opened from
+inside a program (python3 -c, node -e) or spelled through a variable - measured 2026-10-16.`
 
 func runLimits(args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {

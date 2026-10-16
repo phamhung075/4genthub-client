@@ -18,12 +18,12 @@ import (
 const (
 	// Name is the limits file inside the ROOM's own directory.
 	Name = "limits.json"
-	// ParkedName is the record a safeguard leaves in the SEAT's own directory. NOTHING protects it: the guard's
-	// write rules see an edit tool's path and a bash redirect/`tee`/`cp`/`mv` target, and the seat's own
-	// directory is inside worktree-scope, so EVERY shape passes - an edit tool, a redirect, `sed -i`, `rm`,
-	// `truncate`, `dd of=` (each measured 2026-10-16). The record is load-bearing - it is what the routes that
-	// refuse a parked seat work read - so a seat that removes it unparks itself. The rules that would refuse
-	// those shapes are written and parked for the owner.
+	// ParkedName is the record a safeguard leaves in the SEAT's own directory. The record is load-bearing - it is
+	// what the routes that refuse a parked seat work read - so the guard names it in its PROTECTED PATHS: an edit
+	// tool's path, a redirect, `tee`, `cp`/`mv`/`install`/`rsync`/`ln`, `rm`/`unlink`/`truncate`/`shred`,
+	// `sed -i`/`perl -i` and `dd of=` on it are all refused. What it does NOT see is a path opened from inside a
+	// program (`python3 -c`, `node -e`) or spelled through a variable - measured 2026-10-16, both pass - so a seat
+	// that wants to unpark itself still has a route the guard cannot read.
 	ParkedName = "parked.json"
 
 	// SpendWindow and RateWindow are the two windows the ceilings are counted over, and they are the
