@@ -36,7 +36,29 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
-const reportUsage = "usage: 4genteam room report ROOM [--since 24h] [--json] [--state-dir DIR] [--socket PATH]"
+const reportUsage = `usage: 4genteam room report ROOM [--since 24h] [--json] [--state-dir DIR] [--socket PATH]
+
+One read-only measurement of one room over one window; it writes nothing. The numbers come from the room's own
+records rather than an ad-hoc script, so the five targets below are read the same way twice, and a source that
+cannot be read prints "unavailable (<reason>)" instead of a zero.
+
+Four sources: the seats' session transcripts (every assistant turn's cost, classified by its FIRST tool call)
+and tool-calls.jsonl (the guard-blocked count); the room's queue, asked from the runtime daemon - counts and
+lengths only, never a body; and git log --since of the repository the seats' session headers name most often,
+where a commit's Seat: trailer names the seat that made it, Task: names a hub task, and a commit whose every
+file is documentation counts as docs-only.
+
+The window is --since: 24h by default, and 90m or 7d are read the same way. It is LIVE - two runs minutes
+apart answer differently - and --json prints the same answer as one object.
+
+Per seat and for the room: USD cost, turns, commits, docs-only share, queue rows, high-priority share, the
+guard-blocked count, and the cost share across the nine activity classes room metrics records.
+
+The five targets, each PASS, FAIL or n/a: docs-only commits % < 15, queue rows/day < 300, high-priority rows %
+< 20, measuring-bash cost % < 25, code-edit cost % > 30. A sixth check this verb adds is not one of the five:
+tasks closed after a commit that cites them, wanted 0. Below them: the tasks open more than 24h, and the
+commits that carry no Task: trailer.
+`
 
 // The activity classes a turn falls into.
 const (
