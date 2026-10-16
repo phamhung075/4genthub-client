@@ -1,8 +1,10 @@
 // The budget a room runs under: the ceilings the room's safeguard enforces, written by the owner and read by
-// `budget-run`. The file is the room's own - rooms/<room>/limits.json - and nothing enforces that split: the
-// seat guard has no rule about it, so any seat may write it, with `room limits` itself or with any shape the
-// guard does not parse (measured 2026-10-16; `room limits --help` carries the matrix). The rules that would
-// refuse those shapes are written and parked for the owner.
+// `budget-run`. The file is the room's own - rooms/<room>/limits.json - and the SEAT the ceilings bind may not
+// RAISE them: this verb refuses a raise, and `--off`, when a seat asks (raisesTheCeiling; the usage carries the
+// matrix), because a ceiling the runaway can lift in one command stops nobody. What is NOT closed is the file
+// itself - the seat guard judges the SHAPE of a write and never who is asking, so every shape it does not parse
+// passes - and the rules that would refuse those are written and parked for the owner. The marker is
+// $AGENTHUB_SESSION_NAME: a speed bump, not a wall, since a seat that unsets it claims to be the owner.
 package clientroom
 
 import (
@@ -34,8 +36,11 @@ A number that is not named keeps the value the file already carries, and a file 
 25 USD/24h and 300 calls/min - the ceilings this room agreed. Zero is refused: a ceiling of zero is not a ceiling,
 and OFF is how a room says it has none.
 
-The file is the OWNER's to change by convention, NOT by enforcement: the seat guard does not refuse this verb from
-any seat, and the rules it does have judge the shape of a write, never who is asking.`
+A SEAT MAY NOT RAISE A CEILING OR TURN THE CEILINGS OFF: this verb refuses that, naming $AGENTHUB_SESSION_NAME,
+because a ceiling exists to stop the seat it is measured against. A seat may still LOWER one or turn them ON, and
+the OWNER raises one by running this with $AGENTHUB_SESSION_NAME unset. Writing the FILE directly is a different
+matter and is NOT closed: the seat guard judges the shape of a write, never who is asking, so the shapes it does
+not parse (sed -i, rm, truncate, dd of=, any program) pass until the parked patch lands.`
 
 func runLimits(args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
@@ -75,6 +80,14 @@ func runLimits(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam room limits: %v\n", err)
 		return clientcmd.ExitRoomRefused
 	}
+	if caller := strings.TrimSpace(os.Getenv(sessionEnv)); caller != "" && (hasUSD || hasCalls || off) {
+		if reason := raisesTheCeiling(limits, hasUSD, usd, hasCalls, calls, off); reason != "" {
+			fmt.Fprintf(stderr, "4genteam room limits: %s does not raise the ceiling that bounds it - %s. A seat may LOWER a "+
+				"ceiling or turn it ON; the OWNER raises one, running this with $%s unset (a number the file does not carry yet is "+
+				"not a ceiling, so writing that one is not a raise).\n", caller, reason, sessionEnv)
+			return clientcmd.ExitRoomRefused
+		}
+	}
 	if hasUSD || hasCalls || on || off {
 		if limits.USDPerSeat24h == 0 {
 			limits.USDPerSeat24h = roombudget.DefaultUSDPerSeat24h
@@ -112,6 +125,33 @@ func runLimits(args []string, stdout, stderr io.Writer) int {
 	inv.printPair(stdout)
 	printLimits(stdout, roomDir, limits)
 	return clientcmd.ExitOK
+}
+
+// raisesTheCeiling names the raise a request asks for, or "" when it tightens (or changes nothing). A SEAT runs
+// through this, because the seat a ceiling exists to stop is the caller that must not lift it: measured on the
+// real binary before this rule, `room limits --usd 999` from a seat wrote 999 and `--off` disabled the ceilings.
+// The comparison is against the numbers the FILE carries, never the defaults: a number the file does not carry
+// is not a ceiling yet, so writing that one raises nothing, and a number that cannot be read is left to the
+// usage error below rather than judged here.
+//
+// The marker ($AGENTHUB_SESSION_NAME) is the same one the rail and the git hooks take a seat's identity from,
+// and it is a SPEED BUMP, not a wall: a seat that unsets it claims to be the owner. Closing that is the
+// destructive-write work (parked with the owner), not this verb's.
+func raisesTheCeiling(limits roombudget.Limits, hasUSD bool, usd string, hasCalls bool, calls string, off bool) string {
+	if off && limits.Enabled {
+		return "turning the ceilings OFF lifts them all at once"
+	}
+	if hasUSD {
+		if value, err := ceiling("usd", usd); err == nil && limits.USDPerSeat24h > 0 && value > limits.USDPerSeat24h {
+			return fmt.Sprintf("--usd %s is above the %.2f USD/24h in force", strings.TrimSpace(usd), limits.USDPerSeat24h)
+		}
+	}
+	if hasCalls {
+		if value, err := ceiling("calls", calls); err == nil && limits.CallsPerSeatMin > 0 && value > float64(limits.CallsPerSeatMin) {
+			return fmt.Sprintf("--calls %s is above the %d calls/min in force", strings.TrimSpace(calls), limits.CallsPerSeatMin)
+		}
+	}
+	return ""
 }
 
 // ceiling reads one ceiling: a positive number, refused by name otherwise. A ceiling of zero is not a ceiling -
