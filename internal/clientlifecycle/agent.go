@@ -269,6 +269,10 @@ func agentSpecs(rigs []string) ([]agentSpec, error) {
 		if err != nil {
 			return nil, err
 		}
+		budgetLog, err := BudgetLogPath(rig)
+		if err != nil {
+			return nil, err
+		}
 		specs = append(specs,
 			agentSpec{
 				safeguard: clientservices.Compact, rig: rig,
@@ -293,6 +297,12 @@ func agentSpecs(rigs []string) ([]agentSpec, error) {
 				argv:      []string{"idle-run", "--room", rig},
 				logPath:   guardLog,
 				threshold: clientservices.SilentAfter(clientservices.RoomGuardEvery),
+			},
+			agentSpec{
+				safeguard: clientservices.Budget, rig: rig,
+				argv:      []string{"budget-run", "--room", rig},
+				logPath:   budgetLog,
+				threshold: clientservices.SilentAfter(clientservices.BudgetEvery),
 			},
 		)
 	}

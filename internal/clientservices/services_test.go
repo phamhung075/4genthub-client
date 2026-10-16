@@ -82,6 +82,7 @@ func TestTheSilenceThresholdsAreSevenFour(t *testing.T) {
 		Watchdog:  180 * time.Second,
 		Messages:  30 * time.Second,
 		RoomGuard: 90 * time.Second,
+		Budget:    45 * time.Second,
 		Bridge:    360 * time.Second,
 		Agent:     75 * time.Second,
 	}
@@ -380,7 +381,7 @@ func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 	for _, row := range rows {
 		order = append(order, strings.TrimSpace(row.Rig+" "+row.Safeguard))
 	}
-	want := "demo compact,demo watchdog,demo messages,demo roomguard,other compact,other watchdog,other messages,other roomguard,bridge,agent"
+	want := "demo compact,demo watchdog,demo messages,demo roomguard,demo budget,other compact,other watchdog,other messages,other roomguard,other budget,bridge,agent"
 	if strings.Join(order, ",") != want {
 		t.Errorf("order = %v, want %v", order, want)
 	}

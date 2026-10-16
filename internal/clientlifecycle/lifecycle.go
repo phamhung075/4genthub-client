@@ -102,6 +102,7 @@ func Commands() []clientcmd.Command {
 		uiCommand{},
 		compactRunCommand{},
 		idleRunCommand{},
+		budgetRunCommand{},
 		doctorCommand{},
 		agentCommand{},
 	}

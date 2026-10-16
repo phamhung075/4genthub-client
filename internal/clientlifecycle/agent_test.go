@@ -110,8 +110,9 @@ func TestEverySupervisionPassWritesAgentOwnHeartbeat(t *testing.T) {
 	}
 }
 
-// TestTheChildListIsSevenOne: a compaction supervisor, a watchdog and a seat-message deliverer per
-// listed rig, and ONE bridge per machine, each with the arguments and the derived threshold 7.4 gives it.
+// TestTheChildListIsSevenOne: a compaction supervisor, a watchdog, a seat-message deliverer and the two
+// per-room guards (the idle guard and the budget guard) per listed rig, and ONE bridge per machine, each
+// with the arguments and the derived threshold 7.4 gives it.
 func TestTheChildListIsSevenOne(t *testing.T) {
 	specs, err := agentSpecs([]string{"demo", "other"})
 	if err != nil {
@@ -126,10 +127,12 @@ func TestTheChildListIsSevenOne(t *testing.T) {
 		"watchdog demo --watch @3m0s",
 		"sync messages --room demo --watch @30s",
 		"idle-run --room demo @1m30s",
+		"budget-run --room demo @45s",
 		"compact-run --room other @30s",
 		"watchdog other --watch @3m0s",
 		"sync messages --room other --watch @30s",
 		"idle-run --room other @1m30s",
+		"budget-run --room other @45s",
 		"bridge run @6m0s",
 	}
 	if strings.Join(described, "|") != strings.Join(want, "|") {
