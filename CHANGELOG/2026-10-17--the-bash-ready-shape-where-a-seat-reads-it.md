@@ -2,10 +2,13 @@
 
 The `bash` tool's long-lived-service shape was documented nowhere a seat reads, and two refusals follow
 from it: `ready` must be an object and never a boolean, and a named service takes no `async`/`timeout`.
-In the 24h to 2026-10-16T22:56Z the room spent about 28 calls on them - this seat's own tool-call log
-carries 5 of the service-mode refusal in that window, and the rest are the `ready`-boolean refusal on
-another seat. Hub task `1b0740aa-3c3f-4a30-9172-7037c5de3468`; the harness half of the gap is the
-owner's feedback record `4f60f2cc`.
+Over the window 2026-10-15T22:51Z-2026-10-16T22:51Z the room's own seat logs carry 20 service-mode
+refusals - architect 6, fe-dev 3, go-dev 4, reviewer 7 - and no `ready`-boolean row at all: a boolean
+`ready` is answered while the call is validated, before dispatch, so it never enters `tool-calls.jsonl` and
+is counted from the seats' own reports instead (the architect's row names 11 of them beside its 6
+service-mode ones; the reviewer's row names 11 service-mode ones, all-time). Hub task
+`1b0740aa-3c3f-4a30-9172-7037c5de3468`; the harness half of the gap is the owner's feedback record
+`4f60f2cc`.
 
 ### Changed
 
@@ -29,8 +32,10 @@ owner's feedback record `4f60f2cc`.
   package lines, not from a filtered stream).
 - Both refusal strings are evidence, not paraphrase: `ready: true` was measured at the tool (it answers
   `ready: ready must be an object (was boolean)`), and `Service mode does not accept async or timeout; use
-  ready.timeout for readiness.` is the recorded answer of the five service-mode calls in this seat's own
-  tool-call log for the same window.
+  ready.timeout for readiness.` is the recorded answer of this seat's own four service-mode calls in that
+  window. The census paragraph is counted the same way it can be reproduced: every `seats/*/tool-calls.jsonl`
+  in the room, rows whose `error`/`rule` carries the refusal text, inside the window - and a boolean `ready`
+  appears in none of them, because it is refused before dispatch.
 - The accepted shape was smoked, not just written: a call carrying `name` and
   `ready={"log": "listening on", "timeout": 15}` came up `ready pid=...` with no `async`/`timeout`
   argument, and `proc://<name>` read its status and its output back (`ready`, pid, up 1.9s); the same
