@@ -55,12 +55,12 @@ var switchSetModel = func(room, seat, model string) error {
 	return client.SetSeatModel(room, seat, model)
 }
 
-var switchRestartFresh = func(room, seat string) error {
+var switchRestartFresh = func(room, seat string, document *string) error {
 	client := clientruntime.NewClient("")
 	if !client.Reachable() {
 		return errSwitchRuntimeAbsent
 	}
-	_, err := client.RestartSeatFresh(room, seat)
+	_, err := client.RestartSeatFresh(room, seat, document)
 	return err
 }
 
@@ -320,7 +320,11 @@ func switchApplyToRuntime(room, seat, model string, restart bool, stderr io.Writ
 	}
 	if restart {
 		fmt.Fprintf(stderr, "warning: restarting %s/%s interrupts it and loses its live context\n", room, seat)
-		if applied, done, err := switchSeatStep("restart", switchRestartFresh(room, seat), room, seat, stderr); done {
+		// THE DOCUMENT, fetched for THIS restart: the seat may be an omp one, and a switched seat must come
+		// back on the hub's render of its policy rather than on whatever its directory last held. A render that
+		// cannot be read is SAID and the restart goes ahead on the room's own record.
+		document := SeatDocumentFor(context.Background(), room, seat, stderr)
+		if applied, done, err := switchSeatStep("restart", switchRestartFresh(room, seat, document), room, seat, stderr); done {
 			return applied, err
 		}
 		return "restart", nil

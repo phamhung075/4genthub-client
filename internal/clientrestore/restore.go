@@ -255,7 +255,9 @@ func reviveRoom(_ context.Context, room string) error {
 			failed = append(failed, seat.Seat+" was not started: "+err.Error())
 			continue
 		}
-		if _, err := client.RestartSeat(room, seat.Seat); err != nil {
+		// NO DOCUMENT: this is the restore loop, and it starts each seat from the room's own spec - which carries
+		// the document the seat was last started on. A fresh render belongs to a reseat, which fetches one.
+		if _, err := client.RestartSeat(room, seat.Seat, nil); err != nil {
 			failed = append(failed, seat.Seat+": "+err.Error())
 		}
 	}

@@ -4,14 +4,17 @@
 package clientseat
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
+	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
 // QuietWaiter is wait_until_quiet: true once the seat is not running and its session has been still for
@@ -179,9 +182,25 @@ func secondsSinceLastWrite(stateRoot, rig, seat string) float64 {
 // restartSeat is the ONE place this package asks the runtime to start a seat again. It is a variable for the same
 // reason clientlifecycle's runtimeSendText is: a test replaces it to assert WHICH room and seat were asked for, and to
 // prove that no shell-out can hide behind it.
+//
+// THE DOCUMENT COMES FROM THE HUB, per restart. A reseat is the act that applies a policy change - it is what an
+// operator runs after the hub's render changes - so the render is fetched here and travels on the frame, and the
+// runtime installs it before the seat's runner starts. A render that cannot be read does NOT stop the restart: the
+// seat comes back on the room's own record, which is what it was already running under, and the reason is SAID
+// rather than swallowed (clientsync.SeatDocumentFor).
 var restartSeat = func(rig, seat string) error {
-	_, err := clientruntime.NewClient("").RestartSeat(rig, seat)
+	document := clientsync.SeatDocumentFor(context.Background(), rig, seat, policyNotes{})
+	_, err := clientruntime.NewClient("").RestartSeat(rig, seat, document)
 	return err
+}
+
+// policyNotes carries clientpolicy's own lines into this package's timed log, so a note about the seat's policy
+// does not become a second output channel - and a test that silences logLine silences this with it.
+type policyNotes struct{}
+
+func (policyNotes) Write(p []byte) (int, error) {
+	logLine("%s", strings.TrimRight(string(p), "\n"))
+	return len(p), nil
 }
 
 // relaunch stops the seat's session and asks the runtime to start it again, so it loads the snapshot it is

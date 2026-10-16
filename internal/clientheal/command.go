@@ -101,7 +101,10 @@ func machineDeps(root string, client *clientruntime.Client, fix bool) Deps {
 			if err := client.StopSeat(room, seat); err != nil {
 				return err
 			}
-			_, err := client.RestartSeat(room, seat)
+			// NO DOCUMENT: a heal restarts a seat that died, from the room's own record, and the record carries
+			// the document every start and reseat wrote into it - so the seat comes back on what it was on. A
+			// fresh render is what a RESEAT is for, and that verb fetches one.
+			_, err := client.RestartSeat(room, seat, nil)
 			return err
 		},
 		ProcEnv: procEnv,

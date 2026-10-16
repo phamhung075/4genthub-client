@@ -12,6 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
 const testRoom = "room-a"
@@ -270,6 +273,12 @@ func TestRoomStatusReportsTheDaemonsOwnMessage(t *testing.T) {
 // TestRoomReseatWritesStopSeatThenRestartSeat pins the ORDER on the wire: two requests, the stop first, and
 // both naming the same room and seat.
 func TestRoomReseatWritesStopSeatThenRestartSeat(t *testing.T) {
+	// A HUB THAT CANNOT BE REACHED, deliberately: this test is the fallback case - the room's own record is
+	// all there is, so the restart frame carries no document and the seat still comes back. The document's own
+	// case is the test below.
+	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
+	t.Setenv("AGENTHUB_TOKEN", "tok")
+
 	daemon := newFakeDaemon(t, map[string]string{
 		"StopSeat":    okData("null"),
 		"RestartSeat": okData(seatJSON("lead", "omp", "running")),
@@ -285,6 +294,51 @@ func TestRoomReseatWritesStopSeatThenRestartSeat(t *testing.T) {
 	if !strings.Contains(stdout, "lead omp running agenthub--room-a--lead\n") {
 		t.Errorf("stdout = %q, want the returned seat status", stdout)
 	}
+}
+
+// THE RESEAT CARRIES THE HUB'S DOCUMENT: this is the act that installs a policy change, so the render is
+// fetched for the seat being restarted and travels on the restart frame - the frame the runtime writes
+// `<seat dir>/config.yml` from. The frame's KEY is a contract between two implementations, and the runtime's
+// own test parses this exact spelling (`types.rs`), because a rename on one side alone is a document that
+// silently never arrives. Measured before this change: the frame carried only the room and the seat, so a
+// seat whose policy had changed came back with the file it was launched with.
+func TestRoomReseatCarriesTheHubsPolicyDocument(t *testing.T) {
+	const document = "bash:\n  allowCompoundCommands: true\ntools:\n  approval:\n    edit: deny\n"
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != clientsync.PathsPath+"/"+testRoom+"/lead" {
+			http.Error(w, `{"detail":"seat not found"}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"resolved_seat": map[string]any{
+				"room": testRoom, "seat": "lead", "hash": "abc",
+				"files":  []any{map[string]any{"path": clientsync.SeatRenderPath, "content": document}},
+				"policy": map[string]any{},
+			},
+		})
+	}))
+	t.Cleanup(cloud.Close)
+	t.Setenv("AGENTHUB_URL", cloud.URL)
+	t.Setenv("AGENTHUB_TOKEN", "tok")
+
+	daemon := newFakeDaemon(t, map[string]string{
+		"StopSeat":    okData("null"),
+		"RestartSeat": okData(seatJSON("lead", "omp", "running")),
+	})
+
+	code, _, stderr := runRoom(t, daemon.args("reseat", testRoom, "lead")...)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	installed, err := json.Marshal(clientsync.InstallDocument(document))
+	if err != nil {
+		t.Fatalf("marshal the document the seat is installed with: %v", err)
+	}
+	assertRequests(t, daemon,
+		`{"action":"StopSeat","payload":{"room":"room-a","seat":"lead"}}`,
+		`{"action":"RestartSeat","payload":{"policy_document":`+string(installed)+`,"room":"room-a","seat":"lead"}}`)
 }
 
 // TestRoomReseatReportsASeatThatDidNotComeBack pins the partial case: the daemon answered, the seat is not

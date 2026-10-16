@@ -171,10 +171,10 @@ func TestSeatControlWritesTheFramesTheRuntimeReads(t *testing.T) {
 	})
 	client := NewClient(sock)
 
-	if _, err := client.RestartSeat("room-a", "seat-1"); err != nil {
+	if _, err := client.RestartSeat("room-a", "seat-1", nil); err != nil {
 		t.Fatalf("RestartSeat: %v", err)
 	}
-	if _, err := client.RestartSeatFresh("room-a", "seat-1"); err != nil {
+	if _, err := client.RestartSeatFresh("room-a", "seat-1", nil); err != nil {
 		t.Fatalf("RestartSeatFresh: %v", err)
 	}
 	if err := client.SetSeatModel("room-a", "seat-1", "deepseek/deepseek-flash"); err != nil {

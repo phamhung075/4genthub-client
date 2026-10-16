@@ -29,6 +29,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientteam"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
@@ -450,6 +451,16 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 			"(a first launch in a fresh cache builds the agent's model cache, so this can take a while)")
 	}
 	if sendSpec {
+		// THE POLICY DOCUMENTS TRAVEL WITH THE SPEC, because only the client talks to the hub: the runtime
+		// installs each document as that seat's config.yml before its runner starts. A seat of another runtime
+		// is skipped rather than fetched for - its config is not this document's destination - and a render that
+		// cannot be read is said and leaves that seat on the room's own record (clientsync.SeatDocumentFor).
+		for i := range spec.Seats {
+			if !clientsync.ServesRuntime(spec.Seats[i].Runtime) {
+				continue
+			}
+			spec.Seats[i].PolicyDocument = clientsync.SeatDocumentFor(context.Background(), name, spec.Seats[i].SeatKey, stderr)
+		}
 		started, err := client.StartRoom(spec)
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam up: could not start room %s: %v\n", name, err)
@@ -462,7 +473,12 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 	// start (stop that seat if it runs, re-read the materialised spec, start it), so it cannot touch a
 	// running sibling.
 	for _, seat := range restart {
-		if _, err := client.RestartSeat(name, seat); err != nil {
+		// A restarted seat is started FROM THE ROOM'S OWN SPEC, so a fresh render has to travel on this frame
+		// instead: fetched here for the seat being restarted, the same way a whole-room start carries one per
+		// seat. A seat of another runtime is not gated out here - the hub renders this document for an omp seat
+		// only, so the answer for any other seat is `no document` and nothing is installed for it.
+		document := clientsync.SeatDocumentFor(context.Background(), name, seat, stderr)
+		if _, err := client.RestartSeat(name, seat, document); err != nil {
 			fmt.Fprintf(stderr, "4genteam up: could not start %s/%s: %v\n", name, seat, err)
 			fmt.Fprintf(stderr, "4genteam up: the runtime daemon's own output is in %s\n", daemonLog)
 			return clientcmd.ExitPartialStart

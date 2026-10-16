@@ -2,411 +2,232 @@ package clientpolicy
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
-// writeTeam is the file the roles now come from: the rig's own definition, not a compiled table.
-func writeTeam(t *testing.T) string {
+// policyDoc is a hub render in the shape the seatrenderer produces: the fold's `bash`, `mcp` and `tools`
+// blocks, with the deny that matters for this suite (a developer keeps `edit`; this document denies it).
+const policyDoc = "bash:\n  allowCompoundCommands: true\nmcp:\n  startupTimeoutMs: 0\ntools:\n  approval:\n    edit: deny\n    ast_edit: deny\n"
+
+// policyCloud stands up a hub that knows ONE seat and renders a runtime/omp-config.yml for it; any other
+// seat is the 404 the hub's own API answers with.
+func policyCloud(t *testing.T, seat string, files []map[string]any) {
 	t.Helper()
-	body := `{"room":{"slug":"my-rig"},"seats":[` +
-		`{"seat_key":"lead","seat_type":"lead"},` +
-		`{"seat_key":"go-dev","seat_type":"developer"},` +
-		`{"seat_key":"reviewer","seat_type":"reviewer"},` +
-		`{"seat_key":"writer","seat_type":"writer","thinking":"medium"}]}`
-	path := filepath.Join(t.TempDir(), "team.json")
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func testTeam(t *testing.T) Team {
-	t.Helper()
-	team, err := ReadTeam(writeTeam(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return team
-}
-
-func parsed(t *testing.T, seat Seat) map[string]any {
-	t.Helper()
-	var doc map[string]any
-	if err := yaml.Unmarshal([]byte(RenderConfig(seat)), &doc); err != nil {
-		t.Fatalf("the rendered config is not valid YAML: %v", err)
-	}
-	return doc
-}
-
-// denyPatterns is the bash rules that DENY; the startup exemption is `allow` and is asserted on its own.
-func denyPatterns(t *testing.T, doc map[string]any) []string {
-	t.Helper()
-	bash, _ := doc["bash"].(map[string]any)
-	patterns, _ := bash["patterns"].([]any)
-	var denied []string
-	for _, entry := range patterns {
-		rule, _ := entry.(map[string]any)
-		if rule["approval"] == "deny" {
-			match, _ := rule["match"].(string)
-			denied = append(denied, match)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != clientsync.PathsPath+"/room1/"+seat {
+			http.Error(w, `{"detail":"seat not found"}`, http.StatusNotFound)
+			return
 		}
-	}
-	return denied
-}
-
-func toolsDenied(t *testing.T, doc map[string]any) []string {
-	t.Helper()
-	tools, _ := doc["tools"].(map[string]any)
-	approval, _ := tools["approval"].(map[string]any)
-	var denied []string
-	for tool := range approval {
-		denied = append(denied, tool)
-	}
-	sort.Strings(denied)
-	return denied
-}
-
-func TestEverySeatExemptsTheStartupRigWhoamiAndOnlyThat(t *testing.T) {
-	team := testTeam(t)
-	for _, seat := range team.Seats {
-		doc := parsed(t, seat)
-		bash, _ := doc["bash"].(map[string]any)
-		patterns, _ := bash["patterns"].([]any)
-		var allowed []string
-		for _, entry := range patterns {
-			rule, _ := entry.(map[string]any)
-			if rule["approval"] == "allow" {
-				match, _ := rule["match"].(string)
-				allowed = append(allowed, match)
-			}
+		entries := make([]any, 0, len(files))
+		for _, f := range files {
+			entries = append(entries, f)
 		}
-		if len(allowed) != 1 || allowed[0] != "rig whoami*" {
-			t.Errorf("%s: allowed patterns are %v, want exactly [rig whoami*]", seat.Key, allowed)
-		}
-		for _, deny := range denyPatterns(t, doc) {
-			if deny == "rig whoami*" {
-				t.Errorf("%s: the startup exemption is also denied", seat.Key)
-			}
-		}
-	}
-}
-
-func TestEverySeatWaitsForMCPAndChecksCompoundCommands(t *testing.T) {
-	for _, seat := range testTeam(t).Seats {
-		doc := parsed(t, seat)
-		mcp, _ := doc["mcp"].(map[string]any)
-		if mcp["startupTimeoutMs"] != 0 {
-			t.Errorf("%s: mcp.startupTimeoutMs = %v, want 0", seat.Key, mcp["startupTimeoutMs"])
-		}
-		bash, _ := doc["bash"].(map[string]any)
-		if bash["allowCompoundCommands"] != true {
-			t.Errorf("%s: allowCompoundCommands = %v, want true", seat.Key, bash["allowCompoundCommands"])
-		}
-	}
-}
-
-func TestEverySeatIncludingTheLeadIsDeniedPushAmendAndProductionAccess(t *testing.T) {
-	for _, seat := range testTeam(t).Seats {
-		denied := denyPatterns(t, parsed(t, seat))
-		for _, want := range []string{"git push*", "git commit*--amend*", "git add -A*", "git reset --hard*", "ssh *", "tmux kill-*"} {
-			found := false
-			for _, rule := range denied {
-				if rule == want {
-					found = true
-					break
-				}
-			}
-			if !found {
-				t.Errorf("%s is not denied %q", seat.Key, want)
-			}
-		}
-	}
-}
-
-func TestOnlyTheLeadKeepsRigLaunchAndTheAgentSeatConnectionTools(t *testing.T) {
-	team := testTeam(t)
-	for _, seat := range team.Seats {
-		doc := parsed(t, seat)
-		denied := denyPatterns(t, doc)
-		hasRigLaunch := false
-		for _, rule := range denied {
-			if rule == "rig launch*" {
-				hasRigLaunch = true
-			}
-		}
-		if seat.Type == "lead" {
-			if hasRigLaunch {
-				t.Error("the lead is denied rig launch*")
-			}
-			if tools := toolsDenied(t, doc); len(tools) != 0 {
-				t.Errorf("the lead has tool denies: %v", tools)
-			}
-			continue
-		}
-		if !hasRigLaunch {
-			t.Errorf("%s keeps rig launch*", seat.Key)
-		}
-		deniedTools := toolsDenied(t, doc)
-		for _, want := range nonLeadToolDeny {
-			found := false
-			for _, tool := range deniedTools {
-				if tool == want {
-					found = true
-				}
-			}
-			if !found {
-				t.Errorf("%s is not denied %q", seat.Key, want)
-			}
-		}
-	}
-}
-
-func TestTheContextSyncToolsAreNeverDenied(t *testing.T) {
-	for _, seat := range testTeam(t).Seats {
-		denied := toolsDenied(t, parsed(t, seat))
-		for _, tool := range []string{"manage_task", "manage_subtask", "manage_context", "manage_project", "manage_git_branch", "call_seat"} {
-			for _, entry := range denied {
-				if entry == "mcp__agenthub_http_"+tool {
-					t.Errorf("%s is denied the context-sync tool %s", seat.Key, tool)
-				}
-			}
-		}
-		for _, entry := range denied {
-			if strings.Contains(entry, "deepseek") {
-				t.Errorf("%s denies a provider token tool: %s", seat.Key, entry)
-			}
-		}
-	}
-}
-
-func TestOnlyTheReviewerLosesTheEditTools(t *testing.T) {
-	for _, seat := range testTeam(t).Seats {
-		denied := toolsDenied(t, parsed(t, seat))
-		hasEdit, hasAST := false, false
-		for _, entry := range denied {
-			if entry == "edit" {
-				hasEdit = true
-			}
-			if entry == "ast_edit" {
-				hasAST = true
-			}
-		}
-		want := seat.Type == "reviewer"
-		if hasEdit != want || hasAST != want {
-			t.Errorf("%s: edit=%v ast_edit=%v, want both %v", seat.Key, hasEdit, hasAST, want)
-		}
-	}
-}
-
-func TestEverySeatKeepsOnlyTheRecentTailVerbatimAtACompaction(t *testing.T) {
-	for _, seat := range testTeam(t).Seats {
-		compaction, _ := parsed(t, seat)["compaction"].(map[string]any)
-		if compaction["keepRecentTokens"] != keepRecentTokens {
-			t.Errorf("%s: compaction = %v, want keepRecentTokens %d", seat.Key, compaction, keepRecentTokens)
-		}
-	}
-}
-
-func TestOnlyTheSeatWithAThinkingLevelGetsOne(t *testing.T) {
-	for _, seat := range testTeam(t).Seats {
-		level := parsed(t, seat)["defaultThinkingLevel"]
-		if seat.Thinking == "" && level != nil {
-			t.Errorf("%s carries a thinking level it did not declare: %v", seat.Key, level)
-		}
-		if seat.Thinking != "" && level != seat.Thinking {
-			t.Errorf("%s: level = %v, want %q", seat.Key, level, seat.Thinking)
-		}
-	}
-}
-
-func TestAnUnlistedRigOrSeatHasNoPermissiveDefault(t *testing.T) {
-	team := testTeam(t)
-	if _, err := RoleFor(team, "unknown-rig", "lead"); err == nil {
-		t.Error("an unknown rig was accepted")
-	}
-	var out, errOut bytes.Buffer
-	code := runShow([]string{"nobody", "--room", "my-rig", "--team", writeTeam(t)}, &out, &errOut)
-	if code != clientcmd.ExitUsage {
-		t.Errorf("an unlisted seat exited %d, want %d (stderr: %q)", code, clientcmd.ExitUsage, errOut.String())
-	}
-}
-
-func seedState(t *testing.T, root string, team Team) {
-	t.Helper()
-	for _, seat := range team.Seats {
-		if err := os.MkdirAll(filepath.Dir(ConfigPath(root, team.Room.Slug, seat.Key)), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestApplyWritesEverySeatIsIdempotentAndCheckReportsDrift(t *testing.T) {
-	team := testTeam(t)
-	root := t.TempDir()
-	seedState(t, root, team)
-	teamPath := writeTeam(t)
-	args := []string{"--room", "my-rig", "--team", teamPath, "--state-root", root}
-
-	var out, errOut bytes.Buffer
-	if code := runApply(append(append([]string{}, args...), "--check"), &out, &errOut); code != ExitDrift {
-		t.Errorf("--check on a fresh state root = %d, want %d", code, ExitDrift)
-	}
-	if _, err := os.Stat(ConfigPath(root, "my-rig", "lead")); !os.IsNotExist(err) {
-		t.Error("--check wrote a file")
-	}
-
-	out.Reset()
-	if code := runApply(args, &out, &errOut); code != clientcmd.ExitOK {
-		t.Fatalf("apply = %d (stderr %q)", code, errOut.String())
-	}
-	for _, seat := range team.Seats {
-		got, err := os.ReadFile(ConfigPath(root, "my-rig", seat.Key))
+		body, err := json.Marshal(map[string]any{
+			"success": true,
+			"resolved_seat": map[string]any{
+				"room": "room1", "seat": seat, "hash": "abc",
+				"files": entries, "policy": map[string]any{},
+			},
+		})
 		if err != nil {
-			t.Fatalf("%s was not written: %v", seat.Key, err)
+			t.Errorf("encode: %v", err)
+			return
 		}
-		if string(got) != RenderConfig(seat) {
-			t.Errorf("%s: the written file is not what this binary renders", seat.Key)
-		}
-	}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("AGENTHUB_URL", server.URL)
+	t.Setenv("AGENTHUB_TOKEN", "tok")
+}
 
-	out.Reset()
-	if code := runApply(append(append([]string{}, args...), "--check"), &out, &errOut); code != clientcmd.ExitOK {
-		t.Errorf("--check after a write = %d, want %d", code, clientcmd.ExitOK)
-	}
+// policyCloudWithDocument is the ordinary case: the seat's render carries the document.
+func policyCloudWithDocument(t *testing.T, seat string) {
+	t.Helper()
+	policyCloud(t, seat, []map[string]any{
+		{"path": "AGENTS.md", "content": "the seat's own guide"},
+		{"path": clientsync.SeatRenderPath, "content": policyDoc},
+	})
+}
 
-	writer := ConfigPath(root, "my-rig", "writer")
-	if err := os.WriteFile(writer, []byte("tools: {}\n"), 0o644); err != nil {
+// policyStateRoot makes a fresh state root and, when `installed` is given, the seat's own directory with a
+// config.yml in it - the file the runtime installs and `--check` reads.
+func policyStateRoot(t *testing.T, installed string) string {
+	t.Helper()
+	root := t.TempDir()
+	if installed == "" {
+		return root
+	}
+	path := clientsync.SeatConfigPath(root, "room1", "seat1")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	out.Reset()
-	if code := runApply(append(append([]string{}, args...), "--check"), &out, &errOut); code != ExitDrift {
-		t.Errorf("--check on a broken rule = %d, want %d", code, ExitDrift)
+	if err := os.WriteFile(path, []byte(installed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func runPolicy(t *testing.T, argv ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = policyCommand{}.Run(context.Background(), argv, &out, &errOut)
+	return code, out.String(), errOut.String()
+}
+
+// WHAT `policy render` PRINTS IS WHAT WOULD BE INSTALLED: the hub's document, key for key, plus this client's
+// own non-policy key - and nothing else, because there is no client-side table left to add to it.
+func TestPolicyRenderPrintsTheHubDocument(t *testing.T) {
+	policyCloudWithDocument(t, "seat1")
+
+	code, stdout, stderr := runPolicy(t, "render", "--room", "room1", "--seat", "seat1")
+
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	if want := clientsync.InstallDocument(policyDoc); stdout != want {
+		t.Errorf("stdout = %q, want exactly the installable document %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Errorf("stderr = %q, want nothing", stderr)
 	}
 }
 
-// --state-root names the root policy apply writes under.
-func TestApplyWritesUnderTheStateRootFlag(t *testing.T) {
-	team := testTeam(t)
-	root := t.TempDir()
-	seedState(t, root, team)
+// A INSTALLED FILE THAT CARRIES THE RENDER IS NOT DRIFT, and `--check` says so on stdout and exits 0 - the
+// file's own extra top-level keys are none of this comparison's business.
+func TestPolicyCheckAcceptsAFileThatCarriesTheRender(t *testing.T) {
+	policyCloudWithDocument(t, "seat1")
+	root := policyStateRoot(t, clientsync.InstallDocument(policyDoc)+"otherTool:\n  key: 1\n")
 
-	var out, errOut bytes.Buffer
-	if code := runApply([]string{"--room", "my-rig", "--team", writeTeam(t), "--state-root", root}, &out, &errOut); code != clientcmd.ExitOK {
-		t.Fatalf("apply = %d\nstderr: %s", code, errOut.String())
+	code, stdout, stderr := runPolicy(t, "render", "--room", "room1", "--seat", "seat1", "--state-root", root, "--check")
+
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stdout %q, stderr %q)", code, clientcmd.ExitOK, stdout, stderr)
 	}
-	if _, err := os.Stat(ConfigPath(root, "my-rig", "writer")); err != nil {
-		t.Errorf("nothing written under the flag's root: %v", err)
+	if !strings.Contains(stdout, "seat1: ok (") {
+		t.Errorf("stdout = %q, want the ok line naming the file", stdout)
 	}
 }
 
-func TestApplyRefusesASeatThatWasNeverLaunched(t *testing.T) {
-	var out, errOut bytes.Buffer
-	code := runApply([]string{"--room", "my-rig", "--team", writeTeam(t), "--state-root", t.TempDir()}, &out, &errOut)
+// A FILE THAT NO LONGER CARRIES THE RENDER IS REPORTED, NOT KEPT. The case here is the one the change is
+// about: a tool the hub denies is left allowed in the installed file, which a check by shape must catch
+// (the file still parses, still has a `tools.approval`, and still names the tool).
+func TestPolicyCheckReportsADriftedFile(t *testing.T) {
+	policyCloudWithDocument(t, "seat1")
+	drifted := strings.Replace(clientsync.InstallDocument(policyDoc), "    edit: deny\n", "    edit: allow\n", 1)
+	root := policyStateRoot(t, drifted)
+
+	code, stdout, _ := runPolicy(t, "render", "--room", "room1", "--seat", "seat1", "--state-root", root, "--check")
+
+	if code != ExitDrift {
+		t.Fatalf("exit %d, want %d (stdout %q)", code, ExitDrift, stdout)
+	}
+	if !strings.Contains(stdout, "seat1: DRIFT (") {
+		t.Errorf("stdout = %q, want the drift line naming the file", stdout)
+	}
+}
+
+// A FILE THAT IS NOT THERE IS THE LOUDEST DRIFT: the seat is running with no policy file at all, which is the
+// state this change exists to end.
+func TestPolicyCheckReportsAMissingFile(t *testing.T) {
+	policyCloudWithDocument(t, "seat1")
+	root := policyStateRoot(t, "")
+
+	code, stdout, _ := runPolicy(t, "render", "--room", "room1", "--seat", "seat1", "--state-root", root, "--check")
+
+	if code != ExitDrift {
+		t.Fatalf("exit %d, want %d (stdout %q)", code, ExitDrift, stdout)
+	}
+	if !strings.Contains(stdout, "no installed file at") {
+		t.Errorf("stdout = %q, want the missing file and its path", stdout)
+	}
+}
+
+// A SEAT WHOSE RENDER CARRIES NO DOCUMENT HAS NOTHING TO INSTALL. That is not a drift and not a failure to
+// read: it is said, and the verb exits without printing a document.
+func TestPolicyRenderRefusesASeatWithNoDocument(t *testing.T) {
+	policyCloud(t, "seat1", []map[string]any{{"path": "AGENTS.md", "content": "guide"}})
+
+	code, stdout, stderr := runPolicy(t, "render", "--room", "room1", "--seat", "seat1")
+
+	if code == clientcmd.ExitOK {
+		t.Fatalf("exit %d, want a refusal (stdout %q)", code, stdout)
+	}
+	if !strings.Contains(stderr, clientsync.SeatRenderPath) {
+		t.Errorf("stderr = %q, want the missing entry named", stderr)
+	}
+}
+
+// A SEAT THE HUB DOES NOT KNOW IS A REFUSAL THAT NAMES THE HUB'S OWN ANSWER: this verb asks the hub, so an
+// unknown seat is exactly the case it must not paper over with an empty document.
+func TestPolicyRenderRefusesASeatTheHubDoesNotKnow(t *testing.T) {
+	policyCloudWithDocument(t, "seat1")
+
+	code, stdout, stderr := runPolicy(t, "render", "--room", "room1", "--seat", "seat2")
+
+	if code == clientcmd.ExitOK {
+		t.Fatalf("exit %d, want a refusal (stdout %q)", code, stdout)
+	}
+	if !strings.Contains(stderr, "HTTP 404") || !strings.Contains(stderr, "room1/seat2") {
+		t.Errorf("stderr = %q, want the seat and the hub's reason", stderr)
+	}
+}
+
+// THE DELETED INPUT STAYS DELETED: `--team` is gone with the role table it named, and this pins that the flag
+// is refused BY NAME rather than carried and ignored.
+func TestPolicyRenderRefusesTheRemovedTeamFlagAndMissingArguments(t *testing.T) {
+	policyCloudWithDocument(t, "seat1")
+
+	code, _, stderr := runPolicy(t, "render", "--room", "room1", "--seat", "seat1", "--team", "/tmp/team.json")
 	if code != clientcmd.ExitUsage {
-		t.Errorf("apply on an unseeded state root = %d, want %d", code, clientcmd.ExitUsage)
+		t.Errorf("exit %d with --team, want %d", code, clientcmd.ExitUsage)
 	}
-	if !strings.Contains(errOut.String(), "never launched") {
-		t.Errorf("the refusal did not name the reason: %q", errOut.String())
+	if !strings.Contains(stderr, "unknown flag --team") {
+		t.Errorf("stderr = %q, want the flag named", stderr)
+	}
+
+	code, _, stderr = runPolicy(t, "render", "--room", "room1")
+	if code != clientcmd.ExitUsage || !strings.Contains(stderr, "--seat") {
+		t.Errorf("exit %d, stderr %q, want a usage refusal naming --seat", code, stderr)
+	}
+
+	code, _, stderr = runPolicy(t, "apply", "--room", "room1", "--seat", "seat1")
+	if code != clientcmd.ExitUsage || !strings.Contains(stderr, "unknown verb") {
+		t.Errorf("exit %d, stderr %q, want the removed apply verb named", code, stderr)
 	}
 }
 
-// TestApplyRefusesASeatOfAnotherRuntimeBeforeWritingAnything: on a mixed room the loop wrote the omp seats
-// and THEN stopped at the seat whose state lives under its own runtime's root, so a caller got a non-zero
-// exit, a "never launched?" message about a seat that HAD been launched, and no statement of what was
-// skipped or whether the write was complete. Measured at the binary on a scratch room before this test
-// existed: lead's config was already on disk when the exit was 2. Both agent directories exist here on
-// purpose - that is the strongest form of the case, because with no runtime filter the verb writes an omp
-// config into the other runtime's seat and exits 0.
-func TestApplyRefusesASeatOfAnotherRuntimeBeforeWritingAnything(t *testing.T) {
-	teamPath := filepath.Join(t.TempDir(), "team.json")
-	body := `{"room":{"slug":"my-rig"},"seats":[` +
-		`{"seat_key":"lead","seat_type":"lead","runtime":"omp"},` +
-		`{"seat_key":"architect","seat_type":"architect","runtime":"claude-code"}]}`
-	if err := os.WriteFile(teamPath, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
+// THE COMPARISON IS EXACT INSIDE THE KEYS IT DEFINES, and blind to the keys it does not: an extra top-level
+// key is another tool's business, while a changed entry INSIDE `tools.approval` is this one's.
+func TestPolicyKeysMatchComparesInsideTheKeysItDefines(t *testing.T) {
+	want := policyDoc
+	cases := []struct {
+		name  string
+		have  string
+		match bool
+	}{
+		{"identical", want, true},
+		{"an extra top-level key", want + "other:\n  key: 1\n", true},
+		{"a reordered document", "tools:\n  approval:\n    edit: deny\n    ast_edit: deny\nmcp:\n  startupTimeoutMs: 0\nbash:\n  allowCompoundCommands: true\n", true},
+		{"an entry changed inside tools", strings.Replace(want, "edit: deny", "edit: allow", 1), false},
+		{"an entry added inside tools", strings.Replace(want, "edit: deny", "edit: deny\n    write: deny", 1), false},
+		{"the tools block gone", "bash:\n  allowCompoundCommands: true\nmcp:\n  startupTimeoutMs: 0\n", false},
+		{"not a document", "\t\x00", false},
+		{"empty", "", false},
 	}
-	team, err := ReadTeam(teamPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	root := t.TempDir()
-	seedState(t, root, team)
-
-	var out, errOut bytes.Buffer
-	code := runApply([]string{"--room", "my-rig", "--team", teamPath, "--state-root", root}, &out, &errOut)
-	if code != clientcmd.ExitUsage {
-		t.Errorf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, errOut.String())
-	}
-	for _, want := range []string{"architect", "claude-code", "nothing was written"} {
-		if !strings.Contains(errOut.String(), want) {
-			t.Errorf("stderr %q does not name %q", errOut.String(), want)
+	for _, tc := range cases {
+		if got := PolicyKeysMatch(want, tc.have); got != tc.match {
+			t.Errorf("%s: PolicyKeysMatch = %v, want %v", tc.name, got, tc.match)
 		}
-	}
-	if _, statErr := os.Stat(ConfigPath(root, "my-rig", "lead")); !os.IsNotExist(statErr) {
-		t.Error("the omp seat was written before the refusal: the application is partial")
-	}
-	if out.Len() != 0 {
-		t.Errorf("stdout %q, want nothing: no seat was applied", out.String())
-	}
-}
-
-func TestCheckToleratesKeysThePolicyDoesNotDefineAndStillCatchesABrokenRule(t *testing.T) {
-	team := testTeam(t)
-	root := t.TempDir()
-	seedState(t, root, team)
-	teamPath := writeTeam(t)
-	args := []string{"--room", "my-rig", "--team", teamPath, "--state-root", root}
-
-	var out, errOut bytes.Buffer
-	if code := runApply(args, &out, &errOut); code != clientcmd.ExitOK {
-		t.Fatalf("apply = %d", code)
-	}
-	path := ConfigPath(root, "my-rig", "go-dev")
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, append(body, []byte("\nmodel: something-else\n")...), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	out.Reset()
-	if code := runApply(append(append([]string{}, args...), "--check"), &out, &errOut); code != clientcmd.ExitOK {
-		t.Errorf("--check rejected a key the policy does not define: %d (%q)", code, out.String())
-	}
-
-	broken := strings.Replace(string(body), `"git push*"`, `"git pull*"`, 1)
-	if err := os.WriteFile(path, []byte(broken), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	out.Reset()
-	if code := runApply(append(append([]string{}, args...), "--check"), &out, &errOut); code != ExitDrift {
-		t.Errorf("--check missed a changed rule: %d", code)
-	}
-}
-
-func TestShowPrintsTheSeatsConfigAndRefusesAnUnknownRig(t *testing.T) {
-	var out, errOut bytes.Buffer
-	if code := runShow([]string{"writer", "--room", "my-rig", "--team", writeTeam(t)}, &out, &errOut); code != clientcmd.ExitOK {
-		t.Fatalf("show = %d (stderr %q)", code, errOut.String())
-	}
-	if !strings.Contains(out.String(), "defaultThinkingLevel: medium") {
-		t.Errorf("show did not render the seat's thinking level: %q", out.String())
-	}
-
-	out.Reset()
-	errOut.Reset()
-	if code := runShow([]string{"lead", "--room", "other-rig", "--team", writeTeam(t)}, &out, &errOut); code != clientcmd.ExitUsage {
-		t.Errorf("show for an unknown rig = %d, want %d", code, clientcmd.ExitUsage)
-	}
-	if !strings.Contains(errOut.String(), "no policy table for rig") {
-		t.Errorf("the refusal did not name the rule: %q", errOut.String())
 	}
 }

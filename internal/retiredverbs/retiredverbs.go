@@ -10,8 +10,10 @@
 // THE READ SET HAS A BOUNDARY, and it is stated here rather than left to be inferred from the code: the
 // non-test `*.go` files of this module, every file under `docs/`, and every file under `skills/`. The root
 // README.md and the runtime crate's own usage strings are OUTSIDE it. A repo-wide search for this class
-// currently leaves only the parked patterns in internal/clientpolicy/policy.go, and those escape this pin
-// because their sub-verb carries a `*` - incidentally, not by an allowlist entry.
+// previously left the parked deny patterns in internal/clientpolicy/policy.go, which escaped this pin
+// because their sub-verb carried a `*` - incidentally, not by an allowlist entry; those patterns were
+// deleted with the client's own policy table (2026-10-16, the seat policy is the hub's render), so what
+// the search leaves now is the allowlisted spans the table below carries, each with its reason.
 //
 // COMMENTS ARE NOT SCANNED, deliberately. The register of this pod's comments is the record of its own
 // removals ("this used to exec `rig ps`", "THE CLI REACH IS RETIRED RATHER THAN WRAPPED"), so a scan over

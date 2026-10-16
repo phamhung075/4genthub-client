@@ -1735,6 +1735,7 @@ mod tests {
             permission_policy: Some("builtin:yolo".into()),
             cwd: None,
             agent_dir: None,
+            policy_document: None,
             env: Default::default(),
         };
         let argv = child_argv(&AgentRuntime::Omp, Path::new("/state/rooms/roomA/seats/dev"), &seat)
@@ -1764,6 +1765,7 @@ mod tests {
             permission_policy: None,
             cwd: None,
             agent_dir: None,
+            policy_document: None,
             env: Default::default(),
         };
         let argv = child_argv(&AgentRuntime::ClaudeCode, Path::new("/state/s"), &seat).expect("argv");
@@ -1851,6 +1853,7 @@ mod tests {
             permission_policy: None,
             cwd: None,
             agent_dir: None,
+            policy_document: None,
             env: Default::default(),
         };
         let err = child_argv(

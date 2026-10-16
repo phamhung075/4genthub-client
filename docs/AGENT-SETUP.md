@@ -146,8 +146,9 @@ choices the software accepts. Do not answer any of them yourself.
 - whether it **pins a version** (`pinned_version`, a concrete `x.y.z`) or **follows the latest**.
 
 **(b) The permission policy, one answer per seat.** Read the five choices to the user and get an
-explicit answer for each seat. `4genteam policy show <SEAT> --room <RIG> --team <FILE>` prints one
-seat's rendered policy:
+explicit answer for each seat. `4genteam policy render --room <RIG> --seat <SEAT>` prints one
+seat's rendered policy — the hub's own render of it, which is also the document the client installs
+as that seat's `config.yml` at launch:
 
 | Policy | Means | Stored as |
 |---|---|---|
@@ -157,7 +158,7 @@ seat's rendered policy:
 | `yolo` | the operator/no-guardrails posture — everything the harness allows; the launch posture is **full bypass** | `builtin:yolo` |
 | `none` | the reserved deliberate-none choice: the posture is the floor, the same as naming nothing, but the choice is visible | `none` |
 
-This client has no `policy list`: `4genteam policy show <SEAT> --room <RIG> --team <FILE>` prints one
+This client has no `policy list`: `4genteam policy render --room <RIG> --seat <SEAT>` prints one
 seat's rendered policy, and the five postures above are the choices a 4genthub
 seat may record.
 

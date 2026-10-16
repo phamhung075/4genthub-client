@@ -34,6 +34,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 )
 
@@ -414,10 +415,15 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	inv.printPair(stdout)
+	// THE DOCUMENT BEFORE THE STOP, so the seat is down for the hub round trip and nothing more. This is the
+	// act that installs a policy change, so the render is fetched and travels on the restart frame; a fetch
+	// that fails is SAID and the seat comes back on the room's own record rather than not coming back at all
+	// (clientsync.SeatDocumentFor).
+	document := clientsync.SeatDocumentFor(context.Background(), inv.room, inv.seat, stderr)
 	if err := inv.client.StopSeat(inv.room, inv.seat); err != nil {
 		return reportDaemon(stderr, "reseat", err)
 	}
-	status, err := inv.client.RestartSeat(inv.room, inv.seat)
+	status, err := inv.client.RestartSeat(inv.room, inv.seat, document)
 	if err != nil {
 		return reportDaemon(stderr, "reseat", err)
 	}
