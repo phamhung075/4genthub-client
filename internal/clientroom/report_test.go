@@ -90,25 +90,31 @@ func TestParseGitLogReadsSeatTrailerAndDocsOnly(t *testing.T) {
 
 func TestFindStaleTasksKeepsOnlyOldOpenTasksOldestFirst(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	answers := map[string]map[string]any{
-		"todo": {"tasks": []any{
-			map[string]any{"id": "t1", "title": "old todo", "updated_at": "2026-10-14T12:00:00Z"},
-			map[string]any{"id": "t2", "title": "fresh", "updated_at": "2026-10-16T08:00:00Z"},
-		}},
-		"in_progress": {"tasks": []any{
-			map[string]any{"id": "t3", "title": "older", "updated_at": "2026-10-13T12:00:00Z"},
-			map[string]any{"id": "t4", "title": "no stamp"},
-		}},
+	lists := map[string]map[string]any{
+		"todo":        {"tasks": []any{map[string]any{"id": "t1"}, map[string]any{"id": "t2"}}},
+		"in_progress": {"tasks": []any{map[string]any{"id": "t3"}}},
 	}
-	stale, err := findStaleTasks(func(status string) (map[string]any, error) { return answers[status], nil }, now)
+	// updated_at is fresh on every task: the sweeper rewrites it, so only created_at may decide.
+	details := map[string]map[string]any{
+		"t1": {"task": map[string]any{"title": "old todo", "created_at": "2026-10-14T12:00:00Z", "updated_at": "2026-10-16T11:00:00Z"}},
+		"t2": {"task": map[string]any{"title": "fresh", "created_at": "2026-10-16T08:00:00Z"}},
+		"t3": {"task": map[string]any{"title": "older", "created_at": "2026-10-13T12:00:00.123456+00:00"}},
+	}
+	list := func(status string) (map[string]any, error) { return lists[status], nil }
+	get := func(id string) (map[string]any, error) { return details[id], nil }
+	stale, err := findStaleTasks(list, get, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(stale) != 2 || stale[0].ID != "t3" || stale[0].Status != "in_progress" || stale[1].ID != "t1" {
 		t.Fatalf("stale = %+v, want t3 then t1", stale)
 	}
-	if _, err := findStaleTasks(func(string) (map[string]any, error) { return nil, fmt.Errorf("down") }, now); err == nil {
-		t.Fatal("a failed fetch must be an error, not an empty list")
+	if _, err := findStaleTasks(func(string) (map[string]any, error) { return nil, fmt.Errorf("down") }, get, now); err == nil {
+		t.Fatal("a failed list must be an error, not an empty list")
+	}
+	noStamp := func(string) (map[string]any, error) { return map[string]any{"task": map[string]any{}}, nil }
+	if _, err := findStaleTasks(list, noStamp, now); err == nil {
+		t.Fatal("a task without created_at must be an error, not silently skipped")
 	}
 }
 

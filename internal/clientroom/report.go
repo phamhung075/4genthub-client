@@ -62,7 +62,7 @@ const (
 	targetCodeEditMin  = 30.0
 )
 
-// staleTaskAge is how long a todo or in_progress task may go without an update before it is listed.
+// staleTaskAge is how long a todo or in_progress task may stay open before it is listed.
 const staleTaskAge = 24 * time.Hour
 
 var (
@@ -378,40 +378,50 @@ func seatFor(bySeat map[string]*seatStats, seat string) *seatStats {
 	return bySeat[seat]
 }
 
-// staleTask is a hub task still open and untouched for longer than staleTaskAge.
+// staleTask is a hub task still open more than staleTaskAge after it was created. The age counts from
+// created_at: the hub's lifecycle sweeper rewrites updated_at when it escalates a task, so updated_at cannot
+// show that nobody worked on it.
 type staleTask struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Status    string `json:"status"`
-	UpdatedAt string `json:"updated_at"`
+	CreatedAt string `json:"created_at"`
 }
 
-// findStaleTasks lists the todo and in_progress tasks whose updated_at is older than staleTaskAge, oldest first.
-// fetch returns the hub's list answer for one status.
-func findStaleTasks(fetch func(status string) (map[string]any, error), now time.Time) ([]staleTask, error) {
+// findStaleTasks lists the todo and in_progress tasks created more than staleTaskAge ago, oldest first.
+// list returns the hub's list answer for one status (ids only, the list is minimal); get returns one task's answer.
+func findStaleTasks(list func(status string) (map[string]any, error), get func(id string) (map[string]any, error), now time.Time) ([]staleTask, error) {
 	var stale []staleTask
 	for _, status := range []string{"todo", "in_progress"} {
-		body, err := fetch(status)
+		body, err := list(status)
 		if err != nil {
 			return nil, err
 		}
 		tasks, _ := body["tasks"].([]any)
 		for _, entry := range tasks {
-			task, ok := entry.(map[string]any)
+			listed, ok := entry.(map[string]any)
 			if !ok {
 				continue
 			}
-			updated, _ := task["updated_at"].(string)
-			at, err := time.Parse(time.RFC3339Nano, updated)
-			if err != nil || now.Sub(at) <= staleTaskAge {
+			id, _ := listed["id"].(string)
+			answer, err := get(id)
+			if err != nil {
+				return nil, err
+			}
+			task, _ := answer["task"].(map[string]any)
+			created, _ := task["created_at"].(string)
+			at, err := time.Parse(time.RFC3339Nano, created)
+			if err != nil {
+				return nil, fmt.Errorf("task %s has no readable created_at", id)
+			}
+			if now.Sub(at) <= staleTaskAge {
 				continue
 			}
-			id, _ := task["id"].(string)
 			title, _ := task["title"].(string)
-			stale = append(stale, staleTask{ID: id, Title: title, Status: status, UpdatedAt: updated})
+			stale = append(stale, staleTask{ID: id, Title: title, Status: status, CreatedAt: created})
 		}
 	}
-	sort.Slice(stale, func(i, j int) bool { return stale[i].UpdatedAt < stale[j].UpdatedAt })
+	sort.Slice(stale, func(i, j int) bool { return stale[i].CreatedAt < stale[j].CreatedAt })
 	return stale, nil
 }
 
@@ -428,6 +438,8 @@ func hubTasks(ctx context.Context, now time.Time) ([]staleTask, error) {
 	}
 	return findStaleTasks(func(status string) (map[string]any, error) {
 		return clientsync.RequestJSON(ctx, "GET", baseURL, token, "/api/v2/tasks/?limit=500&task_status="+status, nil)
+	}, func(id string) (map[string]any, error) {
+		return clientsync.RequestJSON(ctx, "GET", baseURL, token, "/api/v2/tasks/"+id, nil)
 	}, now)
 }
 
@@ -616,9 +628,9 @@ func (r *Report) renderText(out io.Writer) {
 	case len(r.Stale) == 0:
 		fmt.Fprintln(out, "stale tasks: none")
 	default:
-		fmt.Fprintf(out, "stale tasks (todo or in_progress, no update for over 24h): %d\n", len(r.Stale))
+		fmt.Fprintf(out, "stale tasks (todo or in_progress, open for over 24h): %d\n", len(r.Stale))
 		for _, t := range r.Stale {
-			fmt.Fprintf(out, "  %s %-11s %s  %s\n", t.ID, t.Status, t.UpdatedAt, t.Title)
+			fmt.Fprintf(out, "  %s %-11s %s  %s\n", t.ID, t.Status, t.CreatedAt, t.Title)
 		}
 	}
 }
