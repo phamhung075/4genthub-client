@@ -57,8 +57,7 @@ guard-blocked count, and the cost share across the nine activity classes room me
 The five targets, each PASS, FAIL or n/a: docs-only commits % < 15, queue rows/day < 300, high-priority rows %
 < 20, measuring-bash cost % < 25, code-edit cost % > 30. A sixth check this verb adds is not one of the five:
 tasks closed after a commit that cites them, wanted 0. Below them: the tasks open more than 24h, and the
-commits that carry no Task: trailer.
-`
+commits that carry no Task: trailer.`
 
 // The activity classes a turn falls into.
 const (
