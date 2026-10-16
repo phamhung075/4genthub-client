@@ -10,8 +10,10 @@ Owner decision, 2026-10-11. Every seat that writes files works in its own git wo
 ## Before the first edit
 
 1. `pwd` and `git rev-parse --show-toplevel`, then `git branch --show-current`.
-2. If the toplevel is the main checkout or the branch is `main`, stop. Do not edit. Ask the lead for your worktree. The client creates it (`4genteam up <rig>`); do not make one by hand.
+2. If the toplevel is the main checkout or the branch is `main`, stop. Do not edit. Ask the lead for your worktree; do not make one by hand.
 3. Edit only inside your own worktree.
+
+**Where a seat starts** (2026-10-16): the seat's launch directory is the room spec's `cwd` for that seat, else its own worktree under `<roomDir>/wt/` - `<seat>` first, then `<seat>-<repo>` - and the guard is handed that whole list. A seat the room names no `cwd` for, in a room that holds no worktree for it, does not start at all: the room's `team.json`/`spec.json` has to name one (`spec.json` for a room that is already up). The lead's own directory is the main checkout, which the lead merges into; a writing seat's is its worktree.
 
 ## Branches, merges and push
 

@@ -182,27 +182,30 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     let _ = SEAT_LOG.set(seat_log_path(state_dir, &target.room, &target.seat));
     // A refusal to launch is a *config* outcome, and the caller must be able to tell it from a crash: the
     // published death carries the refusal's own text, so a mistyped policy word names the word and a blank
-    // one says it is empty, instead of both reading as "died before readiness" (the lead's request).
+    // one says it is empty, instead of both reading as "died before readiness" (the lead's request). The room's
+    // own directory for the seat is the same kind of config, so it leaves by the same door.
+    let refuse = |reason: String| -> Result<(), String> {
+        let path = state_file_path(state_dir, &target.room, &target.seat);
+        // The seat's directory may not exist yet (nothing has launched), and a refusal that cannot be
+        // published is exactly the gap this closes: measured, the first version left no state file at all.
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = write_state(&path, "agent_exited", &reason, 0);
+        mirror(&reason);
+        Ok(())
+    };
     let argv = match child_argv(&runtime, &seat_dir, &seat) {
         Ok(argv) => argv,
-        Err(e) => {
-            let reason = format!("refusing to launch: {e}");
-            let path = state_file_path(state_dir, &target.room, &target.seat);
-            // The seat's directory may not exist yet (nothing has launched), and a refusal that cannot be
-            // published is exactly the gap this closes: measured, the first version left no state file at all.
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = write_state(&path, "agent_exited", &reason, 0);
-            mirror(&reason);
-            return Ok(());
-        }
+        Err(e) => return refuse(format!("refusing to launch: {e}")),
     };
-    let cwd = seat
-        .cwd
-        .clone()
-        .or_else(|| spec.cwd.clone())
-        .unwrap_or_else(|| ".".to_string());
+    // Where the agent itself runs. The supervisor launched this pane in the same directory, and the runner asks
+    // the room's spec again rather than trusting a shell it may not have been started by: the resolution is one
+    // function, used by both, so a seat started by hand lands where the room says.
+    let cwd = match crate::supervisor::seat_scope(&seat, &spec, &room_dir) {
+        Ok(scope) => scope[0].clone(),
+        Err(e) => return refuse(format!("refusing to launch: {e}")),
+    };
     fs::create_dir_all(&seat_dir).map_err(|e| format!("cannot create seat dir: {e}"))?;
 
     // The supervisor already put AGENTHUB_* and PI_CODING_AGENT_DIR into this process's environment when

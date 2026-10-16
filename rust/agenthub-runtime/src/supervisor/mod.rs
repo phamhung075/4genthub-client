@@ -632,6 +632,11 @@ impl RoomSupervisor {
         crate::park::refuse(self.state_dir(), room, &seat.seat_key, "nothing was started")?;
         let session_name = Self::session_name(room, &seat.seat_key);
         let room_dir = self.room_dir(room);
+        // WHERE THE SEAT RUNS AND WHAT IT MAY WRITE, decided before anything of it is written: a seat with no
+        // directory of its own is refused here, so a room that names none cannot quietly hand its seats the
+        // daemon's own directory again.
+        let scope = seat_scope(seat, spec, &room_dir)?;
+        let cwd = scope[0].clone();
         let seat_dir = room_dir.join("seats").join(&seat.seat_key);
         fs::create_dir_all(&seat_dir).map_err(|e| format!("cannot create seat dir: {e}"))?;
         fs::write(seat_dir.join("mcp.json"), SEAT_MCP_CONFIG)
@@ -645,10 +650,6 @@ impl RoomSupervisor {
             let home = std::env::var_os("HOME").ok_or("HOME is not set, so agy's hooks.json cannot be found")?;
             install_agy_guard_hook(Path::new(&home))?;
         }
-
-        // Determine working directory
-        let cwd_str = seat.cwd.as_deref().or(spec.cwd.as_deref()).unwrap_or(".");
-        let cwd = PathBuf::from(cwd_str);
 
         // Build command line according to runtime. An omp seat's pane runs THIS binary as a runner, which
         // spawns the agent and owns its channel (design §1: the runner replaces `pi-runner.js`); the other
@@ -673,9 +674,17 @@ impl RoomSupervisor {
 
         // Build environment variables
         let mut env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket, &self.base_state_dir);
-        // The seat guard refuses writes outside this directory: the seat's own worktree, where the seat starts.
-        let worktree = cwd.canonicalize().map_err(|e| format!("cannot resolve the seat's directory {}: {e}", cwd.display()))?;
-        env.insert("AGENTHUB_WORKTREE".into(), worktree.to_string_lossy().to_string());
+        // The guard refuses writes outside the seat's own directories, and it takes them from HERE: the runtime
+        // owns the room layout, so the list is decided once, at the launch, and never re-derived where it could
+        // disagree. The first entry is the directory the pane starts in.
+        env.insert(
+            "AGENTHUB_WORKTREES".into(),
+            scope
+                .iter()
+                .map(|dir| dir.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join(":"),
+        );
 
         // WHEN THIS GENERATION'S PANE WAS CREATED. The readiness proof below is a file the previous
         // generation's teardown also writes into, so existence alone cannot separate a handshake from an
@@ -1539,6 +1548,79 @@ fn seat_sessions_dir(room_dir: &Path, seat: &str) -> PathBuf {
     room_dir.join("seats").join(seat).join("sessions")
 }
 
+/// The directories a seat may write: the one the room spec names for it, then its own worktrees under the room's
+/// `wt/`. The FIRST entry is where the seat starts and what a relative path in a tool call resolves against, and
+/// the whole list is what the guard is handed (`AGENTHUB_WORKTREES`).
+///
+/// The runtime owns the room layout - `seats/`, `logs/`, `run/` - so it owns this too: a seat holds one worktree
+/// per repo it edits, `<room>/wt/<seat>` and `<room>/wt/<seat>-<repo>`, and another seat's worktree and the
+/// checkout every seat on this host shares are not among them.
+///
+/// A seat with no directory of its own is REFUSED rather than started somewhere convenient. The resolution this
+/// replaces ended in `.` - the daemon's own directory, the checkout every seat on this host shares - so a room
+/// that named no `cwd` gave each of its seats write scope over it (the architect's finding, 2026-10-16: five omp
+/// seats rooted there, and a seat's file landed in the shared checkout while its own worktree stayed clean).
+/// Naming the seat's directory is the room spec's job; a spec that does not is a room that cannot start a seat,
+/// and the refusal says which spec to write.
+pub fn seat_scope(seat: &SeatSpec, spec: &RoomSpec, room_dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut scope: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = seat.cwd.as_deref().or(spec.cwd.as_deref()) {
+        let path = PathBuf::from(dir);
+        // A relative directory resolves against the daemon's own, which is exactly the base this fix removes:
+        // the room would be naming a directory only the machine that started the daemon can predict.
+        if !path.is_absolute() {
+            return Err(format!(
+                "the directory '{dir}' named for seat '{}' is not absolute: a relative one resolves against the \
+                 daemon's own directory, which is not what a room means",
+                seat.seat_key
+            ));
+        }
+        scope.push(canonical_dir(&path)?);
+    }
+    for worktree in own_worktrees(room_dir, &seat.seat_key) {
+        if !scope.contains(&worktree) {
+            scope.push(worktree);
+        }
+    }
+    if scope.is_empty() {
+        return Err(format!(
+            "seat '{}' has no directory of its own: name one for it in the room's spec (`cwd`, in team.json or \
+             spec.json) or give the room its worktree at {}",
+            seat.seat_key,
+            room_dir.join("wt").join(&seat.seat_key).display()
+        ));
+    }
+    Ok(scope)
+}
+
+/// A seat's own worktrees under the room's `wt/`: `<seat>` and `<seat>-<repo>`, the exact name first, then the
+/// rest by name. A room that holds no `wt/` yet (or none for this seat) has none, and says so with an empty list.
+fn own_worktrees(room_dir: &Path, seat: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(room_dir.join("wt")) else {
+        return Vec::new();
+    };
+    let mut named: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| name == seat || name.starts_with(&format!("{seat}-")))
+        .collect();
+    // `<seat>` sorts before every `<seat>-<repo>`: `-` (0x2D) is below every name character a repo key can
+    // start with, so the sort IS the precedence - the seat's own room worktree first, its other repos after.
+    named.sort();
+    named
+        .into_iter()
+        .filter_map(|name| canonical_dir(&room_dir.join("wt").join(name)).ok())
+        .collect()
+}
+
+/// The absolute, symlink-free form of a directory that must already exist: every path a seat is given is one the
+/// runtime hands to tmux, to `/proc/<pid>/cwd` and to the guard, and all three must name the same directory.
+fn canonical_dir(path: &Path) -> Result<PathBuf, String> {
+    path.canonicalize()
+        .map_err(|e| format!("cannot resolve the seat's directory {}: {e}", path.display()))
+}
+
 /// THE ONE DEFINITION OF A SEAT'S TRANSCRIPT: the newest `*.jsonl` the agent wrote into its sessions dir
 /// (`<UTC-timestamp>_<uuid>.jsonl`, so the newest sorts last by name). Resolved when asked, so a restart
 /// that starts a new session is followed; `None` while the agent has written no session file.
@@ -2277,6 +2359,20 @@ mod tests {
         .expect("room spec")
     }
 
+    /// `<state dir>/rooms/<room>`, the room's own directory, spelled the way the launcher computes it.
+    fn room_dir_of(state_dir: &Path, room: &str) -> PathBuf {
+        state_dir.join("rooms").join(room)
+    }
+
+    /// The room's own directory for a seat: `<state dir>/rooms/<room>/wt/<seat>`. The launcher gives it to a seat
+    /// whose spec names no `cwd`, and a seat with no directory of its own does not start at all - so a case that
+    /// starts one of those leaves the room this directory, the way a room that holds a worktree does.
+    fn seat_worktree(state_dir: &Path, room: &str, seat: &str) -> PathBuf {
+        let dir = room_dir_of(state_dir, room).join("wt").join(seat);
+        fs::create_dir_all(&dir).expect("the seat's worktree");
+        dir
+    }
+
     /// The LIVE direction of the non-omp readiness proof. Those runtimes have no runner to publish a readiness
     /// word, so their proof is the session STILL existing after the grace period - the paragraph in `start_seat`
     /// says exactly that, and the code used to contradict it by returning a survival refusal at the deadline.
@@ -2289,6 +2385,7 @@ mod tests {
         let dir = scratch("probe-live");
         let room = format!("probe-live-{}", std::process::id());
         let key = seat_key("probe-live");
+        seat_worktree(&dir, &room, &key);
         let spec = startable_spec(&room, &key, "sleep 30");
         let supervisor = supervisor_at(&dir);
 
@@ -2322,6 +2419,7 @@ mod tests {
         let dir = scratch("probe-dead");
         let room = format!("probe-dead-{}", std::process::id());
         let key = seat_key("probe-dead");
+        seat_worktree(&dir, &room, &key);
         let spec = startable_spec(&room, &key, "no-such-program-agenthub-probe");
         let supervisor = supervisor_at(&dir);
 
@@ -2350,9 +2448,136 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// The freshness the daemon reports is the seat's OWN (`updated_at`, the runner's stamp), not the
-    /// `None` this used to be hardcoded to and not the launch instant `start_seat` records. Fails without
-    /// the join: the assertion below reads `None` on the old code.
+    /// The scope is the room spec's directory for the seat FIRST - where the pane starts and what a relative path
+    /// resolves against - then the seat's own worktrees under the room's `wt/`, and neither another seat's worktree
+    /// nor an unrelated name that merely starts with the seat key.
+    #[test]
+    fn a_seats_scope_is_its_named_directory_first_and_its_own_worktrees_after() {
+        let dir = scratch("scope");
+        let room = "scope-room";
+        let room_dir = dir.join("rooms").join(room);
+        let hub = seat_worktree(&dir, room, "dev");
+        let client = room_dir.join("wt").join("dev-client");
+        let other = room_dir.join("wt").join("other");
+        let device = room_dir.join("wt").join("device");
+        for path in [&client, &other, &device] {
+            fs::create_dir_all(path).expect("a worktree other than the seat's");
+        }
+        let named = |cwd: Option<&str>| {
+            let mut spec = serde_json::json!({
+                "room": room,
+                "seats": [{"seat_key": "dev", "seat_type": "developer", "runtime": "omp"}],
+                "links": []
+            });
+            if let Some(cwd) = cwd {
+                spec["seats"][0]["cwd"] = serde_json::Value::String(cwd.to_string());
+            }
+            serde_json::from_value::<RoomSpec>(spec).expect("room spec")
+        };
+        let scope = |cwd: Option<&str>| {
+            let spec = named(cwd);
+            seat_scope(&spec.seats[0], &spec, &room_dir)
+        };
+        let canonical = |path: &Path| path.canonicalize().expect("a worktree on disk");
+
+        // Named: the spec's directory leads, and the seat's other worktree still follows it.
+        assert_eq!(
+            scope(Some(&hub.display().to_string())).expect("a named seat starts"),
+            vec![canonical(&hub), canonical(&client)]
+        );
+        // Unnamed: the room's own worktree for the seat is where it starts, and the one holding another repo is
+        // reachable too. `other` and `device` are in the same room and are NOT the seat's.
+        assert_eq!(
+            scope(None).expect("a seat with a room worktree starts"),
+            vec![canonical(&hub), canonical(&client)]
+        );
+        // A relative directory would resolve against the daemon's own, which is the base this fix removes.
+        let err = scope(Some("wt/dev")).expect_err("a relative directory is refused");
+        assert!(err.contains("is not absolute"), "the refusal says why, got: {err}");
+    }
+
+    /// A seat the room names no directory for, in a room that holds no worktree for it, does not start - and the
+    /// refusal names the seat and the two ways to give it one. RED on the resolution this replaces: the seat
+    /// started in `.`, the daemon's own directory, which is the checkout every seat on this host shares.
+    #[tokio::test]
+    async fn a_seat_the_room_gives_no_directory_is_refused_by_its_own_reason() {
+        let dir = scratch("no-directory");
+        let room = format!("no-directory-{}", std::process::id());
+        let key = seat_key("no-directory");
+        let spec = startable_spec(&room, &key, "sleep 300");
+        let supervisor = supervisor_at(&dir);
+
+        let err = supervisor
+            .start_seat(&room, &spec.seats[0], &spec)
+            .expect_err("a seat with no directory of its own must not start in the daemon's");
+        assert!(
+            err.contains(&format!("seat '{key}' has no directory of its own")),
+            "the refusal names the seat, got: {err}"
+        );
+        assert!(
+            err.contains("team.json") && err.contains(&room_dir_of(&dir, &room).join("wt").join(&key).display().to_string()),
+            "the refusal names both ways to give the seat a directory, got: {err}"
+        );
+        assert!(
+            !TerminalManager::is_session_alive(&RoomSupervisor::session_name(&room, &key)),
+            "nothing was launched for a seat that was refused"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The whole point, measured on a live pane: a seat starts in the directory the room named for it, and the
+    /// guard is handed the list - the named directory first, then the seat's other worktree - from `/proc/<pid>`,
+    /// which is where the room measured the defect.
+    #[tokio::test]
+    async fn a_seat_starts_in_its_own_worktree_and_the_guard_is_given_the_list() {
+        let _server = crate::pty::test_servers::own("seat-worktree");
+        let dir = scratch("seat-worktree");
+        let room = format!("seat-worktree-{}", std::process::id());
+        let key = seat_key("seat-worktree");
+        let hub = seat_worktree(&dir, &room, &key);
+        let client = room_dir_of(&dir, &room).join("wt").join(format!("{key}-client"));
+        fs::create_dir_all(&client).expect("the seat's second worktree");
+        let spec: RoomSpec = serde_json::from_value(serde_json::json!({
+            "room": room,
+            "seats": [{"seat_key": key, "seat_type": "developer", "runtime": "sleep 300",
+                       "cwd": hub.display().to_string()}],
+            "links": []
+        }))
+        .expect("room spec");
+        let supervisor = supervisor_at(&dir);
+
+        let status = supervisor
+            .start_seat(&room, &spec.seats[0], &spec)
+            .expect("a seat with a directory starts");
+        let pid = status.pid.expect("a live pane has a pid");
+
+        let started_in = fs::read_link(format!("/proc/{pid}/cwd")).expect("the pane's own cwd");
+        assert_eq!(
+            started_in,
+            hub.canonicalize().expect("the worktree on disk"),
+            "the pane starts in the directory the room named"
+        );
+        let environ = fs::read(format!("/proc/{pid}/environ")).expect("the pane's own environment");
+        let environ = String::from_utf8_lossy(&environ);
+        let list = environ
+            .split('\0')
+            .find_map(|pair| pair.strip_prefix("AGENTHUB_WORKTREES="))
+            .expect("the guard's directories reach the pane");
+        assert_eq!(
+            list,
+            format!(
+                "{}:{}",
+                hub.canonicalize().unwrap().display(),
+                client.canonicalize().unwrap().display()
+            ),
+            "the named directory first, then the seat's other worktree - and nothing else"
+        );
+
+        let _ = supervisor.stop_seat(&room, &key);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn last_active_is_the_seats_own_freshness_stamp() {
         let dir = scratch("last-active");
