@@ -474,7 +474,7 @@ mod tests {
         // The lock first: this test moves the process-wide `TMUX_TMPDIR` to its own directory and deletes that
         // directory at the end, which is exactly the window in which another test's tmux clients would resolve
         // a server that no longer exists. See `pty::test_servers` for the measurement.
-        let (_tmux, _server) = crate::pty::test_servers::own("tmux-root");
+        let _server = crate::pty::test_servers::own("tmux-root");
         let dir = std::env::temp_dir().join(format!("runtime-tmux-root-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch state dir");

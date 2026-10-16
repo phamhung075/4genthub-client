@@ -2173,7 +2173,7 @@ mod tests {
     /// which proof it was.
     #[tokio::test]
     async fn an_omp_seat_reports_the_proof_its_state_rests_on() {
-        let (_tmux, _server) = crate::pty::test_servers::own("omp-proof");
+        let _server = crate::pty::test_servers::own("omp-proof");
         let dir = scratch("omp-proof");
         let room = format!("omp-proof-{}", std::process::id());
         let key = seat_key("omp-proof");
@@ -2257,7 +2257,7 @@ mod tests {
     /// just watched, alive, on the iteration before.
     #[tokio::test]
     async fn a_live_non_omp_seat_is_running_once_its_grace_has_passed() {
-        let (_tmux, _server) = crate::pty::test_servers::own("probe-live");
+        let _server = crate::pty::test_servers::own("probe-live");
         let dir = scratch("probe-live");
         let room = format!("probe-live-{}", std::process::id());
         let key = seat_key("probe-live");
@@ -3014,7 +3014,7 @@ mod tests {
     /// reviewer's file said `working` for a session that had been gone for 42 minutes.
     #[tokio::test]
     async fn the_status_corrects_a_claim_whose_publisher_is_gone() {
-        let (_tmux, _server) = crate::pty::test_servers::own("status-stale");
+        let _server = crate::pty::test_servers::own("status-stale");
         let dir = scratch("status-stale");
         let room = format!("status-stale-{}", std::process::id());
         let key = seat_key("status-stale");

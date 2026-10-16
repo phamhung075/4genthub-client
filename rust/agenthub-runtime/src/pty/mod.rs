@@ -14,8 +14,9 @@ pub struct TerminalManager;
 /// `TMUX_TMPDIR` (set once at startup, see `crate::own_tmux_root`) decides WHICH server, and the scrub
 /// decides whether that server starts clean - measured, a private server created by an unscrubbed client
 /// carried the host's variables just as the shared one did (7 of them), because a server takes the
-/// environment of whoever creates it. The first tmux call in `launch_session` runs before any other scrub,
-/// and it is exactly the call that would create ours.
+/// environment of whoever creates it. The first tmux call in `launch_session` is `ensure_server`, which starts
+/// ours from a scrubbed client and keeps no seat's environment on its argv - it is the one call that may
+/// create the server, so it is the one call that must.
 /// Pane lines compared before and after Enter: enough to hold the input box and what sits around it.
 const SUBMIT_CAPTURE_LINES: usize = 30;
 /// Time the pane gets to repaint after a paste and after each Enter.
@@ -106,6 +107,47 @@ fn tmux_command() -> Command {
     cmd
 }
 
+/// Start this root's tmux server from a client whose command line carries no seat's environment, and keep it
+/// alive until a seat's pane exists.
+///
+/// WHY THE SERVER NEEDS A START OF ITS OWN: a tmux server is created by whichever client reaches it first, and
+/// the server KEEPS THAT CLIENT'S ARGV for as long as it runs - `/proc/<server pid>/cmdline` is world-readable
+/// (0444), while the same process's environment is not. The session-creating client below is the one that must
+/// carry a seat's environment (`new-session -e KEY=VALUE`), so when it is also the creating client, every one
+/// of those pairs is published on the longest-lived process in the room. Measured on this box 2026-10-16, after
+/// the connector token left the `-e` list: the room's server argv held `DEEPSEEK_API_KEY=`, `TYPESAFE_API_KEY=`
+/// and `AGENTHUB_TOKEN=`, and it held them because the first seat's `new-session` had created it. Those three
+/// keys cannot be denied the way the connector token was - a seat's model calls read the first two and its own
+/// `mcp.json` reads the third - so the fix is the argv, not the key. Started here, the server's argv is this
+/// call's, and a seat's `-e` pairs live only in that seat's own client, which is gone within the launch.
+///
+/// `exit-empty off` is what makes the bootstrap hold. Under tmux's default an empty server exits as soon as its
+/// last client disconnects, so a `start-server`-only client leaves nothing behind: measured here, a bare
+/// `start-server` on a fresh root had no server a moment later, and `new-session` then created the real one out
+/// of its own argv - which is exactly how the pairs got onto it. Off, the empty server waits for the seats.
+/// The consequence is a decision rather than a side effect: this root's server now OUTLIVES its last session.
+/// The root belongs to the state root and is shared by every room under it, so no per-room stop may kill it,
+/// and a stop now leaves an idle server (with a clean argv) instead of none.
+///
+/// A server that is already up is left exactly as it is - not started, and its own `exit-empty` not touched -
+/// because whether an older server's argv is clean cannot be read from here and a live server may be carrying
+/// live seats. A server started before this change has `exit-empty` on, so it still exits with its last session
+/// and the next launch bootstraps over its grave; one started by this call is clean and stays clean.
+fn ensure_server() -> Result<(), String> {
+    if matches!(tmux_command().args(["list-sessions"]).output(), Ok(out) if out.status.success()) {
+        return Ok(());
+    }
+    let out = tmux_command()
+        .args(["start-server", ";", "set", "-g", "exit-empty", "off"])
+        .output()
+        .map_err(|e| format!("failed to start the tmux server: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("tmux start-server failed: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
 impl TerminalManager {
     /// Launch an agent runtime inside a dedicated tmux session.
     pub fn launch_session(
@@ -115,6 +157,10 @@ impl TerminalManager {
         env_vars: &HashMap<String, String>,
     ) -> Result<u32, String> {
         info!("launching session {} in cwd {}", session_name, cwd.display());
+
+        // The server first, and from a client that carries none of this seat's environment: whoever creates it
+        // keeps its argv (see `ensure_server`), and every call below connects to the server this one started.
+        ensure_server()?;
 
         // Check if session already exists
         let check = tmux_command()
@@ -132,9 +178,10 @@ impl TerminalManager {
         // cannot out-vote it: a server that already exists keeps whatever it was created with, a pane takes the
         // server's environment, and a key merely left out of `-e` still arrives. Measured on this box
         // 2026-10-15 with the server up: `tmux show-environment -g` held AGENTHUB_CONNECTOR_TOKEN while this
-        // runtime was the only thing creating sessions. The server exists by this point - the `has-session`
-        // call above creates it, from an already-scrubbed client, when it is not there - so this loop can only
-        // ever clean a server, never make a dirty one. A key the server never held is not an error.
+        // runtime was the only thing creating sessions. The server exists by this point - `ensure_server` above
+        // starts it, from an already-scrubbed client, when it is not there, and `has-session` cannot create one
+        // now that it is - so this loop can only ever clean a server, never make a dirty one. A key the server
+        // never held is not an error.
         //
         // The credential class is cleaned HERE rather than by the `env -u` wrapper below: the wrapper prints the
         // key's NAME on the pane's command line for the seat's whole life, which is the surface the owner's own
@@ -412,7 +459,7 @@ mod launch_env_tests {
 
     #[test]
     fn each_session_gets_its_own_env_not_the_servers() {
-        let (_tmux, _server) = super::test_servers::own("launch-env");
+        let _server = super::test_servers::own("launch-env");
         let dir = std::env::temp_dir().join(format!("pty-launch-env-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let sessions: Vec<(String, std::path::PathBuf)> = ["first", "second"]
@@ -439,6 +486,107 @@ mod launch_env_tests {
         }
         let _ = fs::remove_dir_all(&dir);
     }
+
+    /// A value the test itself writes, so a hit on a command line can only have come from the launch.
+    const SECRET_IN_THE_ENV: &str = "sk-the-owner-would-grep-this";
+
+    /// THE OWNER'S MEASUREMENT, pinned: after a launch, the tmux SERVER's command line holds none of the seat's
+    /// environment - and the pane still holds all of it.
+    ///
+    /// The server is the one process of a room that outlives every seat, and `/proc/<server pid>/cmdline` is
+    /// world-readable, so a `-e KEY=VALUE` that lands on the CREATING client's argv is a credential published
+    /// for the room's whole life: measured on this box 2026-10-16, the live room's server carried
+    /// `DEEPSEEK_API_KEY=`, `TYPESAFE_API_KEY=` and `AGENTHUB_TOKEN=`, and it carried them because the first
+    /// seat's `new-session` had created that server. The second half is what the fix must not cost: the pane
+    /// still receives the value, because what moved is WHICH process's argv the pair is written on.
+    #[test]
+    fn the_server_is_not_the_process_that_carries_the_seats_environment() {
+        if !Path::new("/proc/self").exists() {
+            eprintln!("no /proc: this case IS that measurement, so it cannot be taken here");
+            return;
+        }
+        let server = super::test_servers::own("server-argv");
+        let dir = std::env::temp_dir().join(format!("pty-server-argv-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let session = format!("pty-server-argv-{}", std::process::id());
+        let delivered = dir.join("seat-env");
+        let env = HashMap::from([
+            ("DEEPSEEK_API_KEY".to_string(), SECRET_IN_THE_ENV.to_string()),
+            ("AGENTHUB_SEAT".to_string(), "dev".to_string()),
+        ]);
+        let cmd = format!(
+            "sh -c 'printf %s \"$DEEPSEEK_API_KEY\" > {}; sleep 5'",
+            delivered.display()
+        );
+        TerminalManager::launch_session(&session, &dir, &cmd, &env).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !delivered.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            fs::read_to_string(&delivered).unwrap_or_default(),
+            SECRET_IN_THE_ENV,
+            "the seat must still get its own environment: the fix is about the server's argv, not the delivery"
+        );
+
+        let argv = server_argv(server.root()).expect("the root's own tmux server");
+        assert!(argv.len() > 1, "a one-word argv is not a server's: {argv:?}");
+        for arg in &argv {
+            assert!(
+                !arg.contains(SECRET_IN_THE_ENV),
+                "the seat's value is on the server's command line, where `ps` reads it: {arg}"
+            );
+            assert!(
+                !credential_shaped(arg),
+                "a `NAME=VALUE` whose name is a credential rides the server's command line: {arg}"
+            );
+        }
+
+        let _ = TerminalManager::stop_session(&session);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The owner's own predicate, kept as written: a `KEY=VALUE` whose key names a `TOKEN`, `KEY`, `SECRET` or
+    /// `PASSWORD`. The bootstrap's own command has no `=` on it at all, so a hit here is a seat's environment.
+    fn credential_shaped(arg: &str) -> bool {
+        let Some((name, _)) = arg.split_once('=') else {
+            return false;
+        };
+        ["TOKEN", "KEY", "SECRET", "PASSWORD"].iter().any(|word| name.contains(word))
+    }
+
+    /// The command line of THIS root's tmux server, read the way the owner's measurement reads it: the server is
+    /// the `tmux: server` process whose environment names this root, and its argv is world-readable.
+    fn server_argv(root: &Path) -> Option<Vec<String>> {
+        let wanted = format!("TMUX_TMPDIR={}", root.display());
+        let mut pid = None;
+        for entry in fs::read_dir("/proc").ok()?.flatten() {
+            let Ok(candidate) = entry.file_name().to_string_lossy().parse::<u32>() else {
+                continue;
+            };
+            let process = entry.path();
+            let is_server = fs::read_to_string(process.join("comm"))
+                .map(|comm| comm.trim() == "tmux: server")
+                .unwrap_or(false);
+            if !is_server {
+                continue;
+            }
+            let environ = fs::read(process.join("environ")).unwrap_or_default();
+            if environ.split(|b| *b == 0).any(|kv| kv == wanted.as_bytes()) {
+                pid = Some(candidate);
+                break;
+            }
+        }
+        let argv = fs::read(format!("/proc/{}/cmdline", pid?)).ok()?;
+        Some(
+            argv.split(|b| *b == 0)
+                .filter(|arg| !arg.is_empty())
+                .map(|arg| String::from_utf8_lossy(arg).to_string())
+                .collect(),
+        )
+    }
 }
 
 /// ONE lock over the process-wide `TMUX_TMPDIR`, and a tmux server directory of the caller's own.
@@ -458,20 +606,59 @@ mod launch_env_tests {
 /// other pane test is in flight while it does.
 #[cfg(test)]
 pub(crate) mod test_servers {
-    use std::path::PathBuf;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
     use std::sync::{Mutex, MutexGuard};
 
     static TMUX_ENV: Mutex<()> = Mutex::new(());
 
+    /// One test's own tmux root, and the lock that keeps the process pointed at it.
+    ///
+    /// The lock is held for the guard's whole life and the root is removed when it drops, which is the property
+    /// the tests below rely on: with `pty::ensure_server` setting `exit-empty off`, a server no longer exits
+    /// with its last session, so the socket - and this directory - would otherwise outlive every test that
+    /// opened a pane.
+    pub(crate) struct Server {
+        _env: MutexGuard<'static, ()>,
+        root: PathBuf,
+        /// What `TMUX_TMPDIR` held before this test took it, handed back when the guard drops.
+        previous: Option<OsString>,
+    }
+
+    impl Server {
+        pub(crate) fn root(&self) -> &Path {
+            &self.root
+        }
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            // The variable is set back to THIS root for the kill: it is process-wide, and a `kill-server` that
+            // resolved to the room's own server would end every seat in the live room. Then the variable goes
+            // back to whatever the previous test (or nothing) had put there.
+            std::env::set_var("TMUX_TMPDIR", &self.root);
+            let _ = super::tmux_command().args(["kill-server"]).output();
+            let _ = std::fs::remove_dir_all(&self.root);
+            match self.previous.take() {
+                Some(previous) => std::env::set_var("TMUX_TMPDIR", previous),
+                None => std::env::remove_var("TMUX_TMPDIR"),
+            }
+        }
+    }
+
     /// Hold the process's tmux root for the rest of the test, pointed at a scratch server of this test's own.
-    /// The returned guard must stay alive while the test opens panes, and the directory outlives the test only
-    /// because tmux removes its own socket.
-    pub(crate) fn own(tag: &str) -> (MutexGuard<'static, ()>, PathBuf) {
+    /// The guard must stay alive while the test opens panes.
+    pub(crate) fn own(tag: &str) -> Server {
         let guard = TMUX_ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = std::env::temp_dir().join(format!("agenthub-tmux-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch tmux server dir");
+        let previous = std::env::var_os("TMUX_TMPDIR");
         std::env::set_var("TMUX_TMPDIR", &root);
-        (guard, root)
+        Server {
+            _env: guard,
+            root,
+            previous,
+        }
     }
 }
