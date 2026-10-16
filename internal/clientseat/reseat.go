@@ -19,6 +19,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/commpolicy"
+	"github.com/phamhung075/4genthub-client/internal/seatpark"
 )
 
 // reseatDeps is what reseat touches outside its arguments, as fields so the suite needs no rig and no wait.
@@ -337,6 +338,11 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	if opts["raw"] == "true" {
 		text = strings.Join(positional[2:], " ")
 	}
+	// A PARKED SEAT IS NOT HANDED WORK, and here the seat key IS the caller's, so no lookup stands between
+	// the park and the refusal (seatpark).
+	if err := seatpark.Refuse(socket, rig, seat); err != nil {
+		return report(stderr, err)
+	}
 	// THE DECISION COMES BEFORE THE DELIVERY. On this shape the seat key the caller typed IS the key the
 	// policy speaks in, so no lookup stands between them.
 	handle, err := authorizeToSeat(socket, rig, seat, intent)
@@ -386,6 +392,12 @@ func sendToSession(session, text string, opts map[string]string, socket string, 
 					"by cannot be read for it; nothing was sent", socket, session),
 			})
 		}
+	}
+	// A PARKED SEAT IS NOT HANDED WORK, and it is asked BEFORE the policy decision: a park is a state of the
+	// destination rather than a permission of the sender, so it writes no decision line - the record and the
+	// rail row are where a reader finds it (seatpark).
+	if err := seatpark.Refuse(socket, room, seat); err != nil {
+		return report(stderr, err)
 	}
 	handle, err := authorizeToSeat(socket, room, seat, intent)
 	if err != nil {

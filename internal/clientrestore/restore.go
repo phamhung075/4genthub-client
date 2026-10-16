@@ -12,6 +12,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
+	"github.com/phamhung075/4genthub-client/internal/seatpark"
 )
 
 // briefSendTimeout is the shell's `timeout 40 rig send`. A brief is text typed into a seat's terminal
@@ -141,6 +142,14 @@ func (r *restorer) brief(rigName string, seats []string, body string) []string {
 	body = strings.TrimRight(body, "\n")
 	var undelivered []string
 	for _, seat := range seats {
+		// A PARKED SEAT IS NOT HANDED WORK. The brief is how a restored seat is given its next stretch of
+		// work, so a seat the budget breaker stopped is not briefed - and it counts as NOT reached, because a
+		// brief that was asked for and deliberately withheld is not a delivery (seatpark).
+		if err := seatpark.Refuse("", rigName, seat); err != nil {
+			r.log.printf("%s: %v", rigName, err)
+			undelivered = append(undelivered, seat)
+			continue
+		}
 		text := "Your seat: " + seat + ". " + body
 		if own, err := os.ReadFile(filepath.Join(r.briefs, rigName, seat+".txt")); err == nil {
 			text = "Your seat: " + seat + ". " + strings.TrimRight(string(own), "\n")
@@ -237,6 +246,13 @@ func reviveRoom(_ context.Context, room string) error {
 	var failed []string
 	for _, seat := range seats {
 		if strings.EqualFold(strings.TrimSpace(seat.State), "running") {
+			continue
+		}
+		// A PARKED SEAT IS NOT BROUGHT BACK. The breaker stopped it, and this loop is what would restart the
+		// seat that crossed the ceiling; the skip is REPORTED rather than silent, because a seat this verb
+		// deliberately left down is not a seat that came up (seatpark).
+		if err := seatpark.Refuse("", room, seat.Seat); err != nil {
+			failed = append(failed, seat.Seat+" was not started: "+err.Error())
 			continue
 		}
 		if _, err := client.RestartSeat(room, seat.Seat); err != nil {
