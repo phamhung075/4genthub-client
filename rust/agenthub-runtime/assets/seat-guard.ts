@@ -79,7 +79,17 @@ const PGREP_CALL = callOf("pgrep");
 const KILL_CALL = callOf("kill");
 const XARGS_CALL = callOf("xargs");
 const TEE_CALL = callOf("tee");
-const COPY_CALL = callOf("(?:cp|mv|install|rsync)");
+const COPY_CALL = callOf("(?:cp|install|rsync|ln)");
+// A move removes its source as well as filling its destination, so it contributes every operand.
+const MOVE_CALL = callOf("mv");
+// A statement that DELETES its operands or rewrites a file in place. Neither is a redirect, a `tee` or a copy
+// target, so before this every path built this way was judged by NO rule: `rm <seat dir>/config.yml` and
+// `rm <seat dir>/hooks/pre/seat-guard.ts` both left the seat unguarded while the edit-shaped forms were refused.
+const DESTROY_CALL = callOf("(?:rm|unlink|truncate|shred)");
+const IN_PLACE_CALL = callOf("(?:sed|perl)");
+const DD_CALL = callOf("dd");
+const IN_PLACE = /(^|\s)(-\S*i\S*|--in-place)\s/;
+const DD_OF = /\bof=(\S+)/g;
 
 // A git statement as verb and arguments, after the global options (`-C dir`, `-c k=v`, `--no-pager`, ...).
 function gitOf(part: string): { verb: string; args: string[] } | null {
@@ -162,6 +172,14 @@ function writeTargets(tool: string, input: Record<string, unknown>): string[] {
       if (tee) raw.push(...operands(tee[1]));
       const copy = part.match(COPY_CALL);
       if (copy) raw.push(...operands(copy[1]).slice(-1));
+      const move = part.match(MOVE_CALL);
+      if (move) raw.push(...operands(move[1]));
+      const destroy = part.match(DESTROY_CALL);
+      if (destroy) raw.push(...operands(destroy[1]));
+      const inPlace = part.match(IN_PLACE_CALL);
+      if (inPlace && IN_PLACE.test(inPlace[1])) raw.push(...operands(inPlace[1]).slice(-1));
+      const dd = part.match(DD_CALL);
+      if (dd) for (const m of dd[1].matchAll(DD_OF)) raw.push(m[1]);
     }
   }
   return raw.filter((p) => p && p !== "/dev/null" && !/^(""|'')$/.test(p) && !/[$`]/.test(p));
@@ -181,11 +199,14 @@ const frozen = (abs: string): boolean =>
 // ALLOWS the seat its own directory, so these two are named by DIRECTORY and not by file name: a project's own
 // config.yml stays the seat's to edit.
 const seatDir = resolve(process.env.PI_CODING_AGENT_DIR ?? ".");
-const SEAT_FILES: Record<string, true> = { "config.yml": true, "tool-calls.jsonl": true };
+// `parked.json` is the breaker's record that this seat is stopped, in the seat's own directory; the ROOM's
+// limits.json is the budget the breaker enforces and the guard derives from the same seat dir (two levels up).
+const SEAT_FILES: Record<string, true> = { "config.yml": true, "tool-calls.jsonl": true, "parked.json": true };
+const roomBudget = resolve(seatDir, "..", "..", "limits.json");
 const protectedPath = (abs: string): boolean =>
   abs.includes("/scripts/git-hooks/") || abs.includes("/.git/hooks/") || basename(abs) === "seat-guard.ts" ||
   abs.includes("/hooks/pre/") || abs.endsWith("/.gemini/config/hooks.json") ||
-  (dirname(abs) === seatDir && SEAT_FILES[basename(abs)] === true);
+  (dirname(abs) === seatDir && SEAT_FILES[basename(abs)] === true) || abs === roomBudget;
 
 // The rules. Each returns the reason a call is refused, or "" to let it through.
 const RULES: { rule: string; check: (tool: string, input: Record<string, unknown>) => string }[] = [
@@ -285,7 +306,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     rule: "protected-paths",
     check: (tool, input) =>
       writeTargets(tool, input).some((p) => protectedPath(absolute(p)))
-        ? "the git hooks, the seat guard, and the config and log it rests on, are the owner's to change"
+        ? "the git hooks, the seat guard, and the config, log, budget and park record it rests on, are the owner's to change"
         : "",
   },
   {

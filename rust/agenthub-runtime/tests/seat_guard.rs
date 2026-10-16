@@ -210,3 +210,60 @@ fn a_seat_cannot_edit_the_config_or_the_log_the_guard_rests_on() {
     assert_eq!(write("/work/wt/dev/config.yml"), None);
     assert_eq!(write("/work/wt/dev/tool-calls.jsonl"), None);
 }
+
+/// Deleting or rewriting in place what enforces the rules puts the seat outside them as surely as editing it does:
+/// `rm`, `sed -i`, `truncate`, `dd of=`, an `mv` away and an `ln` over the file were all judged by NO rule, because
+/// writeTargets saw only a redirect, a `tee` and a copy target. The park record and the room's budget are the same
+/// kind of state, so they are named here too. A glob (`rm <seat dir>/*`), `find -delete`, `xargs rm` and a command
+/// inside quotes are still unjudged: the guard is a net for a seat's mistakes, not a sandbox.
+#[test]
+fn a_seat_cannot_delete_or_rewrite_the_files_the_rules_rest_on() {
+    let root = fresh_dir("state");
+    let seat = root.join("rooms/r/seats/dev");
+    std::fs::create_dir_all(seat.parent().unwrap()).unwrap();
+    let room = seat.parent().unwrap().parent().unwrap();
+    let seat_file = |name: &str| seat.join(name).display().to_string();
+    let run = |cmd: String| verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+
+    let cases = vec![
+        format!("rm {}", seat_file("config.yml")),
+        format!("rm {}", seat_file("parked.json")),
+        format!("rm -rf {}/hooks/pre/seat-guard.ts", seat.display()),
+        format!("sed -i s/x/y/ {}", seat_file("tool-calls.jsonl")),
+        format!("perl -pi -e s/x/y/ {}", seat_file("parked.json")),
+        format!("truncate -s0 {}", seat_file("tool-calls.jsonl")),
+        format!("dd of={}", seat_file("parked.json")),
+        format!("mv {} /tmp/gone", seat_file("config.yml")),
+        format!("ln -sf /dev/null {}", seat_file("tool-calls.jsonl")),
+        format!("rm {}", room.join("limits.json").display()),
+    ];
+    for cmd in cases {
+        assert_eq!(run(cmd.clone()).as_deref(), Some("protected-paths"), "{cmd}");
+    }
+    assert_eq!(
+        verdict_in(&seat, "write_to_file", serde_json::json!({ "TargetFile": seat_file("parked.json") })).as_deref(),
+        Some("protected-paths")
+    );
+    assert_eq!(
+        verdict_in(&seat, "write_to_file", serde_json::json!({ "TargetFile": room.join("limits.json") })).as_deref(),
+        Some("protected-paths")
+    );
+}
+
+/// The net is not a blanket ban on deleting or rewriting: a seat's own worktree, the temp dir and a target it
+/// cannot judge (a variable) stay its own.
+#[test]
+fn an_ordinary_deletion_still_stays_the_seat_s_own() {
+    let seat = fresh_dir("seat");
+    let run = |cmd: String| verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+    for cmd in [
+        format!("rm -rf {WORKTREE}/dist"),
+        "rm /tmp/scratch".to_string(),
+        "rm -rf $SCRATCH/x".to_string(),
+        format!("sed -i s/x/y/ {WORKTREE}/main.go"),
+        format!("dd if=/dev/zero of={WORKTREE}/big.bin count=1"),
+        format!("mv {WORKTREE}/a.go {WORKTREE}/b.go"),
+    ] {
+        assert_eq!(run(cmd.clone()), None, "{cmd}");
+    }
+}
