@@ -75,6 +75,7 @@ func TestRoomQueueListPrintsOneLinePerRow(t *testing.T) {
 // verb exits 0, because an empty read is a measurement the daemon made - while printing nothing would be
 // indistinguishable from a read that never happened.
 func TestRoomQueueListOnAnEmptyRailSaysSo(t *testing.T) {
+	t.Setenv(sessionEnv, "")
 	daemon := newFakeDaemon(t, map[string]string{"QueueList": okData("[]")})
 
 	code, stdout, stderr := runRoom(t, daemon.args("queue", "list", testRoom)...)

@@ -33,6 +33,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
+	"github.com/phamhung075/4genthub-client/internal/roombudget"
 )
 
 // closeWatch closes the room's herdr watch workspaces, whose panes run the feed and input helpers; a var so
@@ -77,6 +78,8 @@ func (RoomCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		return runReport(args[1:], stdout, stderr)
 	case "metrics":
 		return runMetrics(args[1:], stdout, stderr)
+	case "limits":
+		return runLimits(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "4genteam room: unknown verb %q; the verbs are status, stop, reseat, compact\n", args[0])
 	return clientcmd.ExitRoomRefused
@@ -93,6 +96,7 @@ var subUsages = map[string]string{
 	"compact": "usage: 4genteam room compact ROOM [--state-dir DIR] [--socket PATH]",
 	"report":  reportUsage,
 	"metrics": metricsUsage,
+	"limits":  limitsUsage,
 }
 
 func subUsage(verb string) string {
@@ -113,7 +117,8 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "machine's own.")
 	fmt.Fprintln(out, "\nstatus reads GetRoomStatus and prints one line per seat: SEAT RUNTIME STATE SESSION, plus an")
 	fmt.Fprintln(out, "ALERT segment when the runtime flagged the seat - alert=<kind> quiet_seconds=<secs|unknown>")
-	fmt.Fprintln(out, "waiting_qitem_ids=<id,id|none>. A seat with no alert prints the four fields and nothing else, and")
+	fmt.Fprintln(out, "waiting_qitem_ids=<id,id|none> - and a PARKED segment when the budget safeguard stopped the seat:")
+	fmt.Fprintln(out, "parked=<at> reason=<why>. A seat with neither prints the four fields and nothing else, and")
 	fmt.Fprintln(out, "`unknown` is a seat that published no freshness stamp: unknown quiet time is NOT zero seconds.")
 	fmt.Fprintln(out, "stop sends StopRoom: exactly that room's own sessions. The room's directory (spec.json, seats/,")
 	fmt.Fprintln(out, "logs/) is LEFT IN PLACE so the room can be started again; nothing outside the room is touched.")
@@ -124,6 +129,10 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "is never reported as one.")
 	fmt.Fprintln(out, "\nExit codes (design §2.5): 0 every seat answered; 2 the daemon answered but a seat would not run; 3 a")
 	fmt.Fprintln(out, "usage error, or a room the daemon does not know.")
+	fmt.Fprintln(out, "\nlimits reads or writes the room's budget file, rooms/<room>/limits.json, which `4genteam budget-run")
+	fmt.Fprintln(out, "--room ROOM` enforces: the ceilings a seat may spend in 24h and make in a minute. The limits SHIP OFF,")
+	fmt.Fprintln(out, "and while they are off the safeguard measures nothing. This is the verb an OWNER uses: the guard refuses")
+	fmt.Fprintln(out, "a seat a write to that file, so it cannot be raised by the seat it bounds.")
 }
 
 // invocation is one sub-verb's resolved arguments: the room as the caller named it, the seat for the one
@@ -318,11 +327,24 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	// One line per seat, and the SEAT's own rows in the daemon's order: the state word and the session name
 	// are the daemon's, not this client's, so a reader can compare this output with the room's own reading.
-	// A seat the runtime flagged carries its alert as the row's last segment (see seatRow/alertNote).
+	// A seat the runtime flagged carries its alert as the row's last segment (see seatRow/alertNote), and a
+	// seat the budget safeguard parked carries that too - a stopped seat whose reason nobody can read is a
+	// seat an operator will start again.
 	for _, seat := range seats {
-		fmt.Fprintln(stdout, seatRow(seat))
+		fmt.Fprintln(stdout, seatRow(seat)+parkedNote(inv, seat))
 	}
 	return clientcmd.ExitOK
+}
+
+// parkedNote is the trailing segment of a seat's row for the record the budget safeguard leaves in the seat's
+// own directory, or the empty string when the seat is not parked. The reason is quoted because it is a
+// sentence with spaces and commas in it, and the row's fields are space-separated.
+func parkedNote(inv invocation, seat clientruntime.SeatStatus) string {
+	parked, ok := roombudget.ReadParked(clientruntime.SeatDir(inv.stateDir, inv.room, seat.Seat))
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf(" parked=%s reason=%q", parked.At, parked.Reason)
 }
 
 // runStop sends StopRoom and closes the room's own herdr watch workspaces, whose feed and input helpers would

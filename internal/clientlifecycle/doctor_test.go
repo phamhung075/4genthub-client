@@ -106,6 +106,7 @@ func (f *healthFixture) everythingRunning() {
 	f.running(clientservices.Watchdog, "demo", 4102)
 	f.running(clientservices.Messages, "demo", 4105)
 	f.running(clientservices.RoomGuard, "demo", 4106)
+	f.running(clientservices.Budget, "demo", 4107)
 	f.running(clientservices.Bridge, "", 4103)
 	f.running(clientservices.Agent, "", 4104)
 }
@@ -259,6 +260,7 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	for _, want := range []struct{ safeguard, rig string }{
 		{clientservices.Compact, "demo"},
 		{clientservices.Watchdog, "demo"},
+		{clientservices.Budget, "demo"},
 		{clientservices.Bridge, ""},
 		{clientservices.Agent, ""},
 	} {
@@ -274,7 +276,7 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	if stderr != "" {
 		t.Errorf("a healthy machine wrote %q to stderr", stderr)
 	}
-	for _, want := range []string{"demo compact: running, age 1s", "demo watchdog: running, age 1s", "bridge: running, age 1s", "agent: running, age 1s"} {
+	for _, want := range []string{"demo compact: running, age 1s", "demo watchdog: running, age 1s", "demo budget: running, age 1s", "bridge: running, age 1s", "agent: running, age 1s"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout = %q, want %q", stdout, want)
 		}
