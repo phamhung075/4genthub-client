@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -375,6 +376,41 @@ func TestSwitchRestartStillRunsOnTheRuntimeTheMachineNames(t *testing.T) {
 	}
 	if !strings.HasSuffix(out, "applied=restart\n") {
 		t.Errorf("stdout = %q, want it to end applied=restart", out)
+	}
+}
+
+// The other half of the machine read: a read that FAILS names no runtime, and the verb then keeps the cloud's
+// record instead of inventing a change it cannot see - so a machine it cannot read does not turn a model-only
+// request into a runtime change (and does not fail the switch either). The stub carries a DECOY seat list
+// beside the error, naming a runtime the request does not ask for: with only the error set, a read that
+// returned the (empty) list instead of checking the error would answer the same way and the case would pass
+// while the err != nil line was gone.
+func TestSwitchFailedMachineReadKeepsTheCloudsRecord(t *testing.T) {
+	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("agy", "old-model")}}
+	stub := &switchSeatStub{
+		seats:     []clientruntime.SeatStatus{switchStatus("seat1", "omp")},
+		statusErr: errors.New("daemon unreachable at /tmp/agenthub.sock"),
+	}
+	switchStubSeats(t, stub)
+
+	code, out, errOut := switchRun(t, cloud, []string{
+		"room1", "seat1", "--runtime", "agy", "--model", "gemini-3.8-flash-low", "--apply", "restart"})
+
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d: a failed machine read is not a failed switch", code, clientcmd.ExitOK)
+	}
+	want := [][]string{
+		{"set-model", "room1", "seat1", "gemini-3.8-flash-low"},
+		{"restart-fresh", "room1", "seat1", ""},
+	}
+	if got := stub.calls; !reflect.DeepEqual(got, want) {
+		t.Errorf("runtime calls = %v, want %v - the cloud already records the requested runtime, so this is a model-only request", got, want)
+	}
+	if strings.Contains(errOut, "owner's call") {
+		t.Errorf("stderr = %q, want NO runtime-change notice: the unreadable machine named no runtime", errOut)
+	}
+	if want := "switched:room1/seat1 runtime=agy model=gemini-3.8-flash-low applied=restart\n"; out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
 	}
 }
 
