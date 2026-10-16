@@ -39,7 +39,10 @@ is that change, in one act.
   `spec.json` before the seat starts from it - so every later heal, restore or restart installs the same
   file instead of a stale one.
 - Docs: `README.md` and `docs/AGENT-SETUP.md` named `policy show|apply` and the team file. They now name
-  `policy render` and say that the printed document is what the client installs.
+  `policy render` and say that the printed document is what the client installs. The `retiredverbs`
+  package's read-set note named the parked deny patterns in `internal/clientpolicy/policy.go` as the one
+  thing a repo-wide search for the retired-orchestrator class still left; that is now recorded as gone
+  with the table.
 
 ### Testing
 
