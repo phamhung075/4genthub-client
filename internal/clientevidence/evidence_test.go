@@ -362,6 +362,71 @@ func TestEvidencePostsTheFrozenPayloadAndSurfacesTheFailedRun(t *testing.T) {
 	}
 }
 
+// postedFailed reads the failed list out of the body the server was sent.
+func postedFailed(t *testing.T, server *evidenceServer) []string {
+	t.Helper()
+	_, _, _, _, raw := server.seen()
+	var body struct {
+		Test struct {
+			Failed []string `json:"failed"`
+		} `json:"test"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("the body is not JSON: %v (%s)", err, raw)
+	}
+	return body.Test.Failed
+}
+
+// A PASSING run names no failures, whatever its own output printed: extraction runs only on a non-zero
+// exit, so a program's line - even one spelled exactly like a runner's summary - cannot become a name in
+// evidence that reports a green run.
+func TestEvidencePassingRunNamesNoFailures(t *testing.T) {
+	server := newEvidenceServer(t)
+	evidenceEnv(t, server.URL, "tok")
+	withGit(t, standardGit())
+	withTestCommand(t, testRun{
+		output: "FAILED tests/test_x.py::test_y - AssertionError\n" +
+			"--- FAIL: TestAlpha (0.00s)\n" +
+			"  1 passed (1.3s)\n",
+		exitCode: 0,
+	})
+
+	var stdout, stderr bytes.Buffer
+	code := runEvidence(context.Background(), []string{
+		"--task", "t", "--base", "main", "--test", "go test -v ./...",
+	}, &stdout, &stderr)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr.String())
+	}
+	if failed := postedFailed(t, server); len(failed) != 0 {
+		t.Errorf("a passing run's evidence named failures %v, want none", failed)
+	}
+}
+
+// A FAILING run whose output names no test carries the explicit marker: an empty list would read as
+// "nothing failed", which is the reading the room made of seq 26's evidence.
+func TestEvidenceFailingRunWithNoNamedTestSaysSo(t *testing.T) {
+	server := newEvidenceServer(t)
+	evidenceEnv(t, server.URL, "tok")
+	withGit(t, standardGit())
+	withTestCommand(t, testRun{output: "Error: cannot find module 'playwright'\n", exitCode: 1})
+
+	var stdout, stderr bytes.Buffer
+	code := runEvidence(context.Background(), []string{
+		"--task", "t", "--base", "main", "--test", "playwright test",
+	}, &stdout, &stderr)
+	if code != exitTestFailed {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, exitTestFailed, stderr.String())
+	}
+	failed := postedFailed(t, server)
+	if len(failed) != 1 || failed[0] != unnamedFailure {
+		t.Errorf("a failing run that named no test stored %v, want [%s]", failed, unnamedFailure)
+	}
+	if !strings.Contains(stderr.String(), "exited 1") {
+		t.Errorf("stderr = %q, want the failing run surfaced", stderr.String())
+	}
+}
+
 func TestEvidenceWithoutATestRunCarriesAnEmptyBlock(t *testing.T) {
 	server := newEvidenceServer(t)
 	evidenceEnv(t, server.URL, "tok")
@@ -626,6 +691,24 @@ func TestExtractFailedTestsIsHeuristicAndNamesOnly(t *testing.T) {
 			"pytest short summary",
 			"FAILED tests/test_x.py::test_y - AssertionError: nope\n1 failed, 2 passed\n",
 			[]string{"tests/test_x.py::test_y"},
+		},
+		{
+			"a program's own line that merely starts with FAILED names nothing",
+			"FAILED READ {\"status\":503,\"text\":\"the spec log line that stored READ as a test\"}\n",
+			[]string{},
+		},
+		{
+			"Playwright list reporter, measured on agenthub-frontend/playwright.config.ts",
+			"  ✘  1 [chromium] › agenthub-frontend/e2e/x.spec.ts:6:5 › deliberate failure A (5ms)\n" +
+				"  ✓  3 [chromium] › agenthub-frontend/e2e/x.spec.ts:17:5 › the passing control (4ms)\n" +
+				"  ✘  2 [chromium] › agenthub-frontend/e2e/x.spec.ts:12:7 › a nested group › deliberate failure B (5ms)\n" +
+				"\n  2 failed\n" +
+				"    [chromium] › agenthub-frontend/e2e/x.spec.ts:6:5 › deliberate failure A ────────────\n" +
+				"  1 passed (1.3s)\n",
+			[]string{
+				"agenthub-frontend/e2e/x.spec.ts:6:5 › deliberate failure A",
+				"agenthub-frontend/e2e/x.spec.ts:12:7 › a nested group › deliberate failure B",
+			},
 		},
 		{
 			"TAP",

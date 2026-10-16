@@ -65,7 +65,8 @@ file contents and NO command output are sent - only those fields are stored.
   --base   REQUIRED. The commit the change is measured from. It is resolved to a full 40-hex SHA.
   --test   Optional. The test command to run. The line is split into arguments in-process and quotes
            are honoured, but NO SHELL is used: pipes, redirects and globs are NOT interpreted. Its exit
-           code and the failing test names found in its output are reported; the output stays local.
+           code and the failing test names found in its output are reported; the output stays local. A
+           failing run whose output names no test carries an explicit marker, never an empty list.
            Without it the submission carries an empty command, exit 0 and no failures.
   --url    Optional. Defaults to $AGENTHUB_URL. The route path is appended.
 
@@ -245,7 +246,12 @@ func Collect(ctx context.Context, base, test string) (Body, *CollectFailure) {
 			return Body{}, &CollectFailure{Message: fmt.Sprintf("the test command could not run: %v", err)}
 		}
 		result.ExitCode = code
-		result.Failed = extractFailedTests(output)
+		if code != 0 {
+			result.Failed = extractFailedTests(output)
+			if len(result.Failed) == 0 {
+				result.Failed = []string{unnamedFailure}
+			}
+		}
 	}
 	return Body{BaseSHA: baseSHA, HeadSHA: headSHA, Numstat: numstat, Test: result}, nil
 }
@@ -363,16 +369,33 @@ func splitCommand(line string) ([]string, error) {
 // call site, and every match is a NAME, not a line of output:
 //
 //   - `--- FAIL: TestName (0.00s)`  the `go test -v` shape; the name is the first field.
-//   - `FAILED tests/test_x.py::test_y`  pytest's short summary; the trailing reason is not captured.
+//   - `FAILED tests/test_x.py::test_y`  pytest's short summary. The node id is REQUIRED, because pytest
+//     always spells `file::test`, and demanding the `::` is what keeps a program's OWN line that merely
+//     starts with the word - `FAILED READ {"status":503}`, which stored 'READ' as a failing test on
+//     2026-10-16 - out of the list.
+//   - `  ✘  2 [chromium] › e2e/x.spec.ts:12:7 › a group › the title (5ms)`  Playwright's list reporter,
+//     as measured on this repository's own config: the ✘ marker, the project in brackets, the test's
+//     location, then its title path and duration. The location is kept - as pytest's node id is - so the
+//     name identifies the test and not only its title.
 //   - `not ok 1 - a name`  TAP.
+//
+// A PASSING run names no failures at all: extraction runs only when the command exited non-zero, so a
+// program's own output cannot name a failed test in evidence that reports a green run.
 //
 // `go test` WITHOUT -v prints only package-level `FAIL\tpkg\t0.1s` lines, which name no test, so nothing
 // is extracted from them: the caller who wants names passes -v, and the exit code is reported either way.
 var failedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^\s*--- FAIL:\s*(\S+)`),
-	regexp.MustCompile(`^FAILED\s+(\S+)`),
+	regexp.MustCompile(`^FAILED\s+(\S+::\S+)`),
+	regexp.MustCompile(`^\s*✘\s+\d+\s+\[[^\]]*\]\s+›\s+(.+?)\s+\([^()]*\)(?:\s+\([^()]*\))*\s*$`),
 	regexp.MustCompile(`^not ok\s+\d+\s*-\s*(.+?)\s*$`),
 }
+
+// unnamedFailure is what the test block carries when the command exited non-zero and its output named no
+// failing test: a reporter that prints no marker, a run that died before its summary. The failure is
+// REAL and its NAME is not in the output, and the marker says exactly that - an empty list reads as
+// "nothing failed" to the room, which is the other half of the wrong name 2026-10-16 stored.
+const unnamedFailure = "(no failing test name in the output)"
 
 // extractFailedTests pulls the failing test names out of a command's output, in the order the command
 // printed them and once each. It never returns nil, so the wire always carries a list.
