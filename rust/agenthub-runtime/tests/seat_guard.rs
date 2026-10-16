@@ -341,6 +341,69 @@ fn a_guard_with_no_list_allows_only_the_seat_directory_and_the_temp_dir() {
     );
 }
 
+/// A statement that makes or removes a DIRECTORY ENTRY without writing a byte was judged by NO rule: `touch`
+/// creates the file, `mkdir` and `rmdir` make and remove the directory, and none of them is a redirect, a `tee`, a
+/// copy target, a move, an in-place edit or a `dd`, so the path each of them built was never read. Measured before
+/// this change: `touch <seat dir>/config.yml`, `mkdir -p <seat dir>/hooks/pre`, `rmdir <seat dir>/hooks/pre` and
+/// `touch <room>/limits.json` were all ALLOWED, as was `mkdir -p /home/other/elsewhere` and `touch` of a file in
+/// the checkout every seat on this host shares. The two rules that already read `writeTargets` name them now, so
+/// no rule was added: protected-paths for what enforces the rules, worktree-scope for everything else.
+#[test]
+fn a_seat_cannot_touch_or_mkdir_a_path_no_rule_would_see() {
+    let root = fresh_dir("state");
+    let seat = root.join("rooms/r/seats/dev");
+    std::fs::create_dir_all(seat.parent().unwrap()).unwrap();
+    let room = seat.parent().unwrap().parent().unwrap();
+    let run = |cmd: String| verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+
+    // The paths the guard rests on, built with no byte written: the seat's own config, the directory the guard is
+    // installed in, and the room's budget file.
+    for cmd in [
+        format!("touch {}", seat.join("config.yml").display()),
+        format!("mkdir -p {}/hooks/pre", seat.display()),
+        format!("rmdir {}/hooks/pre", seat.display()),
+        format!("touch {}", room.join("limits.json").display()),
+    ] {
+        assert_eq!(run(cmd.clone()).as_deref(), Some("protected-paths"), "{cmd}");
+    }
+    // The protected DIRECTORIES themselves, which a trailing slash never matched: the seat's worktree is in scope,
+    // so removing its copy of the hooks, or making the directory they live in, had no rule at all.
+    for cmd in [
+        format!("rm -rf {WORKTREE}/scripts/git-hooks"),
+        format!("mkdir -p {WORKTREE}/.git/hooks"),
+    ] {
+        assert_eq!(run(cmd.clone()).as_deref(), Some("protected-paths"), "{cmd}");
+    }
+    // A directory entry outside every directory the launcher named for this seat.
+    for cmd in [
+        "mkdir -p /home/other/elsewhere".to_string(),
+        "touch /home/other/planted.go".to_string(),
+        "rmdir /home/other/empty".to_string(),
+    ] {
+        assert_eq!(run(cmd.clone()).as_deref(), Some("worktree-scope"), "{cmd}");
+    }
+}
+
+/// The net is not a blanket ban on making directories: the worktree, the seat's own directory, the temp dir and a
+/// target it cannot judge (a variable) stay the seat's own, and a segment that merely STARTS with a protected one
+/// (`hooks/preflight`) is not protected.
+#[test]
+fn an_ordinary_touch_or_mkdir_stays_the_seat_s_own() {
+    let seat = fresh_dir("seat");
+    let run = |cmd: String| verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+    for cmd in [
+        format!("touch {WORKTREE}/new.go"),
+        format!("mkdir -p {WORKTREE}/build/probe"),
+        format!("rmdir {WORKTREE}/build/probe"),
+        format!("mkdir -p {WORKTREE}/hooks/preflight"),
+        format!("touch {}", seat.join("notes.txt").display()),
+        "mkdir -p $SCRATCH/x".to_string(),
+        "touch /tmp/probe-file".to_string(),
+    ] {
+        assert_eq!(run(cmd.clone()), None, "{cmd}");
+    }
+}
+
 /// A SEAT DOES NOT RAISE ITS OWN CEILING. The verb writes the room's limits THROUGH the client, so it never names a
 /// file and no path rule can see it: measured 2026-10-16 at 6492b77, `4genteam room limits <rig> --usd 999` was
 /// allowed while every FILE shape against the same ceiling (rm, sed -i, truncate -s 0, dd, the write tool) was
@@ -364,4 +427,30 @@ fn a_seat_cannot_raise_its_own_budget() {
         "4genteam room status 4genthub-min",
         "echo '4genteam room limits 4genthub-min --usd 999'",
     ]);
+}
+
+/// AN EMPTY VALUE IN A PREFIX IS STILL A PREFIX. `callOf` ate the env/sudo noise with `[A-Za-z_]+=\S+`, which asks
+/// for at least one character after the `=`, so the three-character head `FOO= ` - what a shell accepts, and how a
+/// seat empties a marker it was handed - was not noise, the anchor never reached the command, and EVERY rule built
+/// on `callOf` was stepped past. Measured 2026-10-16 at d964b8b: `FOO= 4genteam room limits 4genthub-min --usd 999`,
+/// `FOO= git push origin main` and `FOO= rm scripts/git-hooks/pre-commit` were all ALLOWED while their bare
+/// spellings were refused. Both spellings are pinned, so the fix cannot buy the prefixed form by losing the bare
+/// one, and a prefix that CARRIES a value is pinned too: that one already worked, and it is the line that says the
+/// hole was the empty value and nothing else.
+#[test]
+fn an_empty_value_in_a_prefix_is_still_a_prefix() {
+    for (rule, cmd) in [
+        ("push", "git push origin main"),
+        ("protected-paths", "rm scripts/git-hooks/pre-commit"),
+        ("protected-paths", "sed -i s/x/y/ scripts/git-hooks/pre-commit"),
+        ("budget-ceiling", "4genteam room limits 4genthub-min --usd 999"),
+    ] {
+        assert_eq!(bash(cmd).as_deref(), Some(rule), "{cmd}");
+        for head in ["FOO=", "AGENTHUB_SESSION_NAME=", "env FOO=", "FOO=1"] {
+            let prefixed = format!("{head} {cmd}");
+            assert_eq!(bash(&prefixed).as_deref(), Some(rule), "{prefixed}");
+        }
+    }
+    // The prefix is noise and not a rule of its own: what the command IS stays what is judged.
+    allowed(&["FOO= git status", "AGENTHUB_SESSION_NAME= git status", "env FOO= ls -la"]);
 }

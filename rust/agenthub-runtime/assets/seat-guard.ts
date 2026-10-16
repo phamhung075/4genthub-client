@@ -65,10 +65,14 @@ const statements = (input: Record<string, unknown>): string[] =>
     .split(/&&|\|\||;|\n|\|/);
 
 // A statement whose COMMAND is `name`, after env/sudo/VAR= noise: `tmux ...` and `env -u TMUX tmux ...` match,
-// `echo tmux is nice` does not. The capture is what follows the command name.
+// `echo tmux is nice` does not. The capture is what follows the command name. An assignment's value may be EMPTY
+// (`FOO= cmd`, which every shell accepts, and which is how a seat empties a marker it was handed), so the value is
+// `\S*` and not `\S+`: with `\S+` the head was not eaten as noise, the anchor never reached the command, and EVERY
+// rule built on `callOf` was stepped past (measured 2026-10-16 at d964b8b: `FOO= 4genteam room limits <rig> --usd
+// 999`, `FOO= git push origin main` and `FOO= rm scripts/git-hooks/pre-commit` were all allowed).
 const callOf = (name: string): RegExp =>
   new RegExp(
-    `^\\s*(?:(?:env|sudo|command|exec|nohup)\\s+(?:-\\S+\\s+(?:[A-Za-z_]+\\s+)?|[A-Za-z_]+=\\S+\\s+)*|[A-Za-z_]+=\\S+\\s+)*${name}\\b(.*)$`,
+    `^\\s*(?:(?:env|sudo|command|exec|nohup)\\s+(?:-\\S+\\s+(?:[A-Za-z_]+\\s+)?|[A-Za-z_]+=\\S*\\s+)*|[A-Za-z_]+=\\S*\\s+)*${name}\\b(.*)$`,
     "s",
   );
 const TMUX_CALL = callOf("tmux");
@@ -87,6 +91,12 @@ const MOVE_CALL = callOf("mv");
 // target, so before this every path built this way was judged by NO rule: `rm <seat dir>/config.yml` and
 // `rm <seat dir>/hooks/pre/seat-guard.ts` both left the seat unguarded while the edit-shaped forms were refused.
 const DESTROY_CALL = callOf("(?:rm|unlink|truncate|shred)");
+// A statement that makes or removes a DIRECTORY ENTRY without writing a byte: `touch` creates the file, `mkdir`
+// and `rmdir` make and remove the directory. None of them is a redirect, a `tee` a copy target, a move, an
+// in-place edit or a `dd`, so before this the path each of them built was judged by NO rule: the guard refused
+// `echo x > <seat dir>/config.yml` while `touch <seat dir>/config.yml` and `mkdir -p <anywhere outside>` went
+// through, and the same rule that reads this list (protected-paths, worktree-scope) never saw them.
+const EMPTY_PATH_CALL = callOf("(?:touch|mkdir|rmdir)");
 const IN_PLACE_CALL = callOf("(?:sed|perl)");
 const DD_CALL = callOf("dd");
 const IN_PLACE = /(^|\s)(-\S*i\S*|--in-place)\s/;
@@ -184,6 +194,8 @@ function writeTargets(tool: string, input: Record<string, unknown>): string[] {
       if (move) raw.push(...operands(move[1]));
       const destroy = part.match(DESTROY_CALL);
       if (destroy) raw.push(...operands(destroy[1]));
+      const emptyPath = part.match(EMPTY_PATH_CALL);
+      if (emptyPath) raw.push(...operands(emptyPath[1]));
       const inPlace = part.match(IN_PLACE_CALL);
       if (inPlace && IN_PLACE.test(inPlace[1])) raw.push(...operands(inPlace[1]).slice(-1));
       const dd = part.match(DD_CALL);
@@ -218,9 +230,13 @@ const seatDir = resolve(process.env.PI_CODING_AGENT_DIR ?? ".");
 // limits.json is the budget the breaker enforces and the guard derives from the same seat dir (two levels up).
 const SEAT_FILES: Record<string, true> = { "config.yml": true, "tool-calls.jsonl": true, "parked.json": true };
 const roomBudget = resolve(seatDir, "..", "..", "limits.json");
+// The three of these name a DIRECTORY as well as the files inside it. A trailing slash alone covered only the
+// CONTENTS, and the seat's own directory is inside worktree-scope, so `mkdir -p <seat dir>/hooks/pre` and
+// `rmdir <seat dir>/hooks/pre` - like an `rm -rf` of either hooks directory - were judged by NO rule: the path
+// that keeps the guard installed was itself the one path no rule saw.
+const PROTECTED_DIRS = /(^|\/)(hooks\/pre|scripts\/git-hooks|\.git\/hooks)(\/|$)/;
 const protectedPath = (abs: string): boolean =>
-  abs.includes("/scripts/git-hooks/") || abs.includes("/.git/hooks/") || basename(abs) === "seat-guard.ts" ||
-  abs.includes("/hooks/pre/") || abs.endsWith("/.gemini/config/hooks.json") ||
+  PROTECTED_DIRS.test(abs) || basename(abs) === "seat-guard.ts" || abs.endsWith("/.gemini/config/hooks.json") ||
   (dirname(abs) === seatDir && SEAT_FILES[basename(abs)] === true) || abs === roomBudget;
 
 // The rules. Each returns the reason a call is refused, or "" to let it through.
