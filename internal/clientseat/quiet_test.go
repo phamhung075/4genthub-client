@@ -232,4 +232,3 @@ func TestWaitUntilQuietNamesAnUnreadableActivityOnItsFirstReading(t *testing.T) 
 		t.Errorf("the unreadable activity was named %vs in, at the end of a %v wait", saidAt[0], quietWaitSeconds)
 	}
 }
-

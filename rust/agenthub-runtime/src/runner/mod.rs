@@ -1314,6 +1314,10 @@ pub fn nudge_seat(
     qitem_ids: &[String],
     attempt: u32,
 ) -> Result<serde_json::Value, String> {
+    // A PARKED SEAT IS NOT NUDGED, and the refusal comes before the attempt log: the ladder's state is that
+    // durable log, so a parked seat must not spend attempts of it. The rail wake is the runtime's own route to
+    // a seat, which is exactly why it is gated here rather than at its caller.
+    crate::park::refuse(state_dir, room, seat, "the rail prompt was not delivered")?;
     let text = nudge_text(room, seat, qitem_ids, attempt);
     let id = format!("nudge-{}-{attempt}", std::process::id());
     let outcome = send_to_seat(
@@ -2320,6 +2324,36 @@ mod tests {
         let published: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
         assert_eq!(published["state"], "working");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A PARKED SEAT IS NOT NUDGED. The rail wake is the runtime's own route to a seat - the nudge hands the
+    /// agent the prompt that its waiting work is about - so it must not be the route that reaches a parked
+    /// seat, and a refusal must not burn the ladder's attempts either: the ladder's state is the durable log.
+    ///
+    /// RED before the gate: the nudge went to a mailbox with no runner and the attempt was recorded.
+    #[test]
+    fn a_parked_seat_is_not_nudged() {
+        let dir = std::env::temp_dir().join(format!("agenthub-nudge-park-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let seat_dir = dir.join("rooms").join("lab").join("seats").join("dev");
+        std::fs::create_dir_all(&seat_dir).expect("seat dir");
+        std::fs::write(
+            seat_dir.join("parked.json"),
+            r#"{"seat":"dev","reason":"made 300 tool calls in the last minute, over the 10 call ceiling","at":"2026-10-16T17:23:51Z","cost_usd":0.25,"calls":300}"#,
+        )
+        .expect("record");
+
+        let err = nudge_seat(&dir, "lab", "dev", "agenthub--lab--dev", &["qitem-1".to_string()], 1)
+            .expect_err("a parked seat is not nudged");
+        assert!(
+            err.contains("PARKED") && err.contains("the rail prompt was not delivered"),
+            "the nudge must refuse with the park, got {err:?}"
+        );
+        assert!(
+            !nudge_log_path(&dir, "lab", "dev").exists(),
+            "a refused nudge must record no attempt: a parked seat does not spend the ladder"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

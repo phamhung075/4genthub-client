@@ -281,13 +281,16 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 }
 
 // seatRow is the ONE rendering of a seat's line: the four fields the usage line documents - SEAT RUNTIME
-// STATE SESSION - and then the runtime's advisory when there is one. `status` and `reseat` each print a
-// seat's row out of a daemon-returned SeatStatus, so both come through here rather than each keeping its own
-// format string: an alert that showed up on one verb and not the other would be the field carried but not
-// rendered, one verb at a time.
-func seatRow(seat clientruntime.SeatStatus) string {
+// STATE SESSION - and then the runtime's advisory when there is one, and the budget breaker's park when the
+// seat carries one. `status` and `reseat` each print a seat's row out of a daemon-returned SeatStatus, so both
+// come through here rather than each keeping its own format string: an alert that showed up on one verb and not
+// the other would be the field carried but not rendered, one verb at a time.
+//
+// stateRoot is handed in because the park record is a FILE the daemon does not report through this status: the
+// row is what makes a stopped seat's reason visible (see parkNote).
+func seatRow(seat clientruntime.SeatStatus, stateRoot string) string {
 	row := fmt.Sprintf("%s %s %s %s", seat.Seat, seat.Runtime, seat.State, seat.SessionName)
-	return row + alertNote(seat.Alert)
+	return row + alertNote(seat.Alert) + parkNote(stateRoot, seat)
 }
 
 // alertNote is the trailing segment of a seat's row for the runtime's alert, or the empty string when the
@@ -339,9 +342,11 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	// One line per seat, and the SEAT's own rows in the daemon's order: the state word and the session name
 	// are the daemon's, not this client's, so a reader can compare this output with the room's own reading.
-	// A seat the runtime flagged carries its alert as the row's last segment (see seatRow/alertNote).
+	// A seat the runtime flagged carries its alert as a trailing segment, and a seat the budget safeguard
+	// parked carries the record's own reason and numbers (see seatRow/alertNote/parkNote): a stopped seat
+	// whose reason nobody can read is a seat an operator will start again.
 	for _, seat := range seats {
-		fmt.Fprintln(stdout, seatRow(seat))
+		fmt.Fprintln(stdout, seatRow(seat, inv.stateDir))
 	}
 	return clientcmd.ExitOK
 }
@@ -416,7 +421,7 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam room reseat: the runtime answered RestartSeat for %s with no seat status, so this verb cannot say the seat is running\n", inv.seat)
 		return clientcmd.ExitPartialStart
 	}
-	fmt.Fprintln(stdout, seatRow(*status))
+	fmt.Fprintln(stdout, seatRow(*status, inv.stateDir))
 	if !seatRunning(*status) {
 		fmt.Fprintf(stderr, "4genteam room reseat: %s came back %q, not running\n", inv.seat, status.State)
 		return clientcmd.ExitPartialStart

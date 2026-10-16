@@ -624,6 +624,12 @@ impl RoomSupervisor {
 
     /// Start a single seat.
     pub fn start_seat(&self, room: &str, seat: &SeatSpec, spec: &RoomSpec) -> Result<SeatStatus, String> {
+        // A PARKED SEAT IS NOT STARTED, and it is refused BEFORE anything is prepared for it: no seat dir
+        // written, no mcp.json, no pane. Both routes that start a seat - `RestartSeat` and a room start -
+        // funnel here, so a room start obeys the park through the room's own existing rule for a seat that did
+        // not come up: it is reported by name with the park as the reason, and a room whose every seat is
+        // parked starts no seat and says why.
+        crate::park::refuse(self.state_dir(), room, &seat.seat_key, "nothing was started")?;
         let session_name = Self::session_name(room, &seat.seat_key);
         let room_dir = self.room_dir(room);
         let seat_dir = room_dir.join("seats").join(&seat.seat_key);
@@ -882,6 +888,9 @@ impl RoomSupervisor {
     /// Restart one seat. `fresh` removes the seat's saved agent sessions after the stop, so the agent that
     /// starts has none of the previous one's context.
     pub fn restart_seat(&self, room: &str, seat: &str, fresh: bool) -> Result<SeatStatus, String> {
+        // The refusal comes BEFORE the stop: a parked seat is not brought back, and a restart that stopped
+        // first would have changed the seat's state on its way to refusing.
+        crate::park::refuse(self.state_dir(), room, seat, "nothing was restarted")?;
         self.stop_seat(room, seat)?;
         if fresh {
             self.clear_saved_sessions(room, seat)?;
@@ -1166,6 +1175,10 @@ impl RoomSupervisor {
     /// runtimes with no runner own their pane's input (a TUI), where the bracketed tmux paste is the delivery.
     pub fn deliver_text(&self, session: &str, text: &str) -> Result<serde_json::Value, String> {
         let (room, seat) = self.resolve_seat(session)?;
+        // A PARKED SEAT IS NOT HANDED WORK, and this is the tier every caller crosses: `SendText`, this
+        // daemon's own `send` command, and any future caller. The client refuses its own routes first, with a
+        // friendlier sentence; this one is the enforcement, and it cannot be forgotten by a caller above it.
+        crate::park::refuse(self.state_dir(), &room, &seat, "Nothing was sent")?;
         let canonical = Self::session_name(&room, &seat);
         if !self.seat_runtime(&room, &seat)?.has_runner() {
             let outcome = TerminalManager::send_text(&canonical, text)?;
@@ -3114,6 +3127,76 @@ mod tests {
         );
 
         let _ = TerminalManager::stop_session(&session);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A PARKED SEAT IS NOT HANDED WORK AT THE RUNTIME TIER EITHER.
+    ///
+    /// The client refuses its own routes, but a client is only a caller: `SendText` (and this daemon's own
+    /// `send` command), `RestartSeat` and a room start all cross this supervisor. The record the client's
+    /// safeguard leaves in the seat's own directory is what each of them reads, and each refusal names what
+    /// did not happen.
+    ///
+    /// RED before the gate: the two delivery assertions saw a transport answer (no pane for the session) and
+    /// the start assertion saw a seat prepared and a pane started.
+    #[tokio::test]
+    async fn a_parked_seat_is_refused_by_the_runtimes_own_routes() {
+        let dir = scratch("parked-routes");
+        let room = format!("parked-{}", std::process::id());
+        let key = seat_key("parked");
+        let spec = startable_spec(&room, &key, "sleep 30");
+        let supervisor = supervisor_at(&dir);
+        let seat_dir = dir.join("rooms").join(&room).join("seats").join(&key);
+        fs::create_dir_all(&seat_dir).expect("seat dir");
+        fs::write(
+            dir.join("rooms").join(&room).join("spec.json"),
+            serde_json::to_string(&spec).expect("spec json"),
+        )
+        .expect("spec file");
+        let session = RoomSupervisor::session_name(&room, &key);
+
+        // CONTROL: with no record, a park is not what answers. The delivery still fails - there is no pane for
+        // this session - but that is a transport answer, and a test that cannot tell them apart proves nothing.
+        let before = supervisor.deliver_text(&session, "hi");
+        assert!(
+            !matches!(&before, Err(e) if e.contains("PARKED")),
+            "an unparked seat must not be refused as parked: {before:?}"
+        );
+
+        // The record the client's safeguard writes, verbatim in shape.
+        fs::write(
+            seat_dir.join("parked.json"),
+            r#"{"seat":"parked","reason":"spent 1.50 USD in the last 24h, over the 1.00 USD ceiling","at":"2026-10-16T17:23:51Z","cost_usd":1.5,"calls":1}"#,
+        )
+        .expect("record");
+
+        let sent = supervisor.deliver_text(&session, "hi").expect_err("a send must refuse");
+        assert!(
+            sent.contains("PARKED") && sent.contains("cost_usd=1.50") && sent.contains("Nothing was sent"),
+            "deliver_text: {sent}"
+        );
+
+        let restarted = supervisor
+            .restart_seat(&room, &key, false)
+            .expect_err("a restart must refuse");
+        assert!(
+            restarted.contains("PARKED") && restarted.contains("nothing was restarted"),
+            "restart_seat: {restarted}"
+        );
+
+        // A room start funnels through `start_seat`, so its refusal rides the room's EXISTING rule for a seat
+        // that did not come up: reported by name with the park as the reason, and a room whose every seat is
+        // parked starts no seat and says so.
+        let started = supervisor
+            .start_room(spec.clone())
+            .expect_err("a room whose only seat is parked starts no seat");
+        assert!(started.contains("PARKED"), "start_room: {started}");
+        // ...and nothing of that start ran: a seat prepared for a start has its mcp.json written.
+        assert!(
+            !seat_dir.join("mcp.json").exists(),
+            "a parked seat must not be prepared for a start"
+        );
+
         let _ = fs::remove_dir_all(&dir);
     }
 }
