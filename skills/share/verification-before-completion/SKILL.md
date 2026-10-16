@@ -5,7 +5,7 @@ metadata:
   agenthub:
     vendored_from: "Obra Superpowers (https://github.com/obra/superpowers)"
     vendoring_pattern: modify-the-file
-    last_upstream_check: "2026-05-13 (diff against plugin source pulled 2026-05-11 = identical)"
+    last_upstream_check: "2026-05-13 (historical upstream comparison; a local harness section on services and long jobs added 2026-10-17)"
 ---
 
 # Verification Before Completion
@@ -108,6 +108,21 @@ Skip any step = lying, not verifying
 ```
 ✅ Agent reports success → Check VCS diff → Verify changes → Report actual state
 ❌ Trust agent report
+```
+
+## Running the thing: services and long jobs
+
+Most verifications start something — a daemon, a dev server, the built binary. The `bash` tool has one shape for that, and two of its refusals are call-shape errors: the command never ran, so repeating the same arguments only repeats the refusal.
+
+- **`ready` is an object, never a boolean.** Keys: `log` (a regex the output must match), `port` (a port that must open), `host` (default `127.0.0.1`), `timeout` (that wait, in seconds, default 30). Give `log`, `port`, or both; the call returns once they hold. `ready: true` is refused verbatim: `ready: ready must be an object (was boolean)`.
+- **A long-lived service is a call that carries a `name`**, and there the rule inverts: **no `async`, no `timeout` call argument** — the wait belongs in `ready.timeout`. The process is left running, its output is read at `proc://<name>`, and `proc://<name>/kill` stops it. Refused verbatim: `Service mode does not accept async or timeout; use ready.timeout for readiness.`
+- **A one-shot command carries no `name`**: it takes the plain `timeout` (seconds), and `timeout: 0` only for a watcher you mean to leave up.
+
+A server on port 3000 — `name` selects service mode, the wait lives inside `ready`:
+
+```bash
+bash(command="cd app && go run ./cmd/server", name="app-server",
+     ready={"log": "listening on", "port": 3000, "host": "127.0.0.1", "timeout": 30})
 ```
 
 ## When the check itself lies — content over shape
