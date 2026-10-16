@@ -71,6 +71,10 @@ func switchWriteJSON(w http.ResponseWriter, status int, body any) {
 type switchSeatStub struct {
 	failure error
 	calls   [][]string
+	// seats is what the RUNTIME itself reports for the room's seats and statusErr its answer when that read
+	// fails. Both nil is "the runtime's room names no seat", which changes no decision.
+	seats     []clientruntime.SeatStatus
+	statusErr error
 }
 
 func (s *switchSeatStub) setModel(room, seat, model string) error {
@@ -87,11 +91,22 @@ func (s *switchSeatStub) restartFresh(room, seat string, document *string) error
 	return s.failure
 }
 
+func (s *switchSeatStub) roomSeats(_ string) ([]clientruntime.SeatStatus, error) {
+	return s.seats, s.statusErr
+}
+
 func switchStubSeats(t *testing.T, stub *switchSeatStub) {
 	t.Helper()
-	originalModel, originalRestart := switchSetModel, switchRestartFresh
-	switchSetModel, switchRestartFresh = stub.setModel, stub.restartFresh
-	t.Cleanup(func() { switchSetModel, switchRestartFresh = originalModel, originalRestart })
+	originalModel, originalRestart, originalStatus := switchSetModel, switchRestartFresh, switchRoomSeats
+	switchSetModel, switchRestartFresh, switchRoomSeats = stub.setModel, stub.restartFresh, stub.roomSeats
+	t.Cleanup(func() {
+		switchSetModel, switchRestartFresh, switchRoomSeats = originalModel, originalRestart, originalStatus
+	})
+}
+
+// switchStatus is one seat as the RUNTIME reports it; the runtime is the only field this verb reads.
+func switchStatus(seat, runtime string) clientruntime.SeatStatus {
+	return clientruntime.SeatStatus{Room: "room1", Seat: seat, Runtime: runtime}
 }
 
 func switchOccupant(runtime, model string) map[string]any {
@@ -309,6 +324,57 @@ func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 		if strings.Contains(printed, needle) {
 			t.Errorf("the runtime-change notice prints the rig CLI verb %q, which a reader cannot run after the cutover:\n%s", needle, printed)
 		}
+	}
+}
+
+// THE PIN THE 22:47Z INCIDENT EARNED. The cloud already recorded the runtime the operator asked for, so the
+// verb read the request as a MODEL change, took `--apply restart`, and restarted the seat into a runtime
+// nobody had asked it to run - the seat died before readiness and nothing put it back. The machine is the
+// half a restart moves, so a runtime the seat is NOT on is a runtime change even when the cloud records it.
+func TestSwitchRuntimeTheCloudAlreadyRecordsStillSkipsTheSeat(t *testing.T) {
+	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("agy", "old-model")}}
+	stub := &switchSeatStub{seats: []clientruntime.SeatStatus{switchStatus("seat1", "omp")}}
+	switchStubSeats(t, stub)
+
+	code, out, errOut := switchRun(t, cloud, []string{
+		"room1", "seat1", "--runtime", "agy", "--model", "gemini-3.8-flash-low", "--apply", "restart"})
+
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
+	}
+	if len(stub.calls) != 0 {
+		t.Errorf("a runtime change touched a seat, and restarting into it is what killed it: %v", stub.calls)
+	}
+	if !strings.Contains(errOut, "owner's call") {
+		t.Errorf("stderr = %q, want the runtime-change notice", errOut)
+	}
+	if want := "switched:room1/seat1 runtime=agy model=gemini-3.8-flash-low applied=manual\n"; out != want {
+		t.Errorf("stdout = %q, want %q", out, want)
+	}
+}
+
+// The boundary the fix must not cross: the RUNTIME already reports the requested runtime, so a restart moves
+// no runtime and `--apply restart` still sets the model and restarts the seat.
+func TestSwitchRestartStillRunsOnTheRuntimeTheMachineNames(t *testing.T) {
+	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
+	stub := &switchSeatStub{seats: []clientruntime.SeatStatus{switchStatus("seat1", "claude-code")}}
+	switchStubSeats(t, stub)
+
+	code, out, _ := switchRun(t, cloud, []string{
+		"room1", "seat1", "--runtime", "claude-code", "--model", "new-model", "--apply", "restart"})
+
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
+	}
+	want := [][]string{
+		{"set-model", "room1", "seat1", "new-model"},
+		{"restart-fresh", "room1", "seat1", ""},
+	}
+	if got := stub.calls; !reflect.DeepEqual(got, want) {
+		t.Errorf("runtime calls = %v, want %v", got, want)
+	}
+	if !strings.HasSuffix(out, "applied=restart\n") {
+		t.Errorf("stdout = %q, want it to end applied=restart", out)
 	}
 }
 

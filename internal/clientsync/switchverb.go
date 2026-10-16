@@ -7,9 +7,13 @@
 // the operator's intent has been recorded and only the local half is outstanding.
 //
 // A RUNTIME CHANGE CANNOT BE APPLIED IN PLACE. A changed runtime prints the manual steps and touches
-// no seat at all; only a model change is applied. The model is written to the room's own spec and
-// takes effect at the seat's next start; `--apply restart` makes that start now, with the seat's saved
-// agent sessions dropped.
+// no seat at all; only a model change is applied. WHETHER A REQUEST CHANGES A RUNTIME IS READ FROM THE
+// MACHINE AS WELL AS FROM THE CLOUD: the cloud carries the OCCUPANT OF RECORD, and the seat's own runtime
+// is what a restart would move, so while a switch is half done the two disagree - and a decision read from
+// the cloud alone restarts a seat into a runtime nobody asked it to run and leaves it dead (measured
+// 2026-10-16 22:47Z). The cloud record can therefore only ADD a runtime change, never remove one. The
+// model is written to the room's own spec and takes effect at the seat's next start; `--apply restart`
+// makes that start now, with the seat's saved agent sessions dropped.
 package clientsync
 
 import (
@@ -62,6 +66,17 @@ var switchRestartFresh = func(room, seat string, document *string) error {
 	}
 	_, err := client.RestartSeatFresh(room, seat, document)
 	return err
+}
+
+// switchRoomSeats reads the RUNTIME's own view of a room's seats - the reading that says whether a restart
+// would MOVE a seat's runtime, as opposed to whether the cloud already records the new one. Vars so a test
+// drives the verb without a daemon.
+var switchRoomSeats = func(room string) ([]clientruntime.SeatStatus, error) {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return nil, errSwitchRuntimeAbsent
+	}
+	return client.GetRoomStatus(room)
 }
 
 // switchArgs is the parsed command line. runtimeSet/modelSet distinguish "the flag was absent" from
@@ -223,6 +238,17 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 	}
 
 	runtimeChanged := runtime != currentRuntime
+	if parsed.runtimeSet && !runtimeChanged {
+		// THE MACHINE'S OWN READING, because the cloud's record is the OCCUPANT OF RECORD and a restart
+		// moves the runtime the SEAT is on. Measured 2026-10-16 22:47Z: the cloud already said `agy` while
+		// the seat ran `omp`, so this request read as a model-only one, took `--apply restart`, and
+		// restarted the seat into a runtime nobody asked it to run - the seat died before readiness and
+		// nothing put it back. A reading that names no runtime (no daemon, or a room that does not list the
+		// seat) changes nothing here: the apply step reports what it could not read, as it always has.
+		if machineRuntime, named := switchMachineRuntime(room, seat); named && machineRuntime != parsed.runtime {
+			runtimeChanged = true
+		}
+	}
 	modelChanged := model != currentModel
 	reason := parsed.reason
 	if reason == "" {
@@ -307,6 +333,22 @@ func switchCurrentOccupant(ctx context.Context, baseURL, token, room, seat strin
 		Message: fmt.Sprintf("seat %s/%s not found in the cloud", room, seat),
 		Code:    clientcmd.ExitRemote,
 	}
+}
+
+// switchMachineRuntime is the runtime the RUNTIME itself reports for one seat, and whether it named one at
+// all. A read that fails, or a seat the runtime's room does not list, names nothing: the caller then keeps
+// the cloud's own reading rather than inventing a change it cannot see.
+func switchMachineRuntime(room, seat string) (string, bool) {
+	seats, err := switchRoomSeats(room)
+	if err != nil {
+		return "", false
+	}
+	for _, status := range seats {
+		if status.Seat == seat {
+			return status.Runtime, true
+		}
+	}
+	return "", false
 }
 
 // switchApplyToRuntime applies the change through the runtime: the model is written to the room's spec,
