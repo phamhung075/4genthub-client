@@ -11,13 +11,15 @@
 // 2026-10-16 by driving all three copies; both share one residual: a path opened from INSIDE a program
 // (`python3 -c "open(...)"`, `node -e "writeFileSync(...)"`) or spelled through a variable.
 //
-// The marker is a SPEED BUMP, not a wall, and that is measured too: with 25/300 in force and a seat's marker
-// set, `--usd 777` exits 3 and leaves the file alone, but the SAME seat writes 777 through an EMPTY marker
-// (`AGENTHUB_SESSION_NAME= 4genteam ...`), 888 through `env --unset=AGENTHUB_SESSION_NAME` and 889 through a
-// variable holding the name; a program that cleans its own environment and execs the verb writes 999. The
-// guard's hook-bypass rule refuses only the two literal spellings, `env -u AGENTHUB_SESSION_NAME` and
-// `unset AGENTHUB_SESSION_NAME`. So the refusal stops the honest route, not a determined one; what bounds a
-// seat regardless of who wrote the file is the safeguard itself (`budget-run`), not this verb.
+// The marker is read as a PAIR (os.LookupEnv, not Getenv), so a marker that is SET counts as a seat even when it
+// is EMPTY: `AGENTHUB_SESSION_NAME= 4genteam ...` is refused like any other seat's raise, where it used to write
+// 999 - measured 2026-10-16 at d964b8b. It is still a SPEED BUMP, not a wall, and ABSENCE is what gets past it:
+// with 25/300 in force, `--usd 777` exits 3 and leaves the file alone, while `env --unset=AGENTHUB_SESSION_NAME`
+// writes 888 and a variable holding the name writes 889; a program that cleans its own environment and execs the
+// verb writes 999. The guard's hook-bypass rule refuses only the two literal spellings, `env -u
+// AGENTHUB_SESSION_NAME` and `unset AGENTHUB_SESSION_NAME`. So the refusal stops the honest route, not a
+// determined one; what bounds a seat regardless of who wrote the file is the safeguard itself (`budget-run`), not
+// this verb.
 package clientroom
 
 import (
@@ -59,10 +61,12 @@ of 194343c and refuses only an edit path, a redirect, tee and cp. So sed -i, rm,
 here until the runtime is rebuilt, installed and the seats restarted; a reseat re-installs the same older copy.
 Neither copy sees a path opened from inside a program (python3 -c, node -e) or spelled through a variable.
 
-THE MARKER IS A SPEED BUMP, NOT A WALL: with 25/300 in force and a seat's marker set, a raise exits 3 and leaves
-the file alone, but the same seat writes the raise through an EMPTY marker (AGENTHUB_SESSION_NAME= 4genteam ...),
-through env --unset=AGENTHUB_SESSION_NAME, or through a variable holding the name - measured 2026-10-16; the
-guard refuses only the literal "env -u AGENTHUB_SESSION_NAME" and "unset AGENTHUB_SESSION_NAME".`
+THE MARKER IS READ AS A PAIR: the OWNER is the caller with NO marker, and a marker that is SET is a seat even when
+its value is EMPTY - "AGENTHUB_SESSION_NAME= 4genteam room limits ROOM --usd 999" is refused exactly like the
+unemptied spelling (measured 2026-10-16 at d964b8b, where the empty spelling wrote 999). It is still a SPEED BUMP,
+NOT A WALL, and ABSENCE is what gets past it: "env --unset=AGENTHUB_SESSION_NAME", a variable holding the name, or
+a program that cleans its own environment and execs the verb writes the raise, and the guard refuses only the
+literal "env -u AGENTHUB_SESSION_NAME" and "unset AGENTHUB_SESSION_NAME".`
 
 func runLimits(args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
@@ -102,11 +106,20 @@ func runLimits(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam room limits: %v\n", err)
 		return clientcmd.ExitRoomRefused
 	}
-	if caller := strings.TrimSpace(os.Getenv(sessionEnv)); caller != "" && (hasUSD || hasCalls || off) {
+	// A marker that is SET counts as a seat even when its value is EMPTY: the shell hands a seat
+	// `AGENTHUB_SESSION_NAME= 4genteam room limits <room> --usd 999` for three characters, and measured
+	// 2026-10-16 at d964b8b that raise was WRITTEN (999, exit 0) while the same seat's set-value attempt was
+	// refused, because os.Getenv cannot tell an empty marker from an absent one. The OWNER is the caller with NO
+	// marker; every other caller is a seat.
+	if caller, marked := os.LookupEnv(sessionEnv); marked && (hasUSD || hasCalls || off) {
+		name := strings.TrimSpace(caller)
+		if name == "" {
+			name = "a seat whose $" + sessionEnv + " is empty"
+		}
 		if reason := raisesTheCeiling(limits, hasUSD, usd, hasCalls, calls, off); reason != "" {
 			fmt.Fprintf(stderr, "4genteam room limits: %s does not raise the ceiling that bounds it - %s. A seat may LOWER a "+
 				"ceiling or turn it ON; the OWNER raises one, running this with $%s unset (a number the file does not carry yet is "+
-				"not a ceiling, so writing that one is not a raise).\n", caller, reason, sessionEnv)
+				"not a ceiling, so writing that one is not a raise).\n", name, reason, sessionEnv)
 			return clientcmd.ExitRoomRefused
 		}
 	}

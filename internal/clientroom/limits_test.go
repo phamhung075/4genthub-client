@@ -25,6 +25,26 @@ func roomDir(t *testing.T, stateDir string) string {
 	return dir
 }
 
+// asOwner runs the test with the caller's marker ABSENT, which is the state - and the only one - the verb reads
+// as the owner: a marker that is SET counts as a seat even when its value is EMPTY, because the shell hands a
+// seat `AGENTHUB_SESSION_NAME= 4genteam room limits <room> --usd 999` for three characters, and that raise used
+// to be written (measured 2026-10-16 at d964b8b: empty through the shell, 777 written, while the same seat's
+// set-value attempt was refused). `t.Setenv(sessionEnv, "")` is therefore no longer the owner's spelling and
+// cannot be: `t.Setenv` cannot UNSET. The usage names the same two states - a seat has the marker, the owner
+// raises "running this with $AGENTHUB_SESSION_NAME unset".
+func asOwner(t *testing.T) {
+	t.Helper()
+	old, had := os.LookupEnv(sessionEnv)
+	if err := os.Unsetenv(sessionEnv); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(sessionEnv, old)
+		}
+	})
+}
+
 // TestRoomLimitsReadsWritesNothing: the limits SHIP OFF, so the first read of a room that has never had a file
 // prints the zeros and leaves no file behind - a read that created one would invent the very state it reports.
 func TestRoomLimitsReadsWritesNothing(t *testing.T) {
@@ -57,9 +77,9 @@ func TestRoomLimitsWritesKeepsAndTurnsOff(t *testing.T) {
 	daemon := newFakeDaemon(t, map[string]string{})
 	stateDir := daemon.stateDir
 	dir := roomDir(t, stateDir)
-	// The verb reads the CALLER's identity, and these are the OWNER's writes (25 -> 40 is a raise): pinned
-	// rather than inherited from the shell, so a run from a seat's shell asserts the same thing as a bare one.
-	t.Setenv(sessionEnv, "")
+	// The verb reads the CALLER's identity, and these are the OWNER's writes (25 -> 40 is a raise): the marker
+	// is UNSET rather than emptied, because a set-but-empty marker is a seat.
+	asOwner(t)
 	load := func() roombudget.Limits {
 		t.Helper()
 		limits, err := roombudget.Load(dir)
@@ -196,7 +216,7 @@ func TestTheOwnerRaisesTheCeilingAndAnAlreadyOffCeilingIsNotARaise(t *testing.T)
 	daemon := newFakeDaemon(t, map[string]string{})
 	dir := roomDir(t, daemon.stateDir)
 
-	t.Setenv(sessionEnv, "")
+	asOwner(t)
 	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--usd", "25", "--calls", "300", "--on")...); code != clientcmd.ExitOK {
 		t.Fatalf("setup: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
 	}
@@ -211,7 +231,7 @@ func TestTheOwnerRaisesTheCeilingAndAnAlreadyOffCeilingIsNotARaise(t *testing.T)
 	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--off")...); code != clientcmd.ExitRoomRefused {
 		t.Errorf("--off from a seat with the ceilings ON: exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, stderr)
 	}
-	t.Setenv(sessionEnv, "")
+	asOwner(t)
 	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--off")...); code != clientcmd.ExitOK {
 		t.Fatalf("the owner turning them off: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
 	}
@@ -221,5 +241,53 @@ func TestTheOwnerRaisesTheCeilingAndAnAlreadyOffCeilingIsNotARaise(t *testing.T)
 	}
 	if got := loadLimits(t, dir); got.Enabled {
 		t.Errorf("limits = %+v, want them still off", got)
+	}
+}
+
+// TestAnEmptyMarkerIsStillASeat: the marker is read as a PAIR, so a seat that EMPTIES it in the prefix of its own
+// command line - `AGENTHUB_SESSION_NAME= 4genteam room limits ROOM --usd 999`, which every shell accepts - is
+// still a seat. Measured 2026-10-16 at d964b8b: through an empty marker the same seat wrote 777 while its own
+// set-value attempt was refused, because the check read os.Getenv and could not tell an empty marker from an
+// absent one. The guard's `FOO= ` hole is the same three characters seen from the other side. A WHITESPACE-ONLY
+// marker is the same class and is pinned with it: the check trimmed before comparing, so `'   '` was the owner
+// too, and what decides now is whether the marker is THERE, not what it holds.
+func TestAnEmptyMarkerIsStillASeat(t *testing.T) {
+	daemon := newFakeDaemon(t, map[string]string{})
+	dir := roomDir(t, daemon.stateDir)
+	asOwner(t)
+	if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--usd", "25", "--calls", "300", "--on")...); code != clientcmd.ExitOK {
+		t.Fatalf("setup: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	want := roombudget.Limits{Enabled: true, USDPerSeat24h: 25, CallsPerSeatMin: 300}
+
+	for _, spelling := range []string{"", "   "} {
+		t.Setenv(sessionEnv, spelling)
+		for _, flags := range [][]string{{"--usd", "999"}, {"--calls", "301"}, {"--off"}} {
+			code, stdout, stderr := runRoom(t, append(daemon.args("limits", testRoom), flags...)...)
+			if code != clientcmd.ExitRoomRefused {
+				t.Errorf("a marker of %q asking %v: exit %d, want %d (stderr %q)", spelling, flags, code, clientcmd.ExitRoomRefused, stderr)
+			}
+			if !strings.Contains(stderr, sessionEnv) || !strings.Contains(stderr, "OWNER") {
+				t.Errorf("a marker of %q refusing %v said %q, want the marker and who may raise it named", spelling, flags, stderr)
+			}
+			if stdout != "" {
+				t.Errorf("a marker of %q asking %v printed %q, want nothing", spelling, flags, stdout)
+			}
+			if got := loadLimits(t, dir); got != want {
+				t.Fatalf("a marker of %q asking %v left %+v, want the ceilings unchanged at %+v", spelling, flags, got, want)
+			}
+		}
+	}
+
+	// Tightening through the same blank markers still passes: the rule is about a RAISE, not about the marker.
+	// The second run writes the same 10 over the same 10, which raises nothing either.
+	for _, spelling := range []string{"", "   "} {
+		t.Setenv(sessionEnv, spelling)
+		if code, _, stderr := runRoom(t, append(daemon.args("limits", testRoom), "--usd", "10")...); code != clientcmd.ExitOK {
+			t.Errorf("a marker of %q LOWERING the ceiling: exit %d, want %d (stderr %q)", spelling, code, clientcmd.ExitOK, stderr)
+		}
+		if got := loadLimits(t, dir); got.USDPerSeat24h != 10 {
+			t.Errorf("limits = %+v, want the seat's own 10 written through a marker of %q", got, spelling)
+		}
 	}
 }

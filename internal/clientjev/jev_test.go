@@ -2,10 +2,17 @@ package clientjev
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
+
+	"github.com/phamhung075/4genthub-client/internal/clientevidence"
 )
 
 func TestFromEnvDefaultsAndOwnerOnly(t *testing.T) {
@@ -72,6 +79,164 @@ func TestEvaluateCriteriaFollowsTheConfiguredThreshold(t *testing.T) {
 		got, reason, err := cfg.EvaluateCriteria(context.Background(), []string{"c"}, nil)
 		if err != nil || got != want {
 			t.Fatalf("threshold %v: verdict %q (%s), err %v, want %q", threshold, got, reason, err, want)
+		}
+	}
+}
+
+// keysOf is a JSON object's key set, sorted: a payload's SHAPE, compared without depending on field order.
+func keysOf(t *testing.T, raw json.RawMessage) []string {
+	t.Helper()
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("%s is not a JSON object: %v", raw, err)
+	}
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// rawOf is one field of a JSON object, un-decoded, so a nested shape can be inspected in place.
+func rawOf(t *testing.T, raw json.RawMessage, name string) json.RawMessage {
+	t.Helper()
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("%s is not a JSON object: %v", raw, err)
+	}
+	value, ok := obj[name]
+	if !ok {
+		t.Fatalf("%s carries no %q", raw, name)
+	}
+	return value
+}
+
+// THE CRITERIA REQUEST IS THE CONTRACT WITH SYSTEM ONE, and this is the only test that reads it: three
+// top-level keys, the evidence body's OWN field set inside `state`, and one `noul` question per criterion
+// carrying the criterion's text verbatim. Nothing else travels, because nothing else is shown to the
+// judge - so a later move to a richer payload (route (a) of the Outcome-2 ruling) has to break this test
+// rather than pass unnoticed. The threshold case above reads only the answers; this one reads the request.
+func TestTheCriteriaRequestCarriesTheEvidenceAndNothingElse(t *testing.T) {
+	var request json.RawMessage
+	var path, contentType, authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, contentType, authorization = r.URL.Path, r.Header.Get("Content-Type"), r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("the request body is not JSON: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"answers":{"criterion_1":{"noul":0.99},"criterion_2":{"noul":0.99}}}`))
+	}))
+	defer server.Close()
+
+	body := clientevidence.Body{BaseSHA: "99cdc0ef", HeadSHA: "0c53c313", Numstat: "3\t1\ta.go\n-\t-\tlogo.png\n"}
+	body.Test.Command = "go test -count=1 ./fastmcp/..."
+	body.Test.Failed = []string{}
+	criteria := []string{
+		"The acceptance command `go test -count=1 ./fastmcp/...` exits 0",
+		"The numstat names exactly one path under CHANGELOG/",
+	}
+	cfg := Config{APIKey: "k", Model: "m", BaseURL: server.URL, Threshold: 0.8}
+	if verdict, reason, err := cfg.EvaluateCriteria(context.Background(), criteria, body); err != nil || verdict != Accept {
+		t.Fatalf("verdict %q (%s), err %v", verdict, reason, err)
+	}
+	if path != "/systemone" || contentType != "application/json" || authorization != "Bearer k" {
+		t.Errorf("posted to %s as %s with %q", path, contentType, authorization)
+	}
+	if got, want := keysOf(t, request), []string{"model", "questions", "state"}; !slices.Equal(got, want) {
+		t.Errorf("top-level keys = %v, want %v", got, want)
+	}
+	// `state` is the evidence body field for field: its key set is compared against the body's OWN
+	// encoding, so a field added on either side - or a fourth key in the request - fails here.
+	state := rawOf(t, request, "state")
+	bodyJSON, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := keysOf(t, state), keysOf(t, bodyJSON); !slices.Equal(got, want) {
+		t.Errorf("state carries %v, the evidence body carries %v", got, want)
+	}
+	testJSON, err := json.Marshal(body.Test)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := keysOf(t, rawOf(t, state, "test")), keysOf(t, testJSON); !slices.Equal(got, want) {
+		t.Errorf("state.test carries %v, the test block carries %v", got, want)
+	}
+	var gotState clientevidence.Body
+	if err := json.Unmarshal(state, &gotState); err != nil || !reflect.DeepEqual(gotState, body) {
+		t.Errorf("state = %+v (err %v), want the evidence body %+v", gotState, err, body)
+	}
+	// One `noul` question per criterion, the criterion's own text verbatim, and nothing else per question.
+	var questions map[string]json.RawMessage
+	if err := json.Unmarshal(rawOf(t, request, "questions"), &questions); err != nil {
+		t.Fatalf("questions is not an object of objects: %v", err)
+	}
+	if len(questions) != len(criteria) {
+		t.Errorf("questions = %d, want %d", len(questions), len(criteria))
+	}
+	for i, criterion := range criteria {
+		id := fmt.Sprintf("criterion_%d", i+1)
+		question, ok := questions[id]
+		if !ok {
+			t.Errorf("%s is missing: %v", id, questions)
+			continue
+		}
+		if got := keysOf(t, question); !slices.Equal(got, []string{"instructions", "type"}) {
+			t.Errorf("%s carries %v, want [instructions type]", id, got)
+		}
+		var kind, instruction string
+		_ = json.Unmarshal(rawOf(t, question, "type"), &kind)
+		_ = json.Unmarshal(rawOf(t, question, "instructions"), &instruction)
+		if kind != "noul" || instruction != criterion {
+			t.Errorf("%s = %q with %q, want noul with %q verbatim", id, kind, instruction, criterion)
+		}
+	}
+}
+
+// THE WORDING IS THE INSTRUMENT, pinned as a case: the same evidence, one criterion in the evidence
+// vocabulary and one that asks for content - the mechanical one answers high, the content one low, and
+// the refusal NAMES the criterion that failed while carrying every answer. The criteria reach Jev byte for
+// byte: the gate adds no instruction prefix of its own and no rescue (Outcome-2 ruling, THE VOCABULARY -
+// Jev never sees a file, so a criterion asking for one can only answer low).
+func TestTheCriterionWordingDecidesAndTheRefusalNamesIt(t *testing.T) {
+	const mechanical = "The acceptance command `go test -count=1 ./fastmcp/...` exits 0 and the numstat names exactly one path under CHANGELOG/"
+	const content = "a real closure through the gate is demonstrated from a seat"
+	var request json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("the request body is not JSON: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"answers":{"criterion_1":{"noul":0.97},"criterion_2":{"noul":0.12}}}`))
+	}))
+	defer server.Close()
+
+	body := clientevidence.Body{Numstat: "10\t0\tCHANGELOG/2026-10-16--x.md\n"}
+	body.Test.Command = "go test -count=1 ./fastmcp/..."
+	body.Test.Failed = []string{}
+	cfg := Config{APIKey: "k", Model: "m", BaseURL: server.URL, Threshold: 0.8}
+	verdict, reason, err := cfg.EvaluateCriteria(context.Background(), []string{mechanical, content}, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict != Reject {
+		t.Errorf("verdict = %q (%s), want reject: one criterion cannot be settled from the evidence", verdict, reason)
+	}
+	if !strings.Contains(reason, "criterion_2: 0.12") {
+		t.Errorf("the refusal must name the criterion it refused: %s", reason)
+	}
+	if !strings.Contains(reason, "criterion_1: 0.97") {
+		t.Errorf("the refusal must carry every answer, so the reader sees which one failed: %s", reason)
+	}
+	var questions map[string]struct {
+		Instructions string `json:"instructions"`
+	}
+	if err := json.Unmarshal(rawOf(t, request, "questions"), &questions); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"criterion_1": mechanical, "criterion_2": content} {
+		if questions[id].Instructions != want {
+			t.Errorf("%s instructions = %q, want %q verbatim", id, questions[id].Instructions, want)
 		}
 	}
 }
