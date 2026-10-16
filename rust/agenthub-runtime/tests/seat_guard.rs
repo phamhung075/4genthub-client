@@ -267,3 +267,22 @@ fn an_ordinary_deletion_still_stays_the_seat_s_own() {
         assert_eq!(run(cmd.clone()), None, "{cmd}");
     }
 }
+
+/// A seat's worktrees sit under <room>/wt/ outside its start directory, so worktree-scope names them: `<seat>` and
+/// `<seat>-<repo>` are the seat's own, another seat's and a longer seat name are not.
+#[test]
+fn a_seat_writes_its_own_worktrees_under_the_room_and_no_other_seats() {
+    // Under target/, not the temp dir: worktree-scope already allows every path under the temp dir.
+    let room = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(format!("seat-guard-room-{}", std::process::id()));
+    let seat_dir = room.join("seats/dev");
+    let wt = room.join("wt");
+    let write_to = |name: &str| {
+        verdict_in(&seat_dir, "write_to_file", serde_json::json!({ "TargetFile": wt.join(name).join("a.go").display().to_string() }))
+    };
+
+    assert_eq!(write_to("dev"), None);
+    assert_eq!(write_to("dev-client"), None);
+    assert_eq!(write_to("dev-root"), None);
+    assert_eq!(write_to("other").as_deref(), Some("worktree-scope"));
+    assert_eq!(write_to("device").as_deref(), Some("worktree-scope"));
+}

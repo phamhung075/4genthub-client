@@ -201,6 +201,14 @@ const frozen = (abs: string): boolean =>
 const seatDir = resolve(process.env.PI_CODING_AGENT_DIR ?? ".");
 // `parked.json` is the breaker's record that this seat is stopped, in the seat's own directory; the ROOM's
 // limits.json is the budget the breaker enforces and the guard derives from the same seat dir (two levels up).
+// A seat's worktrees live under <room>/wt/ (seat dir is <room>/seats/<seat>) and are named <seat> or <seat>-<repo>,
+// so a seat may write its own and no other seat's.
+const ownWorktree = (abs: string): boolean => {
+  const wtRoot = resolve(seatDir, "../../wt");
+  if (!seat || !within(abs, wtRoot)) return false;
+  const name = abs.slice(wtRoot.length + 1).split("/")[0];
+  return name === seat || name.startsWith(seat + "-");
+};
 const SEAT_FILES: Record<string, true> = { "config.yml": true, "tool-calls.jsonl": true, "parked.json": true };
 const roomBudget = resolve(seatDir, "..", "..", "limits.json");
 const protectedPath = (abs: string): boolean =>
@@ -316,7 +324,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     check: (tool, input) => {
       if (!worktree) return "";
       const roots = [worktree, process.env.PI_CODING_AGENT_DIR ?? "", tmpdir()].filter(Boolean).map((r) => resolve(r));
-      const outside = writeTargets(tool, input).find((p) => !roots.some((r) => within(absolute(p), r)));
+      const outside = writeTargets(tool, input).find((p) => !roots.some((r) => within(absolute(p), r)) && !ownWorktree(absolute(p)));
       return outside ? `${outside} is outside your worktree ${worktree}; edit inside it and report the commit to the lead` : "";
     },
   },
