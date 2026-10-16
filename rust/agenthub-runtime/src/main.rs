@@ -11,7 +11,6 @@ mod ipc;
 mod pty;
 mod queue;
 mod runner;
-mod rules;
 mod skills;
 mod supervisor;
 mod types;

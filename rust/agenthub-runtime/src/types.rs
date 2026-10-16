@@ -3,35 +3,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Permission policy posture for seats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PermissionPolicy {
-    Locked,
-    Standard,
-    Open,
-    Yolo,
-    None,
-}
-
-impl Default for PermissionPolicy {
-    fn default() -> Self {
-        PermissionPolicy::Standard
-    }
-}
-
-impl PermissionPolicy {
-    pub fn from_str_loose(s: &str) -> Self {
-        match s.trim().to_lowercase().as_str() {
-            "locked" | "builtin:locked" => PermissionPolicy::Locked,
-            "open" | "builtin:open" => PermissionPolicy::Open,
-            "yolo" | "builtin:yolo" => PermissionPolicy::Yolo,
-            "none" => PermissionPolicy::None,
-            _ => PermissionPolicy::Standard,
-        }
-    }
-}
-
 /// Agent runtime identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
