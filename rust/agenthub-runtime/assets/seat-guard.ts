@@ -18,7 +18,7 @@
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const seat = process.env.AGENTHUB_SEAT ?? "";
@@ -175,10 +175,17 @@ const within = (path: string, root: string): boolean => path === root || path.st
 // a seat that edits them is writing a report instead of shipping.
 const frozen = (abs: string): boolean =>
   /^NEXT-GEN.*\.md$/.test(basename(abs)) || /^GATE-.*\.md$/.test(basename(abs)) || abs.includes("/ai_docs/reports-status/");
-// What enforces the rules is not the seat's to edit: the git hooks, the guard source, the installed guard, agy's hook list.
+// What enforces the rules is not the seat's to edit: the git hooks, the guard source, the installed guard, agy's hook
+// list - and, inside the seat's own directory, the two files the guard rides: the omp config its deny patterns are
+// rendered into (`4genteam policy apply`, header "do not edit") and the log its refusals are recorded in. worktree-scope
+// ALLOWS the seat its own directory, so these two are named by DIRECTORY and not by file name: a project's own
+// config.yml stays the seat's to edit.
+const seatDir = resolve(process.env.PI_CODING_AGENT_DIR ?? ".");
+const SEAT_FILES: Record<string, true> = { "config.yml": true, "tool-calls.jsonl": true };
 const protectedPath = (abs: string): boolean =>
   abs.includes("/scripts/git-hooks/") || abs.includes("/.git/hooks/") || basename(abs) === "seat-guard.ts" ||
-  abs.includes("/hooks/pre/") || abs.endsWith("/.gemini/config/hooks.json");
+  abs.includes("/hooks/pre/") || abs.endsWith("/.gemini/config/hooks.json") ||
+  (dirname(abs) === seatDir && SEAT_FILES[basename(abs)] === true);
 
 // The rules. Each returns the reason a call is refused, or "" to let it through.
 const RULES: { rule: string; check: (tool: string, input: Record<string, unknown>) => string }[] = [
@@ -278,7 +285,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     rule: "protected-paths",
     check: (tool, input) =>
       writeTargets(tool, input).some((p) => protectedPath(absolute(p)))
-        ? "the git hooks and the seat guard are the owner's to change"
+        ? "the git hooks, the seat guard, and the config and log it rests on, are the owner's to change"
         : "",
   },
   {

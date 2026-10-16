@@ -13,16 +13,26 @@ fn guard() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/seat-guard.ts")
 }
 
+/// A directory of this run's own, so no two cases share a log.
+fn fresh_dir(tag: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("seat-guard-{tag}-{}-{}", std::process::id(), CALLS.fetch_add(1, Ordering::Relaxed)))
+}
+
 /// The rule that refused the call, or `None` when it was allowed.
 fn verdict(name: &str, args: serde_json::Value) -> Option<String> {
-    let dir = std::env::temp_dir().join(format!("seat-guard-test-{}-{}", std::process::id(), CALLS.fetch_add(1, Ordering::Relaxed)));
-    std::fs::create_dir_all(&dir).unwrap();
+    verdict_in(&fresh_dir("test"), name, args)
+}
+
+/// The same verdict with the seat's own directory - the one the guard logs to, and the one whose config it must
+/// refuse to let the seat edit - pinned to `dir`.
+fn verdict_in(dir: &std::path::Path, name: &str, args: serde_json::Value) -> Option<String> {
+    std::fs::create_dir_all(dir).unwrap();
     let mut child = Command::new("node")
         .arg(guard())
         .args(["--agy-hook", "pre"])
         .env("AGENTHUB_SEAT", "dev")
         .env("AGENTHUB_WORKTREE", WORKTREE)
-        .env("PI_CODING_AGENT_DIR", &dir)
+        .env("PI_CODING_AGENT_DIR", dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -172,4 +182,31 @@ fn a_seat_writes_only_inside_its_worktree_and_not_to_frozen_or_protected_paths()
     refused("frozen-paths", &["echo x >> NEXT-GEN2.md"]);
     refused("protected-paths", &["echo x > scripts/git-hooks/pre-commit"]);
     allowed(&["echo x > a.go", "make 2>&1 | tail", "echo x > /dev/null", "cp a.go b.go"]);
+}
+
+/// The guard rides two files that live in the seat's OWN directory, which worktree-scope allows the seat to write:
+/// the omp config its deny patterns are rendered into (`4genteam policy apply`, header "do not edit") and the log
+/// its refusals are recorded in. Editing either is how a seat disables the guard without touching the guard.
+#[test]
+fn a_seat_cannot_edit_the_config_or_the_log_the_guard_rests_on() {
+    let seat = fresh_dir("seat");
+    let in_seat = |name: &str| seat.join(name).display().to_string();
+    let write_to = |path: &str| verdict_in(&seat, "write_to_file", serde_json::json!({ "TargetFile": path }));
+
+    assert_eq!(write_to(&in_seat("config.yml")).as_deref(), Some("protected-paths"));
+    assert_eq!(write_to(&in_seat("tool-calls.jsonl")).as_deref(), Some("protected-paths"));
+    // The other two faces of a write reach the same rule: a shell that outlives the tool, and a copy over it.
+    assert_eq!(
+        verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": format!("echo x > {}", in_seat("config.yml")) }))
+            .as_deref(),
+        Some("protected-paths")
+    );
+    assert_eq!(
+        verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": format!("cp evil.yml {}", in_seat("config.yml")) }))
+            .as_deref(),
+        Some("protected-paths")
+    );
+    // The rule names the seat's own directory, not the file names: a project's own config.yml stays the seat's to edit.
+    assert_eq!(write("/work/wt/dev/config.yml"), None);
+    assert_eq!(write("/work/wt/dev/tool-calls.jsonl"), None);
 }
