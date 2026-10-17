@@ -79,15 +79,43 @@ func DefaultStateRoot() string {
 // rather than guesses, so it has to be reachable without breaking the machine running the test.
 var realHome = RealHome
 
+// StateRootRetiredMessage is the ONE refusal a script carrying the runtime's spelling gets. The runtime
+// binary's own flag is `--state-dir`; the client's directory is the state root, and `--state-dir` is no
+// longer a client flag at all (architect ruling 2026-10-17, R1-R2). Keeping the two words distinct is the
+// point: one name for one directory, and the other name stays where it belongs.
+//
+// The compare is WHOLE-ARGUMENT (R6): a VALUE that is literally `--state-dir` is refused too, because a
+// parser that read the flag table would have to know every verb's value-taking flags to tell them apart,
+// and that second knowledge is what this unification removes. The limit is stated here rather than
+// papered over with a quoting mechanism.
+const StateRootRetiredMessage = "--state-dir is the runtime's own flag, not the client's: pass --state-root DIR"
+
+// IsStateDirRetired reports whether err is that ONE refusal. A verb whose own contract numbers a bad
+// argument differently (clientroom's group numbers it 3, §2.5) still exits 2 for the retired spelling,
+// because the ruling is about the spelling: a script that carried it must be told to change the word, not
+// handed a code that reads as a partial start. Every other root failure keeps the verb's own code.
+func IsStateDirRetired(err error) bool {
+	var coded *clientcmd.CodedError
+	return errors.As(err, &coded) && coded.Message == StateRootRetiredMessage
+}
+
 // StateRootFromFlags pulls `--state-root DIR` (or `--state-root=DIR`) out of a verb's arguments, wherever
 // it sits, and returns the flag's value with the rest of the arguments in order. The LAST occurrence wins,
 // the way a repeated flag does elsewhere. A verb parses its root through this and then resolves it through
 // ResolveStateRoot, so every flag-taking verb reads the flag the same way - and a root is never half-read,
 // one part from the flag and another from the default.
-func StateRootFromFlags(args []string) (value string, rest []string) {
+//
+// IT IS ALSO THE ONE PLACE `--state-dir` IS REFUSED. The retired spelling returns a typed refusal
+// (ExitUsage, 2) instead of a value, so a verb that calls this before doing anything has nothing to unwind:
+// no daemon started, no runtime asked, no file written. The refusal fires wherever the argument sits,
+// including after the positionals, which is the order the old lookahead allowed.
+func StateRootFromFlags(args []string) (value string, rest []string, err error) {
 	rest = make([]string, 0, len(args))
 	skipValue := false
 	for i, arg := range args {
+		if arg == "--state-dir" || strings.HasPrefix(arg, "--state-dir=") {
+			return "", nil, &clientcmd.CodedError{Message: StateRootRetiredMessage, Code: clientcmd.ExitUsage}
+		}
 		if skipValue {
 			skipValue = false
 			continue
@@ -105,7 +133,7 @@ func StateRootFromFlags(args []string) (value string, rest []string) {
 			value = ""
 		}
 	}
-	return value, rest
+	return value, rest, nil
 }
 
 // ResolveStateRoot is the ONE resolution every verb uses: the flag when it is given, else this machine's

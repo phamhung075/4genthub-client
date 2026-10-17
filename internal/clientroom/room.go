@@ -95,15 +95,15 @@ func (RoomCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	return clientcmd.ExitRoomRefused
 }
 
-const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM SEAT | compact ROOM | queue SUB-VERB ROOM | report ROOM | metrics ROOM | limits ROOM) [--state-dir DIR] [--socket PATH]"
+const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM SEAT | compact ROOM | queue SUB-VERB ROOM | report ROOM | metrics ROOM | limits ROOM) [--state-root DIR] [--socket PATH]"
 
 // subUsages is one line per sub-verb, so a usage error prints the shape of the verb the caller actually
 // typed instead of the whole group's grammar.
 var subUsages = map[string]string{
-	"status":  "usage: 4genteam room status ROOM [--state-dir DIR] [--socket PATH]",
-	"stop":    "usage: 4genteam room stop ROOM [--state-dir DIR] [--socket PATH]",
-	"reseat":  "usage: 4genteam room reseat ROOM SEAT [--state-dir DIR] [--socket PATH]",
-	"compact": "usage: 4genteam room compact ROOM [--state-dir DIR] [--socket PATH]",
+	"status":  "usage: 4genteam room status ROOM [--state-root DIR] [--socket PATH]",
+	"stop":    "usage: 4genteam room stop ROOM [--state-root DIR] [--socket PATH]",
+	"reseat":  "usage: 4genteam room reseat ROOM SEAT [--state-root DIR] [--socket PATH]",
+	"compact": "usage: 4genteam room compact ROOM [--state-root DIR] [--socket PATH]",
 	"queue":   queueGroupUsage,
 	"report":  reportUsage,
 	"metrics": metricsUsage,
@@ -123,7 +123,7 @@ func subUsage(verb string) string {
 func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, subUsage(verb))
 	fmt.Fprintln(out, "\nEvery sub-verb prints the pair it ran against - `room: <room>@<state-dir> socket: <socket>` -")
-	fmt.Fprintln(out, "because neither is resolved implicitly. --state-dir is the flag, else ~/.config/4genthub,")
+	fmt.Fprintln(out, "because neither is resolved implicitly. --state-root is the flag, else ~/.config/4genthub,")
 	fmt.Fprintln(out, "--socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this")
 	fmt.Fprintln(out, "machine's own.")
 	fmt.Fprintln(out, "\nstatus reads GetRoomStatus and prints one line per seat: SEAT RUNTIME STATE SESSION, plus an")
@@ -181,9 +181,16 @@ func parseInvocation(verb string, args []string, positionals int, stdout, stderr
 		printUsage(stdout, verb)
 		return invocation{}, clientcmd.ExitOK, false
 	}
+	// THE ROOT IS READ THROUGH THE ONE PARSER, which strips `--state-root DIR` wherever it sits and refuses
+	// the runtime's spelling before a flag set exists. The group numbers a bad invocation 3, but the retired
+	// spelling keeps the CLI-wide 2: it is a word to change, not a partial start (architect ruling, R7).
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam room %s: %v\n", verb, rootErr)
+		return invocation{}, clientcmd.CodeOf(rootErr, clientcmd.ExitRoomRefused), false
+	}
 	flags := flag.NewFlagSet("room "+verb, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else ~/.config/4genthub")
 	socket := flags.String("socket", "", "the runtime daemon's Unix socket: the flag, else $"+clientruntime.RuntimeSocketEnv+", else this machine's own")
 	flagArgs, rest := splitFlagsAndPositionals(args)
 	if err := flags.Parse(flagArgs); err != nil {
@@ -195,7 +202,7 @@ func parseInvocation(verb string, args []string, positionals int, stdout, stderr
 	}
 	// The room is the FIRST positional and the seat, when the sub-verb takes one, the second - the order
 	// the usage line documents, so it reads the same way in help and in an argument list.
-	root, err := clientenv.ResolveStateRoot(*stateDir)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		// The refusal's OWN code is deliberately NOT returned. ResolveStateRoot answers ExitUsage (2)
 		// because that is the wider CLI's caller-error code, and this group's contract numbers a bad
@@ -212,7 +219,7 @@ func parseInvocation(verb string, args []string, positionals int, stdout, stderr
 }
 
 // splitFlagsAndPositionals separates this group's flags from its positionals, and puts the positionals LAST:
-// the flag package STOPS at the first bare word, so `room status ROOM --state-dir DIR` - the order the usage
+// the flag package STOPS at the first bare word, so `room status ROOM --state-root DIR` - the order the usage
 // line documents, and the one a reader writes - would otherwise parse no flags at all and report the room's
 // neighbour as an unexpected argument. clientlifecycle carries this same helper for this same reason, and
 // clientpolicy's parser carries the warning; it is spelled out rather than rediscovered.
@@ -224,8 +231,8 @@ func splitFlagsAndPositionals(args []string) (flagArgs, positional []string) {
 			continue
 		}
 		flagArgs = append(flagArgs, arg)
-		// A flag that takes a value takes its VALUE with it, so `--state-dir DIR` is never read as a
-		// positional named DIR. `--state-dir=DIR` carries its own value and needs no lookahead.
+		// A flag that takes a value takes its VALUE with it, so `--state-root DIR` is never read as a
+		// positional named DIR. `--state-root=DIR` carries its own value and needs no lookahead.
 		if flagTakesValue(flagName(arg)) && !strings.Contains(arg, "=") && i+1 < len(args) {
 			i++
 			flagArgs = append(flagArgs, args[i])
@@ -266,7 +273,7 @@ func flagName(arg string) string {
 
 // flagTakesValue is this group's flag list. It has exactly two flags and both take a value, so a bare word
 // after one of them is that flag's value rather than a room or a seat.
-func flagTakesValue(name string) bool { return name == "state-dir" || name == "socket" }
+func flagTakesValue(name string) bool { return name == "socket" }
 
 // SessionName is the session name of one seat: `agenthub--<room>--<seat>`.
 //

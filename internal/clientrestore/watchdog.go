@@ -128,7 +128,11 @@ func (watchdogCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 				"skips the check for this run.")
 		return clientcmd.ExitOK
 	}
-	rootFlag, rest := clientenv.StateRootFromFlags(args)
+	rootFlag, rest, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitUnavailable)
+	}
 	root, err := resolveRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)

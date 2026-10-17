@@ -101,12 +101,19 @@ func runRender(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			renderUsage, ExitDrift)
 		return clientcmd.ExitOK
 	}
+	// THE ROOT IS READ THROUGH THE ONE PARSER, so parseArgs' own table no longer names it: the root is
+	// stripped wherever it sits and the runtime's spelling is refused with the CLI-wide caller-error code.
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam policy render: %v. %s\n", rootErr, renderUsage)
+		return clientcmd.ExitUsage
+	}
 	values, _, err := parseArgs(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam policy render: %v. %s\n", err, renderUsage)
 		return clientcmd.ExitUsage
 	}
-	if err := rejectUnknown(values, "room", "seat", "state-root", "check"); err != nil {
+	if err := rejectUnknown(values, "room", "seat", "check"); err != nil {
 		fmt.Fprintf(stderr, "4genteam policy render: %v. %s\n", err, renderUsage)
 		return clientcmd.ExitUsage
 	}
@@ -116,7 +123,7 @@ func runRender(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "4genteam policy render: --room and --seat are required. %s\n", renderUsage)
 		return clientcmd.ExitUsage
 	}
-	stateRoot, resolveErr := clientenv.ResolveStateRoot(values["state-root"])
+	stateRoot, resolveErr := clientenv.ResolveStateRoot(rootFlag)
 	if resolveErr != nil {
 		fmt.Fprintf(stderr, "4genteam policy render: %v. %s\n", resolveErr, renderUsage)
 		return clientcmd.ExitUsage

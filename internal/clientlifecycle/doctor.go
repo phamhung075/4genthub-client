@@ -45,7 +45,11 @@ func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 		return clientcmd.ExitOK
 	}
 	asJSON := false
-	rootFlag, remaining := clientenv.StateRootFromFlags(args)
+	rootFlag, remaining, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam doctor: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitUsage)
+	}
 	var rest []string
 	for _, arg := range remaining {
 		switch {
