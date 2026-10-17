@@ -49,6 +49,10 @@ const (
 	agentHubRoleEnv    = "AGENTHUB_ROLE"
 	agentHubRuntimeEnv = "AGENTHUB_RUNTIME"
 	agentHubSessionEnv = "AGENTHUB_SESSION_NAME"
+	// The hub itself: the base and the credential every hub call this client makes carries. They are
+	// the environment pair `4genteam whoami` reads the seat's current task with (currenttask.go).
+	agentHubURLEnv   = "AGENTHUB_URL"
+	agentHubTokenEnv = "AGENTHUB_TOKEN"
 )
 
 // seatEnvParts is what this shell's environment claims about the seat it is: the (room, seat) pair, the

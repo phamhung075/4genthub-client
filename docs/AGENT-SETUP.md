@@ -419,8 +419,13 @@ is waiting and stop.
 Once the room is up, a seat works the same way on any project.
 
 - **Startup.** `4genteam whoami --json` prints this seat's identity (`rigName`, `memberId`, runtime,
-  session name, role, model), its peers, the edges and the transcript path. Run it after any
-  restart, before concluding anything about where the work stands.
+  session name, role, model), its peers, the edges and the transcript path. Its first key,
+  `current_task`, is the task this seat holds `in_progress` and the hub's resume brief for it
+  (`{"id", "resume"}`), so a seat that was compacted or restarted rebuilds from the task's record
+  instead of its transcript. `null` means the hub knows no task for this seat; an `unavailable (...)`
+  string means the hub was not asked or did not answer - it is never `null`, so a failed read is
+  not mistaken for empty hands. Run it after any restart, before concluding anything about where
+  the work stands.
 - **Find work.** The task board is the MCP server: `manage_task` with `{"action":"list"}`,
   `{"action":"next","git_branch_id":"<uuid>"}`, or `{"action":"search","query":"<words>"}`. Create
   a task only after searching, and assign it with the `@seat-key` form.

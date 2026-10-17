@@ -98,11 +98,18 @@ type RoomSpec struct {
 
 // WhoamiResponse is the exact JSON returned to a seat for Rule 1 compatibility.
 type WhoamiResponse struct {
-	ResolvedBy string           `json:"resolved_by"`
-	Identity   WhoamiIdentity   `json:"identity"`
-	Peers      []WhoamiPeer     `json:"peers"`
-	Edges      WhoamiEdges      `json:"edges"`
-	Transcript WhoamiTranscript `json:"transcript"`
+	// CurrentTask is the seat's task and its resume brief (4/8). It is declared FIRST so the
+	// document `whoami --json` prints leads with it: a compacted seat reads the brief before it
+	// reads who it is. Three shapes, never omitted: null (the hub says no_task_for_seat), an
+	// object {id, resume}, or the string "unavailable (<reason>)" when the hub did not answer.
+	// It is filled by the `4genteam whoami` verb only - the runtime's own whoami does not know the
+	// hub - so a stored runtime payload decodes to null.
+	CurrentTask any              `json:"current_task"`
+	ResolvedBy  string           `json:"resolved_by"`
+	Identity    WhoamiIdentity   `json:"identity"`
+	Peers       []WhoamiPeer     `json:"peers"`
+	Edges       WhoamiEdges      `json:"edges"`
+	Transcript  WhoamiTranscript `json:"transcript"`
 }
 
 type WhoamiIdentity struct {

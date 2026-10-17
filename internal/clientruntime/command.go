@@ -47,6 +47,10 @@ func (whoamiCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 		fmt.Fprintf(stderr, "4genteam whoami: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
 	}
+	// THE BRIEF IS THIS VERB'S OWN READ, not the identity chain's: the send and feedback paths ask
+	// ResolveIdentity and must not pay a hub round trip for an answer they do not print. A failed
+	// read is stated as unavailable, never as "no task" - see ResolveCurrentTask.
+	resolved.CurrentTask = ResolveCurrentTask(ctx, resolved)
 	return printWhoami(stdout, stderr, &resolved, *jsonFlag)
 }
 
@@ -96,6 +100,25 @@ func printWhoami(stdout, stderr io.Writer, resp *WhoamiResponse, asJSON bool) in
 		_, _ = stdout.Write(data)
 		_, _ = stdout.Write([]byte("\n"))
 		return clientcmd.ExitOK
+	}
+	// THE BRIEF COMES FIRST, the same order as the JSON document (types.go): a compacted seat reads
+	// what it holds before it reads who it is. The human form carries the fields it acts on; the
+	// whole brief is `--json`.
+	switch task := resp.CurrentTask.(type) {
+	case map[string]any:
+		fmt.Fprintf(stdout, "Task:    %v\n", task["id"])
+		if brief, ok := task["resume"].(map[string]any); ok {
+			if verdict, ok := brief["last_verdict"].(string); ok && verdict != "" {
+				fmt.Fprintf(stdout, "Verdict: %s\n", verdict)
+			}
+			if next, ok := brief["next_action"].(string); ok && next != "" {
+				fmt.Fprintf(stdout, "Next:    %s\n", next)
+			}
+		}
+	case nil:
+		fmt.Fprintln(stdout, "Task:    none in progress on this seat")
+	case string:
+		fmt.Fprintf(stdout, "Task:    %s\n", task)
 	}
 	fmt.Fprintf(stdout, "Rig:     %s\n", resp.Identity.RigName)
 	fmt.Fprintf(stdout, "Seat:    %s\n", resp.Identity.MemberId)

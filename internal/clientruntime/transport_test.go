@@ -25,7 +25,7 @@ import (
 // environment instead of by the thing under test.
 func hermeticSeat(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{agentHubRoomEnv, agentHubSeatEnv, agentHubRoleEnv, agentHubRuntimeEnv, agentHubSessionEnv} {
+	for _, name := range []string{agentHubRoomEnv, agentHubSeatEnv, agentHubRoleEnv, agentHubRuntimeEnv, agentHubSessionEnv, agentHubURLEnv, agentHubTokenEnv} {
 		t.Setenv(name, "")
 	}
 }
