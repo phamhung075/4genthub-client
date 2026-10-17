@@ -3,11 +3,11 @@ package clientwatch
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
 
@@ -139,7 +139,7 @@ func seatModelOf(root, room, seat, logPath string) string {
 	if model := seatModel(logPath); model != "" {
 		return model
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "rooms", room, "spec.json"))
+	raw, err := os.ReadFile(clientruntime.RoomSpecPath(root, room))
 	if err != nil {
 		return ""
 	}

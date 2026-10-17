@@ -49,3 +49,10 @@ func SeatSessionsDir(root, room, seat string) string {
 func SeatDir(root, room, seat string) string {
 	return filepath.Join(root, "rooms", room, "seats", seat)
 }
+
+// RoomSpecPath is the room's own spec file, `<root>/rooms/<room>/spec.json`: what the runtime wrote when
+// the room was last started, and therefore the only record of state a team definition cannot restate -
+// each seat's cwd, for one.
+func RoomSpecPath(root, room string) string {
+	return filepath.Join(root, "rooms", room, "spec.json")
+}

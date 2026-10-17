@@ -282,6 +282,71 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 	}
 }
 
+// TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec pins the defect measured on 2026-10-17: the live room spec
+// carried five distinct per-seat cwds, and `up --team` - which starts the room from the definition and
+// lets the runtime WRITE spec.json - replaced them with what the definition says (nothing), moving every
+// seat to one directory. The definition wins where it declares a cwd: that is an edit, not a default.
+func TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec(t *testing.T) {
+	restoreAll(t)
+	root := t.TempDir()
+	directory := filepath.Join(root, "rooms", "my-rig")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	live := `{"room":"my-rig","seats":[` +
+		`{"seat_key":"lead","cwd":"/work/lead"},` +
+		`{"seat_key":"go-dev","cwd":"/work/go-dev"},` +
+		`{"seat_key":"reviewer","cwd":"   "}]}`
+	if err := os.WriteFile(filepath.Join(directory, "spec.json"), []byte(live), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	team := `{"room":{"slug":"my-rig"},` +
+		`"seats":[{"seat_key":"lead","seat_type":"developer","runtime":"omp"},` +
+		`{"seat_key":"go-dev","seat_type":"developer","runtime":"omp","cwd":"/declared/go-dev"},` +
+		`{"seat_key":"fe-dev","seat_type":"developer","runtime":"omp"}],` +
+		`"links":[{"from":"lead","kind":"delegates_to","to":"go-dev"},` +
+		`{"from":"lead","kind":"delegates_to","to":"fe-dev"}],"seat_overlays":{}}`
+	teamDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(teamDir, "team.json"), []byte(team), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ensureDaemon = func(string, io.Writer) (string, error) { return "/tmp/daemon.log", nil }
+	var sent clientruntime.RoomSpec
+	ensureRig = func(_ string, spec clientruntime.RoomSpec, _ string, _ io.Writer, _ io.Writer) int {
+		sent = spec
+		return clientcmd.ExitOK
+	}
+
+	var out, errOut bytes.Buffer
+	code := (upCommand{}).Run(context.Background(),
+		[]string{"my-rig", "--team", teamDir, "--state-root", root, "--room-only"}, &out, &errOut)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d (stderr %q)", code, errOut.String())
+	}
+	got := map[string]string{}
+	for _, seat := range sent.Seats {
+		value := "<nil>"
+		if seat.Cwd != nil {
+			value = *seat.Cwd
+		}
+		got[seat.SeatKey] = value
+	}
+	want := map[string]string{
+		"lead":   "/work/lead",
+		"go-dev": "/declared/go-dev",
+		"fe-dev": "<nil>",
+	}
+	for seat, value := range want {
+		if got[seat] != value {
+			t.Errorf("%s cwd = %q, want %q (all: %v)", seat, got[seat], value, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("seats = %v, want exactly %d", got, len(want))
+	}
+}
+
 // TestStopSignalsAgentAndSaysTheStopIsMachineWide: `stop` is the other half of `up`'s contract, and 7.1
 // makes it stop agent - which stops its children - rather than picking safeguards out one by one. Asserted
 // as the PATTERN rather than by signalling it: a test that ran the real thing would stop this machine's

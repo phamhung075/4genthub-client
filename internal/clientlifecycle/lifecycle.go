@@ -317,6 +317,11 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 			teamDir, spec.Room, name, upUsage)
 		return clientcmd.ExitRoomRefused
 	}
+	// THE ROOM'S OWN SPEC IS READ BEFORE THE DEFINITION'S SPEC IS SENT, because StartRoom WRITES spec.json
+	// from what it is sent: a definition carries a seat's cwd only when someone declared one there, so a
+	// team run that ignored the live file would overwrite five distinct per-seat cwds with nothing
+	// (measured 2026-10-17 in this room). A cwd the definition declares still wins - that is an edit.
+	spec = carrySeatCwds(spec, stateDir)
 	daemonLog, err := ensureDaemon(stateDir, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
@@ -534,6 +539,39 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 		return clientcmd.ExitPartialStart
 	}
 	return clientcmd.ExitOK
+}
+
+// carrySeatCwds folds each seat's working directory from the room's OWN spec file into the definition's
+// spec. The definition is the authority on what a seat IS; the live file is the only record of where it
+// was told to work, because a definition states a cwd only when someone meant to change it. A missing,
+// unreadable or malformed live file leaves the definition untouched - the room then starts exactly as
+// the definition says, which is what `up` did before this pass existed.
+func carrySeatCwds(spec clientruntime.RoomSpec, stateDir string) clientruntime.RoomSpec {
+	raw, err := os.ReadFile(clientruntime.RoomSpecPath(stateDir, spec.Room))
+	if err != nil {
+		return spec
+	}
+	var live clientruntime.RoomSpec
+	if json.Unmarshal(raw, &live) != nil {
+		return spec
+	}
+	// A LIVE cwd that is absent or blank is not a directory to move a seat to: it is the state this fix
+	// exists to stop writing, so it carries nothing.
+	liveCwds := make(map[string]string, len(live.Seats))
+	for _, seat := range live.Seats {
+		if seat.Cwd != nil && strings.TrimSpace(*seat.Cwd) != "" {
+			liveCwds[seat.SeatKey] = *seat.Cwd
+		}
+	}
+	for i := range spec.Seats {
+		if spec.Seats[i].Cwd != nil {
+			continue
+		}
+		if cwd, found := liveCwds[spec.Seats[i].SeatKey]; found {
+			spec.Seats[i].Cwd = &cwd
+		}
+	}
+	return spec
 }
 
 // seatStartPlan is the check-then-start decision, pure so it can be pinned without a daemon.
