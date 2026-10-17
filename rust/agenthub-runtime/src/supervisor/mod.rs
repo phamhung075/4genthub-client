@@ -2435,7 +2435,7 @@ mod tests {
         use std::io::{BufRead, BufReader, Write};
         use std::os::unix::net::{UnixListener, UnixStream};
 
-        let state_dir = scratch("deliver-one-frame");
+        let state_dir = scratch("deliver");
         let seat = seat_key("deliver");
         write_spec(&state_dir, "deliver", &seat);
         let run_dir = state_dir.join("rooms").join("deliver").join("run");
