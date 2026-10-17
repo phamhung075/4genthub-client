@@ -36,12 +36,19 @@ the runner's silence reached it as an i/o timeout with no words.
   - `IsNoAnswer(reason)` recognizes the daemon's reply-bound sentence by its words (`no answer from the runner
     for`), the way `IsFramingFailure` reads an older daemon's complaint - the runtime that must be read may be
     older than this client, so the words are the only channel both builds share.
+- `internal/commpolicy/policy.go`: `OutcomeDeliveryUnconfirmed = "delivery_unconfirmed"` is the third fact an
+  allowed send's outcome line can carry - the request reached the runtime and the runtime did not prove the
+  delivery either way. It is not `delivery_failed`: that claims a loss nobody measured.
 - `internal/clientseat/reseat.go`:
   - `sendFailureSentence(socket, err)` and `nothingWasSent(err)` replace the single sentence. A daemon
     refusal, an older daemon that could not frame the request, or no daemon at the socket means nothing was
     sent. The daemon reporting the runner's silence carries the runner's own sentence whole and adds only the
     verdict (`; the delivery is unconfirmed`), so the hold is stated once; a socket timeout and an answer this
     client cannot read name the hold themselves and never claim nothing was sent.
+  - The outcome line says the same thing: `delivery_unconfirmed` when `!nothingWasSent(err)` and
+    `delivery_failed` otherwise, so a held send is no longer audited as lost.
+- `internal/clientactivity/activity.go`: `delivery_unconfirmed` joins `problemOutcomes`, so
+  `activity --problems` shows an unconfirmed send beside a failed one.
 - `internal/clientruntime/deadline_test.go`: the runtime's 8 s bound is named beside the 60 s readiness window
   and pinned - `CallDeadline` must outlast it, so a raised number has to face that test.
 
@@ -62,6 +69,9 @@ the runner's silence reached it as an i/o timeout with no words.
 - `internal/clientseat/sendfailure_test.go::TestSendToAHeldFrameSaysTheTextMayBeHeld` (new): end to end
   through `send` against a fake daemon that reports the runner's silence - exit non-zero, stdout empty, stderr
   carries the runner's own words and `may be held`, and never `nothing was sent`.
+- `internal/clientseat/sendfailure_test.go::TestAHeldSendIsAuditedUnconfirmedAndARefusalFailed` (new): the
+  audit file a held send writes ends in `delivery_unconfirmed`, a daemon refusal ends in `delivery_failed`,
+  and the decision line before either carries no outcome.
 - `internal/clientruntime/deadline_test.go` (extended): `CallDeadline > REPLY_TIMEOUT`, the 8 s number named
   because it cannot be read across the language boundary.
 - At this change, on `4genthub-min/send-reply-race`: `cargo test --bins` = 153 passed, 0 failed;

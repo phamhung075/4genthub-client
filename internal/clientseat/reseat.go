@@ -419,8 +419,14 @@ func runtimeSend(session, text string, opts map[string]string, socket string, ha
 		Raw: opts["raw"] == "true",
 	})
 	if err != nil {
-		if auditErr := handle.outcome(commpolicy.OutcomeDeliveryFailed); auditErr != nil {
-			fmt.Fprintf(stderr, "4genteam send: the outcome of the failed delivery could not be audited in %s: %v\n",
+		// THE OUTCOME LINE CARRIES THE SAME THREE FACTS THE SENTENCE DOES: a frame the runner received and never
+		// answered is unconfirmed, not failed - the text may be held for its next turn (task 83a39aa5).
+		outcome := commpolicy.OutcomeDeliveryFailed
+		if !nothingWasSent(err) {
+			outcome = commpolicy.OutcomeDeliveryUnconfirmed
+		}
+		if auditErr := handle.outcome(outcome); auditErr != nil {
+			fmt.Fprintf(stderr, "4genteam send: the outcome of the delivery could not be audited in %s: %v\n",
 				handle.path, auditErr)
 		}
 		fmt.Fprintf(stderr, "4genteam send: %s\n", sendFailureSentence(socket, err))

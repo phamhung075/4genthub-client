@@ -65,7 +65,8 @@ type Event struct {
 // that are not an acceptance. `reject` and `unjudgeable` are both the enforced gate refusing to close the task,
 // so an operator looking for why a task did not close must find either.
 var problemOutcomes = map[string]bool{
-	"blocked": true, "error": true, "refused": true, "escalated": true, "reject": true, "unjudgeable": true, "delivery_failed": true,
+	"blocked": true, "error": true, "refused": true, "escalated": true, "reject": true, "unjudgeable": true,
+	"delivery_failed": true, "delivery_unconfirmed": true,
 }
 
 type options struct {

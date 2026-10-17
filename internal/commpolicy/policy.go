@@ -88,18 +88,26 @@ type AuditRecord struct {
 	Allowed    bool
 	Reason     string
 	PolicyHash string
-	// Outcome is empty on the decision line, written before delivery, and "delivered" or
-	// "delivery_failed" on the line that follows an allowed one. An allowed decision line with
-	// no outcome line after it means the delivery outcome is unknown: the sender stopped (or
-	// could not write the outcome) between starting the delivery and recording it, so the
-	// message may have been delivered.
+	// Outcome is empty on the decision line, written before delivery, and "delivered",
+	// "delivery_failed" or "delivery_unconfirmed" on the line that follows an allowed one. An allowed decision
+	// line with no outcome line after it means the delivery outcome is unknown: the sender stopped (or could
+	// not write the outcome) between starting the delivery and recording it, so the message may have been
+	// delivered.
 	Outcome string `json:",omitempty"`
 }
 
 // Outcomes of an allowed send.
 const (
-	OutcomeDelivered      = "delivered"
+	// OutcomeDelivered is a delivery the runtime proved: the text was written where the verdict says.
+	OutcomeDelivered = "delivered"
+	// OutcomeDeliveryFailed is a delivery that provably never left this client: the daemon refused the
+	// request, could not frame it, or no daemon was reachable.
 	OutcomeDeliveryFailed = "delivery_failed"
+	// OutcomeDeliveryUnconfirmed is the third fact: the request reached the runtime and the runtime did not
+	// prove the delivery either way - the frame reached the runner's mailbox and the text may be held for its
+	// next turn, or the socket went quiet after the request. It is NOT delivery_failed: that would claim a
+	// loss nobody measured (task 83a39aa5).
+	OutcomeDeliveryUnconfirmed = "delivery_unconfirmed"
 )
 
 // allowedKinds maps a message intent to the link kinds that authorize it.

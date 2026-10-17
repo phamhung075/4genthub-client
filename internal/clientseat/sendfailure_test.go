@@ -3,8 +3,10 @@ package clientseat
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
+	"github.com/phamhung075/4genthub-client/internal/commpolicy"
 )
 
 // aSocketTimeout is a REAL timeout from a real socket, not a manufactured error: the failure this client
@@ -147,13 +150,14 @@ func TestTheSendFailureSentenceSeparatesARefusalFromAHold(t *testing.T) {
 	}
 }
 
-// END TO END through the verb: a daemon that reports the runner's silence prints the HOLD, carries the
-// runner's own words, and never says nothing was sent.
-func TestSendToAHeldFrameSaysTheTextMayBeHeld(t *testing.T) {
-	pinGoDevShell(t)
-	auditStoreUnder(t)
+// runnerSilence is the daemon's own sentence when a frame reached the runner's mailbox and the runner never
+// answered it (REPLY_TIMEOUT in rust/agenthub-runtime/src/runner/mod.rs).
+const runnerSilence = "no answer from the runner for 4genthub-min/fe-dev within 8s: the frame reached its mailbox, so the text may be held for its next turn"
 
-	const runnerSilence = "no answer from the runner for 4genthub-min/fe-dev within 8s: the frame reached its mailbox, so the text may be held for its next turn"
+// daemonForTheSendTest answers the four requests a `send` makes before its delivery - the recipient's record,
+// this shell's identity, the room's links - and hands SendText the failure under test.
+func daemonForTheSendTest(t *testing.T, sendTextFailure string) {
+	t.Helper()
 	sock, _ := fakeRuntime(t, func(line string) string {
 		switch {
 		case strings.Contains(line, `"GetRoomLinks"`):
@@ -165,12 +169,49 @@ func TestSendToAHeldFrameSaysTheTextMayBeHeld(t *testing.T) {
 			return `{"ok":true,"data":[{"room":"4genthub-min","seat":"fe-dev",` +
 				`"session_name":"4genthub-min-fe-dev@4genthub-min","runtime":"omp","state":"Running"}]}` + "\n"
 		case strings.Contains(line, `"SendText"`):
-			return `{"ok":false,"error":"` + runnerSilence + `"}` + "\n"
+			return `{"ok":false,"error":"` + sendTextFailure + `"}` + "\n"
 		default:
 			return `{"ok":true,"data":{}}` + "\n"
 		}
 	})
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
+}
+
+// storeUnder points the audit store at a temp directory this test owns, so the outcome line it reads is the
+// one its own send wrote.
+func storeUnder(t *testing.T) string {
+	t.Helper()
+	store := t.TempDir()
+	previous := sendStore
+	sendStore = func() (string, error) { return store, nil }
+	t.Cleanup(func() { sendStore = previous })
+	return store
+}
+
+// auditLines is every record the store's audit file holds, in the order it was written.
+func auditLines(t *testing.T, store string) []commpolicy.AuditRecord {
+	t.Helper()
+	raw, err := os.ReadFile(commpolicy.AuditPath(store, "4genthub-min", "go-dev"))
+	if err != nil {
+		t.Fatalf("the audit file: %v", err)
+	}
+	var lines []commpolicy.AuditRecord
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var record commpolicy.AuditRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("an audit line is not JSON: %v (%q)", err, line)
+		}
+		lines = append(lines, record)
+	}
+	return lines
+}
+
+// END TO END through the verb: a daemon that reports the runner's silence prints the HOLD, carries the
+// runner's own words, and never says nothing was sent.
+func TestSendToAHeldFrameSaysTheTextMayBeHeld(t *testing.T) {
+	pinGoDevShell(t)
+	auditStoreUnder(t)
+	daemonForTheSendTest(t, runnerSilence)
 
 	var out, errOut bytes.Buffer
 	code := sendCommand{}.Run(context.Background(),
@@ -193,5 +234,47 @@ func TestSendToAHeldFrameSaysTheTextMayBeHeld(t *testing.T) {
 	}
 	if strings.Contains(errOut.String(), "nothing was sent") {
 		t.Errorf("stderr = %q claims nothing was sent for a frame the runner received", errOut.String())
+	}
+}
+
+// THE AUDIT LINE CARRIES THE SAME THREE FACTS THE SENTENCE DOES. A held send used to be audited
+// `delivery_failed`, which claims a loss nobody measured; it is `delivery_unconfirmed` now, and a request
+// that provably never left the client keeps `delivery_failed` (task 83a39aa5).
+func TestAHeldSendIsAuditedUnconfirmedAndARefusalFailed(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		failure string
+		outcome string
+		stderr  string
+	}{
+		{"held by the runner", runnerSilence, commpolicy.OutcomeDeliveryUnconfirmed, "may be held"},
+		{"refused by the daemon", "a parked seat is not handed work", commpolicy.OutcomeDeliveryFailed, "nothing was sent"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pinGoDevShell(t)
+			store := storeUnder(t)
+			daemonForTheSendTest(t, c.failure)
+
+			var out, errOut bytes.Buffer
+			code := sendCommand{}.Run(context.Background(),
+				[]string{"4genthub-min-fe-dev@4genthub-min", "probe", "--intent", "notice"}, &out, &errOut)
+			if code == 0 {
+				t.Fatalf("a failed delivery exited 0; stdout = %q", out.String())
+			}
+			if !strings.Contains(errOut.String(), c.stderr) {
+				t.Errorf("stderr = %q, want it to contain %q", errOut.String(), c.stderr)
+			}
+
+			lines := auditLines(t, store)
+			if len(lines) != 2 {
+				t.Fatalf("audit lines = %d, want the decision and one outcome: %+v", len(lines), lines)
+			}
+			if lines[0].Outcome != "" {
+				t.Errorf("the decision line carries outcome %q, want none", lines[0].Outcome)
+			}
+			if lines[1].Outcome != c.outcome {
+				t.Errorf("outcome line = %q, want %q", lines[1].Outcome, c.outcome)
+			}
+		})
 	}
 }
