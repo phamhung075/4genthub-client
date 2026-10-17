@@ -437,3 +437,26 @@ func TestHelp(t *testing.T) {
 		t.Errorf("exit %d out %q", code, out)
 	}
 }
+
+// The register's exit-code fact is a whole number, not a substring, and the numbers a criterion is likely to
+// carry next to it are decimals: 0 must not be found inside 10 or inside 0.98, or a criterion could pass its
+// register check on a number that is not this run's exit code.
+func TestTheRegisterFindsAWholeNumberAndNotASubstring(t *testing.T) {
+	cases := []struct {
+		text, n string
+		want    bool
+	}{
+		{"the run exits 0", "0", true},
+		{"exit code 0.", "0", true},
+		{"the run exits 10", "10", true},
+		{"the run exits 100", "10", false},
+		{"the run exits 10", "0", false},
+		{"the score is 0.98", "0", false},
+		{"the run exits 0.0", "0", false},
+	}
+	for _, c := range cases {
+		if got := containsInteger(c.text, c.n); got != c.want {
+			t.Errorf("containsInteger(%q, %q) = %v, want %v", c.text, c.n, got, c.want)
+		}
+	}
+}

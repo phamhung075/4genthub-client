@@ -33,7 +33,7 @@ One timeline of what a room's seats did: their tool calls, their sends and the J
 
   --seat      only this seat's tool calls and sends (Jev rows are machine-wide and name no seat, so they stay)
   --kind      only tool calls, only sends, or only Jev rows
-  --problems  only what was refused or went wrong: blocked and failed tool calls, refused sends, escalations, rejected gates
+  --problems  only what was refused or went wrong: blocked and failed tool calls, refused sends, escalations, rejected and unjudgeable gates
   --since     only the last DURATION (30m, 2h, 24h); the default is everything
   --limit     the newest N lines (default 200)
   --json      one JSON object per line instead of text
@@ -61,9 +61,11 @@ type Event struct {
 	Detail  string    `json:"detail,omitempty"`
 }
 
-// problemOutcomes are the outcomes --problems keeps.
+// problemOutcomes are the outcomes --problems keeps: what a seat was refused, what failed, and the gate verdicts
+// that are not an acceptance. `reject` and `unjudgeable` are both the enforced gate refusing to close the task,
+// so an operator looking for why a task did not close must find either.
 var problemOutcomes = map[string]bool{
-	"blocked": true, "error": true, "refused": true, "escalated": true, "reject": true, "delivery_failed": true,
+	"blocked": true, "error": true, "refused": true, "escalated": true, "reject": true, "unjudgeable": true, "delivery_failed": true,
 }
 
 type options struct {

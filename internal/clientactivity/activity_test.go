@@ -1,11 +1,14 @@
 package clientactivity
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/clientjev"
 )
 
 func write(t *testing.T, path, text string) {
@@ -47,5 +50,38 @@ func TestTimelineMergesTheThreeRecordsAndFiltersProblems(t *testing.T) {
 	line := render(problems[0])
 	if !strings.Contains(line, "send") || !strings.Contains(line, "refused") || !strings.Contains(line, "lead -> dev (notice)") {
 		t.Fatalf("a refused send must read as one line saying what was refused: %q", line)
+	}
+}
+
+// The completion gate writes one jev row per verdict, and the two verdicts that refuse a close - reject and
+// unjudgeable - are both what an operator hunting for a task that would not close has to find. The rows below
+// are serialised from clientjev's own entry type, so the fixture cannot drift from what `4genteam complete`
+// appends: kind gate, the task in the summary, the refusal in the detail, the verdict as the outcome.
+func TestProblemsKeepsAnUnjudgeableGateAndDropsAnAcceptingOne(t *testing.T) {
+	root := t.TempDir()
+	at := time.Date(2026, 10, 17, 1, 0, 0, 0, time.UTC)
+	var lines []string
+	for i, entry := range []clientjev.LogEntry{
+		{Timestamp: at, Kind: "gate", Outcome: string(clientjev.Unjudgeable), Summary: "task t-1",
+			Detail: "refused the production activity: the bundle carries no fact about it"},
+		{Timestamp: at.Add(time.Second), Kind: "gate", Outcome: string(clientjev.Reject), Summary: "task t-2",
+			Detail: "the acceptance command failed"},
+		{Timestamp: at.Add(2 * time.Second), Kind: "gate", Outcome: string(clientjev.Accept), Summary: "task t-3"},
+	} {
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatalf("row %d: %v", i, err)
+		}
+		lines = append(lines, string(raw))
+	}
+	write(t, filepath.Join(root, "jev_decisions.log"), strings.Join(lines, "\n")+"\n")
+
+	problems := filter(Collect(root, "r"), options{problems: true}, time.Now())
+	if len(problems) != 2 {
+		t.Fatalf("want both refusing gates (unjudgeable and reject) and not the acceptance, got %+v", problems)
+	}
+	line := render(problems[0])
+	if !strings.Contains(line, "unjudgeable") || !strings.Contains(line, "gate") || !strings.Contains(line, "task t-1") {
+		t.Fatalf("a refused gate must read as one line naming its verdict and the task: %q", line)
 	}
 }
