@@ -32,12 +32,18 @@ use supervisor::RoomSupervisor;
 /// client-side constant), so an agent that inherits a live rig's pre-rename session name is handed an
 /// identity that is not its seat's - exactly the falsification this list exists to stop.
 ///
+/// `OPENRIG_` is denied one name earlier, and for the same failure: it is what the prior client's variables
+/// addressed its daemon with (`OPENRIG_HOME`, `OPENRIG_URL`, the activity-hook token, the session/node ids;
+/// nine of them measured in an agent's environ before e635e79). Purging the old name from this client's own
+/// docs and routes does not retire it from the environments that still export it, and an agent holding them
+/// can address a rig that is not its room.
+///
 /// `AGENTHUB_` is deliberately NOT denied, and the boundary is a decision rather than an oversight. The
 /// supervisor inserts this room's own `AGENTHUB_ROOM`, `AGENTHUB_SEAT`, `AGENTHUB_ROLE`, `AGENTHUB_RUNTIME`,
 /// `AGENTHUB_SESSION_NAME` and `AGENTHUB_MODEL` *after* the scrub, so those would survive a prefix denial - but
 /// the client also reads `AGENTHUB_TOKEN` and `AGENTHUB_URL`, which nothing re-inserts, and whether a room's
 /// agent may hold an inherited cloud token is a design question. Named on U6's row, not decided here.
-pub const ENV_DENY_PREFIXES: [&str; 1] = ["RIGGED_"];
+pub const ENV_DENY_PREFIXES: [&str; 2] = ["OPENRIG_", "RIGGED_"];
 
 /// Keys denied by their EXACT name, because a prefix cannot name a credential without over-removing.
 ///
@@ -445,6 +451,8 @@ mod tests {
     fn the_deny_list_covers_every_prefix_that_addresses_a_rig() {
         for denied in [
             "RIGGED_SESSION_NAME",
+            "OPENRIG_URL",
+            "OPENRIG_ACTIVITY_HOOK_TOKEN",
         ] {
             assert!(env_is_denied(denied), "{denied} addresses a rig and must be denied");
         }
