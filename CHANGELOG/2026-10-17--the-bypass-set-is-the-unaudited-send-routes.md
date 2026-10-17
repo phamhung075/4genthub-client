@@ -21,3 +21,11 @@ line, delivers, writes the outcome line), and the rail's `create` records a row 
   `4genteam input --seat`, `4genteam room queue create`, `tmux send-keys` and `rig send`: it reports the
   last three only, exit 4 (`bypass-suspected: 4genteam input ...`, `... tmux send-keys ...`, `... rig send
   ...`).
+
+### Supersedes
+
+- `CHANGELOG/2026-10-15--the-comm-guard-binds-the-native-spellings.md`: it added `4genteam send` and the
+  rail's `create` to the bypass set on the premise that they skipped the checker. That premise held while
+  `seatcheck send` existed; the checker's send verb is deleted, the surviving route is `4genteam send`, and
+  the rail's `create` is the audited handoff rather than a message - so both entries go, and only
+  `4genteam input` (with `tmux send-keys|paste-buffer` and the foreign `rig` spellings) stays.
