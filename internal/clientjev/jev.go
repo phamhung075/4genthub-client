@@ -131,6 +131,12 @@ const (
 	Accept    Verdict = "accept"
 	Reject    Verdict = "reject"
 	Uncertain Verdict = "uncertain"
+	// Unjudgeable is the completion gate's refusal of a criterion that names no fact the evidence bundle
+	// carries. It is NOT one of the judge's answers - the judge is never asked about such a criterion - and
+	// it is not a low score: a claim the gate cannot see and a claim it can see and finds weak are different
+	// facts about the work, and they must not arrive as the same number
+	// (seats/architect/RULING-closing-gate-register-and-unjudgeable.md, R1/R2).
+	Unjudgeable Verdict = "unjudgeable"
 )
 
 type answer struct {

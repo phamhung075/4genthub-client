@@ -77,7 +77,178 @@ func TestKeepOutDoesNotHitSimilarNames(t *testing.T) {
 	}
 }
 
+// jevServer answers every Jev call with reply, counts them, and records the criteria the judge was asked
+// about: the register gate's whole effect is WHICH criteria reach the judge, so a count alone would pass on
+// a gate that silently dropped one.
+func jevServer(t *testing.T, reply string) (clientjev.Config, *int, *[]string) {
+	t.Helper()
+	hits := 0
+	asked := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		raw, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Questions map[string]struct {
+				Instructions string `json:"instructions"`
+			} `json:"questions"`
+		}
+		if err := json.Unmarshal(raw, &payload); err == nil {
+			for _, q := range payload.Questions {
+				asked = append(asked, q.Instructions)
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("TYPESAFE_BASE_URL", srv.URL)
+	t.Setenv("TYPESAFE_API_KEY", "key-secret")
+	t.Setenv("JEV_DECISION_LOG_PATH", filepath.Join(t.TempDir(), "jev.log"))
+	cfg, err := clientjev.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, &hits, &asked
+}
+
+// measured is the bundle of the lead's calibration run 3 (hub 283fb358 Progress 1): the command that was
+// run, its exit code, the four paths the numstat names, and the base the criteria cite.
+func measured() clientevidence.Body {
+	body := clientevidence.Body{BaseSHA: "b32369c1f4a2b3c4d5e6f708192a3b4c5d6e7f80",
+		HeadSHA: "d5c9b5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8",
+		Numstat: "12\t3\tinternal/roombudget/roombudget.go\n8\t2\tinternal/seatpark/park.go\n" +
+			"5\t1\trust/agenthub-runtime/assets/seat-guard.ts\n20\t0\trust/agenthub-runtime/tests/seat_guard.rs\n"}
+	body.Test.Command = "go test -count=1 ./..."
+	return body
+}
+
+// measuredCriteria are the five clauses that answered ACCEPT at 0.98/0.96/0.96/0.97/0.97 in that run: one
+// exit-code clause and four numstat-path clauses. They are the register's own shape, so the gate must judge
+// them exactly as it did before the register existed.
+var measuredCriteria = []string{
+	"the acceptance command `go test -count=1 ./...` exits 0",
+	"measured from base b32369c, the numstat names internal/roombudget/roombudget.go",
+	"measured from base b32369c, the numstat names internal/seatpark/park.go",
+	"measured from base b32369c, the numstat names rust/agenthub-runtime/assets/seat-guard.ts",
+	"measured from base b32369c, the numstat names rust/agenthub-runtime/tests/seat_guard.rs",
+}
+
+// outcomeOneCriteria are task c916e113's criteria as the task holds them (the lead's re-worded set, Progress
+// 4). Every one is a production-behaviour claim and none names a fact this bundle carries, which is the case
+// the gate must REFUSE rather than score: the same criteria scored 0.29/0.24/0.39.
+var outcomeOneCriteria = []string{
+	"The served production bundle no longer references /api/v2/openrig: the served bytes contain openrig 0 times " +
+		"and /api/v2/rooms/ 21 times, and the panel reads /api/v2/rooms/<room>/decisions",
+	"The panel's failed decisions read names its HTTP status on production: the e2e spec injects a 503 in the " +
+		"browser, asserts the status token, and passes on production",
+	"The panel's pending-row half is settled: the pending row with its attention animation is proven against an " +
+		"injected payload (evidence files on disk), and production holds no pending decision to render, which the " +
+		"owner accepted as a stated limit on 2026-10-16T22:31Z",
+}
+
+func TestTheMeasuredRegisterIsJudgedAndAccepted(t *testing.T) {
+	cfg, hits, asked := jevServer(t, `{"answers":{"criterion_1":{"noul":0.98},"criterion_2":{"noul":0.96},`+
+		`"criterion_3":{"noul":0.96},"criterion_4":{"noul":0.97},"criterion_5":{"noul":0.97}}}`)
+	got := evaluate(context.Background(), cfg, measuredCriteria, measured())
+	if got.Verdict != clientjev.Accept || got.Evaluator != "jev" {
+		t.Fatalf("the measured register must still be judged as it was: got %+v", got)
+	}
+	if *hits != 1 {
+		t.Errorf("Jev was called %d times, want once: every criterion of the register is judged", *hits)
+	}
+	if len(*asked) != len(measuredCriteria) {
+		t.Errorf("the judge was asked %d criteria, want %d: %v", len(*asked), len(measuredCriteria), *asked)
+	}
+}
+
+func TestOutcomeOnesCriteriaAreUnjudgeableWithNoJudgeCall(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99},"criterion_2":{"noul":0.99},`+
+		`"criterion_3":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, outcomeOneCriteria, passing())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+		t.Fatalf("criteria the bundle cannot carry must be refused, not scored: got %+v", got)
+	}
+	if *hits != 0 {
+		t.Errorf("Jev was called %d times for criteria the bundle carries no fact about", *hits)
+	}
+	for _, want := range []string{"openrig 0 times", "HTTP status on production", "pending-row half"} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the refusal must name the criterion it refused (%q):\n%s", want, got.Reasons)
+		}
+	}
+	for _, want := range []string{`"go test ./..."`, "src/a.go"} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the refusal must print the register the bundle does carry (%q):\n%s", want, got.Reasons)
+		}
+	}
+}
+
+func TestACriterionIsJudgedOnlyWhenTheBundleCarriesItsFact(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		criterion string
+		refused   bool
+	}{
+		{"the submitted command", "the acceptance command `go test -count=1 ./...` exits 0", false},
+		{"this run's own exit code", "the run exits 0 with nothing failed", false},
+		{"a path the numstat lists", "the numstat names internal/seatpark/park.go", false},
+		{"a path the numstat does not list", "the numstat names internal/nowhere/absent.go", true},
+		{"production behaviour", "the panel renders the pending row on production", true},
+	} {
+		cfg, hits, asked := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+		got := evaluate(context.Background(), cfg, []string{tc.criterion}, measured())
+		if tc.refused {
+			if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" || *hits != 0 {
+				t.Errorf("%s: got %+v, %d judge calls; want a deterministic refusal and no call: %v",
+					tc.name, got, *hits, *asked)
+			}
+			continue
+		}
+		if got.Verdict != clientjev.Accept || got.Evaluator != "jev" || *hits != 1 {
+			t.Errorf("%s: got %+v, %d judge calls; want it judged and accepted", tc.name, got, *hits)
+		}
+	}
+}
+
+func TestABaseShaPrefixAloneIsJudged(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, []string{"the change is built on base b32369c"}, measured())
+	if got.Verdict != clientjev.Accept || got.Evaluator != "jev" || *hits != 1 {
+		t.Errorf("a sha prefix IS a bundle fact, so the criterion is judged: got %+v, %d judge calls", got, *hits)
+	}
+	cfg, hits, _ = jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got = evaluate(context.Background(), cfg, []string{"the change is built on base 0123456"}, measured())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" || *hits != 0 {
+		t.Errorf("a commit this bundle does not name is not a fact it carries: got %+v, %d judge calls", got, *hits)
+	}
+}
+
+func TestOneRefusedCriterionRefusesTheCompletionEvenWhenTheOthersWouldAccept(t *testing.T) {
+	cfg, hits, asked := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99},"criterion_3":{"noul":0.99}}}`)
+	criteria := []string{
+		"the acceptance command `go test -count=1 ./...` exits 0",
+		"the panel renders the pending row on production",
+		"the numstat names internal/seatpark/park.go",
+	}
+	got := evaluate(context.Background(), cfg, criteria, measured())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+		t.Fatalf("one refused criterion must refuse the task: got %+v", got)
+	}
+	if *hits != 0 {
+		t.Errorf("Jev was called %d times for %v: a refused criterion makes the completion unjudgeable, it does "+
+			"not leave the rest to be scored", *hits, *asked)
+	}
+	for _, want := range []string{`criterion_2 "the panel renders the pending row on production"`, "criterion_1", "criterion_3"} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the refusal must name both sets (%q is missing):\n%s", want, got.Reasons)
+		}
+	}
+}
+
 func TestCriteriaVerdicts(t *testing.T) {
+	// The judge's verdict mapping is this test's subject, so the criteria are the register's own shape: a
+	// criterion the bundle carries no fact about never reaches the judge (TestACriterionIsJudgedOnly…).
+	judged := []string{"the numstat names src/a.go", "the run exits 0"}
 	for _, tc := range []struct {
 		reply string
 		want  clientjev.Verdict
@@ -88,17 +259,17 @@ func TestCriteriaVerdicts(t *testing.T) {
 		{`{"answers":{"criterion_1":{"noul":0.95}}}`, clientjev.Uncertain},
 	} {
 		cfg, _ := jevConfig(t, 200, tc.reply)
-		if got := evaluate(context.Background(), cfg, []string{"a", "b"}, passing()); got.Verdict != tc.want || got.Evaluator != "jev" {
+		if got := evaluate(context.Background(), cfg, judged, passing()); got.Verdict != tc.want || got.Evaluator != "jev" {
 			t.Errorf("%s: got %+v, want %s", tc.reply, got, tc.want)
 		}
 	}
 	cfg, _ := jevConfig(t, 500, "boom")
-	if got := evaluate(context.Background(), cfg, []string{"a"}, passing()); got.Verdict != clientjev.Uncertain {
+	if got := evaluate(context.Background(), cfg, judged[:1], passing()); got.Verdict != clientjev.Uncertain {
 		t.Errorf("an evaluator error must be uncertain, got %+v", got)
 	}
 	t.Setenv("TYPESAFE_API_KEY", "")
 	cfg, _ = clientjev.FromEnv()
-	if got := evaluate(context.Background(), cfg, []string{"a"}, passing()); got.Verdict != clientjev.Uncertain {
+	if got := evaluate(context.Background(), cfg, judged[:1], passing()); got.Verdict != clientjev.Uncertain {
 		t.Errorf("no key must be uncertain, got %+v", got)
 	}
 	if got := evaluate(context.Background(), cfg, nil, passing()); got.Verdict != clientjev.Uncertain {
@@ -179,7 +350,7 @@ func run(args ...string) (int, string, string) {
 
 func TestAcceptedGateStoresEvidenceThenCompletes(t *testing.T) {
 	base := repo(t)
-	rec := taskServer(t, `["it works"]`)
+	rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
 	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
 	t.Setenv(enforcementEnv, "true")
 	code, out, errs := run("--task", "t1", "--base", base, "--summary", "done it", "--notes", "ran tests", "--test", "git --version")
@@ -200,7 +371,7 @@ func TestAcceptedGateStoresEvidenceThenCompletes(t *testing.T) {
 
 func TestEnforcedGateRefusesBeforeAnyServerWrite(t *testing.T) {
 	base := repo(t)
-	rec := taskServer(t, `["it works"]`)
+	rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
 	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.1}}}`)
 	t.Setenv(enforcementEnv, "true")
 	code, out, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
@@ -215,7 +386,7 @@ func TestEnforcedGateRefusesBeforeAnyServerWrite(t *testing.T) {
 
 func TestShadowGateRecordsTheVerdictAndStillCompletes(t *testing.T) {
 	base := repo(t)
-	rec := taskServer(t, `["it works"]`)
+	rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
 	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.1}}}`)
 	t.Setenv(enforcementEnv, "")
 	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
