@@ -114,6 +114,8 @@ func printQueueUsage(out io.Writer, sub string) {
 	fmt.Fprintln(out, "\nRows are typed; the daemon refuses a create that breaks a rule and names the rule and its cap: priority is")
 	fmt.Fprintln(out, "low, normal or high (default normal); high requires --tag prod-break; summary <= 120 chars, body <= 600;")
 	fmt.Fprintln(out, "tags are lowercase kebab from "+strings.Join(clientruntime.QueueTags, ", ")+".")
+	fmt.Fprintln(out, "A create's --to is a session name, a seat key, or <seat>@<room>: all three are stored as the session")
+	fmt.Fprintln(out, "name the nudge pass matches, and a value naming no seat of the room is refused before anything is written.")
 	fmt.Fprintln(out, "A repeated identical list by the same session within 5 minutes with no new row is answered")
 	fmt.Fprintln(out, "`no change since <qitem>` (exit 2); wake on pushes instead of polling.")
 	fmt.Fprintln(out, "\ncreate, update, claim and close act as THE SEAT'S OWN SESSION, read from $"+sessionEnv+". When that variable")
@@ -476,6 +478,51 @@ func runQueueShow(args []string, stdout, stderr io.Writer) int {
 	return clientcmd.ExitOK
 }
 
+// createDestination resolves the address a caller wrote for --to into the session name the rail keys the row
+// by, or refuses a value that names no seat of the room.
+//
+// THE RAIL'S NUDGE PASS COMPARES destination_session WITH THE RUNTIME'S SESSION NAMES, so a row stored under
+// any other spelling is a row that wakes nobody: measured 2026-10-17, `--to reviewer@4genthub-min` nudged no
+// one for ten minutes while the same row addressed by its session name woke the seat in a second. Three
+// spellings name one seat - the session name, `<seat>@<room>` (which the decision skills use for the
+// principal), and the bare seat key - and all three resolve to the session name, so a row, a filter and the
+// pass read one key.
+//
+// A value naming no seat and no session is REFUSED here, with the room's own list, rather than stored and
+// never looked at again: the caller reads the name they typed beside the names that would have worked.
+func createDestination(client *clientruntime.Client, room, typed string, stderr io.Writer) (string, int, bool) {
+	value := strings.TrimSpace(typed)
+	statuses, err := client.GetRoomStatus(room)
+	if err != nil {
+		return "", queueDaemonRefusal(stderr, "create", err), false
+	}
+	seatKey, namedRoom, keyed := strings.Cut(value, "@")
+	if keyed && namedRoom != room {
+		fmt.Fprintf(stderr, "4genteam room queue create: --to %q names room %q, and this row is on %s: a destination resolves only against the seats of the room the row is on. Nothing was written.\n",
+			value, namedRoom, room)
+		return "", clientcmd.ExitRoomRefused, false
+	}
+	var listed []string
+	for _, status := range statuses {
+		session := status.SessionName
+		if session == "" {
+			session = clientruntime.SeatSessionName(room, status.Seat)
+		}
+		listed = append(listed, status.Seat+" ("+session+")")
+		if value == status.SessionName || value == session || seatKey == status.Seat {
+			return session, clientcmd.ExitOK, true
+		}
+	}
+	// The principal is addressed as `principal@<room>` (the decision-request skill) and is the owner, not a
+	// seat: the owner UI reads those rows, so the address resolves without a live session behind it.
+	if seatKey == "principal" {
+		return clientruntime.SeatSessionName(room, seatKey), clientcmd.ExitOK, true
+	}
+	fmt.Fprintf(stderr, "4genteam room queue create: --to %q names no seat of %s and no session of it, so the row would be stored under a destination no nudge can match; the room fields %s, and the principal is addressed as principal@%s. Nothing was written.\n",
+		value, room, strings.Join(listed, ", "), room)
+	return "", clientcmd.ExitRoomRefused, false
+}
+
 // runQueueCreate appends a row to the rail. The SOURCE session is this seat's own, read from the
 // environment: a create whose source were a flag would let a caller write a row in another seat's name, and
 // the rail's whole value is that its record of who owes what is true.
@@ -502,6 +549,10 @@ func runQueueCreate(args []string, stdout, stderr io.Writer) int {
 	actor, ok := queueSession("create", stderr)
 	if !ok {
 		return clientcmd.ExitRoomRefused
+	}
+	destination, code, ok = createDestination(run.client, run.room, destination, stderr)
+	if !ok {
+		return code
 	}
 	input := clientruntime.QueueCreateInput{
 		SourceSession:      actor,
