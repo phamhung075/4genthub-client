@@ -150,10 +150,15 @@ func (c Config) call(ctx context.Context, questions map[string]any, state any) (
 	if c.APIKey == "" {
 		return nil, ErrNoKey
 	}
-	payload, err := json.Marshal(map[string]any{"model": c.Model, "questions": questions, "state": state})
+	payload, err := redactPayload(map[string]any{"model": c.Model, "questions": questions, "state": state})
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode the request: %w", err)
 	}
+	// THE OWNER'S COUNTS-ONLY RULE (O9a) is applied above, at the one place the payload is built, so
+	// every question this client sends - decide and complete/gate alike - leaves with its file paths
+	// and test names replaced. A caller that names one in a criterion cannot bypass it, because the
+	// shaping is here rather than in the caller; the local decision log still records the full text
+	// (LogEntry.Questions).
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/systemone", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("cannot build the request: %w", err)
@@ -217,7 +222,7 @@ func (c Config) EvaluateCriteria(ctx context.Context, criteria []string, evidenc
 	for i, criterion := range criteria {
 		questions[fmt.Sprintf("criterion_%d", i+1)] = map[string]any{"type": "noul", "instructions": criterion}
 	}
-	answers, err := c.call(ctx, questions, evidence)
+	answers, err := c.call(ctx, questions, countsState(evidence))
 	if err != nil {
 		return Uncertain, err.Error(), err
 	}

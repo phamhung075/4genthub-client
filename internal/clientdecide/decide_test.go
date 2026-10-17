@@ -95,6 +95,39 @@ func TestConfidentAnswerDecidesLocallyAndIsLogged(t *testing.T) {
 	}
 }
 
+// THE OWNER'S COUNTS-ONLY RULE, read from both ends: a question that names a file path and a test name
+// leaves with placeholders, while the local log keeps the full question, its options and the pick
+// (owner answer O9a, 2026-10-16: "No file paths or test names to Jev/TypeSafe: counts only").
+func TestTheWireLosesTheNamesTheLogKeeps(t *testing.T) {
+	named := `[{"id":"q1","question":"Is internal/clientjev/jev.go fixed and TestRedactForWire green?","options":[{"id":"yes","label":"fix internal/clientjev/jev.go","recommended":true},{"id":"no","label":"revert"}]}]`
+	rec, logPath := jev(t, 200, `{"answers":{"q1":{"choice":"yes","confidence":0.93}}}`)
+	code, _, errs := run("--tier", "seat", "--category", "General", "--summary", "fix", "--detail", "the redactor", "--questions", named)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, stderr %q", code, errs)
+	}
+	sent, _ := json.Marshal(rec.body)
+	for _, forbidden := range []string{".go", "TestRedactForWire", "clientjev"} {
+		if strings.Contains(string(sent), forbidden) {
+			t.Errorf("the wire carries %q: %s", forbidden, sent)
+		}
+	}
+	q1 := rec.body["questions"].(map[string]any)["q1"].(map[string]any)
+	if instr, _ := q1["instructions"].(string); !strings.Contains(instr, "<path>") || !strings.Contains(instr, "<test>") {
+		t.Errorf("the shaped question lost its placeholders: %v", q1)
+	}
+	entries := readLog(t, logPath)
+	if len(entries) != 1 {
+		t.Fatalf("log = %v", entries)
+	}
+	logged, _ := json.Marshal(entries[0])
+	if !strings.Contains(string(logged), "TestRedactForWire") || !strings.Contains(string(logged), "internal/clientjev/jev.go") {
+		t.Errorf("the log lost the question's names: %s", logged)
+	}
+	if entries[0]["outcome"] != "decided" || !strings.Contains(string(logged), `"selected_option_id":"yes"`) {
+		t.Errorf("the log lost the pick: %s", logged)
+	}
+}
+
 func TestLowConfidenceEscalatesOneTierAndCarriesTheRecommendation(t *testing.T) {
 	_, logPath := jev(t, 200, `{"answers":{"q1":{"choice":"lite","confidence":0.5}}}`)
 	code, out, _ := run("--tier", "seat", "--summary", "db", "--questions", questions)

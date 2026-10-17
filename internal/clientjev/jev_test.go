@@ -1,12 +1,12 @@
 package clientjev
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -113,10 +113,11 @@ func rawOf(t *testing.T, raw json.RawMessage, name string) json.RawMessage {
 }
 
 // THE CRITERIA REQUEST IS THE CONTRACT WITH SYSTEM ONE, and this is the only test that reads it: three
-// top-level keys, the evidence body's OWN field set inside `state`, and one `noul` question per criterion
-// carrying the criterion's text verbatim. Nothing else travels, because nothing else is shown to the
-// judge - so a later move to a richer payload (route (a) of the Outcome-2 ruling) has to break this test
-// rather than pass unnoticed. The threshold case above reads only the answers; this one reads the request.
+// top-level keys, a COUNTS-ONLY state, and one `noul` question per criterion whose text keeps its shape
+// with every file path and test name replaced (owner ruling O9a, 2026-10-16: "No file paths or test
+// names to Jev/TypeSafe: counts only"). Nothing else travels, because nothing else is shown to the
+// judge - so a later move to a richer payload has to break this test rather than pass unnoticed. The
+// threshold case above reads only the answers; this one reads the request.
 func TestTheCriteriaRequestCarriesTheEvidenceAndNothingElse(t *testing.T) {
 	var request json.RawMessage
 	var path, contentType, authorization string
@@ -146,26 +147,24 @@ func TestTheCriteriaRequestCarriesTheEvidenceAndNothingElse(t *testing.T) {
 	if got, want := keysOf(t, request), []string{"model", "questions", "state"}; !slices.Equal(got, want) {
 		t.Errorf("top-level keys = %v, want %v", got, want)
 	}
-	// `state` is the evidence body field for field: its key set is compared against the body's OWN
-	// encoding, so a field added on either side - or a fourth key in the request - fails here.
-	state := rawOf(t, request, "state")
-	bodyJSON, err := json.Marshal(body)
-	if err != nil {
+	// THE PROBE THE RULING ASKS FOR: a criterion naming a file path and a test name went out, and the
+	// bytes carry neither. The state is the counts summary, not the evidence body.
+	raw, _ := json.Marshal(request)
+	for _, forbidden := range []string{"./fastmcp", "CHANGELOG/", "a.go", "logo.png"} {
+		if bytes.Contains(raw, []byte(forbidden)) {
+			t.Errorf("the wire carries %q, and the ruling forbids paths: %s", forbidden, raw)
+		}
+	}
+	var state map[string]any
+	if err := json.Unmarshal(rawOf(t, request, "state"), &state); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := keysOf(t, state), keysOf(t, bodyJSON); !slices.Equal(got, want) {
-		t.Errorf("state carries %v, the evidence body carries %v", got, want)
+	wantState := map[string]any{
+		"test_command_ran": true, "test_exit_code": 0, "tests_failed": 0,
+		"files_changed": 2, "lines_changed": 4, "base_sha": "99cdc0ef", "head_sha": "0c53c313",
 	}
-	testJSON, err := json.Marshal(body.Test)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := keysOf(t, rawOf(t, state, "test")), keysOf(t, testJSON); !slices.Equal(got, want) {
-		t.Errorf("state.test carries %v, the test block carries %v", got, want)
-	}
-	var gotState clientevidence.Body
-	if err := json.Unmarshal(state, &gotState); err != nil || !reflect.DeepEqual(gotState, body) {
-		t.Errorf("state = %+v (err %v), want the evidence body %+v", gotState, err, body)
+	if got := fmt.Sprint(state); got != fmt.Sprint(wantState) {
+		t.Errorf("state = %v, want the counts %v", state, wantState)
 	}
 	// One `noul` question per criterion, the criterion's own text verbatim, and nothing else per question.
 	var questions map[string]json.RawMessage
@@ -175,7 +174,7 @@ func TestTheCriteriaRequestCarriesTheEvidenceAndNothingElse(t *testing.T) {
 	if len(questions) != len(criteria) {
 		t.Errorf("questions = %d, want %d", len(questions), len(criteria))
 	}
-	for i, criterion := range criteria {
+	for i := range criteria {
 		id := fmt.Sprintf("criterion_%d", i+1)
 		question, ok := questions[id]
 		if !ok {
@@ -188,17 +187,23 @@ func TestTheCriteriaRequestCarriesTheEvidenceAndNothingElse(t *testing.T) {
 		var kind, instruction string
 		_ = json.Unmarshal(rawOf(t, question, "type"), &kind)
 		_ = json.Unmarshal(rawOf(t, question, "instructions"), &instruction)
-		if kind != "noul" || instruction != criterion {
-			t.Errorf("%s = %q with %q, want noul with %q verbatim", id, kind, instruction, criterion)
+		if kind != "noul" {
+			t.Errorf("%s type = %q, want noul", id, kind)
+		}
+		if strings.Contains(instruction, "./fastmcp") || strings.Contains(instruction, "CHANGELOG/") {
+			t.Errorf("%s instruction still names a path: %q", id, instruction)
+		}
+		if !strings.Contains(instruction, "<path>") {
+			t.Errorf("%s instruction lost the placeholder: %q", id, instruction)
 		}
 	}
 }
 
 // THE WORDING IS THE INSTRUMENT, pinned as a case: the same evidence, one criterion in the evidence
 // vocabulary and one that asks for content - the mechanical one answers high, the content one low, and
-// the refusal NAMES the criterion that failed while carrying every answer. The criteria reach Jev byte for
-// byte: the gate adds no instruction prefix of its own and no rescue (Outcome-2 ruling, THE VOCABULARY -
-// Jev never sees a file, so a criterion asking for one can only answer low).
+// the refusal NAMES the criterion that failed while carrying every answer. The criteria reach Jev with
+// no instruction prefix of the gate's own and no rescue; since the O9a ruling the two that name a path
+// leave with a placeholder instead, and the criterion that names nothing travels verbatim.
 func TestTheCriterionWordingDecidesAndTheRefusalNamesIt(t *testing.T) {
 	const mechanical = "The acceptance command `go test -count=1 ./fastmcp/...` exits 0 and the numstat names exactly one path under CHANGELOG/"
 	const content = "a real closure through the gate is demonstrated from a seat"
@@ -234,9 +239,14 @@ func TestTheCriterionWordingDecidesAndTheRefusalNamesIt(t *testing.T) {
 	if err := json.Unmarshal(rawOf(t, request, "questions"), &questions); err != nil {
 		t.Fatal(err)
 	}
-	for id, want := range map[string]string{"criterion_1": mechanical, "criterion_2": content} {
-		if questions[id].Instructions != want {
-			t.Errorf("%s instructions = %q, want %q verbatim", id, questions[id].Instructions, want)
-		}
+	if got := questions["criterion_2"].Instructions; got != content {
+		t.Errorf("criterion_2 instructions = %q, want %q verbatim: it names no path or test", got, content)
+	}
+	shaped := questions["criterion_1"].Instructions
+	if strings.Contains(shaped, "./fastmcp") || strings.Contains(shaped, "CHANGELOG/") {
+		t.Errorf("criterion_1 still names a path: %q", shaped)
+	}
+	if !strings.Contains(shaped, "The acceptance command") || !strings.Contains(shaped, "<path>") {
+		t.Errorf("criterion_1 lost its shape: %q", shaped)
 	}
 }
