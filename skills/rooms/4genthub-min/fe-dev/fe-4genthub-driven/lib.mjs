@@ -92,10 +92,22 @@ export async function launchBrowser(flags) {
   const feDir = resolveFrontend(flags)
   const require = createRequire(path.join(feDir, 'package.json'))
   const { chromium } = require('@playwright/test')
+  // THE ENGINE IS THE BUNDLED BUILD BY DEFAULT, not the installed Google Chrome. Measured
+  // 2026-10-17: headless Google Chrome 153.0.8010.36 wedges its renderer on the FIRST canvas 2D
+  // draw (ctx.scale, ctx.setTransform and ctx.fillRect each reproduce it; creating the context and
+  // ctx.measureText do not), so /login — the app's only canvas user — never becomes readable and
+  // `page.evaluate` times out. Headed Chrome 153 on the same page is FINE, and so is bundled
+  // Chromium 141: the defect is headless-Chrome-153-only and is not an app regression. Every check
+  // in this toolkit that read /login was reporting the browser, not the page.
+  // `FE_BROWSER=chrome` opts back into the installed Chrome when the question IS that browser.
+  const useInstalledChrome = process.env.FE_BROWSER === 'chrome'
   try {
-    return { browser: await chromium.launch({ channel: 'chrome', headless: true }), feDir }
+    return {
+      browser: await chromium.launch(useInstalledChrome ? { channel: 'chrome', headless: true } : { headless: true }),
+      feDir,
+    }
   } catch (err) {
-    die(`could not launch Google Chrome (channel 'chrome'): ${String(err).split('\n')[0]}\ninstall Chrome, or run \`npx playwright install chromium\` and change the launch call to the bundled build`)
+    die(`could not launch the browser: ${String(err).split('\n')[0]}\nrun \`npx playwright install chromium\` for the bundled build, or install Chrome for FE_BROWSER=chrome`)
   }
 }
 
