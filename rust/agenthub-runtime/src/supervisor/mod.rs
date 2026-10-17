@@ -1307,7 +1307,18 @@ impl RoomSupervisor {
     /// prompt per line: the envelope's `From:` line alone would be the first thing the agent is asked. Its
     /// mailbox `text` verb carries the whole text in one frame and answers once the runner relayed it. The
     /// runtimes with no runner own their pane's input (a TUI), where the bracketed tmux paste is the delivery.
-    pub fn deliver_text(&self, session: &str, text: &str) -> Result<serde_json::Value, String> {
+    ///
+    /// THE CALLER'S ORIGIN TRAVELS WITH THE FRAME (`from`, `verb`), because the runner is where a text can end
+    /// up held or refused, and the response that reports that carries an id and nothing else: without the
+    /// origin here a seat's runner cannot name whose text it could not deliver, and the sender reads `relayed`
+    /// for a message that died (hub task `c94cecfc`). A `from` the runner can address is also what lets it hand
+    /// the text back rather than drop it.
+    pub fn deliver_text(
+        &self,
+        session: &str,
+        text: &str,
+        origin: &crate::runner::Origin,
+    ) -> Result<serde_json::Value, String> {
         let (room, seat) = self.resolve_seat(session)?;
         // A PARKED SEAT IS NOT HANDED WORK, and this is the tier every caller crosses: `SendText`, this
         // daemon's own `send` command, and any future caller. The client refuses its own routes first, with a
@@ -1319,10 +1330,17 @@ impl RoomSupervisor {
             return Ok(serde_json::json!({"delivered": canonical, "outcome": outcome}));
         }
         let id = format!("send-{}-{}", std::process::id(), Utc::now().timestamp_millis());
+        let mut frame = serde_json::json!({"id": id, "type": "text", "text": text});
+        if let Some(from) = &origin.from {
+            frame["from"] = serde_json::Value::String(from.clone());
+        }
+        if let Some(verb) = &origin.verb {
+            frame["verb"] = serde_json::Value::String(verb.clone());
+        }
         let answer = crate::runner::send_to_seat(
             &self.base_state_dir,
             &canonical,
-            &serde_json::json!({"id": id, "type": "text", "text": text}),
+            &frame,
             Some((text.as_bytes(), true)),
             true,
         )?;
@@ -2333,7 +2351,15 @@ mod tests {
         });
 
         let text = "From: principal@demo\nTo: dev\n---\nthe body";
-        let answer = supervisor_at(&state_dir).deliver_text(&seat, text).expect("delivered");
+        let answer = supervisor_at(&state_dir).deliver_text(
+            &seat,
+            text,
+            &crate::runner::Origin {
+                from: Some("agenthub--demo--principal".to_string()),
+                verb: Some("send".to_string()),
+            },
+        )
+        .expect("delivered");
         let frame = runner.join().expect("runner thread");
         assert_eq!(frame["type"], "text");
         assert_eq!(frame["text"], text, "the whole message is one frame");
@@ -3767,7 +3793,7 @@ mod tests {
 
         // CONTROL: with no record, a park is not what answers. The delivery still fails - there is no pane for
         // this session - but that is a transport answer, and a test that cannot tell them apart proves nothing.
-        let before = supervisor.deliver_text(&session, "hi");
+        let before = supervisor.deliver_text(&session, "hi", &crate::runner::Origin::default());
         assert!(
             !matches!(&before, Err(e) if e.contains("PARKED")),
             "an unparked seat must not be refused as parked: {before:?}"
@@ -3780,7 +3806,7 @@ mod tests {
         )
         .expect("record");
 
-        let sent = supervisor.deliver_text(&session, "hi").expect_err("a send must refuse");
+        let sent = supervisor.deliver_text(&session, "hi", &crate::runner::Origin::default()).expect_err("a send must refuse");
         assert!(
             sent.contains("PARKED") && sent.contains("cost_usd=1.50") && sent.contains("Nothing was sent"),
             "deliver_text: {sent}"
@@ -3813,7 +3839,7 @@ mod tests {
         // removal is how a seat that was let back in stays out. This is the runtime's half of the round trip
         // the way back depends on: the same route that just refused answers for itself again.
         fs::remove_file(seat_dir.join("parked.json")).expect("the record is the whole park");
-        let after = supervisor.deliver_text(&session, "hi");
+        let after = supervisor.deliver_text(&session, "hi", &crate::runner::Origin::default());
         assert!(
             !matches!(&after, Err(e) if e.contains("PARKED")),
             "with the record gone the same send must answer for itself again: {after:?}"

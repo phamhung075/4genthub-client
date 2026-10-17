@@ -381,7 +381,7 @@ func (c *Client) SetSeatModel(room, seat, model string) error {
 }
 
 func (c *Client) SendText(session, text string) error {
-	_, err := c.Call("SendText", map[string]string{"session": session, "text": text})
+	_, err := c.Call("SendText", SendTextArgs(session, text, ownSession(), "send"))
 	return err
 }
 

@@ -162,6 +162,16 @@ func TestSendGoesThroughTheRuntimeSocket(t *testing.T) {
 	if send.Payload["session"] != "4genthub-min-fe-dev@4genthub-min" {
 		t.Errorf("session = %q, want the one the caller named", send.Payload["session"])
 	}
+	// THE ORIGIN TRAVELS WITH THE TEXT: the seat's runner is where a send can end up held, and at its bound it
+	// hands the text BACK to this session rather than dropping it - which is only possible if the request says
+	// who is sending and which verb carried it (hub task c94cecfc: three sends to the lead seat lost in one
+	// evening, with the sender told nothing).
+	if send.Payload["from"] != "4genthub-min-go-dev@4genthub-min" {
+		t.Errorf("from = %q, want this shell's own session", send.Payload["from"])
+	}
+	if send.Payload["verb"] != "send" {
+		t.Errorf("verb = %q, want the verb that carried the text", send.Payload["verb"])
+	}
 	text := send.Payload["text"]
 	if !strings.HasPrefix(text, "From: 4genthub-min-go-dev@4genthub-min\nTo: 4genthub-min-fe-dev@4genthub-min\n") ||
 		!strings.Contains(text, "probe") {

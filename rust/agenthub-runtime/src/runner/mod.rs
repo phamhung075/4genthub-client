@@ -286,7 +286,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     // The RPC reader: responses answer a pending id, events drive the pane and the seat's state, and a
     // turn that dies retryably is resumed from here (never from the sight of an error line alone).
     let state_path = state_file_path(state_dir, &target.room, &target.seat);
-    let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+    let pending: Arc<Mutex<Option<PendingPrompt>>> = Arc::new(Mutex::new(None));
     // The text a prompt refused mid-turn left behind, waiting for the seat to be free again. It sits beside
     // the pending slot because the mailbox (which relays the daemon's prompts) writes that slot and the
     // reader (which sees the refusal) owns both.
@@ -295,7 +295,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     // one turn both have to survive, and a single slot silently overwrote the first with the second - the
     // same lost-message class this hold exists to remove. Order is the order they were refused, and one
     // text is delivered per turn end, so a delivery never races the turn it opens.
-    let held: Arc<Mutex<VecDeque<(String, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let held: Arc<Mutex<VecDeque<HeldText>>> = Arc::new(Mutex::new(VecDeque::new()));
 
     let mailbox = target.mailbox(state_dir);
     // The mailbox relays prompts, so it is given the same pending slot the pane's own input uses: a relayed
@@ -321,6 +321,10 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
         let failures_reader = Arc::clone(&failures_seen);
         let to_child_reader = to_child.clone();
         let state_path = state_path.clone();
+        // The hand-back the held bound reaches needs the two things any relay needs: where the state lives,
+        // and which seat this runner is. Cloned once here rather than read from the environment later.
+        let state_dir_reader = state_dir.to_path_buf();
+        let target_reader = target.clone();
         thread::spawn(move || {
             let lines = agent_lines(child_stdout, bridge, reader_tx, reader_rx);
             let mut announced_ready = false;
@@ -379,7 +383,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                         }
                         let is_our_prompt = {
                             let guard = pending_reader.lock();
-                            guard.as_ref().is_some_and(|(pid, _)| pid == id)
+                            guard.as_ref().is_some_and(|p| p.id == id)
                         };
                         if let Some(err) = &error_text {
                             mirror(&format!("ERROR rpc: {err}"));
@@ -412,7 +416,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                             pending_reader
                                                 .lock()
                                                 .as_ref()
-                                                .map(|(pid, _)| pid.clone())
+                                                .map(|p| p.id.clone())
                                                 .unwrap_or_else(|| id.to_string())
                                         );
                                         if !failures_reader.lock().insert(key) {
@@ -425,9 +429,9 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                             "retry {attempt}/{MAX_RESUME_ATTEMPTS} in {delay_secs}s: {label} :: {err}"
                                         ));
                                         let _ = write_state(&state_path, "retrying", label, attempts);
-                                        let message =
-                                            pending_reader.lock().as_ref().map(|(_, m)| m.clone());
-                                        if let Some(message) = message {
+                                        let resume_prompt =
+                                            pending_reader.lock().as_ref().cloned();
+                                        if let Some(prompt) = resume_prompt {
                                             let sender = to_child_reader.clone();
                                             let pending_retry = Arc::clone(&pending_reader);
                                             thread::spawn(move || {
@@ -436,14 +440,21 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                                     "runner-resume-{}-{attempt}",
                                                     std::process::id()
                                                 );
-                                                *pending_retry.lock() =
-                                                    Some((id.clone(), message.clone()));
+                                                // The origin and the held count ride along: this is the same
+                                                // text, so it is the same sender to answer to and the same
+                                                // bound to compare against.
+                                                *pending_retry.lock() = Some(PendingPrompt {
+                                                    id: id.clone(),
+                                                    text: prompt.text.clone(),
+                                                    origin: prompt.origin,
+                                                    held_attempts: prompt.held_attempts,
+                                                });
                                                 let _ = send(
                                                     &sender,
                                                     &serde_json::json!({
                                                         "id": id,
                                                         "type": "prompt",
-                                                        "message": message
+                                                        "message": prompt.text
                                                     }),
                                                 );
                                             });
@@ -465,37 +476,72 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                     Resume::Hold(reason) => {
                                         // The agent refused this prompt because its own turn holds it: the
                                         // text is not dropped (that was the defect) and it is not re-sent
-                                        // into the turn that refused it. It is held for the next turn, and
-                                        // the state file says so while it waits - which is what a reader
-                                        // (the daemon's `status`, an operator's `ps`) sees instead of
-                                        // `idle`, the word that made the refusal invisible.
-                                        let text =
-                                            pending_reader.lock().as_ref().map(|(_, m)| m.clone());
-                                        *pending_reader.lock() = None;
-                                        match text {
-                                            Some(text) => {
+                                        // into the turn that refused it. It is held for the next turn,
+                                        // carrying the origin it will be answered at, and the state file says
+                                        // so while it waits - which is what a reader (the daemon's `status`,
+                                        // an operator's `ps`) sees instead of `idle`, the word that made the
+                                        // refusal invisible.
+                                        let prompt = pending_reader.lock().take();
+                                        match prompt {
+                                            Some(prompt) => {
                                                 let refused_id = id.to_string();
-                                                let waiting = hold_text(&held_reader, &refused_id, text);
-                                                let sentence = publish_hold(&state_path, waiting, attempts);
+                                                let origin = prompt.origin.clone();
+                                                let entry = HeldText {
+                                                    refused_id: refused_id.clone(),
+                                                    text: prompt.text.clone(),
+                                                    origin: origin.clone(),
+                                                    // A text that was already held keeps the offers it has
+                                                    // spent: the bound is the TEXT's, and a requeue is not a
+                                                    // fresh start.
+                                                    attempts: prompt.held_attempts,
+                                                };
+                                                let waiting = hold_text(&held_reader, entry);
+                                                let sentence = publish_hold(
+                                                    &state_path,
+                                                    waiting,
+                                                    attempts,
+                                                    &origin,
+                                                );
                                                 match waiting {
                                                     Ok(depth) => {
                                                         mirror(&format!(
-                                                            "held for the next turn: {reason} :: {err}"
+                                                            "held for the next turn: {reason} :: {err} :: the text is {}",
+                                                            origin.label()
                                                         ));
                                                         if depth > 1 {
                                                             // The second refusal must be visible as a queue, not
                                                             // as a replacement: the text in front of it is still
                                                             // waiting and will be delivered first.
                                                             mirror(&format!(
-                                                                "the text {refused_id} waits behind {} held text(s); they are delivered in the order they were refused",
+                                                                "the text {refused_id} from {} waits behind {} held text(s); they are delivered in the order they were refused",
+                                                                origin.label(),
                                                                 depth - 1
                                                             ));
                                                         }
                                                     }
-                                                    // A full queue drops NOTHING silently: the text the agent
-                                                    // refused is named as refused by the runner too, with the
+                                                    // A full queue drops NOTHING silently: the text goes back
+                                                    // to the session that sent it, with the reason and the
                                                     // depth the bound was reached at.
-                                                    Err(_) => mirror(&format!("refused, not held: {sentence}")),
+                                                    Err(depth) => {
+                                                        let full = format!(
+                                                            "the runner's held queue is full ({depth} of {MAX_HELD})"
+                                                        );
+                                                        match return_to_sender(
+                                                            &state_dir_reader,
+                                                            &origin,
+                                                            &target_reader,
+                                                            &refused_id,
+                                                            &prompt.text,
+                                                            &full,
+                                                        ) {
+                                                            Ok(outcome) => mirror(&format!(
+                                                                "refused, handed back to its sender: {sentence} ({outcome})"
+                                                            )),
+                                                            Err(e) => mirror(&format!(
+                                                                "refused, NOT held and NOT handed back: {sentence} ({e})"
+                                                            )),
+                                                        }
+                                                    }
                                                 }
                                             }
                                             None => mirror(&format!(
@@ -531,7 +577,9 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                     &pending_reader,
                                     &to_child_reader,
                                     &state_path,
-                                    &mut attempts,
+                                    &state_dir_reader,
+                                    &target_reader,
+                                    attempts,
                                 );
                             }
                             // omp's own bounded provider retry (`P:180-250`): log it, and do NOT stack a
@@ -568,7 +616,9 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                     &pending_reader,
                                     &to_child_reader,
                                     &state_path,
-                                    &mut attempts,
+                                    &state_dir_reader,
+                                    &target_reader,
+                                    attempts,
                                 );
                                 // `idle` is a seat at its prompt, and this arm may have just handed the held
                                 // text back: a prompt in flight — or a text still waiting for the next turn —
@@ -682,7 +732,7 @@ fn spawn_mailbox(
     to_child: Sender<String>,
     state_dir: PathBuf,
     target: RunnerTarget,
-    pending: Arc<Mutex<Option<(String, String)>>>,
+    pending: Arc<Mutex<Option<PendingPrompt>>>,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("cannot create run dir: {e}"))?;
@@ -716,7 +766,7 @@ fn serve_mailbox_stream(
     to_child: &Sender<String>,
     state_dir: &Path,
     target: &RunnerTarget,
-    pending: &Arc<Mutex<Option<(String, String)>>>,
+    pending: &Arc<Mutex<Option<PendingPrompt>>>,
 ) {
     let mut reader = BufReader::new(stream);
     let state_path = state_file_path(state_dir, &target.room, &target.seat);
@@ -800,7 +850,7 @@ fn relay_frame(
     to_child: &Sender<String>,
     state_path: &Path,
     target: &RunnerTarget,
-    pending: &Arc<Mutex<Option<(String, String)>>>,
+    pending: &Arc<Mutex<Option<PendingPrompt>>>,
 ) -> Result<serde_json::Value, String> {
     match kind {
         "compact" => {
@@ -834,7 +884,15 @@ fn relay_frame(
             // its response is the one this runner owns, and without the record a refusal of it answered
             // "nothing to resume" while the text was gone — the send that printed a delivery for text the
             // agent had refused.
-            *pending.lock() = Some((id.to_string(), text.to_string()));
+            //
+            // THE FRAME'S ORIGIN IS REMEMBERED WITH IT (`from`, `verb`), because this is the last moment the
+            // sender is known: a text that is later held, handed back or given up on has to name whose it
+            // was, and the response that reports the refusal carries an id and nothing else.
+            *pending.lock() = Some(PendingPrompt::relayed(
+                id,
+                text,
+                Origin::from_frame(value),
+            ));
             // THE TURN IS PUBLISHED WHEN IT STARTS, not when it ends: a prompt handed to the agent is work
             // in flight, and a state file left at `idle` is how a mid-turn seat read as a seat at its
             // prompt while it was busy (`SPEC` §3).
@@ -1169,6 +1227,107 @@ pub const MAX_RESUME_ATTEMPTS: u32 = 3;
 /// (`publish_hold`) that a reader can act on.
 pub const MAX_HELD: usize = 8;
 
+/// How many times ONE text is offered to the agent while it is held, before it goes back to its sender.
+///
+/// The bound this replaces was the resume ladder's own counter, and the sharing was the measured defect:
+/// `deliver_held` incremented the SAME counter the ladder counts resume attempts in and compared the total
+/// against `MAX_RESUME_ATTEMPTS`, so a text refused once, after three unrelated attempts on that seat, was
+/// dropped on its FIRST delivery with its sender told nothing - 19 lines since 22:00Z on 2026-10-16, 13 of
+/// them addressed to the lead seat. A text's bound has to be its own, and reaching it has to be a RETURN
+/// rather than a hole.
+pub const MAX_HELD_ATTEMPTS: u32 = 3;
+
+/// Who sent a text, and which verb carried it.
+///
+/// The pair every refusal names: a runner that cannot deliver a text must say whose it was and which path
+/// brought it, or the sender reads a successful relay and never learns the text died - the silence that made
+/// fe-dev's three lost sends to the lead seat a mystery on 2026-10-16. `from` is a session name whenever a
+/// session sent it, which is also what makes the text handable BACK (`Origin::sender_session`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct Origin {
+    /// The sender's session name (`agenthub--<room>--<seat>`), or this runtime's own word for a path with no
+    /// seat on the other end (the rail's nudge, the pane).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// The verb that carried the frame: `send`, `nudge`, `pane`, `return`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verb: Option<String>,
+}
+
+impl Origin {
+    /// The origin a frame declares (`from`, `verb`). Absent fields stay absent: a sender this runtime was not
+    /// told about is named as unnamed rather than guessed at. An empty string is absent too - a caller with no
+    /// session of its own sends no `from`, and an empty one would otherwise name nothing at all.
+    pub fn from_frame(value: &serde_json::Value) -> Self {
+        let field = |key: &str| {
+            value
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        Self {
+            from: field("from"),
+            verb: field("verb"),
+        }
+    }
+
+    /// The origin in the words a mirror line, a state classification or a frame back to the sender uses.
+    pub fn label(&self) -> String {
+        match (self.from.as_deref(), self.verb.as_deref()) {
+            (Some(from), Some(verb)) => format!("{from} ({verb})"),
+            (Some(from), None) => from.to_string(),
+            (None, Some(verb)) => format!("an unnamed sender ({verb})"),
+            (None, None) => "an unnamed sender".to_string(),
+        }
+    }
+
+    /// The session a text can be handed back to, when this runtime can address it at all.
+    pub fn sender_session(&self) -> Option<&str> {
+        self.from
+            .as_deref()
+            .filter(|from| target_from_session(from).is_ok())
+    }
+}
+
+/// The prompt this runner has in the agent's hands: its id, its text, and where it came from.
+///
+/// The origin rides with the prompt because the two places a prompt can die - the ladder's give-up and the
+/// held queue's bound - are reached from a RESPONSE, where the only other sight of the text is this slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPrompt {
+    pub id: String,
+    pub text: String,
+    pub origin: Origin,
+    /// How many times this text has already been offered to the agent while held (0 for a fresh prompt).
+    pub held_attempts: u32,
+}
+
+impl PendingPrompt {
+    /// A prompt this runner relays for a caller: fresh, so its held count starts at zero.
+    pub fn relayed(id: &str, text: &str, origin: Origin) -> Self {
+        Self {
+            id: id.to_string(),
+            text: text.to_string(),
+            origin,
+            held_attempts: 0,
+        }
+    }
+}
+
+/// A text the agent refused while its turn was running, waiting for the seat to be free again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldText {
+    /// The id of the prompt whose refusal left this text here, so a reader can follow it back.
+    pub refused_id: String,
+    pub text: String,
+    pub origin: Origin,
+    /// Offers already spent on THIS text, `MAX_HELD_ATTEMPTS` being the bound. It travels with the entry
+    /// through every requeue: a count that resets each turn is not a bound.
+    pub attempts: u32,
+}
+
 pub fn resume_delay(attempt: u32) -> Duration {
     // 1s, 2s, 4s — bounded, and the same shape for every retryable class.
     Duration::from_secs(1u64 << attempt.min(3).saturating_sub(1).min(3))
@@ -1326,7 +1485,16 @@ pub fn nudge_seat(
     let outcome = send_to_seat(
         state_dir,
         session_name,
-        &serde_json::json!({"id": id, "type": "text", "text": text}),
+        &serde_json::json!({
+            "id": id,
+            "type": "text",
+            // The nudge's origin is the rail, not a seat: nothing on the other end of a nudge is a session
+            // this runtime can hand a text back to, so it is named for what it is (`4genteam send` spoke
+            // the same frame above a seat, and `deliver_text` stamps its caller's session there).
+            "from": format!("the rail of room {room}"),
+            "verb": "nudge",
+            "text": text,
+        }),
         None,
         true,
     );
@@ -1464,28 +1632,24 @@ pub fn decide_resume(
     }
 }
 
-/// Hold `text` for the next free turn, behind whatever is already held, and answer the queue's length.
+/// Hold a refused text for the next free turn, behind whatever is already held, and answer the queue's length.
 ///
 /// The queue is the required edit on `c0ffbe8` (reviewer, 2026-10-15): the hold was a single slot and the
 /// second refusal inside one turn overwrote the first silently, so the first text appeared in no surface.
-/// A text is appended here and leaves only through `deliver_held`, in the order it was refused.
+/// A text is appended here and leaves through `deliver_held` (delivered) or `return_to_sender` (handed back
+/// to the session that sent it), in the order it was refused.
 ///
 /// IT IS BOUNDED, and the bound is the lead's second required edit: every entry is a message the seat has not
 /// seen and the queue lives in this process's memory, so a seat whose agent refuses every prompt (a turn that
 /// never ends, an agent that answers each frame with the same refusal) would grow it for as long as the room
 /// lives and never say so. `Err(depth)` is the refusal, and it carries the depth so the caller can name it -
-/// a runner that will not keep the text says that out loud instead of dropping it, which is the defect class
-/// this whole cutover removes.
-fn hold_text(
-    held: &Arc<Mutex<VecDeque<(String, String)>>>,
-    refused_id: &str,
-    text: String,
-) -> Result<usize, usize> {
+/// a runner that will not keep the text says that out loud, to its sender, instead of dropping it.
+fn hold_text(held: &Arc<Mutex<VecDeque<HeldText>>>, entry: HeldText) -> Result<usize, usize> {
     let mut queue = held.lock();
     if queue.len() >= MAX_HELD {
         return Err(queue.len());
     }
-    queue.push_back((refused_id.to_string(), text));
+    queue.push_back(entry);
     Ok(queue.len())
 }
 
@@ -1497,23 +1661,99 @@ fn hold_text(
 /// texts waiting for a free turn is published with the word. A FULL QUEUE IS PUBLISHED AS `blocked`, because
 /// a runner that cannot keep the text it was asked to keep is not healthy and a reader must not find `working`
 /// and conclude the seat will get to it.
-fn publish_hold(state_path: &Path, held: Result<usize, usize>, attempts: u32) -> String {
+///
+/// BOTH SENTENCES NAME THE ORIGIN, because a reader who has to guess whose text is waiting cannot tell its
+/// sender anything, and the sender is the one party who can act on the refusal.
+fn publish_hold(
+    state_path: &Path,
+    held: Result<usize, usize>,
+    attempts: u32,
+    origin: &Origin,
+) -> String {
     match held {
         Ok(depth) => {
             let sentence = format!(
-                "held: the agent refused this prompt while its turn was running ({depth} of {MAX_HELD} held for the next turn)"
+                "held: the text from {} waits for the next free turn ({depth} of {MAX_HELD} held)",
+                origin.label()
             );
             let _ = write_state(state_path, "working", &sentence, attempts);
             sentence
         }
         Err(depth) => {
             let sentence = format!(
-                "the held queue is full ({depth} of {MAX_HELD}): the agent refused this prompt and the runner could NOT hold it"
+                "the held queue is full ({depth} of {MAX_HELD}): the text from {} could NOT be held",
+                origin.label()
             );
             let _ = write_state(state_path, "blocked", &sentence, attempts);
             sentence
         }
     }
+}
+
+/// Hand a text back to the session that sent it, so a refusal is a conversation rather than a hole.
+///
+/// The AC of hub task `c94cecfc` is that a text addressed to a seat is either delivered at that seat's next
+/// turn end or REFUSED BACK to its sender with the text and the reason - never dropped in silence. Delivery
+/// is `deliver_held`'s job; this is the other arm, and it is what the bound reaches instead of deleting the
+/// text (measured 2026-10-16: 19 give-up lines since 22:00Z, every one of them a text nobody was told about).
+///
+/// The frame is the same `text` verb the sender's own send spoke, carrying the text whole and the reason it
+/// was not delivered; its `from`/`verb` name this runner and the `return` path, so the returned text is
+/// attributed rather than anonymous. `want_reply` is true: the answer is the sender's runner saying it
+/// relayed the frame, never "a write returned", which is the distinction this whole mailbox exists on.
+fn return_to_sender(
+    state_dir: &Path,
+    origin: &Origin,
+    target: &RunnerTarget,
+    refused_id: &str,
+    text: &str,
+    reason: &str,
+) -> Result<String, String> {
+    let sender = origin.sender_session().ok_or_else(|| {
+        format!(
+            "{} is not a session this runtime can hand a text back to",
+            origin.label()
+        )
+    })?;
+    let body = format!(
+        "the text you sent to {}/{} was NOT delivered: {reason}.\nIt was {refused_id}. It comes back whole:\n{text}",
+        target.room, target.seat
+    );
+    let id = format!(
+        "runner-return-{}-{}",
+        std::process::id(),
+        Utc::now().timestamp_millis()
+    );
+    let answer = send_to_seat(
+        state_dir,
+        sender,
+        &serde_json::json!({
+            "id": id,
+            "type": "text",
+            "from": format!("the runner for {}/{}", target.room, target.seat),
+            "verb": "return",
+            "text": body,
+        }),
+        None,
+        true,
+    )?;
+    Ok(answer
+        .pointer("/data/relayed")
+        .and_then(|v| v.as_str())
+        .unwrap_or("relayed")
+        .to_string())
+}
+
+/// The id of one held delivery. A per-text attempt number repeats by design (every text has a first offer),
+/// so the sequence is the process's own: two held texts must never share an id, or a refusal of one would be
+/// read as the other's.
+fn next_held_delivery_id() -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!(
+        "runner-held-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+    )
 }
 
 /// Deliver the text a refused prompt left held, when the seat is free again.
@@ -1522,52 +1762,94 @@ fn publish_hold(state_path: &Path, held: Result<usize, usize>, attempts: u32) ->
 /// comes back. It is called from the two arms that mark a turn over (`turn_end`, `agent_end` /
 /// `session_settled`) and is the only taker of the held queue, so one held text cannot be delivered twice.
 /// It takes ONE text — the front of the queue, the one refused first — so two texts held in one turn come
-/// back in order, one turn apart, rather than racing the turn the first delivery opens. It is bounded
-/// exactly like the resume ladder: a seat whose agent refuses the held text every turn ends up `blocked`,
-/// named, rather than looping — and until then the text is published in the state file's classification,
-/// so the queue is visible while it waits.
+/// back in order, one turn apart, rather than racing the turn the first delivery opens.
+///
+/// EVERY WAY OUT IS NAMED, and none of them is a hole:
+///
+/// * offered to the agent — the entry carries its own attempt count, so the bound is the TEXT's and not the
+///   process's (the sharing with the resume ladder's counter is the defect this fixes);
+/// * past `MAX_HELD_ATTEMPTS` — `return_to_sender` hands it back, whole, naming who sent it and why;
+/// * a hand-back that cannot be made (no addressable sender, or its mailbox refused) — the text goes back to
+///   the FRONT of the queue with its count reset, published, rather than out of the process;
+/// * a channel that is gone — the text goes back to the front too, where the old code cleared the pending
+///   slot and let the text fall out of the queue entirely.
 fn deliver_held(
-    held: &Arc<Mutex<VecDeque<(String, String)>>>,
-    pending: &Arc<Mutex<Option<(String, String)>>>,
+    held: &Arc<Mutex<VecDeque<HeldText>>>,
+    pending: &Arc<Mutex<Option<PendingPrompt>>>,
     to_child: &Sender<String>,
     state_path: &Path,
-    attempts: &mut u32,
+    state_dir: &Path,
+    target: &RunnerTarget,
+    attempts: u32,
 ) {
-    let Some((refused_id, text)) = held.lock().pop_front() else {
+    let Some(mut entry) = held.lock().pop_front() else {
         return;
     };
-    *attempts += 1;
-    if *attempts > MAX_RESUME_ATTEMPTS {
-        mirror(&format!(
-            "gave up: the text {refused_id} refused was refused {MAX_RESUME_ATTEMPTS} times while held"
-        ));
-        let _ = write_state(
-            state_path,
-            "blocked",
-            "the agent kept refusing the text this runner held for it",
-            *attempts,
-        );
+    entry.attempts += 1;
+    if entry.attempts > MAX_HELD_ATTEMPTS {
+        let reason = format!("the agent refused it {MAX_HELD_ATTEMPTS} times while it was held");
+        match return_to_sender(
+            state_dir,
+            &entry.origin,
+            target,
+            &entry.refused_id,
+            &entry.text,
+            &reason,
+        ) {
+            Ok(outcome) => {
+                let sentence = format!(
+                    "gave up: the text {} from {} was refused {MAX_HELD_ATTEMPTS} times while held; handed back to its sender ({outcome})",
+                    entry.refused_id,
+                    entry.origin.label()
+                );
+                mirror(&sentence);
+                let _ = write_state(state_path, "blocked", &sentence, attempts);
+            }
+            Err(e) => {
+                let sentence = format!(
+                    "the text {} from {} could not be handed back ({e}); it stays held and is offered again",
+                    entry.refused_id,
+                    entry.origin.label()
+                );
+                mirror(&sentence);
+                let _ = write_state(state_path, "blocked", &sentence, attempts);
+                entry.attempts = 0;
+                held.lock().push_front(entry);
+            }
+        }
         return;
     }
-    let id = format!("runner-held-{}-{}", std::process::id(), *attempts);
-    *pending.lock() = Some((id.clone(), text.clone()));
+    let id = next_held_delivery_id();
+    *pending.lock() = Some(PendingPrompt {
+        id: id.clone(),
+        text: entry.text.clone(),
+        origin: entry.origin.clone(),
+        held_attempts: entry.attempts,
+    });
     if let Err(e) = send(
         to_child,
-        &serde_json::json!({"id": id, "type": "prompt", "message": text}),
+        &serde_json::json!({"id": id, "type": "prompt", "message": entry.text}),
     ) {
         *pending.lock() = None;
         mirror(&format!("ERROR held delivery: {e}"));
+        held.lock().push_front(entry);
         return;
     }
     mirror(&format!(
-        "delivering the text {refused_id} refused (attempt {}/{MAX_RESUME_ATTEMPTS}): the seat is free again",
-        *attempts
+        "delivering the text {} from {} (attempt {}/{MAX_HELD_ATTEMPTS}): the seat is free again",
+        entry.refused_id,
+        entry.origin.label(),
+        entry.attempts
     ));
     let _ = write_state(
         state_path,
         "working",
-        "delivering the text this runner held for the next turn",
-        *attempts,
+        &format!(
+            "delivering the text this runner held for the next turn (attempt {}/{MAX_HELD_ATTEMPTS}, from {})",
+            entry.attempts,
+            entry.origin.label()
+        ),
+        attempts,
     );
 }
 
@@ -1575,7 +1857,7 @@ fn deliver_held(
 /// the reference's own words (`P:34-36, 100-121`).
 fn spawn_pane_input(
     to_child: Sender<String>,
-    pending: Arc<Mutex<Option<(String, String)>>>,
+    pending: Arc<Mutex<Option<PendingPrompt>>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let stdin = std::io::stdin();
@@ -1596,8 +1878,16 @@ fn spawn_pane_input(
                 prompts += 1;
                 let id = format!("runner-pane-prompt-{prompts}");
                 // Remember it: a turn that dies retryably is resumed with THIS message, and its response
-                // is the one this runner owns.
-                *pending.lock() = Some((id.clone(), line.clone()));
+                // is the one this runner owns. Its origin is the pane - the person at the terminal - which
+                // is what a refusal has to name when the text cannot be delivered.
+                *pending.lock() = Some(PendingPrompt::relayed(
+                    &id,
+                    &line,
+                    Origin {
+                        from: None,
+                        verb: Some("pane".to_string()),
+                    },
+                ));
                 serde_json::json!({"id": id, "type": "prompt", "message": line})
             };
             if let Err(e) = send(&to_child, &frame) {
@@ -1676,6 +1966,19 @@ fn wait_child(child: &mut Child) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A held text as the Hold arm builds one: an id, the text, and the origin its sender is answered at.
+    fn held_entry(refused_id: &str, text: &str, from: Option<&str>, attempts: u32) -> HeldText {
+        HeldText {
+            refused_id: refused_id.to_string(),
+            text: text.to_string(),
+            origin: Origin {
+                from: from.map(str::to_string),
+                verb: Some("send".to_string()),
+            },
+            attempts,
+        }
+    }
 
     #[test]
     fn the_seat_log_is_the_rooms_logs_dir_and_holds_what_the_pane_showed() {
@@ -2117,9 +2420,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("runner-relay-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let state_path = dir.join("dev.state.json");
-        let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let pending: Arc<Mutex<Option<PendingPrompt>>> = Arc::new(Mutex::new(None));
         let answer = relay_frame(
-            &serde_json::json!({"id": "nudge-1", "type": "text", "text": "you have work waiting"}),
+            &serde_json::json!({
+                "id": "nudge-1",
+                "type": "text",
+                "text": "you have work waiting",
+                "from": "agenthub--demo--lead",
+                "verb": "send",
+            }),
             "text",
             "nudge-1",
             &to_child,
@@ -2136,7 +2445,18 @@ mod tests {
         assert_eq!(frame["message"], "you have work waiting");
         assert_eq!(
             pending.lock().clone(),
-            Some(("nudge-1".to_string(), "you have work waiting".to_string())),
+            Some(PendingPrompt {
+                id: "nudge-1".to_string(),
+                text: "you have work waiting".to_string(),
+                // THE ORIGIN IS REMEMBERED WITH THE PROMPT: the response that reports a refusal carries an
+                // id and nothing else, so this is the last moment the sender is known - and a runner that
+                // cannot deliver or cannot keep the text has to name whose it was.
+                origin: Origin {
+                    from: Some("agenthub--demo--lead".to_string()),
+                    verb: Some("send".to_string()),
+                },
+                held_attempts: 0,
+            }),
             "the relayed prompt is ours: its response is matched by this id, which is what lets a refusal of it be held"
         );
         let published: serde_json::Value =
@@ -2173,15 +2493,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let state_path = dir.join("dev.state.json");
         let (to_child, from_threads) = mpsc::channel::<String>();
-        let held: Arc<Mutex<VecDeque<(String, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let target = RunnerTarget::parse("demo/dev").unwrap();
+        let held: Arc<Mutex<VecDeque<HeldText>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: Arc<Mutex<Option<PendingPrompt>>> = Arc::new(Mutex::new(None));
         let mut attempts: u32 = 0;
         assert_eq!(
-            hold_text(&held, "send-1-1", "the text the agent refused".to_string()),
+            hold_text(
+                &held,
+                held_entry("send-1-1", "the text the agent refused", Some("agenthub--demo--lead"), 0)
+            ),
             Ok(1),
             "a refused text is queued and the queue answers its depth"
         );
-        deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
+        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, attempts);
         let line = from_threads
             .recv_timeout(Duration::from_secs(1))
             .expect("the held text is delivered");
@@ -2190,7 +2514,10 @@ mod tests {
         assert_eq!(frame["message"], "the text the agent refused");
         assert!(held.lock().is_empty(), "the queue is emptied: nothing is delivered twice");
         assert!(pending.lock().is_some(), "the redelivered prompt is ours to watch");
-        assert_eq!(attempts, 1);
+        assert_eq!(
+            attempts, 0,
+            "a held delivery is NOT a resume attempt: the ladder's count is the ladder's (the two shared one counter, and that is what dropped the 19 texts)"
+        );
         let published: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
         assert_eq!(published["state"], "working");
@@ -2199,7 +2526,7 @@ mod tests {
         // THE COUNT IS PUBLISHED WITH THE WORD (the lead's second required edit): the state file's own
         // classification carries the depth, so `4genteam ps` and the daemon's status show a queue and its
         // size rather than "held", a fact with no size that read the same at one text and at twenty.
-        let sentence = publish_hold(&state_path, Ok(2), 0);
+        let sentence = publish_hold(&state_path, Ok(2), 0, &Origin::default());
         assert!(
             sentence.contains("2 of 8"),
             "the count is named in the sentence the state publishes: {sentence}"
@@ -2211,7 +2538,7 @@ mod tests {
         // AND A FULL QUEUE IS A REFUSAL THE RUNNER NAMES. The text is not kept and not silently dropped: the
         // depth the bound was reached at is published, and the seat is `blocked` because a runner that cannot
         // keep what it was asked to keep will not get to it by waiting.
-        let full = publish_hold(&state_path, Err(MAX_HELD), 0);
+        let full = publish_hold(&state_path, Err(MAX_HELD), 0, &Origin::default());
         assert!(
             full.contains("full (8 of 8)"),
             "the queue names the bound it reached: {full}"
@@ -2221,22 +2548,29 @@ mod tests {
         assert_eq!(published["state"], "blocked");
         assert_eq!(published["classification"], full);
 
-        // Bounded, like the resume ladder: past the bound the seat is `blocked` with the reason and nothing
-        // more is sent.
+        // THE BOUND IS THE TEXT'S, NOT THE PROCESS'S - the whole defect, in one case. The ladder's counter is
+        // already past its own bound here (it reached MAX_RESUME_ATTEMPTS on unrelated attempts), and the text
+        // in the queue has been offered zero times: it must still be delivered. Before this cut, `deliver_held`
+        // incremented THIS counter and compared it, so the first offer of a fresh text was dropped in silence -
+        // 19 lines since 22:00Z on 2026-10-16, 13 of them addressed to the lead seat.
         assert!(
-            hold_text(&held, "send-1-2", "refused again".to_string()).is_ok(),
+            hold_text(
+                &held,
+                held_entry("send-1-2", "refused again", Some("agenthub--demo--lead"), 0)
+            )
+            .is_ok(),
             "the queue still has room"
         );
-        attempts = MAX_RESUME_ATTEMPTS;
-        deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
-        assert_eq!(attempts, MAX_RESUME_ATTEMPTS + 1);
-        assert!(
-            from_threads.recv_timeout(Duration::from_millis(100)).is_err(),
-            "a bounded ladder does not keep sending"
-        );
-        let published: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
-        assert_eq!(published["state"], "blocked");
+        attempts = MAX_RESUME_ATTEMPTS + 5;
+        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, attempts);
+        let late: serde_json::Value = serde_json::from_str(
+            from_threads
+                .recv_timeout(Duration::from_secs(1))
+                .expect("a text whose own count is zero is offered, whatever the ladder reached")
+                .trim(),
+        )
+        .expect("a JSON frame");
+        assert_eq!(late["message"], "refused again");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2246,16 +2580,27 @@ mod tests {
     /// still waits, and the count in front of it is unchanged.
     #[test]
     fn the_held_queue_is_bounded_and_names_the_depth_it_refused() {
-        let held: Arc<Mutex<VecDeque<(String, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let held: Arc<Mutex<VecDeque<HeldText>>> = Arc::new(Mutex::new(VecDeque::new()));
         for i in 1..=MAX_HELD {
             assert_eq!(
-                hold_text(&held, &format!("send-1-{i}"), format!("text {i}")),
+                hold_text(
+                    &held,
+                    held_entry(
+                        &format!("send-1-{i}"),
+                        &format!("text {i}"),
+                        Some("agenthub--demo--lead"),
+                        0
+                    )
+                ),
                 Ok(i),
                 "the queue takes MAX_HELD texts and says how many it holds"
             );
         }
         assert_eq!(
-            hold_text(&held, "send-1-over", "one too many".to_string()),
+            hold_text(
+                &held,
+                held_entry("send-1-over", "one too many", Some("agenthub--demo--lead"), 0)
+            ),
             Err(MAX_HELD),
             "the text that does not fit is refused with the depth, not queued"
         );
@@ -2265,7 +2610,7 @@ mod tests {
             "the refusal evicts nothing: every held text is still waiting, in order"
         );
         assert_eq!(
-            held.lock().front().map(|(id, _)| id.clone()),
+            held.lock().front().map(|entry| entry.refused_id.clone()),
             Some("send-1-1".to_string()),
             "the text refused first is still in front"
         );
@@ -2281,16 +2626,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let state_path = dir.join("dev.state.json");
         let (to_child, from_threads) = mpsc::channel::<String>();
-        let held: Arc<Mutex<VecDeque<(String, String)>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let pending: Arc<Mutex<Option<(String, String)>>> = Arc::new(Mutex::new(None));
+        let target = RunnerTarget::parse("demo/dev").unwrap();
+        let held: Arc<Mutex<VecDeque<HeldText>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: Arc<Mutex<Option<PendingPrompt>>> = Arc::new(Mutex::new(None));
         let mut attempts: u32 = 0;
 
         assert_eq!(
-            hold_text(&held, "send-1-1", "the first refused text".to_string()),
+            hold_text(
+                &held,
+                held_entry("send-1-1", "the first refused text", Some("agenthub--demo--lead"), 0)
+            ),
             Ok(1)
         );
         assert_eq!(
-            hold_text(&held, "send-1-2", "the second refused text".to_string()),
+            hold_text(
+                &held,
+                held_entry("send-1-2", "the second refused text", Some("agenthub--demo--lead"), 0)
+            ),
             Ok(2)
         );
         assert_eq!(
@@ -2300,7 +2652,7 @@ mod tests {
         );
 
         // The turn both were refused in ends: the text in front comes back and the second keeps waiting.
-        deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
+        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, attempts);
         let first: serde_json::Value = serde_json::from_str(
             from_threads
                 .recv_timeout(Duration::from_secs(1))
@@ -2316,7 +2668,7 @@ mod tests {
         );
 
         // ... and the turn that delivery opened ends: the second follows, in the order it was refused.
-        deliver_held(&held, &pending, &to_child, &state_path, &mut attempts);
+        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, attempts);
         let second: serde_json::Value = serde_json::from_str(
             from_threads
                 .recv_timeout(Duration::from_secs(1))
@@ -2326,11 +2678,187 @@ mod tests {
         .expect("a JSON frame");
         assert_eq!(second["message"], "the second refused text");
         assert!(held.lock().is_empty(), "both texts left the queue exactly once");
-        assert_eq!(attempts, 2);
+        assert_eq!(attempts, 0, "and neither delivery counted as a resume attempt");
         let published: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
         assert_eq!(published["state"], "working");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// THE BOUND IS A RETURN, NOT A HOLE (hub task `c94cecfc`). A text the agent refuses `MAX_HELD_ATTEMPTS`
+    /// times goes BACK to the session that sent it, whole, with the reason - and the give-up line names the
+    /// origin, which is the second acceptance criterion.
+    ///
+    /// Before this cut the bound dropped it: `mirror("gave up: the text <id> refused was refused 3 times while
+    /// held")`, state `blocked`, and no surface anywhere said who sent it (19 such lines since 22:00Z on
+    /// 2026-10-16, 13 addressed to the lead seat).
+    #[test]
+    fn a_held_text_past_its_own_bound_goes_back_to_its_sender() {
+        let dir = std::env::temp_dir().join(format!("runner-giveup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let state_path = dir.join("dev.state.json");
+        let target = RunnerTarget::parse("demo/dev").unwrap();
+        let (to_child, _from_threads) = mpsc::channel::<String>();
+        let held: Arc<Mutex<VecDeque<HeldText>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: Arc<Mutex<Option<PendingPrompt>>> = Arc::new(Mutex::new(None));
+
+        // The sender's own mailbox, plugged to the same protocol `send_to_seat` speaks: it takes the frame and
+        // answers on the reply socket the frame names, which is what makes the hand-back a delivery rather
+        // than a successful local write.
+        let mailbox = target_mailbox(&dir, "demo", "lead");
+        let listener = UnixListener::bind(&mailbox).expect("the sender's mailbox");
+        let peer = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("the hand-back connects");
+            let mut reader = BufReader::new(stream);
+            let line = frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES)
+                .expect("the hand-back frame");
+            let value: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
+            let reply_to = value["replyTo"].as_str().expect("the reply socket");
+            let mut back = UnixStream::connect(reply_to).expect("a reply socket to answer on");
+            writeln!(
+                back,
+                "{}",
+                serde_json::json!({"id": value["id"], "ok": true, "data": {"relayed": "prompt"}})
+            )
+            .expect("answer");
+            value
+        });
+
+        assert_eq!(
+            hold_text(
+                &held,
+                held_entry(
+                    "send-9-1",
+                    "the text nobody took",
+                    Some("agenthub--demo--lead"),
+                    MAX_HELD_ATTEMPTS
+                )
+            ),
+            Ok(1)
+        );
+        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, 0);
+        let returned = peer.join().expect("the sender's side");
+
+        assert_eq!(returned["type"], "text", "the text comes back on the verb it left on");
+        assert_eq!(returned["verb"], "return", "and it says which path returned it");
+        assert_eq!(returned["from"], "the runner for demo/dev", "attributed, not anonymous");
+        let body = returned["text"].as_str().expect("the returned body");
+        assert!(
+            body.contains("the text nobody took"),
+            "the text comes back WHOLE: {body}"
+        );
+        assert!(
+            body.contains("refused it 3 times while it was held"),
+            "and with the reason: {body}"
+        );
+
+        assert!(
+            held.lock().is_empty(),
+            "the text left the queue to its sender, not into nothing"
+        );
+        assert!(pending.lock().is_none(), "and no prompt was opened for it");
+        let published: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+        assert_eq!(published["state"], "blocked");
+        let classification = published["classification"].as_str().expect("a sentence");
+        assert!(
+            classification.starts_with("gave up"),
+            "the give-up path says what happened: {classification}"
+        );
+        assert!(
+            classification.contains("agenthub--demo--lead (send)"),
+            "AND IT NAMES THE TEXT'S ORIGIN - the sender's session and the verb that carried it: {classification}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A hand-back that cannot be made loses NOTHING: the text stays in the queue, its count restarts so it is
+    /// offered again rather than retried into the same hole, and the state file names the origin it could not
+    /// reach. The pane's own prompts and the rail's nudges have no session to answer to, so this is their path.
+    #[test]
+    fn a_hand_back_with_no_addressable_sender_keeps_the_text_held() {
+        let dir = std::env::temp_dir().join(format!("runner-giveup-none-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let state_path = dir.join("dev.state.json");
+        let target = RunnerTarget::parse("demo/dev").unwrap();
+        let (to_child, _from_threads) = mpsc::channel::<String>();
+        let held: Arc<Mutex<VecDeque<HeldText>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: Arc<Mutex<Option<PendingPrompt>>> = Arc::new(Mutex::new(None));
+
+        assert_eq!(
+            hold_text(
+                &held,
+                held_entry("send-9-2", "the pane's own text", None, MAX_HELD_ATTEMPTS)
+            ),
+            Ok(1)
+        );
+        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, 0);
+
+        let queue = held.lock();
+        assert_eq!(queue.len(), 1, "the text is still held: nothing was dropped");
+        assert_eq!(
+            queue.front().map(|entry| entry.attempts),
+            Some(0),
+            "its count restarts, so it is offered again next turn end"
+        );
+        drop(queue);
+        let published: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+        assert_eq!(published["state"], "blocked");
+        let classification = published["classification"].as_str().expect("a sentence");
+        assert!(
+            classification.contains("could not be handed back"),
+            "{classification}"
+        );
+        assert!(
+            classification.contains("an unnamed sender"),
+            "an origin nobody named is named as unnamed, not invented: {classification}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A held delivery whose channel to the agent is GONE keeps the text in the queue. The old arm cleared the
+    /// pending slot and returned, so the popped text left the process on the one path where the agent could not
+    /// have received it at all - the second silent loss in the same function.
+    #[test]
+    fn a_held_delivery_that_cannot_reach_the_agent_keeps_the_text() {
+        let dir = std::env::temp_dir().join(format!("runner-held-channel-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let state_path = dir.join("dev.state.json");
+        let target = RunnerTarget::parse("demo/dev").unwrap();
+        let (to_child, from_threads) = mpsc::channel::<String>();
+        let held: Arc<Mutex<VecDeque<HeldText>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let pending: Arc<Mutex<Option<PendingPrompt>>> = Arc::new(Mutex::new(None));
+
+        assert_eq!(
+            hold_text(
+                &held,
+                held_entry("send-9-3", "the text the child cannot take", Some("agenthub--demo--lead"), 0)
+            ),
+            Ok(1)
+        );
+        drop(from_threads);
+        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, 0);
+
+        assert!(pending.lock().is_none(), "no prompt is left pending");
+        let queue = held.lock();
+        assert_eq!(
+            queue.len(),
+            1,
+            "a delivery that could not even reach the channel keeps the text"
+        );
+        assert_eq!(queue.front().map(|entry| entry.refused_id.clone()), Some("send-9-3".to_string()));
+        drop(queue);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A seat the runtime can address: the room's own `run/<seat>.sock`, which is where `send_to_seat` looks.
+    fn target_mailbox(state_dir: &Path, room: &str, seat: &str) -> PathBuf {
+        let path = RunnerTarget::parse(&format!("{room}/{seat}"))
+            .expect("a target")
+            .mailbox(state_dir);
+        fs::create_dir_all(path.parent().expect("the run dir")).expect("run dir");
+        path
     }
 
     /// A PARKED SEAT IS NOT NUDGED. The rail wake is the runtime's own route to a seat - the nudge hands the

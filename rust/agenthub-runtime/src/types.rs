@@ -428,7 +428,17 @@ pub enum IpcRequest {
     /// Record the model a seat starts with. It is written to the room's own spec, so it applies to the
     /// seat's NEXT start (a running agent keeps the model it was spawned with).
     SetSeatModel { room: String, seat: String, model: String },
-    SendText { session: String, text: String },
+    /// One message to one seat, with the origin the runner must name if it cannot deliver or cannot keep it:
+    /// the caller's session name and the verb that carried the text. Absent fields stay absent - a caller
+    /// that does not say who it is is named as unnamed rather than guessed at.
+    SendText {
+        session: String,
+        text: String,
+        #[serde(default)]
+        from: Option<String>,
+        #[serde(default)]
+        verb: Option<String>,
+    },
     GetRoomStatus { room: String },
     /// The links a room's spec declares between its seats, for the status bridge's topology report.
     GetRoomLinks { room: String },

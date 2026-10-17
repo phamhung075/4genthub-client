@@ -62,6 +62,23 @@ func seatEnvParts() (room, seat, session string, ok bool) {
 	return room, seat, SeatSessionName(room, seat), true
 }
 
+// SendTextArgs is the IPC request one message is delivered with: the session, the text, and the ORIGIN the
+// seat's runner must name if it can neither deliver nor keep the text - the caller's session and the verb
+// that carried it.
+//
+// The runtime stamps both onto the frame it hands the seat's runner, and that runner is where a text can end
+// up held: at its bound it hands the text BACK to this session, whole and naming the reason, rather than
+// dropping it in silence (hub task c94cecfc, 19 dropped sends measured in one evening). A caller with no
+// session of its own - a shell, a hook - sends no `from` at all, and the runner names that origin as unnamed
+// instead of guessing.
+func SendTextArgs(session, text, sender, verb string) map[string]string {
+	args := map[string]string{"session": session, "text": text, "verb": verb}
+	if sender = strings.TrimSpace(sender); sender != "" {
+		args["from"] = sender
+	}
+	return args
+}
+
 // RuntimeSendText delivers one message to one session through the runtime socket this shell's environment
 // resolves, and returns the runtime's OWN answer document.
 //
@@ -77,15 +94,15 @@ func RuntimeSendText(session, text string, opts SendOptions) ([]byte, error) {
 // the pair that produced the measured defect: a seat of an isolated run addressed the box's live runtime and
 // was refused for a mailbox under the live runtime's state directory.
 func RuntimeSendTextOn(socket, session, text string, opts SendOptions) ([]byte, error) {
+	sender := opts.Sender
+	if sender == "" {
+		sender = ownSession()
+	}
 	body := text
 	if !opts.Raw {
-		sender := opts.Sender
-		if sender == "" {
-			sender = ownSession()
-		}
 		body = sendEnvelope(sender, session, text, time.Now())
 	}
-	resp, err := NewClient(socket).Call("SendText", map[string]string{"session": session, "text": body})
+	resp, err := NewClient(socket).Call("SendText", SendTextArgs(session, body, sender, "send"))
 	if err != nil {
 		return nil, err
 	}

@@ -152,7 +152,16 @@ impl IpcServer {
                 Err(e) => IpcResponse::err(e),
             },
 
-            IpcRequest::SendText { session, text } => match supervisor.deliver_text(&session, &text) {
+            IpcRequest::SendText {
+                session,
+                text,
+                from,
+                verb,
+            } => match supervisor.deliver_text(
+                &session,
+                &text,
+                &crate::runner::Origin { from, verb },
+            ) {
                 Ok(answer) => IpcResponse::success(answer),
                 Err(e) => IpcResponse::err(e),
             },

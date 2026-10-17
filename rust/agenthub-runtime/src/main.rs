@@ -267,7 +267,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Commands::Send { session, text } => {
             let answer = supervisor
-                .deliver_text(&session, &text)
+                .deliver_text(
+                    &session,
+                    &text,
+                    // The CLI's own send: the origin is this shell's session when it has one, and the verb is
+                    // the frame this call speaks. The runner names both if the text cannot be delivered.
+                    &agent_send_origin(),
+                )
                 .map_err(|e| format!("send error: {e}"))?;
             println!("{}", send_receipt(&session, &answer));
             Ok(())
@@ -322,6 +328,21 @@ fn shellexpand(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// The origin this binary's own `send` speaks with: the session it is running as, when it has one, and the
+/// `send` verb.
+///
+/// The runner needs both to name a text it cannot deliver, and the session is what lets it hand the text
+/// BACK to this caller rather than drop it. A shell that is not a seat has no session name, and that is
+/// recorded as unnamed rather than guessed at from the pane's argv.
+fn agent_send_origin() -> crate::runner::Origin {
+    crate::runner::Origin {
+        from: std::env::var("AGENTHUB_SESSION_NAME")
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
+        verb: Some("send".to_string()),
+    }
 }
 
 /// The one line `agenthub-runtime send` prints for the answer the supervisor produced.
