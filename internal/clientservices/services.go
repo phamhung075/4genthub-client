@@ -32,8 +32,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 // The safeguards of 7.2, in the order a report lists them.
@@ -152,47 +150,28 @@ var (
 	Now = time.Now
 	// Live returns the pids whose command line matches pattern.
 	Live = livePIDs
-	// LogDir is where the client's logs live. It is a variable so a test writes heartbeats into a temp
-	// tree instead of the machine's own state directory.
-	LogDir = logDir
+	// LogDir is where the client's logs live: <root>/logs, for the root its caller RESOLVED once per run
+	// (clientenv.ResolveStateRoot). It is the ONE computation of that path in the client, so the
+	// supervisor's log, the bridge's log, the heartbeat files and alerts.log cannot land in two places -
+	// and a verb pointed at another tree writes its logs there and nothing under this machine's.
+	//
+	// It is a seam so a test points it at a temp tree instead of the machine's own state directory.
+	LogDir = func(root string) string { return filepath.Join(root, "logs") }
 )
 
-// logDir is where the lifecycle verbs keep their logs: $XDG_STATE_HOME/4genthub/logs, else
-// <real home>/.local/state/4genthub/logs. It is the ONE computation of that path in the client, so the
-// supervisor's log, the bridge's log, the heartbeat files and alerts.log cannot land in two places.
-func logDir() (string, error) {
-	home, err := clientenv.RealHome()
-	if err != nil {
-		return "", err
-	}
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		base = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(base, "4genthub", "logs"), nil
-}
-
 // HeartbeatDir is the directory every child writes its beat into.
-func HeartbeatDir() (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "heartbeat"), nil
+func HeartbeatDir(root string) string {
+	return filepath.Join(LogDir(root), "heartbeat")
 }
 
-// HeartbeatPath is one child's heartbeat file: <LogDir>/heartbeat/<safeguard>-<rig>.json, and
+// HeartbeatPath is one child's heartbeat file: <root>/logs/heartbeat/<safeguard>-<rig>.json, and
 // <safeguard>.json for the two machine-scoped safeguards - 7.2 names agent's own file `agent.json`.
-func HeartbeatPath(safeguard, rig string) (string, error) {
-	dir, err := HeartbeatDir()
-	if err != nil {
-		return "", err
-	}
+func HeartbeatPath(root, safeguard, rig string) string {
 	name := safeguard
 	if rig != "" {
 		name = safeguard + "-" + rig
 	}
-	return filepath.Join(dir, name+".json"), nil
+	return filepath.Join(HeartbeatDir(root), name+".json")
 }
 
 // Heartbeat is what a child writes on every pass, and it is the WHOLE file: {pid, at}. Nothing else may
@@ -203,7 +182,8 @@ type Heartbeat struct {
 	At  time.Time `json:"at"`
 }
 
-// WriteHeartbeat stamps the caller's own process into its heartbeat file. It is called on EVERY pass of
+// WriteHeartbeat stamps the caller's own process into its heartbeat file, under the root its caller
+// resolved. It is called on EVERY pass of
 // every child - the supervisor per Step, the watchdog per poll, the seat deliverer per pass, the bridge
 // per Cycle, agent per tick - because a heartbeat that is written only when something happens cannot
 // tell a stopped child from a quiet one, which is the incident this report exists for.
@@ -219,11 +199,8 @@ var WriteHeartbeat = writeHeartbeatFile
 // 0600, not 0644: a heartbeat is state under the state root like any other file there, and an explicit mode is
 // the one thing the process umask (`clientenv.RestrictUmask`) cannot clamp - 0644 here stayed 0644 whatever the
 // umask said. Measured 2026-10-16: the guard heartbeats were world-readable with everything else.
-func writeHeartbeatFile(safeguard, rig string) error {
-	path, err := HeartbeatPath(safeguard, rig)
-	if err != nil {
-		return err
-	}
+func writeHeartbeatFile(root, safeguard, rig string) error {
+	path := HeartbeatPath(root, safeguard, rig)
 	body, err := json.Marshal(Heartbeat{PID: os.Getpid(), At: Now().UTC()})
 	if err != nil {
 		return err
@@ -253,11 +230,8 @@ func writeHeartbeatFile(safeguard, rig string) error {
 
 // ReadHeartbeat reads a child's last beat. A missing or unreadable file answers false, which the report
 // reads as "no beat": never as a fresh one - an unreadable beat must not look like a live child.
-func ReadHeartbeat(safeguard, rig string) (Heartbeat, bool) {
-	path, err := HeartbeatPath(safeguard, rig)
-	if err != nil {
-		return Heartbeat{}, false
-	}
+func ReadHeartbeat(root, safeguard, rig string) (Heartbeat, bool) {
+	path := HeartbeatPath(root, safeguard, rig)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Heartbeat{}, false
@@ -318,6 +292,9 @@ const UnknownAge = -1
 // the silence thresholds to judge with. Everything else the report needs it reads itself - the heartbeat
 // files, the process table and the clock - because those are the three sources the ruling names.
 type Env struct {
+	// Root is the state root the caller resolved: the heartbeat files are read under it and nowhere
+	// else, so a reader pointed at another tree reports that tree.
+	Root string
 	// Rigs are the rigs of agent.json's `rigs` list: the rooms that are meant to run. A rig not in the
 	// list is stopped on purpose and has no report.
 	Rigs []string
@@ -369,7 +346,7 @@ func verifyRow(env Env, safeguard, rig string) Health {
 	if recorded, ok := env.recorded(safeguard, rig); ok {
 		row.StartedAt, row.Restarts = recorded.StartedAt, recorded.Restarts
 	}
-	beat, hasBeat := ReadHeartbeat(safeguard, rig)
+	beat, hasBeat := ReadHeartbeat(env.Root, safeguard, rig)
 	age := time.Duration(0)
 	if hasBeat {
 		age = Now().Sub(beat.At)

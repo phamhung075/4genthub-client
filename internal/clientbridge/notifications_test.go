@@ -155,7 +155,7 @@ func TestNotifyStateSurvivesARestart(t *testing.T) {
 	f.bridge.Cycle(context.Background())
 
 	var restarted [][]byte
-	next := NewBridge("pc-1", time.Second, nil,
+	next := NewBridge("pc-1", t.TempDir(), time.Second, nil,
 		func(body []byte) (int, []byte, error) {
 			restarted = append(restarted, append([]byte(nil), body...))
 			return 200, nil, nil

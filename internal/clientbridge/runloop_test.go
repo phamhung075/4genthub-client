@@ -88,14 +88,14 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 	// bridge through this fixture, so no test writes into the machine's own log directory; the beat is
 	// recorded so a test can assert it happened.
 	previousBeat := clientservices.WriteHeartbeat
-	clientservices.WriteHeartbeat = func(safeguard, rig string) error {
+	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
 		f.beats = append(f.beats, safeguard+"/"+rig)
 		return nil
 	}
 	t.Cleanup(func() { clientservices.WriteHeartbeat = previousBeat })
 	dir := t.TempDir()
 	f.dir, f.statePath = dir, filepath.Join(dir, "sync.json")
-	f.bridge = NewBridge("pc-1", time.Duration(DefaultInterval*float64(time.Second)), f.send, f.notify,
+	f.bridge = NewBridge("pc-1", t.TempDir(), time.Duration(DefaultInterval*float64(time.Second)), f.send, f.notify,
 		secretscan.KnownValuesFromEnv(os.Environ()), dir, f.statePath,
 		func(line string) { f.notes = append(f.notes, line) })
 	f.bridge.Runner = func(_ context.Context, argv ...string) (string, error) {

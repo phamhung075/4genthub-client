@@ -110,7 +110,7 @@ func machineDeps(root string, client *clientruntime.Client, fix bool) Deps {
 		ProcEnv: procEnv,
 		Rows: func(room string) []clientservices.Health {
 			state, _ := clientservices.ReadAgentState()
-			return clientservices.Verify(context.Background(), clientservices.Env{Rigs: []string{room}, Supervised: state.Safeguards})
+			return clientservices.Verify(context.Background(), clientservices.Env{Root: root, Rigs: []string{room}, Supervised: state.Safeguards})
 		},
 		Up: func(room string) error {
 			self, err := os.Executable()
@@ -124,7 +124,7 @@ func machineDeps(root string, client *clientruntime.Client, fix bool) Deps {
 			return nil
 		},
 		Cause: func() string {
-			lines := clientservices.TailAlerts()
+			lines := clientservices.TailAlerts(root)
 			for i := len(lines) - 1; i >= 0; i-- {
 				if strings.Contains(lines[i], "refused") || strings.Contains(lines[i], "NOT") {
 					return lines[i]

@@ -19,7 +19,6 @@ type guardRig struct {
 
 func newGuardRig(t *testing.T, idle map[string]bool, pick clientjev.Selection) *guardRig {
 	t.Helper()
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	r := &guardRig{now: 10000}
 	r.guard = &IdleGuard{Rig: "demo", Lead: "lead", Quiet: 300, Stall: 900, State: map[string]*stallState{}}
 	r.guard.Now = func() float64 { return r.now }

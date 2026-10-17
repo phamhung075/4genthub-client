@@ -98,7 +98,7 @@ func TestRuntimeLinksAreTheRoomsDeclaredEdges(t *testing.T) {
 func TestAMachineWithoutARuntimeReportsNoSeatsAndSaysWhy(t *testing.T) {
 	t.Setenv(clientruntime.RuntimeSocketEnv, filepath.Join(t.TempDir(), "none.sock"))
 	var notes []string
-	bridge := NewBridge("pc-1", 0, nil, nil, nil, t.TempDir(), filepath.Join(t.TempDir(), "sync.json"),
+	bridge := NewBridge("pc-1", t.TempDir(), 0, nil, nil, nil, t.TempDir(), filepath.Join(t.TempDir(), "sync.json"),
 		func(line string) { notes = append(notes, line) })
 	bridge.Runner = func(_ context.Context, argv ...string) (string, error) { return "", errors.New("absent") }
 	payload := bridge.BuildPayload()

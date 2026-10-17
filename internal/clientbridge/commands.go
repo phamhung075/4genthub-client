@@ -62,8 +62,8 @@ func (c bridgeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 
 func bridgeUsage(w io.Writer) {
 	_, _ = io.WriteString(w, "4genteam bridge <subcommand>\n\n"+
-		"  run [--interval SECONDS] [--machine-id ID] [--once]   report on a loop (default 20s)\n"+
-		"  once [--print] [--machine-id ID]                      report once; --print dumps the payload\n"+
+		"  run [--interval SECONDS] [--machine-id ID] [--state-root DIR] [--once]   report on a loop (default 20s)\n"+
+		"  once [--print] [--machine-id ID] [--state-root DIR]                      report once; --print dumps the payload\n"+
 		"  install-service                                       print the systemd unit\n")
 }
 
@@ -119,7 +119,7 @@ func bridgeRun(ctx context.Context, args []string, stdout, stderr io.Writer, onc
 		return clientcmd.ExitOK
 	}
 	values, switches, err := bridgeFlags(args,
-		map[string]bool{"interval": true, "machine-id": true}, map[string]bool{"once": true})
+		map[string]bool{"interval": true, "machine-id": true, "state-root": true}, map[string]bool{"once": true})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
 		return clientcmd.ExitUsage
@@ -156,7 +156,12 @@ func bridgeRun(ctx context.Context, args []string, stdout, stderr io.Writer, onc
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	bridge := NewBridge(id, time.Duration(interval*float64(time.Second)), send, notify,
+	root, err := clientenv.ResolveStateRoot(values["state-root"])
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	bridge := NewBridge(id, root, time.Duration(interval*float64(time.Second)), send, notify,
 		secretscan.KnownValuesFromEnv(os.Environ()), pins, state, noteTo(stderr))
 	_, _ = fmt.Fprintf(stderr, "4genteam bridge: reporting as %s\n", id)
 	return bridge.Run(ctx, onceOnly || switches["once"])
@@ -170,7 +175,8 @@ func bridgeOnce(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		bridgeUsage(stdout)
 		return clientcmd.ExitOK
 	}
-	values, switches, err := bridgeFlags(args, map[string]bool{"machine-id": true}, map[string]bool{"print": true})
+	values, switches, err := bridgeFlags(args,
+		map[string]bool{"machine-id": true, "state-root": true}, map[string]bool{"print": true})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
 		return clientcmd.ExitUsage
@@ -191,8 +197,13 @@ func bridgeOnce(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
 		return clientcmd.ExitUsage
 	}
+	root, err := clientenv.ResolveStateRoot(values["state-root"])
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
+		return clientcmd.ExitUsage
+	}
 	if switches["print"] {
-		bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), nil, nil,
+		bridge := NewBridge(id, root, time.Duration(DefaultInterval*float64(time.Second)), nil, nil,
 			known, pins, state, noteTo(stderr))
 		payload := bridge.BuildPayload()
 		payload.LocalRecord = bridge.LocalRecord(payload.Seats)
@@ -214,7 +225,7 @@ func bridgeOnce(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	bridge := NewBridge(id, time.Duration(DefaultInterval*float64(time.Second)), send, notify,
+	bridge := NewBridge(id, root, time.Duration(DefaultInterval*float64(time.Second)), send, notify,
 		known, pins, state, noteTo(stderr))
 	return bridge.Run(ctx, true)
 }

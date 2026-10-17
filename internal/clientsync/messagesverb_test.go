@@ -542,7 +542,7 @@ func TestMessagesVerbWatchBeatsEachPassAndExitsOnCancel(t *testing.T) {
 	var beaten []string
 	previousBeat := clientservices.WriteHeartbeat
 	ctx, cancel := context.WithCancel(context.Background())
-	clientservices.WriteHeartbeat = func(safeguard, rig string) error {
+	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
 		beaten = append(beaten, safeguard+" "+rig)
 		cancel()
 		return nil

@@ -56,8 +56,8 @@ func stubWholeUp(t *testing.T) *[]string {
 	// The room recorded and the authority started are the steps after the gate; a test about the gate
 	// asserts whether the RESUME ran, so these two are stubbed to no-ops that cannot touch this machine.
 	recordRigFor = func(string, io.Writer) bool { return true }
-	startAuthority = func(io.Writer, io.Writer) bool { return true }
-	waitSafeguards = func(string) ([]clientservices.Health, bool) {
+	startAuthority = func(string, io.Writer, io.Writer) bool { return true }
+	waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
 		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
 	}
 	// The gate passes only for a `up` that may report, so the credentials the missing-env refusal would
@@ -242,7 +242,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 			}
 			SupervisorStartGrace = time.Millisecond
 			agentRunning = func() int { return 4242 }
-			rowsFor = func(string) []clientservices.Health {
+			rowsFor = func(string, string) []clientservices.Health {
 				return []clientservices.Health{{Rig: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}
 			}
 			rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }

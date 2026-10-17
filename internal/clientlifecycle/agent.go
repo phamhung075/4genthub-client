@@ -33,7 +33,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
-const agentUsage = "usage: 4genteam agent [status [--json]]"
+const agentUsage = "usage: 4genteam agent [status [--json]] [--state-root DIR]"
 
 // 7.1's restart curve and the window that makes a crash loop visible.
 const (
@@ -49,24 +49,16 @@ const (
 	agentPass = time.Second
 )
 
-// AgentLogPath is agent's own log, where `up` sends its output.
-func AgentLogPath() (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "agent.log"), nil
+// AgentLogPath is agent's own log, where `up` sends its output, under the root its caller resolved.
+func AgentLogPath(root string) string {
+	return filepath.Join(LogDir(root), "agent.log")
 }
 
 // WatchdogLogPath is the log of the watchdog CHILD agent starts. It is deliberately NOT the watchdog's own
-// ~/.config/4genthub/logs/rig-watchdog.log: that file is written by the watchdog itself through its tee, and
+// <root>/logs/rig-watchdog.log: that file is written by the watchdog itself through its tee, and
 // pointing its stdout at the same file would append every line twice.
-func WatchdogLogPath(rig string) (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "watchdog-"+rig+".log"), nil
+func WatchdogLogPath(rig, root string) string {
+	return filepath.Join(LogDir(root), "watchdog-"+rig+".log")
 }
 
 type agentCommand struct{}
@@ -89,31 +81,38 @@ func (agentCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wr
 				"(the value is never printed).")
 		return clientcmd.ExitOK
 	}
-	if len(args) > 0 && args[0] == "status" {
-		return runAgentStatus(args[1:], stdout, stderr)
+	rootFlag, rest := clientenv.StateRootFromFlags(args)
+	if len(rest) > 0 && rest[0] == "status" {
+		root, err := clientenv.ResolveStateRoot(rootFlag)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam agent status: %v\n", err)
+			return clientcmd.ExitUsage
+		}
+		return runAgentStatus(rest[1:], root, stdout, stderr)
 	}
-	if len(args) > 0 {
-		fmt.Fprintf(stderr, "4genteam agent: unknown argument %s. %s\n", args[0], agentUsage)
+	if len(rest) > 0 {
+		fmt.Fprintf(stderr, "4genteam agent: unknown argument %s. %s\n", rest[0], agentUsage)
 		return clientcmd.ExitUsage
 	}
-	return runAgent(ctx, stdout, stderr)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam agent: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	return runAgent(ctx, root, stdout, stderr)
 }
 
 // runAgent is the process: the supervision loop in the background, the socket loop in the foreground.
-func runAgent(ctx context.Context, stdout, stderr io.Writer) int {
+func runAgent(ctx context.Context, root string, stdout, stderr io.Writer) int {
 	if missing := missingCloudEnv(); len(missing) > 0 {
 		return refuseMissingCloudEnv("agent", missing, stderr)
 	}
-	logPath, err := AgentLogPath()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam agent: %v\n", err)
-		return clientcmd.ExitUnavailable
-	}
+	logPath := AgentLogPath(root)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		fmt.Fprintf(stderr, "4genteam agent: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
-	manager := newAgentManager(func(line string) {
+	manager := newAgentManager(root, func(line string) {
 		fmt.Fprintf(stdout, "%s agent: %s\n", time.Now().UTC().Format(time.RFC3339), line)
 	})
 	daemon := clientsync.NewAgentDaemon(clientsync.AgentDaemonOptions{
@@ -188,7 +187,10 @@ func (c *agentChild) key() string { return c.spec.safeguard + " " + c.spec.rig }
 // agentManager is the supervision half of agent. Its two mutex-guarded maps are the only shared state: the
 // children it owns, and the transitions the socket half has not sent yet.
 type agentManager struct {
-	log func(string)
+	// root is the state root this run resolved: every child it starts is handed it, and every file this
+	// loop reads or writes lives under it.
+	root string
+	log  func(string)
 
 	mu       sync.Mutex
 	children map[string]*agentChild
@@ -196,8 +198,9 @@ type agentManager struct {
 	last     []clientservices.Health
 }
 
-func newAgentManager(log func(string)) *agentManager {
+func newAgentManager(root string, log func(string)) *agentManager {
 	return &agentManager{
+		root:     root,
 		log:      log,
 		children: map[string]*agentChild{},
 		pending:  map[string]clientservices.Health{},
@@ -225,21 +228,18 @@ func (m *agentManager) pass() {
 	// AGENT BEATS ITSELF ON EVERY PASS, and it does so HERE rather than on the socket, because the process
 	// must read `running` while the cloud is unreachable: a beat that needs the network would make an
 	// offline-but-healthy agent look dead, and 7.3 has a separate dead-man for the socket.
-	if err := clientservices.WriteHeartbeat(clientservices.Agent, ""); err != nil {
+	if err := clientservices.WriteHeartbeat(m.root, clientservices.Agent, ""); err != nil {
 		m.log(fmt.Sprintf("cannot write agent's own heartbeat: %v", err))
 	}
 	state, err := clientservices.ReadAgentState()
 	if err != nil {
 		m.log(fmt.Sprintf("the rooms meant to run could not be read, so no child is started this pass: %v", err))
 	}
-	specs, err := agentSpecs(state.Rigs)
-	if err != nil {
-		m.log(fmt.Sprintf("cannot resolve the log directory, so no child can be started: %v", err))
-		return
-	}
+	specs := agentSpecs(state.Rigs, m.root)
 	now := clientservices.Now()
 	m.reconcile(specs, now)
 	rows := clientservices.Verify(context.Background(), clientservices.Env{
+		Root:       m.root,
 		Rigs:       state.Rigs,
 		Supervised: m.recorded(),
 		Thresholds: m.thresholds(),
@@ -250,73 +250,54 @@ func (m *agentManager) pass() {
 
 // agentSpecs is the child list of 7.1: a compaction supervisor, a watchdog and a seat-message deliverer
 // per listed rig, and ONE bridge per machine.
-func agentSpecs(rigs []string) ([]agentSpec, error) {
+func agentSpecs(rigs []string, root string) []agentSpec {
 	var specs []agentSpec
 	for _, rig := range rigs {
-		supervisorLog, err := LogPath(rig)
-		if err != nil {
-			return nil, err
-		}
-		watchdogLog, err := WatchdogLogPath(rig)
-		if err != nil {
-			return nil, err
-		}
-		messagesLog, err := MessagesLogPath(rig)
-		if err != nil {
-			return nil, err
-		}
-		guardLog, err := IdleLogPath(rig)
-		if err != nil {
-			return nil, err
-		}
-		budgetLog, err := BudgetLogPath(rig)
-		if err != nil {
-			return nil, err
-		}
+		supervisorLog := LogPath(rig, root)
+		watchdogLog := WatchdogLogPath(rig, root)
+		messagesLog := MessagesLogPath(rig, root)
+		guardLog := IdleLogPath(rig, root)
+		budgetLog := BudgetLogPath(rig, root)
 		specs = append(specs,
 			agentSpec{
 				safeguard: clientservices.Compact, rig: rig,
-				argv:      []string{"compact-run", "--room", rig},
+				argv:      []string{"compact-run", "--room", rig, "--state-root", root},
 				logPath:   supervisorLog,
 				threshold: clientservices.SilentAfter(clientservices.CompactEvery),
 			},
 			agentSpec{
 				safeguard: clientservices.Watchdog, rig: rig,
-				argv:      []string{"watchdog", rig, "--watch"},
+				argv:      []string{"watchdog", rig, "--watch", "--state-root", root},
 				logPath:   watchdogLog,
 				threshold: clientservices.SilentAfter(clientservices.WatchdogInterval),
 			},
 			agentSpec{
 				safeguard: clientservices.Messages, rig: rig,
-				argv:      []string{"sync", "messages", "--room", rig, "--watch"},
+				argv:      []string{"sync", "messages", "--room", rig, "--watch", "--state-root", root},
 				logPath:   messagesLog,
 				threshold: clientservices.SilentAfter(clientservices.MessagesEvery),
 			},
 			agentSpec{
 				safeguard: clientservices.RoomGuard, rig: rig,
-				argv:      []string{"idle-run", "--room", rig},
+				argv:      []string{"idle-run", "--room", rig, "--state-root", root},
 				logPath:   guardLog,
 				threshold: clientservices.SilentAfter(clientservices.RoomGuardEvery),
 			},
 			agentSpec{
 				safeguard: clientservices.Budget, rig: rig,
-				argv:      []string{"budget-run", "--room", rig},
+				argv:      []string{"budget-run", "--room", rig, "--state-root", root},
 				logPath:   budgetLog,
 				threshold: clientservices.SilentAfter(clientservices.BudgetEvery),
 			},
 		)
 	}
-	bridgeLog, err := BridgeLogPath()
-	if err != nil {
-		return nil, err
-	}
 	specs = append(specs, agentSpec{
 		safeguard: clientservices.Bridge,
-		argv:      []string{"bridge", "run"},
-		logPath:   bridgeLog,
+		argv:      []string{"bridge", "run", "--state-root", root},
+		logPath:   BridgeLogPath(root),
 		threshold: clientservices.SilentAfter(clientservices.BridgeBackoffCap),
 	})
-	return specs, nil
+	return specs
 }
 
 // reconcile starts what is missing, adopts what is already running, and stops what a rig that left the
@@ -516,7 +497,7 @@ func (m *agentManager) report(rows []clientservices.Health) {
 	m.mu.Unlock()
 	for _, row := range changed {
 		line := clientservices.Now().UTC().Format(time.RFC3339) + " " + clientservices.StateLine(row)
-		if err := clientservices.AppendAlert(line); err != nil {
+		if err := clientservices.AppendAlert(m.root, line); err != nil {
 			m.log(fmt.Sprintf("cannot append to alerts.log: %v", err))
 		}
 		m.log(clientservices.StateLine(row))
@@ -662,17 +643,13 @@ var agentRunning = func() int {
 
 // startAgent starts the supervision authority, once: a running agent is LEFT ALONE, because `up` is the
 // idempotent repair verb (7.5) and a second agent would be two restart authorities.
-func startAgent(stdout, stderr io.Writer) bool {
+func startAgent(root string, stdout, stderr io.Writer) bool {
 	if pid := agentRunning(); pid != 0 {
 		fmt.Fprintf(stdout, "agent: already running, pid %d\n", pid)
 		return true
 	}
-	logPath, err := AgentLogPath()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam: %v\n", err)
-		return false
-	}
-	child, err := spawnChild([]string{"agent"}, logPath)
+	logPath := AgentLogPath(root)
+	child, err := spawnChild([]string{"agent", "--state-root", root}, logPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam: could not start agent: %v\n", err)
 		return false
@@ -700,7 +677,7 @@ func stopAgent(rig string, stdout io.Writer) {
 
 // runAgentStatus is `4genteam agent status`: the safeguard rows, the listed rigs, and the per-session
 // withheld counts 4.4 names. It is a reading surface and not a checker - `doctor` exits 3, this exits 0.
-func runAgentStatus(args []string, stdout, stderr io.Writer) int {
+func runAgentStatus(args []string, root string, stdout, stderr io.Writer) int {
 	asJSON := false
 	for _, arg := range args {
 		switch arg {
@@ -721,7 +698,7 @@ func runAgentStatus(args []string, stdout, stderr io.Writer) int {
 		// could not be read".
 		fmt.Fprintf(stderr, "4genteam agent status: the rooms meant to run could not be read, so the rigs list below is empty for that reason: %v\n", stateErr)
 	}
-	rows := rowsFor("")
+	rows := rowsFor("", root)
 	withheld := withheldCounts()
 	if asJSON {
 		body, err := json.MarshalIndent(map[string]any{

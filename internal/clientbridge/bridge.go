@@ -46,7 +46,9 @@ type Runner func(ctx context.Context, argv ...string) (string, error)
 type Bridge struct {
 	MachineID string
 	Interval  time.Duration
-	Send      Sender
+	// Root is the state root the verb resolved: the heartbeat file lives under it and nowhere else.
+	Root string
+	Send Sender
 	// Notify posts one dashboard notification frame per human-addressed the rig orchestrator row (D3). Nil
 	// disables the producer: 4genteam bridge once --print and the parity fixtures build payloads
 	// without talking to anything, and a bridge that cannot notify must still report.
@@ -84,12 +86,12 @@ type Bridge struct {
 // NewBridge builds a bridge with the defaults the Python had: the pins directory the client writes,
 // the sync record beside it, and a runner that shells out to argv. notify may be nil - a bridge that
 // only builds payloads has nowhere to post notifications, and says so by not sending any.
-func NewBridge(machineID string, interval time.Duration, send Sender, notify Sender, known map[string]string, pinsDir, statePath string, note func(string)) *Bridge {
+func NewBridge(machineID, root string, interval time.Duration, send Sender, notify Sender, known map[string]string, pinsDir, statePath string, note func(string)) *Bridge {
 	if interval <= 0 {
 		interval = time.Duration(DefaultInterval * float64(time.Second))
 	}
 	return &Bridge{
-		MachineID: machineID, Interval: interval, Send: send, Notify: notify, Runner: execRunner, Nodes: runtimeNodes, Links: runtimeLinks,
+		MachineID: machineID, Root: root, Interval: interval, Send: send, Notify: notify, Runner: execRunner, Nodes: runtimeNodes, Links: runtimeLinks,
 		Rooms: runtimeRooms, Queue: runtimeHumanQueue,
 		Known: known, PinsDir: pinsDir, StatePath: statePath, Note: note,
 		clock: time.Now, state: ReadSyncState(statePath), notified: ReadNotifiedState(statePath),
@@ -309,7 +311,7 @@ func (b *Bridge) ApplyVerdicts(body []byte) {
 func (b *Bridge) Cycle(ctx context.Context) time.Duration {
 	// The beat is the FIRST thing the cycle does, before any early return: a cycle that finds nothing
 	// to send, or that fails, still proves the bridge is alive. The bridge is one per machine, so no rig.
-	if err := clientservices.WriteHeartbeat(clientservices.Bridge, ""); err != nil {
+	if err := clientservices.WriteHeartbeat(b.Root, clientservices.Bridge, ""); err != nil {
 		b.note("heartbeat", fmt.Sprintf("heartbeat write failed: %v", err))
 	}
 	payload := b.BuildPayload()

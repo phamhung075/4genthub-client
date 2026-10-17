@@ -33,8 +33,10 @@ import (
 // healthFixture is one machine's report inputs: a temp log directory holding the heartbeat files, a temp
 // agent.json holding the listed room, a frozen clock, and the process table.
 type healthFixture struct {
-	t  *testing.T
-	at time.Time
+	t *testing.T
+	// root is the state root every read of this fixture is pointed at: the logs land under <root>/logs.
+	root string
+	at   time.Time
 	// live maps a safeguard's command-line pattern to the pids that match it. An empty answer is a
 	// safeguard that is NOT running, which is what a kill leaves behind.
 	live map[string][]int
@@ -44,20 +46,19 @@ type healthFixture struct {
 // touches the real /var-like paths, and none of them starts, restarts or signals anything.
 func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 	t.Helper()
-	logDir := t.TempDir()
+	root := t.TempDir()
 	stateDir := t.TempDir()
 
-	previousLogDir, previousStatePath := clientservices.LogDir, clientservices.AgentStatePath
+	previousStatePath := clientservices.AgentStatePath
 	previousNow, previousLive := clientservices.Now, clientservices.Live
 	t.Cleanup(func() {
-		clientservices.LogDir, clientservices.AgentStatePath = previousLogDir, previousStatePath
+		clientservices.AgentStatePath = previousStatePath
 		clientservices.Now, clientservices.Live = previousNow, previousLive
 	})
 
-	clientservices.LogDir = func() (string, error) { return logDir, nil }
 	clientservices.AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
 
-	fixture := &healthFixture{t: t, at: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), live: map[string][]int{}}
+	fixture := &healthFixture{t: t, root: root, at: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), live: map[string][]int{}}
 	clientservices.Now = func() time.Time { return fixture.at }
 	clientservices.Live = func(pattern string) []int { return fixture.live[pattern] }
 
@@ -78,10 +79,7 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 // report reads (clientservices.HeartbeatPath).
 func (f *healthFixture) beat(safeguard, rig string, age time.Duration, pid int) {
 	f.t.Helper()
-	path, err := clientservices.HeartbeatPath(safeguard, rig)
-	if err != nil {
-		f.t.Fatal(err)
-	}
+	path := clientservices.HeartbeatPath(f.root, safeguard, rig)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		f.t.Fatal(err)
 	}
@@ -123,11 +121,12 @@ func row(t *testing.T, rows []clientservices.Health, safeguard, rig string) clie
 	return clientservices.Health{}
 }
 
-// doctor runs the verb once and returns its exit code and both streams.
-func doctor(t *testing.T, args ...string) (int, string, string) {
+// doctor runs the verb once, pointed at the fixture's own state root, and returns its exit code and both
+// streams.
+func doctor(t *testing.T, fixture *healthFixture, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code := (doctorCommand{}).Run(context.Background(), args, &out, &errOut)
+	code := (doctorCommand{}).Run(context.Background(), append(args, "--state-root", fixture.root), &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 
@@ -169,7 +168,7 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 			}
 
 			// (a) the report names it, with the age of its last beat.
-			rows := rowsFor("demo")
+			rows := rowsFor("demo", fixture.root)
 			got := row(t, rows, c.safeguard, c.rig)
 			if got.State != wantState {
 				t.Errorf("row = %+v, want state %q", got, wantState)
@@ -179,7 +178,7 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 			}
 
 			// (b) doctor refuses, and names the safeguard on stderr in 7.5's own words.
-			code, stdout, stderr := doctor(t, "demo")
+			code, stdout, stderr := doctor(t, fixture, "demo")
 			if code != clientcmd.ExitUnavailable {
 				t.Fatalf("doctor exited %d, want %d\nstdout:\n%s\nstderr:\n%s", code, clientcmd.ExitUnavailable, stdout, stderr)
 			}
@@ -202,7 +201,7 @@ func TestASafeguardThatIsDownIsNamedNoMatterWhichOneItIs(t *testing.T) {
 	fixture.everythingRunning()
 	fixture.live[clientservices.Pattern(clientservices.Agent, "")] = nil
 
-	code, _, stderr := doctor(t, "demo")
+	code, _, stderr := doctor(t, fixture, "demo")
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("doctor exited %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, stderr)
 	}
@@ -211,7 +210,7 @@ func TestASafeguardThatIsDownIsNamedNoMatterWhichOneItIs(t *testing.T) {
 	}
 
 	// --json prints the rows themselves, so a caller reads the same decision the lines carry.
-	code, stdout, _ := doctor(t, "demo", "--json")
+	code, stdout, _ := doctor(t, fixture, "demo", "--json")
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("doctor --json exited %d, want %d", code, clientcmd.ExitUnavailable)
 	}
@@ -235,12 +234,12 @@ func TestAStaleBeatFromAnotherPidIsSilent(t *testing.T) {
 	fixture.live[clientservices.Pattern(clientservices.Compact, "demo")] = []int{7777}
 	fixture.beat(clientservices.Compact, "demo", time.Second, 4101)
 
-	got := row(t, rowsFor("demo"), clientservices.Compact, "demo")
+	got := row(t, rowsFor("demo", fixture.root), clientservices.Compact, "demo")
 	if got.State != clientservices.Silent {
 		t.Errorf("row = %+v, want silent: the live pid is not the beat's pid", got)
 	}
 
-	code, _, stderr := doctor(t, "demo")
+	code, _, stderr := doctor(t, fixture, "demo")
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("doctor exited %d, want %d", code, clientcmd.ExitUnavailable)
 	}
@@ -256,7 +255,7 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	fixture := newHealthFixture(t, []string{"demo"})
 	fixture.everythingRunning()
 
-	rows := rowsFor("demo")
+	rows := rowsFor("demo", fixture.root)
 	for _, want := range []struct{ safeguard, rig string }{
 		{clientservices.Compact, "demo"},
 		{clientservices.Watchdog, "demo"},
@@ -269,7 +268,7 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 		}
 	}
 
-	code, stdout, stderr := doctor(t, "demo")
+	code, stdout, stderr := doctor(t, fixture, "demo")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("doctor exited %d, want %d\nstdout:\n%s\nstderr:\n%s", code, clientcmd.ExitOK, stdout, stderr)
 	}
@@ -283,7 +282,7 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	}
 
 	// The same machine through --json: the rows carry the same states, so a script reads one shape.
-	code, jsonOut, _ := doctor(t, "demo", "--json")
+	code, jsonOut, _ := doctor(t, fixture, "demo", "--json")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("doctor --json exited %d, want %d", code, clientcmd.ExitOK)
 	}
@@ -302,7 +301,7 @@ func TestDoctorWithoutARigReportsEveryListedRoom(t *testing.T) {
 	fixture := newHealthFixture(t, []string{"demo", "other"})
 	fixture.running(clientservices.Agent, "", 4104)
 
-	rows := rowsFor("")
+	rows := rowsFor("", fixture.root)
 	for _, want := range []struct{ safeguard, rig string }{
 		{clientservices.Compact, "demo"},
 		{clientservices.Watchdog, "demo"},
@@ -321,7 +320,7 @@ func TestDoctorWithoutARigReportsEveryListedRoom(t *testing.T) {
 		t.Errorf("agent = %+v, want running", got)
 	}
 
-	code, _, stderr := doctor(t)
+	code, _, stderr := doctor(t, fixture)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("doctor exited %d, want %d", code, clientcmd.ExitUnavailable)
 	}
@@ -341,16 +340,16 @@ func TestDoctorPrintsTheTailOfAlertsLog(t *testing.T) {
 	fixture := newHealthFixture(t, []string{"demo"})
 	fixture.everythingRunning()
 	line := "2026-10-11T11:59:00Z demo compact: stopped, age 300s"
-	if err := clientservices.AppendAlert(line); err != nil {
+	if err := clientservices.AppendAlert(fixture.root, line); err != nil {
 		t.Fatal(err)
 	}
 
-	_, stdout, _ := doctor(t, "demo")
+	_, stdout, _ := doctor(t, fixture, "demo")
 	if !strings.Contains(stdout, line) {
 		t.Errorf("stdout = %q, want the alert tail", stdout)
 	}
 
-	_, jsonOut, _ := doctor(t, "demo", "--json")
+	_, jsonOut, _ := doctor(t, fixture, "demo", "--json")
 	if strings.Contains(jsonOut, "age 300s") {
 		t.Errorf("--json printed the alert tail: %q", jsonOut)
 	}
@@ -377,7 +376,7 @@ func TestDoctorIsReadOnly(t *testing.T) {
 		return nil, false, nil
 	}
 
-	if code, _, _ := doctor(t, "demo"); code != clientcmd.ExitOK {
+	if code, _, _ := doctor(t, fixture, "demo"); code != clientcmd.ExitOK {
 		t.Fatalf("doctor exited %d on a healthy machine", code)
 	}
 	if len(did) != 0 {

@@ -20,23 +20,24 @@ import (
 type reportFixture struct {
 	t    *testing.T
 	at   time.Time
-	dir  string
+	root string // the state root every read of this fixture is pointed at
+	dir  string // <root>/logs, where the log-derived paths land
 	live map[string][]int
 }
 
 func newReportFixture(t *testing.T) *reportFixture {
 	t.Helper()
-	dir := t.TempDir()
+	root := t.TempDir()
+	dir := filepath.Join(root, "logs")
 	stateDir := t.TempDir()
-	fixture := &reportFixture{t: t, at: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), dir: dir, live: map[string][]int{}}
+	fixture := &reportFixture{t: t, at: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), root: root, dir: dir, live: map[string][]int{}}
 
-	previousLogDir, previousNow, previousLive := LogDir, Now, Live
+	previousNow, previousLive := Now, Live
 	previousStatePath := AgentStatePath
 	t.Cleanup(func() {
-		LogDir, Now, Live = previousLogDir, previousNow, previousLive
+		Now, Live = previousNow, previousLive
 		AgentStatePath = previousStatePath
 	})
-	LogDir = func() (string, error) { return dir, nil }
 	Now = func() time.Time { return fixture.at }
 	Live = func(pattern string) []int { return fixture.live[pattern] }
 	AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
@@ -46,10 +47,7 @@ func newReportFixture(t *testing.T) *reportFixture {
 // beat writes one heartbeat file with a chosen pid and age.
 func (f *reportFixture) beat(safeguard, rig string, age time.Duration, pid int) {
 	f.t.Helper()
-	path, err := HeartbeatPath(safeguard, rig)
-	if err != nil {
-		f.t.Fatal(err)
-	}
+	path := HeartbeatPath(f.root, safeguard, rig)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		f.t.Fatal(err)
 	}
@@ -64,6 +62,7 @@ func (f *reportFixture) beat(safeguard, rig string, age time.Duration, pid int) 
 
 func (f *reportFixture) row(safeguard, rig string, env Env) Health {
 	f.t.Helper()
+	env.Root = f.root
 	for _, row := range Verify(context.Background(), env) {
 		if row.Safeguard == safeguard && row.Rig == rig {
 			return row
@@ -236,10 +235,10 @@ func TestFailingIsDecidableOnlyByAgent(t *testing.T) {
 // machine-scoped writer, holding {pid, at} and nothing else.
 func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	f := newReportFixture(t)
-	if err := WriteHeartbeat(Compact, "demo"); err != nil {
+	if err := WriteHeartbeat(f.root, Compact, "demo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteHeartbeat(Agent, ""); err != nil {
+	if err := WriteHeartbeat(f.root, Agent, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,7 +255,7 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	if _, err := os.Stat(machine); err != nil {
 		t.Errorf("agent's own beat is not at %s: %v", machine, err)
 	}
-	if err := WriteHeartbeat(Bridge, ""); err != nil {
+	if err := WriteHeartbeat(f.root, Bridge, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, "heartbeat", "bridge.json")); err != nil {
@@ -278,7 +277,7 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 		t.Errorf("pid = %v, want this process", fields["pid"])
 	}
 
-	beat, ok := ReadHeartbeat(Compact, "demo")
+	beat, ok := ReadHeartbeat(f.root, Compact, "demo")
 	if !ok || beat.PID != os.Getpid() || !beat.At.Equal(f.at) {
 		t.Errorf("ReadHeartbeat = %+v, %v; want this process at the seam's clock", beat, ok)
 	}
@@ -287,7 +286,7 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(f.dir, "heartbeat", "watchdog-demo.json"), []byte("{"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := ReadHeartbeat(Watchdog, "demo"); ok {
+	if _, ok := ReadHeartbeat(f.root, Watchdog, "demo"); ok {
 		t.Error("a malformed heartbeat read as a live one")
 	}
 }
@@ -346,14 +345,14 @@ func TestAgentStateIsPrivateAndAddsARigOnce(t *testing.T) {
 // TestAlertsLogKeepsTheTransitionsAndTheTail: every transition is appended with its UTC stamp, and the
 // reader gets the last lines.
 func TestAlertsLogKeepsTheTransitionsAndTheTail(t *testing.T) {
-	newReportFixture(t)
-	if err := AppendAlert("2026-10-11T11:00:00Z demo compact: stopped, age 31s"); err != nil {
+	f := newReportFixture(t)
+	if err := AppendAlert(f.root, "2026-10-11T11:00:00Z demo compact: stopped, age 31s"); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendAlert("2026-10-11T11:01:00Z demo watchdog: silent, age 400s"); err != nil {
+	if err := AppendAlert(f.root, "2026-10-11T11:01:00Z demo watchdog: silent, age 400s"); err != nil {
 		t.Fatal(err)
 	}
-	tail := TailAlerts()
+	tail := TailAlerts(f.root)
 	if len(tail) != 2 || !strings.Contains(tail[1], "watchdog: silent") {
 		t.Errorf("tail = %v, want both transitions in order", tail)
 	}
@@ -385,8 +384,8 @@ func TestStateLineIsTheLineSevenFiveRequires(t *testing.T) {
 // TestTheReportWalksTheListedRigsAndTheTwoMachineRows: one supervisor, one watchdog and one seat
 // deliverer per listed rig, and exactly one bridge and one agent, in a stable order.
 func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
-	newReportFixture(t)
-	rows := Verify(context.Background(), Env{Rigs: []string{"demo", "other"}})
+	f := newReportFixture(t)
+	rows := Verify(context.Background(), Env{Root: f.root, Rigs: []string{"demo", "other"}})
 	var order []string
 	for _, row := range rows {
 		order = append(order, strings.TrimSpace(row.Rig+" "+row.Safeguard))

@@ -20,10 +20,11 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
-const doctorUsage = "usage: 4genteam doctor [RIG] [--json]"
+const doctorUsage = "usage: 4genteam doctor [RIG] [--json] [--state-root DIR]"
 
 // doctorCommand is the report verb. It needs no rig tool: it reads files and the process table, and a
 // machine where the rig tool is missing is exactly a machine whose report matters.
@@ -44,8 +45,9 @@ func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 		return clientcmd.ExitOK
 	}
 	asJSON := false
+	rootFlag, remaining := clientenv.StateRootFromFlags(args)
 	var rest []string
-	for _, arg := range args {
+	for _, arg := range remaining {
 		switch {
 		case arg == "--json":
 			asJSON = true
@@ -64,7 +66,12 @@ func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 	if len(rest) == 1 {
 		rig = rest[0]
 	}
-	return runDoctor(rig, asJSON, stdout, stderr)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam doctor: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	return runDoctor(rig, root, asJSON, stdout, stderr)
 }
 
 // rowsFor is the row computation as a seam, in the repo's style of a package-level variable rather than
@@ -79,7 +86,7 @@ var rowsFor = safeguardRows
 // agent.json's list, because that list is what "meant to run" means (7.9). A machine whose agent has never
 // run has an empty list and still gets the bridge and agent rows, which is the point: agent's own absence
 // is the loudest row there is.
-func safeguardRows(rig string) []clientservices.Health {
+func safeguardRows(rig, root string) []clientservices.Health {
 	// A REPORT SURFACE MAY GO ON WITHOUT THE LIST. The rigs list decides WHICH rooms get rows; a failed read
 	// leaves it empty exactly as a machine whose agent never ran does, and this verb neither writes nor acts,
 	// so the rows for the two machine-scoped safeguards still print. `agent status` says in words when the
@@ -90,6 +97,7 @@ func safeguardRows(rig string) []clientservices.Health {
 		rigs = []string{rig}
 	}
 	return clientservices.Verify(context.Background(), clientservices.Env{
+		Root:       root,
 		Rigs:       rigs,
 		Supervised: state.Safeguards,
 	})
@@ -98,8 +106,8 @@ func safeguardRows(rig string) []clientservices.Health {
 // runDoctor prints the rows and decides the exit code. `--json` prints the rows instead of the lines, and
 // the tail of alerts.log is a reading surface for the human output only: the JSON is the rows 7.5 says it
 // is.
-func runDoctor(rig string, asJSON bool, stdout, stderr io.Writer) int {
-	rows := rowsFor(rig)
+func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
+	rows := rowsFor(rig, root)
 	if asJSON {
 		body, err := json.MarshalIndent(rows, "", "  ")
 		if err != nil {
@@ -111,7 +119,7 @@ func runDoctor(rig string, asJSON bool, stdout, stderr io.Writer) int {
 		for _, row := range rows {
 			fmt.Fprintln(stdout, clientservices.StateLine(row))
 		}
-		for _, line := range clientservices.TailAlerts() {
+		for _, line := range clientservices.TailAlerts(root) {
 			fmt.Fprintln(stdout, line)
 		}
 	}
@@ -140,10 +148,10 @@ var waitForSafeguards = waitForSafeguardsImpl
 //
 // It returns the last report either way, so the caller names the very rows the reader will see in
 // `doctor`.
-func waitForSafeguardsImpl(rig string) ([]clientservices.Health, bool) {
+func waitForSafeguardsImpl(rig, root string) ([]clientservices.Health, bool) {
 	started := time.Now()
 	for {
-		rows := rowsFor(rig)
+		rows := rowsFor(rig, root)
 		if clientservices.AllRunning(rows) {
 			return rows, true
 		}

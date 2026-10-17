@@ -240,7 +240,7 @@ func (s *Supervisor) Step() {
 	// The heartbeat, through clientservices: one write per pass, so a live-but-hung supervisor reads
 	// `silent` and a supervisor that died reads `stopped` (7.2). A failure to write is reported here and
 	// nowhere else - the report will say what it says.
-	if err := clientservices.WriteHeartbeat(clientservices.Compact, s.Rig); err != nil {
+	if err := clientservices.WriteHeartbeat(s.StateRoot, clientservices.Compact, s.Rig); err != nil {
 		s.Log("cannot write the heartbeat: " + err.Error())
 	}
 }
@@ -542,7 +542,7 @@ func awaitStart(child supervisorChild) (bool, error) {
 
 // SupervisorStatus prints the supervisor's process and the last five lines of its log. The Python
 // filtered pgrep's own line out of the output, and so does this.
-func SupervisorStatus(name string, stdout, stderr io.Writer) {
+func SupervisorStatus(name, root string, stdout, stderr io.Writer) {
 	pgrep, err := exec.LookPath("pgrep")
 	if err != nil {
 		fmt.Fprintln(stderr, "4genteam status: pgrep is not on PATH, and this verb looks for the supervisor with it")
@@ -560,11 +560,7 @@ func SupervisorStatus(name string, stdout, stderr io.Writer) {
 	} else {
 		fmt.Fprintln(stdout, strings.Join(lines, "\n"))
 	}
-	logPath, err := LogPath(name)
-	if err != nil {
-		return
-	}
-	raw, err := os.ReadFile(logPath)
+	raw, err := os.ReadFile(LogPath(name, root))
 	if err != nil {
 		return
 	}

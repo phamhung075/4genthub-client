@@ -185,11 +185,12 @@ Every key lives in `~/.config/4genthub/.env` or the environment; only the first 
 | `OFFPEAK_UTC` | pins the instant the schedule is read at (`YYYY-MM-DD HH:MM`, UTC) — for a test, or a machine whose clock you do not trust |
 | `DEEPSEEK_HOLIDAYS` | a file of `YYYY-MM-DD` dates, one per line, that bill at the off-peak rate all day |
 
-The client also respects four variables it does not own: `XDG_STATE_HOME`, which is the base of the
-supervisor's log directory (`$XDG_STATE_HOME/4genthub/logs`, else `~/.local/state/4genthub/logs`),
-`PATH`, which is where it looks for `herdr` and `tmux`, and `DEEPSEEK_HOLIDAYS` and
-`OFFPEAK_UTC`, which it reads with the same names the shell gate used so a machine switching to this
-client keeps the same behavior. Only `OFFPEAK_ONLY` is a key this client both reads and writes.
+The client also respects three variables it does not own: `PATH`, which is where it looks for `herdr`
+and `tmux`, and `DEEPSEEK_HOLIDAYS` and `OFFPEAK_UTC`, which it reads with the same names the shell
+gate used so a machine switching to this client keeps the same behavior. Logs - the supervisor's, agent's,
+the bridge's, the message deliverer's, the guards' - and the heartbeat files live at `<state root>/logs`,
+which is `~/.config/4genthub/logs` unless the verb was given `--state-root DIR`; `XDG_STATE_HOME` and
+`~/.local/state` are no longer read. Only `OFFPEAK_ONLY` is a key this client both reads and writes.
 
 ## DeepSeek peak billing
 
