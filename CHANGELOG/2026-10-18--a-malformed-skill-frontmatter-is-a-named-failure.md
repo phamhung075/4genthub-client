@@ -32,8 +32,11 @@ and the only failing assertion was that test's own "carries no frontmatter" chec
 - `supervisor/mod.rs` `scratch()` now writes an isolated `AGENTHUB_CLIENT_SKILLS` into the test state
   root's `.env`: the process environment was the documented fallback, so the suite was reading the
   HOST's tree (the main checkout) and a malformed skill there failed every start the suite performs.
-- Run: `cargo test` in `rust/agenthub-runtime` = 175 passed, 1 failed. The failure is PRE-EXISTING and
-  environmental, not this change: `a_multi_line_message_reaches_a_runner_seat_as_one_text_frame` builds a
-  reply-socket path of 109-111 characters under `/tmp/agenthub-supervisor-deliver-one-frame-<pid>/...`,
-  and this box's pids are 7 digits, so it exceeds the 107-character `SUN_LEN` limit (`path must be
-  shorter than SUN_LEN`); a shorter `TMPDIR` does not shrink it below the limit.
+- Run: `cargo test` in `rust/agenthub-runtime` at this HEAD (after merging `main` `cc2fd1c` into this
+  branch) = **193 passed, 0 failed** - 173 unit + `held_send` 1 + `seat_guard` 18 + `umask_at_the_entry`
+  1; the `skills::` filter alone is 4 passed.
+- THE EARLIER "one pre-existing SUN_LEN failure" NOTE WAS WRONG and is corrected here: this branch was 8
+  commits behind `main`, and `4cd3ee5` renamed the fixture from `scratch("deliver-one-frame")` to
+  `scratch("deliver")`, so the reply-socket path had been short enough on `main` all along. The unit
+  count reads 173, not the branch's pre-merge 176, because that same commit deleted
+  `rust/agenthub-runtime/src/context/mod.rs` and its 3 tests; nothing was skipped or lost.
