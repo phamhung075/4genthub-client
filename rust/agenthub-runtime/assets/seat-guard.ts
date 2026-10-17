@@ -4,7 +4,8 @@
 // It does two jobs and nothing else:
 //   1. GUARD: block the calls the owner's standing rules forbid a seat - printing a secret from a `.env`
 //      file, running Docker, pushing (a push to main deploys production, and the owner approves every one), changing the room's own tmux server,
-//      bypassing the git hooks, destructive git, killing processes by pattern, and writing outside the directories
+//      bypassing the git hooks, destructive git, killing processes by pattern, building the frontend locally
+//      (a vite build took 3.9 GB), and writing outside the directories
 //      the launcher names for the seat ($AGENTHUB_WORKTREES, set by the supervisor from the room spec) or into the
 //      frozen plan files and the guard's own sources.
 //   2. LOG: append ONE line per tool call to <seat dir>/tool-calls.jsonl, so "what did this seat do, and was it
@@ -18,6 +19,7 @@
 // "blocked"; a blocked call carries the `rule` that refused it. An MCP call is the tool mcp__<server>_<tool>
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -108,6 +110,25 @@ const DD_OF = /\bof=(\S+)/g;
 // so its name is matched after any leading path segment.
 const ROOM_LIMITS_CALL = callOf("(?:\\S*\\/)?4genteam\\s+room\\s+limits");
 const LIMITS_WRITE = /(^|\s)--(?:usd|calls|on|off)(?:\s|=|$)/;
+
+// The verb that APPENDS a row to the room's rail. Like room limits it names no file, so no path rule sees it, and
+// a seat that says the same thing twice costs the rail a row nothing will read (on 2026-10-17 at 06:46Z the rail
+// held 311 rows, ~30 of them repeats of a seat's own earlier row). The create's destination and tag are parsed out
+// of the statement; the rows it could duplicate are read from the room's own store, below.
+const QUEUE_CREATE_CALL = callOf("(?:\\S*\\/)?4genteam\\s+room\\s+queue\\s+create");
+// The window the predicate is read in: a second pending row to the same destination with a tag in common is refused
+// while the first is younger than this. Inclusive: a row created 600 s ago still refuses; 601 s does not.
+const COALESCE_WINDOW_MS = 10 * 60 * 1000;
+
+// A frontend build in a seat is the RAM the owner does not have: two vite builds in /tmp/fe-tip took 3.9 GB and
+// free RAM sat at 4 of 16 (2026-10-17, the likely 04:00 OOM, and the owner killed both). The deploy builds the
+// frontend. Every spelling that BUILDS is refused; a --version/--help probe builds nothing and passes.
+const VITE_CALL = callOf("(?:(?:\\S*\\/)?node_modules\\/\\.bin\\/)?vite");
+const VITE_VIA_RUNNER = callOf("(?:npx|pnpm|yarn|bun)\\s+(?:exec\\s+|dlx\\s+|x\\s+)?(?:(?:\\S*\\/)?node_modules\\/\\.bin\\/)?vite");
+const RUN_BUILD_CALL = callOf("(?:npm|pnpm|yarn|bun)\\s+(?:run\\s+)?build(?::\\S+)?(?:\\s|$)");
+const PROBE_ONLY = /^\s*(?:--version|-v|--help|-h)(?:\s+(?:--version|-v|--help|-h))*\s*$/;
+const FRONTEND_BUILD_REFUSAL =
+  "a local frontend build takes the RAM the owner does not have (two vite builds took 3.9 GB; free RAM 4 of 16): the deploy builds the frontend, and the local check is `npx tsc --noEmit`";
 
 // A git statement as verb and arguments, after the global options (`-C dir`, `-c k=v`, `--no-pager`, ...).
 function gitOf(part: string): { verb: string; args: string[] } | null {
@@ -238,6 +259,104 @@ const PROTECTED_DIRS = /(^|\/)(hooks\/pre|scripts\/git-hooks|\.git\/hooks)(\/|$)
 const protectedPath = (abs: string): boolean =>
   PROTECTED_DIRS.test(abs) || basename(abs) === "seat-guard.ts" || abs.endsWith("/.gemini/config/hooks.json") ||
   (dirname(abs) === seatDir && SEAT_FILES[basename(abs)] === true) || abs === roomBudget;
+
+// ---- the room's rail, read-only --------------------------------------------------------------------------------
+// A create is judged against the room's OWN store: `<state root>/rooms/<room>/queue.sqlite`, beside the room's
+// limits.json, written by the room daemon. The client never opens it, and neither does this guard write it - the
+// handle is opened read-only, and a store this runtime cannot open (no node:sqlite and no bun:sqlite) lets the
+// create through: the guard is a net for a seat's repeats, not a second rail.
+// The seat dir is `<state root>/rooms/<room>/seats/<seat>`: three levels up is the ROOMS root, and a create names
+// its room, so the store judged is always the one the daemon would write.
+const roomsRoot = resolve(seatDir, "..", "..", "..");
+const VALUE_FLAGS: Record<string, true> = {
+  "--to": true,
+  "--summary": true,
+  "--body": true,
+  "--priority": true,
+  "--reply-to": true,
+  "--tag": true,
+  "--state-root": true,
+  "--socket": true,
+};
+
+/// The create's own arguments: the ROOM positional, `--to`, and `--tag` (one comma-separated list, as the client
+/// parses it). A value the statement quotes is blanked by `statements` and the rule then skips - a net, not a parser.
+function createOf(part: string): { room: string; to: string; tags: string[] } | null {
+  const call = part.match(QUEUE_CREATE_CALL);
+  if (!call) return null;
+  const words = call[1].trim().split(/\s+/).filter(Boolean);
+  let room = "", to = "", raw = "";
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const eq = w.match(/^(--[a-z-]+)=(.*)$/);
+    if (eq) {
+      if (eq[1] === "--to") to = eq[2];
+      if (eq[1] === "--tag") raw = eq[2];
+      continue;
+    }
+    if (VALUE_FLAGS[w] === true) {
+      const v = words[++i] ?? "";
+      if (w === "--to") to = v;
+      if (w === "--tag") raw = v;
+      continue;
+    }
+    if (w.startsWith("-") || !room) room ||= w;
+  }
+  return { room, to, tags: raw.split(",").map((t) => t.trim()).filter(Boolean) };
+}
+
+type QueueReader = { rows: (sql: string, params: string[]) => Record<string, unknown>[]; close: () => void };
+
+let cjsRequire: ((id: string) => any) | null | undefined;
+function openQueue(path: string): QueueReader | null {
+  if (cjsRequire === undefined) {
+    try { cjsRequire = createRequire(import.meta.url); } catch { cjsRequire = null; }
+  }
+  if (!cjsRequire) return null;
+  const req = cjsRequire;
+  try {
+    const { DatabaseSync } = req("node:sqlite");
+    const db = new DatabaseSync(path, { readOnly: true });
+    return { rows: (sql, params) => db.prepare(sql).all(...params), close: () => db.close() };
+  } catch { /* not node: try Bun, which omp runs in */ }
+  try {
+    const { Database } = req("bun:sqlite");
+    const db = new Database(path, { readonly: true });
+    return { rows: (sql, params) => db.query(sql).all(...params), close: () => db.close() };
+  } catch { return null; }
+}
+
+/// The pending row this create would duplicate, named as its refusal, or "" when nothing already says it: the row
+/// is PENDING, the SOURCE is this seat's session (`AGENTHUB_SESSION_NAME`, the store's own source of a create),
+/// the DESTINATION is the create's `--to`, the TAG SETS INTERSECT, and the row was created within the window.
+function coalescingRow(create: { room: string; to: string; tags: string[] }): string {
+  const session = process.env.AGENTHUB_SESSION_NAME ?? "";
+  if (!session || !create.room || !create.to || !create.tags.length) return "";
+  const db = openQueue(join(roomsRoot, create.room, "queue.sqlite"));
+  if (!db) return "";
+  try {
+    const rows = db.rows(
+      "SELECT qitem_id, tags, ts_created FROM queue_rows \
+       WHERE state = 'pending' AND source_session = ? AND destination_session = ? \
+       ORDER BY ts_created DESC",
+      [session, create.to],
+    );
+    for (const row of rows) {
+      let tags: string[] = [];
+      try { tags = JSON.parse(String(row.tags ?? "[]")); } catch { continue; }
+      const shared = create.tags.find((t) => Array.isArray(tags) && tags.includes(t));
+      if (!shared) continue;
+      const age = Date.now() - Date.parse(String(row.ts_created ?? ""));
+      if (!Number.isFinite(age) || age < 0 || age > COALESCE_WINDOW_MS) continue;
+      return `${row.qitem_id} is already pending to ${create.to} with tag ${shared} (created ${row.ts_created}); update that row with \`room queue update\` instead of opening a second one inside 10 minutes`;
+    }
+  } catch {
+    // A store this reader cannot read must not stop the seat's work.
+  } finally {
+    try { db.close(); } catch { /* a handle that is already closed is fine */ }
+  }
+  return "";
+}
 
 // The rules. Each returns the reason a call is refused, or "" to let it through.
 const RULES: { rule: string; check: (tool: string, input: Record<string, unknown>) => string }[] = [
@@ -372,6 +491,40 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
         const call = part.match(ROOM_LIMITS_CALL);
         if (call && LIMITS_WRITE.test(call[1]))
           return "the room's ceilings are the owner's: a seat does not raise its own budget (--usd/--calls/--on/--off)";
+      }
+      return "";
+    },
+  },
+  {
+    // A SEAT DOES NOT SAY THE SAME THING TWICE. The predicate is the store's own: a pending row FROM THIS SEAT to
+    // the same destination, sharing a tag, created inside the window. The refusal NAMES that row, so the seat reads
+    // it and updates it instead of opening a second one nothing will read.
+    rule: "queue-coalesce",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      try {
+        for (const part of statements(input)) {
+          const create = createOf(part);
+          const reason = create ? coalescingRow(create) : "";
+          if (reason) return reason;
+        }
+      } catch {
+        // A statement this guard cannot parse, or a store it cannot read, must not take the hook down: the rule
+        // lets the create through and the rail still records it.
+      }
+      return "";
+    },
+  },
+  {
+    // A SEAT DOES NOT BUILD THE FRONTEND. Two vite builds in a seat's /tmp took 3.9 GB and free RAM fell to 4 of
+    // 16; the deploy builds it and `npx tsc --noEmit` is the local check. A --version/--help probe is not a build.
+    rule: "local-frontend-build",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      for (const part of statements(input)) {
+        const vite = part.match(VITE_CALL) ?? part.match(VITE_VIA_RUNNER);
+        if (vite && !PROBE_ONLY.test(vite[1])) return FRONTEND_BUILD_REFUSAL;
+        if (RUN_BUILD_CALL.test(part)) return FRONTEND_BUILD_REFUSAL;
       }
       return "";
     },

@@ -2,7 +2,7 @@
 //! Every case names the rule that must refuse it, or none, and the refusal must be logged as `blocked`.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::process::{Command, Stdio};
 
@@ -47,12 +47,25 @@ fn verdict_with(dir: &std::path::Path, worktrees: &str, name: &str, args: serde_
 }
 
 /// What the guard answered, whole: the reason a seat reads, which names the directories it may write.
-fn refusal(dir: &std::path::Path, worktrees: &str, name: &str, args: serde_json::Value) -> Option<String> {
+fn refusal(dir: &Path, worktrees: &str, name: &str, args: serde_json::Value) -> Option<String> {
+    refusal_as(dir, worktrees, "", name, args)
+}
+
+/// The same, with the seat's own session in the environment - the source a queue create is stamped with, and the
+/// value the coalesce rule matches a pending row against.
+fn refusal_as(
+    dir: &Path,
+    worktrees: &str,
+    session: &str,
+    name: &str,
+    args: serde_json::Value,
+) -> Option<String> {
     std::fs::create_dir_all(dir).unwrap();
     let mut child = Command::new("node")
         .arg(guard())
         .args(["--agy-hook", "pre"])
         .env("AGENTHUB_SEAT", "dev")
+        .env("AGENTHUB_SESSION_NAME", session)
         .env("AGENTHUB_WORKTREES", worktrees)
         .env("PI_CODING_AGENT_DIR", dir)
         .stdin(Stdio::piped())
@@ -453,4 +466,129 @@ fn an_empty_value_in_a_prefix_is_still_a_prefix() {
     }
     // The prefix is noise and not a rule of its own: what the command IS stays what is judged.
     allowed(&["FOO= git status", "AGENTHUB_SESSION_NAME= git status", "env FOO= ls -la"]);
+}
+
+// ---- queue-coalesce ------------------------------------------------------------------------------------------
+
+const COALESCE_RIG: &str = "rig";
+const COALESCE_LEAD: &str = "agenthub--rig--lead";
+const COALESCE_SEAT: &str = "agenthub--rig--dev";
+
+/// A room of this run's own holding the rows a case needs: the store at `<root>/rooms/<rig>/queue.sqlite`, the
+/// seat dir three levels under it (`rooms/<rig>/seats/dev`), and one row per tuple - the id, the state, the source,
+/// the destination, the tags as the JSON the store holds, and the row's age in seconds.
+fn room_with_rows(tag: &str, rows: &[(&str, &str, &str, &str, &str, u64)]) -> PathBuf {
+    let root = fresh_dir(tag);
+    let room = root.join("rooms").join(COALESCE_RIG);
+    let seat = room.join("seats").join("dev");
+    std::fs::create_dir_all(&seat).unwrap();
+    let db = rusqlite::Connection::open(room.join("queue.sqlite")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE queue_rows (qitem_id TEXT PRIMARY KEY, state TEXT NOT NULL, summary TEXT NOT NULL, body TEXT \
+         NOT NULL, source_session TEXT NOT NULL, destination_session TEXT NOT NULL, chain_of_record TEXT NOT NULL, \
+         reply_to TEXT, blocked_on TEXT, wake_after_seconds INTEGER, closure_reason TEXT, closure_target TEXT, \
+         priority TEXT NOT NULL, tags TEXT NOT NULL, tier TEXT, ts_created TEXT NOT NULL, ts_updated TEXT NOT NULL);",
+    )
+    .unwrap();
+    for (qitem, state, source, destination, tags, age) in rows {
+        let ts = (chrono::Utc::now() - chrono::Duration::seconds(*age as i64))
+            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+        db.execute(
+            "INSERT INTO queue_rows (qitem_id, state, summary, body, source_session, destination_session, \
+             chain_of_record, priority, tags, ts_created, ts_updated) \
+             VALUES (?1, ?2, 'the row a case holds', '', ?3, ?4, '[]', 'normal', ?5, ?6, ?6)",
+            rusqlite::params![qitem, state, source, destination, tags, ts],
+        )
+        .unwrap();
+    }
+    seat
+}
+
+/// A create through the guard as this seat, with `--to` and `--summary` always present (the client requires both)
+/// and the case's own extra arguments after them.
+fn create_verdict(seat: &Path, extra: &str) -> Option<String> {
+    refusal_as(
+        seat,
+        WORKTREES,
+        COALESCE_SEAT,
+        "run_command",
+        serde_json::json!({
+            "CommandLine": format!("4genteam room queue create {COALESCE_RIG} --to {COALESCE_LEAD} --summary again {extra}")
+        }),
+    )
+}
+
+/// A SEAT DOES NOT SAY THE SAME THING TWICE. A create whose destination and tag an existing PENDING row from this
+/// same seat already carries, inside the window, is refused - and the refusal NAMES that row, because the point is
+/// to make the seat read and update it, not to make it guess. The row is the store's own shape (the tags column is
+/// the JSON array the store holds).
+#[test]
+fn a_second_pending_row_to_the_same_destination_and_tag_is_refused_by_name() {
+    let id = "qitem-20261017070000-aaaaaaaaaaaa";
+    let seat = room_with_rows("coalesce", &[(id, "pending", COALESCE_SEAT, COALESCE_LEAD, "[\"finding\"]", 60)]);
+    let reason = create_verdict(&seat, "--tag finding").expect("a repeat is refused");
+    assert!(reason.contains("queue-coalesce"), "the rule is named: {reason}");
+    assert!(reason.contains(id), "the refusal names the row it would duplicate: {reason}");
+    // A shared tag among several is enough, and the comma list is parsed as the client parses it.
+    let shared = room_with_rows("coalesce-shared", &[(id, "pending", COALESCE_SEAT, COALESCE_LEAD, "[\"gate\",\"finding\"]", 60)]);
+    assert!(create_verdict(&shared, "--tag other,finding").expect("a shared tag refuses").contains(id));
+}
+
+/// The predicate and its window, each edge pinned so the rule cannot buy the refusal by refusing everything: the
+/// state must be pending, the source this seat, the destination this create's, the tag sets must INTERSECT, the row
+/// must be younger than the window, and the verb must be a create. The window is read with a margin on both sides
+/// (nine minutes refuses, eleven does not): the exact second is wall-clock by construction, and a test that raced
+/// the clock would be a flake, not a boundary.
+#[test]
+fn the_coalesce_rule_reads_the_store_s_state_source_destination_tag_and_window() {
+    let id = "qitem-20261017070000-bbbbbbbbbbbb";
+    let pending = |tag: &str, age: u64| room_with_rows(tag, &[(id, "pending", COALESCE_SEAT, COALESCE_LEAD, "[\"finding\"]", age)]);
+    assert!(create_verdict(&pending("inside", 540), "--tag finding").is_some(), "nine minutes inside the window refuses");
+    assert_eq!(create_verdict(&pending("outside", 660), "--tag finding"), None, "eleven minutes outside does not");
+    let other = |tag: &str, state: &str, source: &str, destination: &str| {
+        room_with_rows(tag, &[(id, state, source, destination, "[\"finding\"]", 60)])
+    };
+    assert_eq!(create_verdict(&other("state", "in-progress", COALESCE_SEAT, COALESCE_LEAD), "--tag finding"), None);
+    assert_eq!(create_verdict(&other("destination", "pending", COALESCE_SEAT, "agenthub--rig--reviewer"), "--tag finding"), None);
+    assert_eq!(create_verdict(&other("tag", "pending", COALESCE_SEAT, COALESCE_LEAD), "--tag gate"), None);
+    assert_eq!(create_verdict(&other("source", "pending", "agenthub--rig--fe-dev", COALESCE_LEAD), "--tag finding"), None);
+    // A seat that names no tag, or only other queue verbs, is not judged: the rule reads creates and tags.
+    assert_eq!(create_verdict(&pending("untagged", 60), ""), None);
+    let seat = pending("verb", 60);
+    for cmd in [
+        "4genteam room queue list rig".to_string(),
+        format!("4genteam room queue show rig {id}"),
+        format!("4genteam room queue update rig {id} --note still owed"),
+        "4genteam room queue close rig qitem-20261017070000-cccccccccccc --reason no-follow-on".to_string(),
+    ] {
+        assert_eq!(
+            refusal_as(&seat, WORKTREES, COALESCE_SEAT, "run_command", serde_json::json!({ "CommandLine": cmd })),
+            None,
+            "{cmd}"
+        );
+    }
+}
+
+// ---- local-frontend-build ------------------------------------------------------------------------------------
+
+/// A SEAT DOES NOT BUILD THE FRONTEND LOCALLY. Two vite builds in /tmp/fe-tip took 3.9 GB while free RAM was 4 of
+/// 16 (the owner killed both, 2026-10-17); the deploy builds the frontend and `npx tsc --noEmit` is the local
+/// check. Every spelling that BUILDS is refused, however it is reached; a probe that builds nothing passes, and so
+/// do the checks that are not builds.
+#[test]
+fn a_seat_cannot_run_a_local_frontend_build() {
+    refused(
+        "local-frontend-build",
+        &[
+            "vite build",
+            "npx vite",
+            "npm run build",
+            "cd agenthub-frontend && npm run build",
+            "npx vite build",
+            "./node_modules/.bin/vite build",
+            "pnpm build",
+            "npm run build:prod",
+        ],
+    );
+    allowed(&["npx tsc --noEmit", "vite --version", "npm run lint", "npx vitest run"]);
 }
