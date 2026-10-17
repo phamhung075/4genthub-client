@@ -1145,16 +1145,17 @@ impl RoomSupervisor {
                     {
                         Some(s)
                     }
-                    _ => {
-                        let reason = "agent_socket_closed: the pane ended without publishing a death";
-                        let _ = crate::runner::write_state(
-                            &state_path,
-                            "agent_socket_closed",
-                            "the pane ended without publishing a death",
-                            0,
-                        );
-                        Some(reason.to_string())
-                    }
+                    // AND NOTHING IS WRITTEN HERE. The document at `state_path` is the seat's own word,
+                    // and this branch observed no death: a seat that was never started and one whose pane
+                    // is gone are indistinguishable from here, and a reader that manufactures a claim
+                    // stamps it with its own pid (`write_state` records the writer), so the next reader
+                    // cannot tell the seat's evidence from the reader's assertion. Measured 2026-10-17
+                    // 06:16:38Z: one status read over a seat that had never run left `agent_socket_closed`
+                    // on disk, signed by the daemon. The only writers stay the runner (its real death) and
+                    // the daemon through `observed_death` below, which has an observation to stand on.
+                    _ => Some(
+                        "agent_socket_closed: the pane ended without publishing a death".to_string(),
+                    ),
                 }
             };
 
@@ -3824,6 +3825,51 @@ mod tests {
             ..claim_facts(None, None, None)
         };
         assert!(observed_death(&reread, true).is_none(), "a corrected file must not be corrected again");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A STATUS READ IS NOT AN OBSERVATION OF A DEATH, and it must not leave one on disk. A seat that was
+    /// never started has no pane and no document; the status must still answer (with its own sentence) and
+    /// must NOT write `run/<seat>.state.json`. Measured 2026-10-17 06:16:38Z: one read over such a seat
+    /// created `agent_socket_closed` signed with the DAEMON's pid, so a later reader (the nudge gate) took a
+    /// reader's assertion for the seat's own word.
+    #[tokio::test]
+    async fn a_status_read_over_a_seat_that_never_ran_writes_no_state_document() {
+        let dir = scratch("status-never-ran");
+        let room = format!("status-never-ran-{}", std::process::id());
+        let key = seat_key("status-never-ran");
+        write_spec(&dir, &room, &key);
+        let supervisor = supervisor_at(&dir);
+        let state_path = dir
+            .join("rooms")
+            .join(&room)
+            .join("run")
+            .join(format!("{key}.state.json"));
+        assert!(!state_path.exists(), "the fixture must start with no document");
+
+        let status = supervisor
+            .get_room_status(&room)
+            .expect("status")
+            .into_iter()
+            .next()
+            .expect("one seat");
+        assert_eq!(status.state, SeatLifecycleState::Stopped);
+        assert!(
+            status
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("agent_socket_closed")),
+            "the reader still REPORTS what it saw: {:?}",
+            status.detail
+        );
+        assert!(
+            !state_path.exists(),
+            "a reader that observed no death must not manufacture the seat's document: {:?}",
+            fs::read_to_string(&state_path)
+        );
+        // ...and a second read is no different: the assertion above is not a one-read accident.
+        let _ = supervisor.get_room_status(&room).expect("status");
+        assert!(!state_path.exists(), "and a repeated read writes nothing either");
         let _ = fs::remove_dir_all(&dir);
     }
 

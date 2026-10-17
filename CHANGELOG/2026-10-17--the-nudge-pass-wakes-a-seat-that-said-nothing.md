@@ -13,6 +13,12 @@
   command). The attempt log records what each route proved - `prompt` from the runner's `relayed` answer,
   `submitted`/`unconfirmed` from the pane.
 - `supervisor::PendingNudge` carries `has_runner`, decided once from the status the pass already read.
+- `supervisor::get_room_status` no longer WRITES a death into the seat's own document. Its detail
+  else-branch used to call `runner::write_state` (`agent_socket_closed`, "the pane ended without publishing
+  a death") for any seat that was not alive and had published nothing - including one that never ran - and
+  `write_state` stamps the WRITER's pid, so the daemon's assertion was indistinguishable from the seat's
+  evidence. The branch still reports the sentence in the detail; the writers remain the runner (a death it
+  saw) and `observed_death` (a live pane whose publisher is gone - an observation).
 
 ### Why
 
@@ -24,12 +30,19 @@ and the old gate read it as "not idle" forever. Had the pass selected the seat,
 the mailbox write would have failed as well: an agy seat has no runner socket, so the delivery route had to
 change with the selection rule.
 
+The stale document had a producer on this side too: one status read over a seat that never ran left
+`agent_socket_closed` on disk named for the daemon (measured 06:16:38Z in a throwaway root - room
+`nudge-lab`, seat `rev`, agy, no pane ever created), which is how a reader's assertion became "the seat's
+word" for the next reader.
+
 ### Testing
 
-Three supervisor tests: the measured case (agy spec, live pane, the previous generation's death document -
+Four supervisor tests: the measured case (agy spec, live pane, the previous generation's death document -
 the pass selects the seat and `nudge_pass` records attempt 1, `unconfirmed` on a pane that never reads);
-a turn in flight in all four busy words, then `idle` selects; a document without the word selects. The
-parked-seat test carries the new argument. `cargo test --offline` green (156 unit + 17 integration), `go test
+a turn in flight in all four busy words, then `idle` selects; a document without the word selects; a status
+read over a never-run seat reports the sentence and writes no document (red before the write was removed -
+with the branch reinstated the test fails on the file that should not exist). The
+parked-seat test carries the new argument. `cargo test --offline` green (157 unit + 17 integration), `go test
 ./...` green (32 packages).
 
 Measured before/after in a throwaway root (own state dir, socket, daemon and tmux root, one agy-runtime seat,
