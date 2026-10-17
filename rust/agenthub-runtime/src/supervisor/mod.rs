@@ -1536,6 +1536,10 @@ impl RoomSupervisor {
 
     /// The active rows the room's rail is holding for one seat, by qitem id.
     ///
+    /// `blocked` is filtered out: a row in that state waits on the row its `blocked_on` names, not on its
+    /// destination, so it is part of the rail's active set (listable, claimable, closable) but never part
+    /// of "work waiting for this seat". Its wake is its blocker's close.
+    ///
     /// The rail's rows are written by the client's `room queue` verbs, whose `--to` is a free session
     /// string, and the two spellings in use disagree: the live rig's session name is
     /// `<rig>-<seat>@<rig>` while this runtime derives `agenthub--<room>--<seat>`, and a row a human wrote
@@ -1552,6 +1556,14 @@ impl RoomSupervisor {
         let names = addressed_names(room, session, seat);
         Ok(active
             .into_iter()
+            // A BLOCKED ROW IS WAITING ON ITS BLOCKER, NOT ON ITS DESTINATION. `blocked` is in the rail's
+            // `ACTIVE_STATES` - it can still be listed, claimed and closed - but it is not work the seat
+            // can pick up, so neither the alert nor the nudge pass may read it as such. Measured
+            // 2026-10-17 (task 005e0aad): a row set blocked on a still-open gate woke its own destination
+            // twice (go-dev.nudge.jsonl attempts 2 and 3 at 06:37:06Z/06:37:13Z) while nothing was
+            // callable. The wake for a blocked row is its blocker's close, which the store performs
+            // (`queue::unblock_dependents` returns the row to `pending` in the close's own transaction).
+            .filter(|row| row.state != "blocked")
             .filter(|row| names.iter().any(|name| name == &row.destination_session))
             .map(|row| row.qitem_id)
             .collect())
@@ -3247,6 +3259,123 @@ mod tests {
             line["outcome"], "unconfirmed",
             "the pane route records the pane's own word: a paste into a pane that never read it is not a submission"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE MEASURED DEFECT'S OTHER HALF (task 005e0aad): a row set blocked on a still-open gate stayed in
+    /// the join, so the pass woke its destination for work nothing could pick up (`go-dev.nudge.jsonl`
+    /// attempts 2 and 3 at 06:37:06Z/06:37:13Z). `blocked` is still an ACTIVE state for the rail - it can
+    /// be listed, claimed and closed - but it is not work waiting for its destination.
+    ///
+    /// Both halves are pinned where they were measured: while the row is blocked no attempt is recorded
+    /// and the seat's status carries no queued-work alert naming it; the blocker's close returns the row
+    /// to `pending`, and the same pass then earns EXACTLY ONE attempt whose log line names the row.
+    #[tokio::test]
+    async fn a_blocked_row_wakes_nobody_until_its_blocker_closes() {
+        let _server = crate::pty::test_servers::own("nudge-blocked");
+        let dir = scratch("nudge-blocked");
+        let room = format!("nudge-blocked-{}", std::process::id());
+        let key = seat_key("nudge-blocked");
+        write_spec_with_runtime(&dir, &room, &key, "agy");
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(&session, Path::new("."), "sleep 300", &HashMap::new())
+            .expect("scratch pane");
+        write_state_file(&dir, &room, &key, "idle", "2026-10-17T06:00:00.000Z");
+
+        let store = supervisor.queue_store(&room).expect("open the rail");
+        let blocker = store
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: "reviewer@elsewhere".into(),
+                summary: "the gate".into(),
+                ..Default::default()
+            })
+            .expect("create the blocker");
+        // The blocker is IN PROGRESS and still open: the shape measured on the live rail.
+        store
+            .update(crate::queue::UpdateInput {
+                qitem_id: blocker.qitem_id.clone(),
+                actor_session: "reviewer".into(),
+                state: Some("in-progress".into()),
+                ..Default::default()
+            })
+            .expect("open the gate");
+        let dependent = store
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: session.clone(),
+                summary: "the gated ask".into(),
+                ..Default::default()
+            })
+            .expect("create the dependent");
+        store
+            .update(crate::queue::UpdateInput {
+                qitem_id: dependent.qitem_id.clone(),
+                actor_session: "lead".into(),
+                state: Some("blocked".into()),
+                blocked_on: Some(blocker.qitem_id.clone()),
+                ..Default::default()
+            })
+            .expect("block on the gate");
+
+        // Half one: the blocked row is on the rail and explained by it, but it wakes NOBODY.
+        let alerted: Vec<String> = supervisor
+            .get_room_status(&room)
+            .expect("status")
+            .into_iter()
+            .flat_map(|s| s.alert.into_iter().flat_map(|a| a.waiting_qitem_ids))
+            .collect();
+        assert!(
+            !alerted.contains(&dependent.qitem_id),
+            "a blocked row is not queued work for its destination: {alerted:?}"
+        );
+        assert!(
+            supervisor.pending_nudges().is_empty(),
+            "a blocked row is not selected by the nudge pass"
+        );
+        crate::ipc::nudge_pass(&supervisor);
+        assert!(
+            !crate::runner::nudge_log_path(&dir, &room, &key).exists(),
+            "the pass must not record an attempt for a row its blocker has not let go"
+        );
+        // ...and the row is still the rail's own business: active, claimable, readable.
+        let active = store
+            .list(&crate::queue::ListFilter {
+                active_only: true,
+                ..Default::default()
+            })
+            .expect("list");
+        assert!(active.iter().any(|r| r.qitem_id == dependent.qitem_id));
+
+        // Half two: the blocker's CLOSE is the wake - the row returns to pending, and the pass earns one
+        // attempt naming it.
+        store
+            .close(CloseInput {
+                qitem_id: blocker.qitem_id.clone(),
+                actor_session: "reviewer".into(),
+                closure_reason: "no-follow-on".into(),
+                closure_target: None,
+                transition_note: "gate closed".into(),
+            })
+            .expect("close the gate");
+        assert_eq!(
+            store.show(&dependent.qitem_id).expect("show").state,
+            "pending",
+            "the wake returns the row to the rail's pending set"
+        );
+
+        let pending = supervisor.pending_nudges();
+        assert_eq!(pending.len(), 1, "the wake is the row, once");
+        assert_eq!(pending[0].qitem_ids, vec![dependent.qitem_id.clone()]);
+        crate::ipc::nudge_pass(&supervisor);
+        let log = fs::read_to_string(crate::runner::nudge_log_path(&dir, &room, &key))
+            .expect("the wake earns an attempt");
+        let lines: Vec<&str> = log.lines().collect();
+        assert_eq!(lines.len(), 1, "exactly one attempt for the wake: {log}");
+        let line: serde_json::Value = serde_json::from_str(lines[0]).expect("json");
+        assert_eq!(line["attempt"], 1);
+        assert_eq!(line["qitem_ids"], serde_json::json!([dependent.qitem_id]));
         let _ = fs::remove_dir_all(&dir);
     }
 
