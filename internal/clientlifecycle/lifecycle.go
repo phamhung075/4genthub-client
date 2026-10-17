@@ -849,7 +849,11 @@ func (statusCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 		return clientcmd.ExitOK
 	}
 	asJSON := false
-	rootFlag, remaining := clientenv.StateRootFromFlags(args)
+	rootFlag, remaining, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam status: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitUsage)
+	}
 	var rest []string
 	for _, arg := range remaining {
 		if arg == "--json" {
@@ -894,7 +898,11 @@ func (logCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer
 		printHelp(stdout, logUsage, "Follow the compaction supervisor's log for a rig.")
 		return clientcmd.ExitOK
 	}
-	rootFlag, rest := clientenv.StateRootFromFlags(args)
+	rootFlag, rest, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam log: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitUsage)
+	}
 	name, ok := requireRig("log", rest, stderr)
 	if !ok {
 		return clientcmd.ExitUsage

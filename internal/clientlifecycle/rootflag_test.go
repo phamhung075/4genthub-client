@@ -22,7 +22,7 @@ func TestTheRuntimeSpellingIsRefusedBeforeAnyLifecycleAction(t *testing.T) {
 		return "", nil
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
+	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 
 	for _, name := range []string{"up", "idle-run", "budget-run"} {
 		for _, flag := range [][]string{{"--state-dir", "/x"}, {"--state-dir=/x"}} {

@@ -42,3 +42,12 @@ sharing one of them: a script written against `ps` failed on `room status`, and 
   directory, the flag is what was unified.
 - Historical records that quote `--state-dir` in harness calls (the hub's dated gate records, the older
   `CHANGELOG.md` entries) are records, not instructions, and are left as they are.
+
+### Landing
+
+- The lane was cut from `1e0d6f0`, before the log-home commit that gave `startAuthority` the state dir; the
+  merge into main is textually clean but leaves four `StateRootFromFlags` call sites in
+  `internal/clientlifecycle` (doctor, agent, status, log) written against the two-value shape. They now take
+  the parser's error and answer it with the verb's own sentence, and the lane's `rootflag_test.go` hook
+  literal takes the state dir. `go build ./...`, `go vet`, `gofmt -l` clean, `go test ./...` 32 packages rc 0
+  at the merged tip.

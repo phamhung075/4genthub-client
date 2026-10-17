@@ -81,7 +81,11 @@ func (agentCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wr
 				"(the value is never printed).")
 		return clientcmd.ExitOK
 	}
-	rootFlag, rest := clientenv.StateRootFromFlags(args)
+	rootFlag, rest, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam agent: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitUsage)
+	}
 	if len(rest) > 0 && rest[0] == "status" {
 		root, err := clientenv.ResolveStateRoot(rootFlag)
 		if err != nil {
