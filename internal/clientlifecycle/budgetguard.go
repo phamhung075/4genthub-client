@@ -164,7 +164,7 @@ func (g *BudgetGuard) park(seat string, usage roombudget.Usage, reason string) {
 		return
 	}
 	parked := roombudget.Parked{Seat: seat, Reason: reason, At: g.Now().UTC().Format(time.RFC3339),
-		Cost: usage.Cost, Calls: usage.Calls}
+		Cost: usage.Cost, Calls: usage.Calls, Exit: roombudget.ParkExit(g.Rig, seat)}
 	if err := g.Record(g.Rig, seat, parked); err != nil {
 		g.Log(fmt.Sprintf("%s is over its ceiling (%s) and its park record could not be written, so it was NOT "+
 			"stopped - the record is the park, and the next pass tries again: %v", seat, reason, err))
@@ -193,7 +193,7 @@ func (g *BudgetGuard) row(seat string, usage roombudget.Usage, reason string) cl
 		Body: fmt.Sprintf("Parked seat %s: it %s.\nMeasured %s: %.2f USD over 24h, %d tool calls in the last minute.\n"+
 			"Record: %s. THE RECORD IS THE PARK - the routes that would hand the seat work read it and refuse, so "+
 			"`4genteam room reseat %s %s` alone restarts a seat still refused work. Remove the record once the cause is "+
-			"understood; `4genteam room limits %s` changes the ceiling.",
+			"understood; `4genteam room limits %s` changes the ceiling. CLOSE THIS ROW and say why it came back.",
 			seat, reason, g.Now().UTC().Format(time.RFC3339), usage.Cost, usage.Calls,
 			roombudget.ParkedPath(g.SeatDir(g.Rig, seat)), g.Rig, seat, g.Rig),
 		Tags: []string{budgetRowTag},
