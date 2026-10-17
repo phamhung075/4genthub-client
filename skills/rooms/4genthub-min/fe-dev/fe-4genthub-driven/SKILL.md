@@ -21,8 +21,10 @@ never printed, logged, or committed.
 # 1. The whole check — eight checks, one summary, exit 1 when any check failed.
 node checks/all.mjs --fe /path/to/agenthub-frontend
 
-# 2. A local build instead of production (run this before shipping).
-node checks/all.mjs --base http://localhost:3800 --fe /path/to/agenthub-frontend
+# 2. NO LOCAL BUILD. Owner rule (2026-10-17): a seat never runs `vite build`, `npm run build` or
+#    `npx vite` (local builds here cost ~4 GB RAM each and took the box to 4 GB free). Type-check
+#    with `npx tsc --noEmit -p .`; the deploy builds and serves the bundle, and every browser check
+#    below runs against a DEPLOYED origin (production, or a build some other system served).
 
 # 3. Capture what an origin actually rendered (JSON only — never commit screenshots of signed-in pages).
 node production-walk.mjs capture --base https://www.4genthub.com --out /tmp/cap --label production --routes all --no-shots --fe /path/to/agenthub-frontend
@@ -33,7 +35,8 @@ node production-walk.mjs compare baseline /tmp/cap
 
 The `--fe` checkout is needed for exactly two things: it hosts `@playwright/test` and the repo-root
 `e2e-test-account` file (override with `--account <file>` or `E2E_ACCOUNT_FILE`). Any checkout of
-agenthub-frontend works; the browser is your installed Google Chrome (`channel: 'chrome'`).
+agenthub-frontend works; the browser is Playwright's **bundled Chromium** (`FE_BROWSER=chrome` opts into
+the installed Google Chrome — see trap 18).
 
 ## What each check answers
 
@@ -71,12 +74,15 @@ the first responsive run reported "innerWidth 1280" for a 390 phone), and withou
 
 ## Procedure
 
-**Before shipping a frontend change:**
-1. Run the suite against your local build (`--base http://localhost:3800`). Fix what fails until
-   only the known-and-accepted failures remain.
-2. Capture the local build and compare against [baseline/production.json](baseline/production.json):
-   structural differences are things you changed — confirm each one is deliberate.
-3. Ship. Then capture production and compare again: what you see should be what you tested.
+**Before shipping a frontend change (owner rule: no local build):**
+1. Type-check only: `npx tsc --noEmit -p .` from the frontend checkout, plus the frontend's own
+   `npx vitest run` for the tests this skill does not cover. Do NOT run `vite build`, `npm run build`
+   or `npx vite` — a seat-local build is forbidden (2026-10-17, 4 GB each); the deploy builds it.
+2. Reason about the change against [baseline/production.json](baseline/production.json) from the
+   source, not from a local rendering: what the route renders today is the baseline, and your diff
+   is the delta you intend.
+3. Ship (the owner/lead deploys). Then capture production and compare: what you see should be what
+   you intended, and every diff should be attributable to a commit.
 
 **When production is suspicious (a report, a regression, a deploy):**
 1. Run the suite. The per-check output names routes, selectors and measured numbers — that output
@@ -91,6 +97,33 @@ the baseline's whole value is that a human confirmed what it records.
 
 **Dynamic routes** (a project, a branch, a task, a seat, a session) need an id and are out of the
 static walk. Pass them explicitly: `--routes /seats/<id>`.
+
+## Measured state of production — 2026-10-17 (new deploy, new engine)
+
+**The deploy moved and so did the browser.** `www.4genthub.com` serves entry
+`assets/index-dUxpxWZA.js` (295,147 B) instead of the Oct 8 `index-BMd9UnWH.js`, `/health` reports
+`0.0.38`, and all 97 assets the entry and its chunks name return 200. Captured on Playwright's
+bundled Chromium 141: **11/11 static routes render** — `/login` (3 fields, 3 buttons, 2 links),
+`/dashboard` first heading "DECISION REQUESTS", `/tokens` (3 fields, 18 buttons — the presets are now
+Client connector / Client MCP / Clear All, Full Access and Read Only gone), `/seats` (heading
+"Seats"; sections Company version policy, Create a room, Rooms, Bridge machines), `/seats/authoring`
+(20 fields, 225 buttons), `/sessions` (empty state, 30 buttons — no session is registered for the
+account), `/topology`, `/feedback`, `/profile`, `/docs`, `/help-setup`.
+
+**Run this toolkit on the bundled engine (the default now).** Under headless Google Chrome 153
+every canvas page wedges (trap 18) and `/login` — built directly on `FallingGlitch`'s
+`ctx.scale(dpr,dpr)` — reads as a dead page. `FE_BROWSER=chrome` is only for the question "is this
+browser broken": headed Chrome 153 renders the same login page normally, so the app is not at fault.
+
+**The rigd witnesses are on the live surface:** `seat_state` in `SessionsPage-C2eQtlu2.js` with the
+ruled precedence (`status==="offline" ? "offline" : seat_state==="stopped" ? "stopped" : "live"`),
+`agent_session` in `useRealtimeSync-Bs0iYGI9.js`, "Withheld locally" in `SessionsPage-C2eQtlu2.js`,
+and no `SeatInputBox` anywhere in the served bundle.
+
+**`compare` against the Oct 11 baseline is noisy by construction** — 776 entries, dominated by
+positional `api.N.path` reordering and the deliberate palette move (`#3b82f6` → `#4f46e5`, etc.).
+Read the per-route `headings`/`fields`/`buttons` keys, not the `api.N` keys, before calling anything
+structural. The baseline was NOT replaced: a human should review the route-level diffs first.
 
 ## Measured state of production — 2026-10-11
 
@@ -245,6 +278,22 @@ the same traps will catch the next person writing a frontend measurement.
     `/shimmer/i` occurrences in **12 rules** — it is one minified line, so the unit is the
     `}`-delimited segment, not a line; three of the twelve are the ungated `.shimmer-modern` family —
     and **0** `.shimmer-spin-layer`: a hit there invites both the wrong rule and the wrong sheet.
+
+18. **Headless Google Chrome 153 wedges its renderer on the first canvas 2D draw** — a browser
+    defect that reads exactly like a page regression. Measured 2026-10-17 on a canvas page with no
+    app code in the path (1280×800, `channel: 'chrome'`, headless): `getContext('2d')` alone is fine
+    and `ctx.font` + `ctx.measureText('M')` is fine, while `ctx.scale(1,1)`, `ctx.scale(2,2)`,
+    `ctx.setTransform(1,0,0,1,0,0)` and `ctx.fillRect` each leave the renderer permanently
+    unresponsive — every CDP call to the page then times out (`Page.getFrameTree`, `DOM.getDocument`,
+    `Runtime.evaluate`, `Performance.getMetrics`), no `crash` event fires, and a CDP trace shows
+    **no long main-thread frame**, so the usual "busy thread" reading is wrong. `--disable-gpu` and
+    `--use-angle=swiftshader` do not help; **headed** Chrome 153 on the same page, and bundled
+    Chromium 141 headless, are both fine. Consequence on 4genthub: `/login` is the only canvas user
+    (`FallingGlitch` calls `ctx.scale(dpr,dpr)`), so under headless Chrome 153 it never reaches the
+    120-character floor and every check that reads it fails. The app is NOT broken for users. Do
+    instead: launch the bundled build (the default in `lib.mjs`); keep `FE_BROWSER=chrome` for the
+    question "is this browser broken", and read a wedged tab as the browser's verdict, never the
+    page's.
 
 ## Rules
 
