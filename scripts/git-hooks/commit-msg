@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec /home/daihu/__projects__/4genthub/scripts/git-hooks/task-trailer-guard "$@"

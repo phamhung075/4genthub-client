@@ -153,7 +153,7 @@ function destroys({ verb, args }: { verb: string; args: string[] }): string {
   if (verb === "restore" && args.includes(".")) return "git restore . discards every uncommitted change in the tree";
   if (verb === "stash" && /^(drop|clear)$/.test(args[0] ?? "")) return "git stash drop/clear deletes stashed work";
   if (verb === "push" && (args.some((a) => /^--force/.test(a) || a.startsWith("+")) || hasShort(args, "f"))) return "a force push rewrites the remote";
-  if (verb === "add" && (args.includes("--all") || args.includes(".") || hasShort(args, "A"))) return "git add -A/. stages other seats' and stray files; stage paths: git add -- <paths>";
+  if (verb === "add" && (args.includes("--all") || args.includes(".") || hasShort(args, "A"))) return "git add -A/. stages other seats' and stray files; commit with a pathspec: git commit -- <paths>";
   if (verb === "commit" && args.includes("--amend")) return "git commit --amend rewrites a commit; make a new commit";
   return "";
 }
