@@ -69,6 +69,15 @@ the runner's silence reached it as an i/o timeout with no words.
 - `internal/clientseat/sendfailure_test.go::TestSendToAHeldFrameSaysTheTextMayBeHeld` (new): end to end
   through `send` against a fake daemon that reports the runner's silence - exit non-zero, stdout empty, stderr
   carries the runner's own words and `may be held`, and never `nothing was sent`.
+- `runner::tests::send_to_a_mailbox_that_never_answers_ends_in_the_named_sentence` (new): the REAL
+  `send_to_seat` - bind, `replyTo`, write, wait, error - against a mailbox that reads the frame and never
+  answers, spending the real `REPLY_TIMEOUT` (8.5 s in the suite, which runs in parallel). It asserts the
+  premise the sentence rests on (the frame arrived carrying `replyTo`), the sentence itself, and that the wait
+  is the bound rather than a shorter guess. A runner that READ a frame always answers it
+  (`serve_mailbox_stream` replies even when `relay_frame` refuses), and a mid-turn text is relayed and
+  answered `{"relayed":"prompt"}` at once - so a HELD text is not the silence leg. The silence leg is the
+  LOST ANSWER: the frame reached the mailbox and nothing came back, which is exactly why the sentence says
+  the text MAY be held and the old `nothing was sent` was the false claim.
 - `internal/clientseat/sendfailure_test.go::TestAHeldSendIsAuditedUnconfirmedAndARefusalFailed` (new): the
   audit file a held send writes ends in `delivery_unconfirmed`, a daemon refusal ends in `delivery_failed`,
   and the decision line before either carries no outcome.

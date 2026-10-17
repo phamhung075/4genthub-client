@@ -3028,6 +3028,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// THE SILENCE LEG AT ITS SEAM: the REAL `send_to_seat` - bind, `replyTo`, write, wait, error - against a
+    /// mailbox that reads the frame and never answers. The sentence a client maps is produced here by the code
+    /// that will produce it in service, not by a stub. This spends the real `REPLY_TIMEOUT`, deliberately:
+    /// the bound is the constant under test, and a shortened copy would measure the copy.
+    ///
+    /// WHAT THIS LEG IS, AND IS NOT: a runner that READ a frame always answers it (`serve_mailbox_stream`
+    /// replies even when `relay_frame` refuses), so a mid-turn hold - which is relayed and answered
+    /// `{"relayed":"prompt"}` immediately - is NOT this leg. This is the LOST ANSWER: the frame reached the
+    /// mailbox and nothing came back, so the text may be held and may not be. The old client collapsed it to
+    /// "nothing was sent", which the premise asserted below contradicts (task 83a39aa5).
+    #[test]
+    fn send_to_a_mailbox_that_never_answers_ends_in_the_named_sentence() {
+        let dir = std::env::temp_dir().join(format!("runner-send-silent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mailbox = target_mailbox(&dir, "demo", "dev");
+        let listener = UnixListener::bind(&mailbox).expect("the seat's mailbox");
+        let reached = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = reached.clone();
+        let peer = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("the daemon's connection");
+            let mut reader = BufReader::new(&stream);
+            let line = frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES).expect("the frame");
+            seen.store(line.contains("\"replyTo\""), std::sync::atomic::Ordering::SeqCst);
+            // Never answer, and keep the connection open across the whole reply window.
+            thread::sleep(Duration::from_millis(REPLY_TIMEOUT.as_millis() as u64 + 500));
+            drop(stream);
+        });
+        let started = Instant::now();
+        let err = send_to_seat(
+            &dir,
+            "demo/dev",
+            &serde_json::json!({"id": "send-held-1", "type": "text", "text": "probe"}),
+            None,
+            true,
+        )
+        .expect_err("no answer is an error");
+        let elapsed = started.elapsed();
+        assert!(
+            reached.load(std::sync::atomic::Ordering::SeqCst),
+            "the premise of the sentence: the frame reached the mailbox with its replyTo"
+        );
+        assert!(err.contains("no answer from the runner for demo/dev"), "{err}");
+        assert!(err.contains("may be held for its next turn"), "the text's fate is named: {err}");
+        assert!(
+            elapsed >= REPLY_TIMEOUT - Duration::from_millis(500),
+            "the wait is the bound, not a shorter guess: {elapsed:?}"
+        );
+        assert!(
+            elapsed < REPLY_TIMEOUT + Duration::from_secs(2),
+            "the wait is bounded: {elapsed:?}"
+        );
+        peer.join().expect("the peer thread");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A PARKED SEAT IS NOT NUDGED. The rail wake is the runtime's own route to a seat - the nudge hands the
     /// agent the prompt that its waiting work is about - so it must not be the route that reaches a parked
     /// seat, and a refusal must not burn the ladder's attempts either: the ladder's state is the durable log.
