@@ -2,6 +2,8 @@ package clientruntime
 
 import (
 	"bufio"
+	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -16,6 +18,20 @@ import (
 // tell them apart. Asserting on a Go struct instead would pin the encoder's opinion rather than the frame.
 
 const queueTestRoom = "room-a"
+
+// schemaBody is a body the four-line create rule accepts (facts, rule, decision, next): the client refuses a
+// create without one, so every create fixture below carries it.
+const schemaBody = "facts: task=cd47f19c; base=d6a7be6\nrule: architect ruling 3/8\ndecision: enforce at create\nnext: go-dev returns the runs"
+
+// escapedBody is schemaBody as it rides a JSON string, for the frame assertions.
+func escapedBody(t *testing.T) string {
+	t.Helper()
+	encoded, err := json.Marshal(schemaBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Trim(string(encoded), `"`)
+}
 
 // queueTestRowJSON is a row in the shape the daemon serializes one: the required columns present, `reply_to`
 // and `tier` null (Rust's None), `closure_reason` present, and two transitions - the first spelling absence as
@@ -163,9 +179,9 @@ func TestQueueCreatePinsTheContractedFrame(t *testing.T) {
 		SourceSession:      "sess-src",
 		DestinationSession: "sess-dst",
 		Summary:            "wire the rail",
-		Body:               "body text",
+		Body:               schemaBody,
 		Priority:           &priority,
-		Tags:               []string{"ipc", "queue"},
+		Tags:               []string{"gate", "board"},
 		Tier:               &tier,
 		ReplyTo:            &replyTo,
 		ChainOfRecord:      []string{"q-item-1"},
@@ -180,7 +196,7 @@ func TestQueueCreatePinsTheContractedFrame(t *testing.T) {
 
 	assertQueueFrame(t, requests, `{"action":"QueueCreate","payload":{"input":{`+
 		`"source_session":"sess-src","destination_session":"sess-dst","summary":"wire the rail",`+
-		`"body":"body text","priority":"high","tags":["ipc","queue"],"tier":"T1","reply_to":"q-item-1",`+
+		`"body":"`+escapedBody(t)+`","priority":"high","tags":["gate","board"],"tier":"T1","reply_to":"q-item-1",`+
 		`"chain_of_record":["q-item-1"],"blocked_on":"q-item-2","wake_after_seconds":0,`+
 		`"qitem_id":"q-item-7"},"room":"room-a"}}`)
 
@@ -188,8 +204,8 @@ func TestQueueCreatePinsTheContractedFrame(t *testing.T) {
 }
 
 // TestQueueCreateOmitsWhatTheDaemonDefaults: every field Rust declared with a default or as an Option is
-// absent when it is unset, so the frame a caller with only the required fields writes is exactly those three
-// keys - the difference between "not set" and "set to empty" survives the wire.
+// absent when it is unset, so the frame a caller that sets the four-line body and one tag writes carries
+// exactly the five required keys - the difference between "not set" and "set to empty" survives the wire.
 func TestQueueCreateOmitsWhatTheDaemonDefaults(t *testing.T) {
 	client, requests := captureQueueRequest(t, okDataResponse(queueTestRowJSON))
 
@@ -197,16 +213,69 @@ func TestQueueCreateOmitsWhatTheDaemonDefaults(t *testing.T) {
 		SourceSession:      "sess-src",
 		DestinationSession: "sess-dst",
 		Summary:            "minimal",
+		Body:               schemaBody,
+		Tags:               []string{"gate"},
 	})
 	if err != nil {
 		t.Fatalf("QueueCreate: %v", err)
 	}
 
 	assertQueueFrame(t, requests, `{"action":"QueueCreate","payload":{"input":{`+
-		`"source_session":"sess-src","destination_session":"sess-dst","summary":"minimal"},`+
+		`"source_session":"sess-src","destination_session":"sess-dst","summary":"minimal",`+
+		`"body":"`+escapedBody(t)+`","tags":["gate"]},`+
 		`"room":"room-a"}}`)
 
 	assertQueueTestRow(t, row)
+}
+
+// TestQueueCreateRefusesEachBodySchemaViolationBeforeAnyFrame pins the ruling's six refusals at the client:
+// each is typed, carries the ruled sentence, and writes NO frame - the daemon would refuse it too, and a
+// refusal that costs a round trip is the behaviour this check removes.
+func TestQueueCreateRefusesEachBodySchemaViolationBeforeAnyFrame(t *testing.T) {
+	longNext := "facts: a=1\nrule: b\ndecision: c\nnext: " + strings.Repeat("n", 79)
+	cases := []struct {
+		name string
+		body string
+		tags []string
+		want string
+	}{
+		{"missing field", "facts: a=1\nrule: b\ndecision: c", []string{"gate"},
+			"body schema: field 'next' is missing"},
+		{"out of order", "facts: a=1\ndecision: c\nrule: b\nnext: d", []string{"gate"},
+			"body schema: unexpected line 2 ('decision: c'); the body is facts, rule, decision, next, in that order"},
+		{"duplicate", "facts: a=1\nfacts: b=2\ndecision: c\nnext: d", []string{"gate"},
+			"body schema: field 'facts' appears twice"},
+		{"empty", "facts: a=1\nrule: b\ndecision: \nnext: d", []string{"gate"},
+			"body schema: field 'decision' is empty"},
+		{"per-field cap", longNext, []string{"gate"},
+			"body field 'next' cap: 79 chars exceeds the 78-char cap"},
+		{"no tags", schemaBody, nil,
+			"tag rule: a create carries at least one allowed tag"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			client, requests := captureQueueRequest(t, okDataResponse(queueTestRowJSON))
+			_, err := client.QueueCreate(queueTestRoom, QueueCreateInput{
+				SourceSession:      "sess-src",
+				DestinationSession: "sess-dst",
+				Summary:            "s",
+				Body:               c.body,
+				Tags:               c.tags,
+			})
+			var refused *RowSchemaRefused
+			if !errors.As(err, &refused) {
+				t.Fatalf("QueueCreate error = %v, want a RowSchemaRefused", err)
+			}
+			if err.Error() != c.want {
+				t.Fatalf("refusal = %q, want %q", err.Error(), c.want)
+			}
+			select {
+			case line := <-requests:
+				t.Fatalf("a refused create wrote a frame: %q", line)
+			case <-time.After(150 * time.Millisecond):
+			}
+		})
+	}
 }
 
 func TestQueueListPinsTheContractedFrame(t *testing.T) {

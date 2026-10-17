@@ -27,9 +27,9 @@ const (
 	// read over a minute, so one pass over the ceiling can be a healthy seat in a burst; two passes is half a
 	// window of sustained hammering. The USD ceiling gets no such patience: that money is already spent.
 	budgetTicks = 2
-	// budgetRowTag is the rail tag a park carries. The store keeps a closed list of tags and this one is on
-	// it; a park is a statement about the room's state, which is what the tag says.
-	budgetRowTag   = "status"
+	// budgetRowTag is the rail tag a park carries. The store keeps a closed list of tags; "status" was retired
+	// on 2026-10-17, so the park is filed as an assignment: the lead takes the act the row's next line names.
+	budgetRowTag   = "assignment"
 	budgetRunUsage = "usage: 4genteam budget-run --room RIG [--lead SEAT] [--every SECONDS] [--once] [--state-root DIR]"
 )
 
@@ -185,19 +185,19 @@ func (g *BudgetGuard) park(seat string, usage roombudget.Usage, reason string) {
 }
 
 // row is the ONE row a park files: the seat and the number, to the lead, with the ceiling it crossed and how
-// to lift it. The rail's own caps bound the two strings (summary 120, body 600), so they stay short enough to
-// be read in a list.
+// to lift it. The body is the four-line row schema the architect ruled (facts, rule, decision, next, each
+// within its per-field cap), because the rail refuses any other shape at create.
 func (g *BudgetGuard) row(seat string, usage roombudget.Usage, reason string) clientruntime.QueueCreateInput {
 	return clientruntime.QueueCreateInput{
 		SourceSession:      "budget@" + g.Rig,
 		DestinationSession: clientruntime.SeatSessionName(g.Rig, g.Lead),
 		Summary:            fmt.Sprintf("BUDGET: seat %s parked - %s", seat, reason),
-		Body: fmt.Sprintf("Parked seat %s: it %s.\nMeasured %s: %.2f USD over 24h, %d tool calls in the last minute.\n"+
-			"Record: %s. THE RECORD IS THE PARK - the routes that would hand the seat work read it and refuse. "+
-			"Remove the record FIRST, then `4genteam room reseat %s %s`: a reseat before the removal stops the "+
-			"seat. `4genteam room limits %s` changes the ceiling. CLOSE THIS ROW and say why it came back.",
-			seat, reason, g.Now().UTC().Format(time.RFC3339), usage.Cost, usage.Calls,
-			roombudget.ParkedPath(g.SeatDir(g.Rig, seat)), g.Rig, seat, g.Rig),
+		Body: fmt.Sprintf("facts: seat=%s; reason=%s; cost24h=%.2f USD; calls1m=%d; record=%s\n"+
+			"rule: the room budget ceiling parks a seat; the record refuses it work\n"+
+			"decision: parked; remove the record FIRST, then reseat - a reseat first stops the seat\n"+
+			"next: lead closes this row and says why the seat came back",
+			seat, reason, usage.Cost, usage.Calls,
+			roombudget.ParkedPath(g.SeatDir(g.Rig, seat))),
 		Tags: []string{budgetRowTag},
 	}
 }

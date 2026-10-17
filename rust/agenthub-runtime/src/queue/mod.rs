@@ -273,6 +273,9 @@ fn validate_typed_fields(input: &CreateInput) -> Result<String, String> {
             ));
         }
     }
+    if input.tags.is_empty() {
+        return Err("tag rule: a create carries at least one allowed tag".into());
+    }
     if priority == "high" && !input.tags.iter().any(|t| t == PROD_BREAK_TAG) {
         return Err(format!(
             "priority rule: 'high' requires tag '{}'",
@@ -280,6 +283,7 @@ fn validate_typed_fields(input: &CreateInput) -> Result<String, String> {
         ));
     }
     check_summary(&input.summary)?;
+    validate_body_schema(&input.body)?;
     let body_chars = input.body.chars().count();
     if body_chars > BODY_MAX_CHARS {
         return Err(format!(
@@ -288,6 +292,74 @@ fn validate_typed_fields(input: &CreateInput) -> Result<String, String> {
         ));
     }
     Ok(priority.to_string())
+}
+
+/// The body's four fixed lines and their value caps (architect ruling 3/8, `RULING-queue-row-schema.md`).
+/// The prefixes and newlines cost 32 chars, so the caps (280+110+100+78 = 568) sum with them to
+/// BODY_MAX_CHARS exactly: a body at every cap IS the body cap, and no conforming row is refused.
+const BODY_FIELDS: [(&str, usize); 4] = [
+    ("facts", 280),
+    ("rule", 110),
+    ("decision", 100),
+    ("next", 78),
+];
+
+/// The create-only body grammar: exactly four lines, in order, one key each, single-line non-empty values
+/// inside their caps. Every refusal is one line naming the rule and the field, the same sentence the Go
+/// client writes (`internal/clientruntime/queue.go`), because both seams refuse the same input.
+fn validate_body_schema(body: &str) -> Result<(), String> {
+    let lines: Vec<&str> = if body.is_empty() {
+        Vec::new()
+    } else {
+        body.split('\n').collect()
+    };
+    let mut seen: Vec<&str> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some((key, _)) = line.split_once(": ") else {
+            return Err(unexpected_body_line(index, line));
+        };
+        let Some(position) = BODY_FIELDS.iter().position(|(name, _)| *name == key) else {
+            return Err(unexpected_body_line(index, line));
+        };
+        if seen.contains(&key) {
+            return Err(format!("body schema: field '{}' appears twice", key));
+        }
+        if position != index {
+            return Err(unexpected_body_line(index, line));
+        }
+        seen.push(key);
+    }
+    if lines.len() < BODY_FIELDS.len() {
+        return Err(BODY_FIELDS[lines.len()..]
+            .iter()
+            .map(|(name, _)| format!("body schema: field '{}' is missing", name))
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    for (index, (name, cap)) in BODY_FIELDS.iter().enumerate() {
+        let value = lines[index]
+            .strip_prefix(&format!("{}: ", name))
+            .unwrap_or_default();
+        if value.is_empty() {
+            return Err(format!("body schema: field '{}' is empty", name));
+        }
+        let chars = value.chars().count();
+        if chars > *cap {
+            return Err(format!(
+                "body field '{}' cap: {} chars exceeds the {}-char cap",
+                name, chars, cap
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn unexpected_body_line(index: usize, line: &str) -> String {
+    format!(
+        "body schema: unexpected line {} ('{}'); the body is facts, rule, decision, next, in that order",
+        index + 1,
+        line
+    )
 }
 
 fn check_summary(summary: &str) -> Result<(), String> {
@@ -992,6 +1064,8 @@ mod tests {
                 source_session: source.into(),
                 destination_session: destination.into(),
                 summary: summary.into(),
+                body: schema_body(),
+                tags: vec!["gate".into()],
                 ..Default::default()
             })
             .expect("create row")
@@ -1256,6 +1330,8 @@ mod tests {
                 source_session: "seat-a".into(),
                 destination_session: "seat-b".into(),
                 summary: "blocked on ci".into(),
+                body: schema_body(),
+                tags: vec!["handoff".into()],
                 blocked_on: Some("ci green".into()),
                 wake_after_seconds: Some(300),
                 ..Default::default()
@@ -1385,6 +1461,7 @@ mod tests {
                 source_session: "seat-a".into(),
                 destination_session: "seat-b".into(),
                 summary: "lineage".into(),
+                body: schema_body(),
                 chain_of_record: vec!["qitem-1".into(), "qitem-2".into()],
                 reply_to: Some("qitem-2".into()),
                 tags: vec!["finding".into(), "prod-break".into()],
@@ -1425,6 +1502,8 @@ mod tests {
                 source_session: "seat-a".into(),
                 destination_session: "seat-b".into(),
                 summary: "x".into(),
+                body: schema_body(),
+                tags: vec!["gate".into()],
                 qitem_id: Some(row.qitem_id.clone()),
                 ..Default::default()
             })
@@ -1591,10 +1670,134 @@ mod tests {
         }
     }
 
+    /// The four-line body the ruling requires, at its shortest: the parser's positive case.
+    fn schema_body() -> String {
+        concat!(
+            "facts: task=cd47f19c; base=d6a7be6\n",
+            "rule: architect ruling 3/8: four fixed lines\n",
+            "decision: enforce the schema at create\n",
+            "next: go-dev returns the red and green runs"
+        )
+        .to_string()
+    }
+
+    #[test]
+    fn the_four_line_body_is_stored_verbatim() {
+        let (_dir, store) = temp_store();
+        let row = store
+            .create(typed(None, &["gate"], "s", &schema_body()))
+            .expect("a conforming body is accepted");
+        assert_eq!(row.body, schema_body());
+    }
+
+    #[test]
+    fn a_missing_body_field_is_refused_by_name_in_schema_order() {
+        let (_dir, store) = temp_store();
+        let body = schema_body();
+        let three_lines = body.rsplit_once('\n').expect("four lines").0;
+        let err = store.create(typed(None, &["gate"], "s", three_lines)).unwrap_err();
+        assert_eq!(err, "body schema: field 'next' is missing", "{err}");
+
+        let two_lines = three_lines.rsplit_once('\n').expect("three lines").0;
+        let err = store.create(typed(None, &["gate"], "s", two_lines)).unwrap_err();
+        assert_eq!(
+            err,
+            "body schema: field 'decision' is missing\nbody schema: field 'next' is missing",
+            "{err}"
+        );
+
+        let err = store.create(typed(None, &["gate"], "s", "")).unwrap_err();
+        assert_eq!(
+            err,
+            "body schema: field 'facts' is missing\nbody schema: field 'rule' is missing\n\
+             body schema: field 'decision' is missing\nbody schema: field 'next' is missing",
+            "{err}"
+        );
+        assert!(store.list(&ListFilter::default()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_body_out_of_order_is_refused_at_its_line() {
+        let (_dir, store) = temp_store();
+        let body = "facts: a=1\ndecision: enforce at create\nrule: the schema\nnext: go-dev tests";
+        let err = store.create(typed(None, &["gate"], "s", body)).unwrap_err();
+        assert_eq!(
+            err,
+            "body schema: unexpected line 2 ('decision: enforce at create'); the body is facts, rule, decision, next, in that order",
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_duplicate_body_field_is_refused_by_name() {
+        let (_dir, store) = temp_store();
+        let body = "facts: a=1\nfacts: b=2\ndecision: c\nnext: d";
+        let err = store.create(typed(None, &["gate"], "s", body)).unwrap_err();
+        assert_eq!(err, "body schema: field 'facts' appears twice", "{err}");
+    }
+
+    #[test]
+    fn an_empty_body_field_is_refused_by_name() {
+        let (_dir, store) = temp_store();
+        let body = "facts: a=1\nrule: b\ndecision: \nnext: d";
+        let err = store.create(typed(None, &["gate"], "s", body)).unwrap_err();
+        assert_eq!(err, "body schema: field 'decision' is empty", "{err}");
+    }
+
+    #[test]
+    fn a_body_at_every_field_cap_is_exactly_the_600_char_body_cap() {
+        let (_dir, store) = temp_store();
+        let body = format!(
+            "facts: {}\nrule: {}\ndecision: {}\nnext: {}",
+            "f".repeat(280),
+            "r".repeat(110),
+            "d".repeat(100),
+            "n".repeat(78)
+        );
+        assert_eq!(body.chars().count(), 600);
+        store
+            .create(typed(None, &["gate"], "s", &body))
+            .expect("the cap arithmetic sums to the 600 cap");
+    }
+
+    #[test]
+    fn a_body_over_a_field_cap_is_refused_naming_the_field_and_its_cap() {
+        let (_dir, store) = temp_store();
+        let body = format!(
+            "facts: {}\nrule: r\ndecision: d\nnext: {}",
+            "f".repeat(281),
+            "n".repeat(78)
+        );
+        let err = store.create(typed(None, &["gate"], "s", &body)).unwrap_err();
+        assert_eq!(
+            err,
+            "body field 'facts' cap: 281 chars exceeds the 280-char cap",
+            "{err}"
+        );
+
+        let body = format!(
+            "facts: f\nrule: r\ndecision: d\nnext: {}",
+            "n".repeat(79)
+        );
+        let err = store.create(typed(None, &["gate"], "s", &body)).unwrap_err();
+        assert_eq!(
+            err,
+            "body field 'next' cap: 79 chars exceeds the 78-char cap",
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_create_with_no_tags_is_refused() {
+        let (_dir, store) = temp_store();
+        let err = store.create(typed(None, &[], "s", &schema_body())).unwrap_err();
+        assert_eq!(err, "tag rule: a create carries at least one allowed tag", "{err}");
+    }
+
     #[test]
     fn priority_outside_the_enum_is_refused_naming_the_rule() {
         let (_dir, store) = temp_store();
-        let err = store.create(typed(Some("urgent"), &[], "s", "")).unwrap_err();
+        let err = store.create(typed(Some("urgent"), &["gate"], "s", &schema_body())).unwrap_err();
         assert!(err.contains("priority rule") && err.contains("low, normal, high"), "{err}");
         assert!(store.list(&ListFilter::default()).unwrap().is_empty());
     }
@@ -1602,10 +1805,10 @@ mod tests {
     #[test]
     fn high_requires_the_prod_break_tag() {
         let (_dir, store) = temp_store();
-        let err = store.create(typed(Some("high"), &["finding"], "s", "")).unwrap_err();
+        let err = store.create(typed(Some("high"), &["finding"], "s", &schema_body())).unwrap_err();
         assert!(err.contains("'high' requires tag 'prod-break'"), "{err}");
         let row = store
-            .create(typed(Some("high"), &["prod-break"], "s", ""))
+            .create(typed(Some("high"), &["prod-break"], "s", &schema_body()))
             .expect("high with prod-break");
         assert_eq!(row.priority, "high");
     }
@@ -1613,8 +1816,8 @@ mod tests {
     #[test]
     fn summary_over_120_chars_is_refused() {
         let (_dir, store) = temp_store();
-        store.create(typed(None, &[], &"a".repeat(120), "")).expect("120 fits");
-        let err = store.create(typed(None, &[], &"a".repeat(121), "")).unwrap_err();
+        store.create(typed(None, &["gate"], &"a".repeat(120), &schema_body())).expect("120 fits");
+        let err = store.create(typed(None, &["gate"], &"a".repeat(121), &schema_body())).unwrap_err();
         assert!(err.contains("summary cap") && err.contains("120"), "{err}");
     }
 
@@ -1634,21 +1837,13 @@ mod tests {
     }
 
     #[test]
-    fn body_over_600_chars_is_refused() {
-        let (_dir, store) = temp_store();
-        store.create(typed(None, &[], "s", &"b".repeat(600))).expect("600 fits");
-        let err = store.create(typed(None, &[], "s", &"b".repeat(601))).unwrap_err();
-        assert!(err.contains("body cap") && err.contains("600"), "{err}");
-    }
-
-    #[test]
     fn tags_outside_the_allowed_kebab_set_are_refused() {
         let (_dir, store) = temp_store();
         for bad in ["urgent", "GATE", "Owner_Decision"] {
-            let err = store.create(typed(None, &[bad], "s", "")).unwrap_err();
+            let err = store.create(typed(None, &[bad], "s", &schema_body())).unwrap_err();
             assert!(err.contains("tag rule") && err.contains(bad), "{err}");
         }
-        store.create(typed(None, &["gate", "owner-decision"], "s", "")).expect("allowed tags");
+        store.create(typed(None, &["gate", "owner-decision"], "s", &schema_body())).expect("allowed tags");
     }
 
     /// The four low-value tags are RETIRED: a create naming one is refused BY NAME, and the refusal carries
@@ -1657,7 +1852,7 @@ mod tests {
     fn the_retired_low_value_tags_are_refused_by_name() {
         let (_dir, store) = temp_store();
         for retired in ["status", "ack", "checkpoint", "report"] {
-            let err = store.create(typed(None, &[retired], "s", "")).unwrap_err();
+            let err = store.create(typed(None, &[retired], "s", &schema_body())).unwrap_err();
             assert!(err.contains("tag rule"), "{retired}: {err}");
             assert!(err.contains(retired), "{retired}: the refusal does not name it: {err}");
             assert!(err.contains("allowed (lowercase kebab)"), "{retired}: {err}");

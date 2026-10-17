@@ -7,6 +7,7 @@
 package clientroom
 
 import (
+	"encoding/json"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +20,19 @@ import (
 // testSeat is the session this test's shell carries: what create, update, claim and close act as, and what
 // their frames must name as the actor.
 const testSeat = "4genthub-min-go-dev@4genthub-min"
+
+// schemaBody is a body the four-line create rule accepts; a create without one is refused since 4/8.
+const schemaBody = "facts: task=cd47f19c; base=d6a7be6\nrule: architect ruling 3/8\ndecision: enforce at create\nnext: go-dev returns the runs"
+
+// escapedBody is schemaBody as it rides a JSON string in a frame assertion.
+func escapedBody(t *testing.T) string {
+	t.Helper()
+	encoded, err := json.Marshal(schemaBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Trim(string(encoded), `"`)
+}
 
 // queueRowFrame is one row as the daemon serializes it, carrying the fields a rendering reads. Only the
 // transitions a test names are emitted: a row frame with no `transitions` key is a row whose log the daemon
@@ -107,7 +121,8 @@ func TestRoomQueueCreateSendsTheEnvSessionAsSource(t *testing.T) {
 	})
 
 	code, stdout, stderr := runRoom(t, daemon.args("queue", "create", testRoom,
-		"--to", "reviewer@"+testRoom, "--summary", "hand me the build log")...)
+		"--to", "reviewer@"+testRoom, "--summary", "hand me the build log",
+		"--body", schemaBody, "--tag", "gate")...)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
 	}
@@ -122,7 +137,26 @@ func TestRoomQueueCreateSendsTheEnvSessionAsSource(t *testing.T) {
 	}
 	assertRequests(t, daemon,
 		`{"action":"QueueCreate","payload":{"input":{"source_session":"`+testSeat+
-			`","destination_session":"reviewer@`+testRoom+`","summary":"hand me the build log"},"room":"`+testRoom+`"}}`)
+			`","destination_session":"reviewer@`+testRoom+`","summary":"hand me the build log",`+
+			`"body":"`+escapedBody(t)+`","tags":["gate"]},"room":"`+testRoom+`"}}`)
+}
+
+// TestRoomQueueCreateRefusesARowOutsideTheSchemaWithoutARoundTrip pins the refusal at the CLI door: the ruled
+// sentence is printed, the exit is 2 (the daemon answered nothing), and no frame is written - the client
+// checked the four-line body before the round trip.
+func TestRoomQueueCreateRefusesARowOutsideTheSchemaWithoutARoundTrip(t *testing.T) {
+	t.Setenv(sessionEnv, testSeat)
+	daemon := newFakeDaemon(t, map[string]string{})
+
+	code, _, stderr := runRoom(t, daemon.args("queue", "create", testRoom,
+		"--to", "reviewer@"+testRoom, "--summary", "hand me the build log", "--tag", "gate")...)
+	if code != clientcmd.ExitPartialStart {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitPartialStart, stderr)
+	}
+	if !strings.Contains(stderr, "body schema: field 'facts' is missing") {
+		t.Errorf("stderr = %q, want the missing facts field named", stderr)
+	}
+	assertRequests(t, daemon)
 }
 
 // TestRoomQueueCreateWithoutTheSessionEnvRefusesAndSendsNothing pins the actor rule's refusal half: with

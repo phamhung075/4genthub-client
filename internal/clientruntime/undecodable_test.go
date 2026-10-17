@@ -76,6 +76,8 @@ func undecodableCalls() []undecodableCall {
 				SourceSession:      "sess-src",
 				DestinationSession: "sess-dst",
 				Summary:            "wire the rail",
+				Body:               schemaBody,
+				Tags:               []string{"gate"},
 			})
 			return ptrValue(row), err
 		}},

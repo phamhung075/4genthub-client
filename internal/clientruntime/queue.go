@@ -1,6 +1,12 @@
 package clientruntime
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
 
 // The room's durable rail over the runtime socket. The daemon owns each room's queue store and is its only
 // writer - the client renders rows and never opens the file, because two writers is a defect class this team
@@ -134,6 +140,9 @@ type QueueCloseInput struct {
 
 // QueueCreate appends a row to the room's rail and returns it as the store now holds it.
 func (c *Client) QueueCreate(room string, in QueueCreateInput) (*QueueRow, error) {
+	if err := validateCreateRow(in); err != nil {
+		return nil, err
+	}
 	resp, err := c.Call("QueueCreate", map[string]any{"room": room, "input": in})
 	if err != nil {
 		return nil, err
@@ -143,6 +152,82 @@ func (c *Client) QueueCreate(room string, in QueueCreateInput) (*QueueRow, error
 		return nil, err
 	}
 	return &row, nil
+}
+
+// RowSchemaRefused is the rail's create-time shape rule (architect ruling 3/8): the body is four fixed lines
+// and a create carries at least one tag. The message is the daemon's own sentence - the daemon refuses the
+// same input in `rust/agenthub-runtime/src/queue/mod.rs`, and ONE wording serves both seams.
+type RowSchemaRefused struct{ Message string }
+
+func (e *RowSchemaRefused) Error() string { return e.Message }
+
+// bodyFields is the ruled grammar: keys in order and the per-field value caps. The prefixes and newlines
+// cost 32 chars, so the caps (280+110+100+78 = 568) sum with them to the store's 600-char body cap exactly.
+var bodyFields = []struct {
+	key string
+	cap int
+}{{"facts", 280}, {"rule", 110}, {"decision", 100}, {"next", 78}}
+
+// validateCreateRow is the client half of the create-time rule. It runs BEFORE the round trip so a seat is
+// told in one line and writes nothing; the daemon checks the same rule as the authority over its store.
+func validateCreateRow(in QueueCreateInput) error {
+	if len(in.Tags) == 0 {
+		return &RowSchemaRefused{Message: "tag rule: a create carries at least one allowed tag"}
+	}
+	if err := validateBodySchema(in.Body); err != nil {
+		return &RowSchemaRefused{Message: err.Error()}
+	}
+	return nil
+}
+
+// validateBodySchema is the four-line grammar, character for character the Rust function's twin.
+func validateBodySchema(body string) error {
+	var lines []string
+	if body != "" {
+		lines = strings.Split(body, "\n")
+	}
+	seen := make(map[string]bool, len(bodyFields))
+	for index, line := range lines {
+		key, _, found := strings.Cut(line, ": ")
+		position := -1
+		for i, field := range bodyFields {
+			if field.key == key {
+				position = i
+				break
+			}
+		}
+		if !found || position < 0 {
+			return unexpectedBodyLine(index, line)
+		}
+		if seen[key] {
+			return fmt.Errorf("body schema: field '%s' appears twice", key)
+		}
+		if position != index {
+			return unexpectedBodyLine(index, line)
+		}
+		seen[key] = true
+	}
+	if len(lines) < len(bodyFields) {
+		missing := make([]string, 0, len(bodyFields)-len(lines))
+		for _, field := range bodyFields[len(lines):] {
+			missing = append(missing, fmt.Sprintf("body schema: field '%s' is missing", field.key))
+		}
+		return errors.New(strings.Join(missing, "\n"))
+	}
+	for index, field := range bodyFields {
+		value := strings.TrimPrefix(lines[index], field.key+": ")
+		if value == "" {
+			return fmt.Errorf("body schema: field '%s' is empty", field.key)
+		}
+		if chars := utf8.RuneCountInString(value); chars > field.cap {
+			return fmt.Errorf("body field '%s' cap: %d chars exceeds the %d-char cap", field.key, chars, field.cap)
+		}
+	}
+	return nil
+}
+
+func unexpectedBodyLine(index int, line string) error {
+	return fmt.Errorf("body schema: unexpected line %d ('%s'); the body is facts, rule, decision, next, in that order", index+1, line)
 }
 
 // QueueList reads the room's rail through a filter, newest first as the store orders it.

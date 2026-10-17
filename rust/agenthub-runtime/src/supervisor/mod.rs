@@ -3026,6 +3026,19 @@ mod tests {
         .is_none());
     }
 
+    /// waiting_row is a rail row that satisfies the four-line create schema (4/8). The supervisor's tests need
+    /// a WAITING row, never a body, so the fixture is the shortest conforming one.
+    fn waiting_row(source: &str, destination: impl Into<String>, summary: &str) -> CreateInput {
+        CreateInput {
+            source_session: source.into(),
+            destination_session: destination.into(),
+            summary: summary.into(),
+            body: "facts: test fixture\nrule: the four-line create schema\ndecision: fixture row for a supervisor test\nnext: claim the row".into(),
+            tags: vec!["handoff".into()],
+            ..Default::default()
+        }
+    }
+
     /// The rail's rows have been written with more than one spelling of a seat's name, and the join has to
     /// see all of them: a row addressed to the native session name, to the rig orchestrator session name, to
     /// the bare seat key, or to `seat@room` all belong to the same seat. A spelling the join missed would
@@ -3051,31 +3064,16 @@ mod tests {
                 (seat_at_room.as_str(), "seat at room"),
             ] {
                 let row = store
-                    .create(CreateInput {
-                        source_session: "lead".into(),
-                        destination_session: to.into(),
-                        summary: summary.into(),
-                        ..Default::default()
-                    })
+                    .create(waiting_row("lead", to, summary))
                     .expect("create");
                 expected_ids.push(row.qitem_id);
             }
             // A row for somebody else, and a row for this seat that is closed: neither is waiting work.
             store
-                .create(CreateInput {
-                    source_session: "lead".into(),
-                    destination_session: "someone-else".into(),
-                    summary: "not ours".into(),
-                    ..Default::default()
-                })
+                .create(waiting_row("lead", "someone-else", "not ours"))
                 .expect("create");
             let closed = store
-                .create(CreateInput {
-                    source_session: "lead".into(),
-                    destination_session: seat.clone(),
-                    summary: "already done".into(),
-                    ..Default::default()
-                })
+                .create(waiting_row("lead", seat.clone(), "already done"))
                 .expect("create");
             store
                 .close(CloseInput {
@@ -3172,12 +3170,7 @@ mod tests {
         let before = supervisor
             .queue_store("demo")
             .expect("open the rail")
-            .create(CreateInput {
-                source_session: "lead".into(),
-                destination_session: seat.clone(),
-                summary: "before the room was rebuilt".into(),
-                ..Default::default()
-            })
+            .create(waiting_row("lead", seat.clone(), "before the room was rebuilt"))
             .expect("create");
         assert!(
             rail.is_file(),
@@ -3196,12 +3189,7 @@ mod tests {
         let after = supervisor
             .queue_store("demo")
             .expect("the next verb opens the file it is about to use")
-            .create(CreateInput {
-                source_session: "lead".into(),
-                destination_session: seat.clone(),
-                summary: "after the room was rebuilt".into(),
-                ..Default::default()
-            })
+            .create(waiting_row("lead", seat.clone(), "after the room was rebuilt"))
             .expect("create into the new file");
 
         let rows = supervisor
@@ -3266,12 +3254,7 @@ mod tests {
         write_state_file(&dir, &room, &key, "agent_socket_closed", "2026-10-17T04:00:36.547Z");
         let row = supervisor.queue_store(&room).expect("open the rail");
         let created = row
-            .create(CreateInput {
-                source_session: "lead".into(),
-                destination_session: session.clone(),
-                summary: "the owner's gate ask".into(),
-                ..Default::default()
-            })
+            .create(waiting_row("lead", session.clone(), "the owner's gate ask"))
             .expect("create");
 
         let pending = supervisor.pending_nudges();
@@ -3322,12 +3305,7 @@ mod tests {
         supervisor
             .queue_store(&room)
             .expect("open the rail")
-            .create(CreateInput {
-                source_session: "lead".into(),
-                destination_session: session.clone(),
-                summary: "the owner's gate ask".into(),
-                ..Default::default()
-            })
+            .create(waiting_row("lead", session.clone(), "the owner's gate ask"))
             .expect("create");
 
         for state in ["agent_socket_closed", "agent_exited", "stopped", "idle"] {
@@ -3389,12 +3367,7 @@ mod tests {
         supervisor
             .queue_store(&room)
             .expect("open the rail")
-            .create(CreateInput {
-                source_session: "lead".into(),
-                destination_session: session.clone(),
-                summary: "the owner's gate ask".into(),
-                ..Default::default()
-            })
+            .create(waiting_row("lead", session.clone(), "the owner's gate ask"))
             .expect("create");
 
         assert!(
@@ -3507,12 +3480,7 @@ mod tests {
 
         let store = supervisor.queue_store(&room).expect("open the rail");
         let blocker = store
-            .create(CreateInput {
-                source_session: "lead".into(),
-                destination_session: "reviewer@elsewhere".into(),
-                summary: "the gate".into(),
-                ..Default::default()
-            })
+            .create(waiting_row("lead", "reviewer@elsewhere", "the gate"))
             .expect("create the blocker");
         // The blocker is IN PROGRESS and still open: the shape measured on the live rail.
         store
@@ -3524,12 +3492,7 @@ mod tests {
             })
             .expect("open the gate");
         let dependent = store
-            .create(CreateInput {
-                source_session: "lead".into(),
-                destination_session: session.clone(),
-                summary: "the gated ask".into(),
-                ..Default::default()
-            })
+            .create(waiting_row("lead", session.clone(), "the gated ask"))
             .expect("create the dependent");
         store
             .update(crate::queue::UpdateInput {
@@ -3616,13 +3579,8 @@ mod tests {
         TerminalManager::launch_session(&session, Path::new("."), "sleep 300", &HashMap::new())
             .expect("scratch pane");
         let row = supervisor.queue_store(&room).expect("open the rail");
-        row.create(CreateInput {
-            source_session: "lead".into(),
-            destination_session: session.clone(),
-            summary: "the owner's gate ask".into(),
-            ..Default::default()
-        })
-        .expect("create");
+        row.create(waiting_row("lead", session.clone(), "the owner's gate ask"))
+            .expect("create");
 
         for state in ["working", "retrying", "blocked", "needs_input"] {
             write_state_file(&dir, &room, &key, state, "2026-10-17T06:00:00.000Z");
@@ -3660,13 +3618,8 @@ mod tests {
         )
         .expect("state file");
         let row = supervisor.queue_store(&room).expect("open the rail");
-        row.create(CreateInput {
-            source_session: "lead".into(),
-            destination_session: session,
-            summary: "the owner's gate ask".into(),
-            ..Default::default()
-        })
-        .expect("create");
+        row.create(waiting_row("lead", session, "the owner's gate ask"))
+            .expect("create");
 
         assert_eq!(
             supervisor.pending_nudges().len(),
@@ -4100,12 +4053,7 @@ mod tests {
         {
             let store = supervisor.queue_store("demo").expect("open the rail");
             store
-                .create(CreateInput {
-                    source_session: "lead".into(),
-                    destination_session: seat.clone(),
-                    summary: "waiting work".into(),
-                    ..Default::default()
-                })
+                .create(waiting_row("lead", seat.clone(), "waiting work"))
                 .expect("create");
         }
         assert!(supervisor.pending_nudges().is_empty());
