@@ -444,7 +444,7 @@ func runtimeSend(session, text string, opts map[string]string, socket string, ha
 // sendFailureSentence names the failure the delivery got. THREE facts, three sentences, because the delivery
 // path is three-way and one sentence for all of them was false for two: a refusal means nothing was written
 // anywhere; a runner the daemon could not hear from - and a socket that went quiet - means the frame reached
-// the runner's mailbox, so the text may be held for the seat's next turn and "nothing was sent" is a claim
+// the runner's mailbox, so the text may be held for its next turn and "nothing was sent" is a claim
 // nobody measured. The U3 gate caught exactly that sentence against a delivery the runtime had HELD (task
 // 83a39aa5).
 func sendFailureSentence(socket string, err error) string {
@@ -453,16 +453,17 @@ func sendFailureSentence(socket string, err error) string {
 	}
 	var refused *clientruntime.DaemonRefused
 	if errors.As(err, &refused) && clientruntime.IsNoAnswer(refused.Reason) {
-		return fmt.Sprintf("%s; the text may be held for the seat's next turn, so the delivery is unconfirmed",
-			refused.Reason)
+		// The daemon's own sentence already says why the wait elapsed and that the frame reached the mailbox,
+		// so only the verdict is added: repeating the hold would read as two separate findings.
+		return refused.Reason + "; the delivery is unconfirmed"
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return fmt.Sprintf("the runtime at %s did not answer within its %s call deadline (%v); the text may be "+
-			"held for the seat's next turn, so the delivery is unconfirmed", socket, clientruntime.CallDeadline, err)
+			"held for its next turn, so the delivery is unconfirmed", socket, clientruntime.CallDeadline, err)
 	}
 	return fmt.Sprintf("the runtime at %s answered the call with something this client cannot read as a "+
-		"refusal (%v); the text may be held for the seat's next turn, so the delivery is unconfirmed", socket, err)
+		"refusal (%v); the text may be held for its next turn, so the delivery is unconfirmed", socket, err)
 }
 
 // nothingWasSent reports whether the failure guarantees the request never left this client: the daemon

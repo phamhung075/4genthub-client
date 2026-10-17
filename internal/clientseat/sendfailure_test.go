@@ -65,7 +65,7 @@ func TestTheSendFailureSentenceSeparatesARefusalFromAHold(t *testing.T) {
 			nothing: false,
 			contains: []string{
 				"the runtime at /run/x.sock did not answer within its " + clientruntime.CallDeadline.String() + " call deadline",
-				"the text may be held for the seat's next turn",
+				"the text may be held for its next turn",
 				"unconfirmed",
 			},
 			absent: []string{"nothing was sent"},
@@ -76,7 +76,7 @@ func TestTheSendFailureSentenceSeparatesARefusalFromAHold(t *testing.T) {
 			nothing: false,
 			contains: []string{
 				"no answer from the runner for 4genthub-min/fe-dev",
-				"the text may be held for the seat's next turn",
+				"the text may be held for its next turn",
 				"unconfirmed",
 			},
 			absent: []string{"nothing was sent"},
@@ -184,7 +184,7 @@ func TestSendToAHeldFrameSaysTheTextMayBeHeld(t *testing.T) {
 	}
 	for _, want := range []string{
 		"no answer from the runner for 4genthub-min/fe-dev",
-		"the text may be held for the seat's next turn",
+		"the text may be held for its next turn",
 		"unconfirmed",
 	} {
 		if !strings.Contains(errOut.String(), want) {

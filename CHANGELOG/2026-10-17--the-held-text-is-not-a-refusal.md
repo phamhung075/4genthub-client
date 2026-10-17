@@ -39,9 +39,9 @@ the runner's silence reached it as an i/o timeout with no words.
 - `internal/clientseat/reseat.go`:
   - `sendFailureSentence(socket, err)` and `nothingWasSent(err)` replace the single sentence. A daemon
     refusal, an older daemon that could not frame the request, or no daemon at the socket means nothing was
-    sent. The daemon reporting the runner's silence, a socket timeout, and an answer this client cannot read
-    all name the hold (`the text may be held for the seat's next turn, so the delivery is unconfirmed`) and
-    never claim nothing was sent.
+    sent. The daemon reporting the runner's silence carries the runner's own sentence whole and adds only the
+    verdict (`; the delivery is unconfirmed`), so the hold is stated once; a socket timeout and an answer this
+    client cannot read name the hold themselves and never claim nothing was sent.
 - `internal/clientruntime/deadline_test.go`: the runtime's 8 s bound is named beside the 60 s readiness window
   and pinned - `CallDeadline` must outlast it, so a raised number has to face that test.
 
