@@ -283,7 +283,7 @@ func TestBuildReportMeasuresTheWindowOnly(t *testing.T) {
 	for _, target := range report.Targets {
 		results[target.Name] = target.Result
 	}
-	want := map[string]string{"docs-only commits %": "FAIL", "queue rows/day": "PASS", "high-priority rows %": "FAIL", "measuring cost %": "PASS", "code-edit cost %": "PASS"}
+	want := map[string]string{"docs-only commits %": "FAIL", "queue rows/day": "PASS", "high-priority rows %": "FAIL", "measuring cost %": "PASS", "code-edit cost %": "diag"}
 	for name, verdict := range want {
 		if results[name] != verdict {
 			t.Errorf("target %q = %s, want %s", name, results[name], verdict)
@@ -348,6 +348,190 @@ func TestRoomReportRefusesBadInput(t *testing.T) {
 	} {
 		if code, _, _ := runRoom(t, args...); code != clientcmd.ExitRoomRefused {
 			t.Errorf("%v: exit %d, want %d", args, code, clientcmd.ExitRoomRefused)
+		}
+	}
+}
+
+// A TURN THAT READS AND THEN EDITS IS A CODE-EDIT TURN. The old reader scored a turn by its first tool call
+// only, and every edit is preceded by a read, so editing was under-counted by exactly the read that found the
+// file (seats/architect/RULING-code-edit-share-target.md). The docs turn is the boundary: its first call is a
+// read and neither call edits CODE, so it stays a read even under the any-call rule.
+func TestAReadThenEditTurnCountsAsCodeEdit(t *testing.T) {
+	seatDir := filepath.Join(t.TempDir(), "seat")
+	if err := os.MkdirAll(filepath.Join(seatDir, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	turn := func(cost float64, parts string) string {
+		return fmt.Sprintf(`{"type":"message","timestamp":%q,"message":{"role":"assistant","content":[%s],"usage":{"output":1,"cost":{"total":%v}}}}`,
+			now.Add(-time.Hour).Format(time.RFC3339Nano), parts, cost)
+	}
+	readThenEdit := `{"type":"toolCall","name":"read","arguments":{"path":"/r/a.go"}},` +
+		`{"type":"toolCall","name":"edit","arguments":{"path":"/r/a.go"}}`
+	readThenDoc := `{"type":"toolCall","name":"read","arguments":{"path":"/r/notes.md"}},` +
+		`{"type":"toolCall","name":"edit","arguments":{"path":"/r/notes.md"}}`
+	grep := `{"type":"toolCall","name":"bash","arguments":{"command":"grep -rn x ."}}`
+	session := strings.Join([]string{
+		turn(6, readThenEdit),
+		turn(1, readThenDoc),
+		turn(3, grep),
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(seatDir, "sessions", "s.jsonl"), []byte(session), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := newSeatStats("dev")
+	if _, err := readSessions(seatDir, now.Add(-24*time.Hour), stats); err != nil {
+		t.Fatal(err)
+	}
+	stats.finish()
+	if got := stats.ActivityPct[actCodeEdit]; got != 60 {
+		t.Errorf("code-edit share = %.1f%%, want 60: the 6 USD read-then-edit turn is an edit", got)
+	}
+	if got := stats.CodeEditFirstCallPct; got != 0 {
+		t.Errorf("first-call code-edit share = %.1f%%, want 0: neither turn edits on its first call", got)
+	}
+	if got := stats.ActivityPct[actRead]; got != 10 {
+		t.Errorf("read share = %.1f%%, want 10: only the docs turn keeps its first-call class", got)
+	}
+}
+
+// writeSpec writes one room spec naming each seat's type: the report reads it to know which seats EDIT.
+func writeSpec(t *testing.T, roomDir string, seats [][2]string) {
+	t.Helper()
+	entries := make([]string, 0, len(seats))
+	for _, seat := range seats {
+		entries = append(entries, fmt.Sprintf(`{"seat_key":%q,"seat_type":%q,"runtime":"omp"}`, seat[0], seat[1]))
+	}
+	spec := fmt.Sprintf(`{"room":%q,"seats":[%s],"links":[]}`, filepath.Base(roomDir), strings.Join(entries, ","))
+	if err := os.WriteFile(filepath.Join(roomDir, "spec.json"), []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeSeatTurns writes one session file for a seat with one turn per given cost, each a lone measuring call,
+// except a cost of -1 which writes a code-edit turn - the shape the tests below need to set a share.
+func writeSeatTurns(t *testing.T, roomDir, seat string, costs []float64) {
+	t.Helper()
+	seatDir := filepath.Join(roomDir, "seats", seat)
+	if err := os.MkdirAll(filepath.Join(seatDir, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	var lines []string
+	for _, cost := range costs {
+		parts := `{"type":"toolCall","name":"bash","arguments":{"command":"grep -rn x ."}}`
+		if cost < 0 {
+			parts = `{"type":"toolCall","name":"edit","arguments":{"path":"/r/a.go"}}`
+			cost = -cost
+		}
+		lines = append(lines, fmt.Sprintf(`{"type":"message","timestamp":%q,"message":{"role":"assistant","content":[%s],"usage":{"output":1,"cost":{"total":%v}}}}`,
+			now.Add(-time.Hour).Format(time.RFC3339Nano), parts, cost))
+	}
+	if err := os.WriteFile(filepath.Join(seatDir, "sessions", "s.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// THE ROOM LINE IS A DIAGNOSTIC; THE EDITING SEATS ARE THE TARGET. Three of five seats may not edit code and
+// hold most of a gated room's cost, so a room-wide floor fails by construction (the ruling's arithmetic). The
+// test reads the rendered report, not the struct: what a seat sees is a `diag` room line and PASS/FAIL per
+// developer seat.
+func TestTheRoomCodeEditLineIsDiagnosticWhileEachEditingSeatIsGated(t *testing.T) {
+	now := time.Now().UTC()
+	roomDir, _ := reportFixture(t, now)
+	writeSpec(t, roomDir, [][2]string{{"lead", "lead"}, {"go-dev", "developer"}, {"fe-dev", "developer"}, {"reviewer", "reviewer"}})
+	// go-dev keeps the fixture's turns (60% code-edit); fe-dev is all measuring, so 0%.
+	writeSeatTurns(t, roomDir, "fe-dev", []float64{2, 3})
+	report, err := buildReport("room-a", roomDir, 24*time.Hour, now,
+		func() ([]clientruntime.QueueRow, error) { return nil, nil },
+		func() ([]staleTask, error) { return nil, nil }, noTaskStatus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bySeat := map[string]targetResult{}
+	for _, target := range report.Targets {
+		if target.Name == "code-edit cost %" {
+			bySeat[target.Seat] = target
+		}
+	}
+	if got := bySeat["go-dev"]; got.Result != "PASS" || got.Value != 60 {
+		t.Errorf("go-dev line = %+v, want PASS at 60", got)
+	}
+	if got := bySeat["fe-dev"]; got.Result != "FAIL" || got.Value != 0 {
+		t.Errorf("fe-dev line = %+v, want FAIL at 0", got)
+	}
+	if got := bySeat["room"]; got.Result != verdictDiag {
+		t.Errorf("room line = %+v, want %q: the room share is printed, never gated", got, verdictDiag)
+	}
+	if _, gated := bySeat["lead"]; gated {
+		t.Error("a non-editing seat holds a code-edit target")
+	}
+
+	var out strings.Builder
+	report.renderText(&out)
+	text := out.String()
+	for _, want := range []string{"PASS code-edit cost % [go-dev]", "FAIL code-edit cost % [fe-dev]", "diag code-edit cost % [room]", "(want diagnostic, not a target)", "code-edit by FIRST tool call"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text lacks %q:\n%s", want, text)
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "code-edit cost % [room]") && (strings.Contains(line, "PASS") || strings.Contains(line, "FAIL")) {
+			t.Errorf("the room code-edit line carries a verdict:\n%s", line)
+		}
+	}
+}
+
+// ONE SEAT'S TARGET DOES NOT MOVE WITH THE OTHER'S NUMBER: each editing seat is gated on its own reading, so
+// raising fe-dev to PASS must leave go-dev's line exactly as it was.
+func TestOneSeatsCodeEditTargetDoesNotMoveWithTheOthers(t *testing.T) {
+	seatWith := func(name string, editShare float64) *seatStats {
+		s := newSeatStats(name)
+		s.Turns = 2
+		s.Cost = 100
+		s.ActivityCost[actCodeEdit] = editShare
+		s.ActivityCost[actMeasuring] = 100 - editShare
+		s.finish()
+		return s
+	}
+	room := newSeatStats("ROOM")
+	room.Cost = 200
+	room.ActivityCost[actCodeEdit] = 60
+	room.ActivityCost[actMeasuring] = 140
+	room.finish()
+	goDev := seatWith("go-dev", 50)
+	feDev := seatWith("fe-dev", 10)
+
+	line := func(targets []targetResult, seat string) targetResult {
+		for _, target := range targets {
+			if target.Name == "code-edit cost %" && target.Seat == seat {
+				return target
+			}
+		}
+		t.Fatalf("no code-edit line for %q in %+v", seat, targets)
+		return targetResult{}
+	}
+
+	first := evaluateTargets(room, 1, true, true, []*seatStats{goDev, feDev})
+	if got := line(first, "go-dev"); got.Result != "PASS" || got.Value != 50 {
+		t.Fatalf("go-dev line = %+v, want PASS at 50", got)
+	}
+	if got := line(first, "fe-dev"); got.Result != "FAIL" || got.Value != 10 {
+		t.Fatalf("fe-dev line = %+v, want FAIL at 10", got)
+	}
+
+	raised := seatWith("fe-dev", 90)
+	second := evaluateTargets(room, 1, true, true, []*seatStats{goDev, raised})
+	if got := line(second, "fe-dev"); got.Result != "PASS" || got.Value != 90 {
+		t.Fatalf("fe-dev line = %+v, want PASS at 90", got)
+	}
+	if firstGo, secondGo := line(first, "go-dev"), line(second, "go-dev"); firstGo != secondGo {
+		t.Errorf("go-dev moved with fe-dev: %+v -> %+v", firstGo, secondGo)
+	}
+	for _, targets := range [][]targetResult{first, second} {
+		if got := line(targets, "room"); got.Result != verdictDiag {
+			t.Errorf("room line = %+v, want %q", got, verdictDiag)
 		}
 	}
 }

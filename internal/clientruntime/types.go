@@ -50,8 +50,10 @@ type SeatAlert struct {
 	// state file's updated_at), floored at 0 by the runtime. nil means the seat published no stamp at all,
 	// so the quiet time is unknown and this says unknown rather than inventing a zero.
 	QuietSeconds *int64 `json:"quiet_seconds,omitempty"`
-	// WaitingQitemIDs are the active (pending|in-progress|blocked) qitem ids the rail is holding for this
-	// seat. Plain, not omitempty: the runtime sends the list whenever it sends an alert at all.
+	// WaitingQitemIDs are the active (pending|in-progress) qitem ids the rail is holding for this seat. A
+	// BLOCKED row is not here: it waits on the row its blocked_on names, not on this seat, so it neither
+	// alerts nor nudges until its blocker closes (measured 2026-10-17, task 005e0aad). Plain, not omitempty:
+	// the runtime sends the list whenever it sends an alert at all.
 	WaitingQitemIDs []string `json:"waiting_qitem_ids"`
 }
 

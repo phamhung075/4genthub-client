@@ -43,11 +43,11 @@ One read-only measurement of one room over one window; it writes nothing. The nu
 records rather than an ad-hoc script, so the five targets below are read the same way twice, and a source that
 cannot be read prints "unavailable (<reason>)" instead of a zero.
 
-Four sources: the seats' session transcripts (every assistant turn's cost, classified by its FIRST tool call)
-and tool-calls.jsonl (the guard-blocked count); the room's queue, asked from the runtime daemon - counts and
-lengths only, never a body; and git log --since of the repository the seats' session headers name most often,
-where a commit's Seat: trailer names the seat that made it, Task: names a hub task, and a commit whose every
-file is documentation counts as docs-only.
+Four sources: the seats' session transcripts (every assistant turn's cost, classified by the FIRST tool call,
+and by ANY call for the code-edit class) and tool-calls.jsonl (the guard-blocked count); the room's queue, asked
+from the runtime daemon - counts and lengths only, never a body; and git log --since of the repository the
+seats' session headers name most often, where a commit's Seat: trailer names the seat that made it, Task: names
+a hub task, and a commit whose every file is documentation counts as docs-only.
 
 The window is --since: 24h by default, and 90m or 7d are read the same way. It is LIVE - two runs minutes
 apart answer differently - and --json prints the same answer as one object.
@@ -55,8 +55,12 @@ apart answer differently - and --json prints the same answer as one object.
 Per seat and for the room: USD cost, turns, commits, docs-only share, queue rows, high-priority share, the
 guard-blocked count, and the cost share across the nine activity classes room metrics records.
 
-The five targets, each PASS, FAIL or n/a: docs-only commits % < 15, queue rows/day < 300, high-priority rows %
-< 20, measuring-bash cost % < 25, code-edit cost % > 30. A sixth check this verb adds is not one of the five:
+The targets, each PASS, FAIL or n/a: docs-only commits % < 15, queue rows/day < 300, high-priority rows % < 20,
+measuring-bash cost % < 25 - all four on the room; then code-edit cost % > 40 for each EDITING seat (the room
+spec's developer seats), each on its own line so one seat cannot hide behind the other. The room's own
+code-edit share is printed as a DIAGNOSTIC with no PASS/FAIL: three of five seats may not edit code and hold
+more than half the cost, so a room-wide floor measures the role split, not the effort
+(seats/architect/RULING-code-edit-share-target.md). A sixth check this verb adds is not one of the five:
 tasks closed after a commit that cites them, wanted 0. Below them: the tasks open more than 24h, and the
 commits that carry no Task: trailer.`
 
@@ -75,13 +79,16 @@ const (
 
 var activityOrder = []string{actCodeEdit, actDocEdit, actMeasuring, actTestBuild, actQueueWr, actQueuePoll, actRead, actTextOnly, actOther}
 
-// The targets, as the plan's section 2.7 states them.
+// The targets, as the plan's section 2.7 states them - except code-edit, which
+// seats/architect/RULING-code-edit-share-target.md moved from a room-wide floor to a per-editing-seat floor.
+// The 30% room target cannot be met here by construction: the seats that may not edit code hold 55.1% of the
+// room's cost, so the room share caps at 44.9% even if both developers spent every dollar editing.
 const (
-	targetDocsOnlyMax  = 15.0
-	targetRowsPerDay   = 300.0
-	targetHighMax      = 20.0
-	targetMeasuringMax = 25.0
-	targetCodeEditMin  = 30.0
+	targetDocsOnlyMax     = 15.0
+	targetRowsPerDay      = 300.0
+	targetHighMax         = 20.0
+	targetMeasuringMax    = 25.0
+	targetCodeEditSeatMin = 40.0
 )
 
 // staleTaskAge is how long a todo or in_progress task may stay open before it is listed.
@@ -150,12 +157,19 @@ type seatStats struct {
 	OutputTokens int64              `json:"output_tokens"`
 	ActivityCost map[string]float64 `json:"cost_by_activity_usd"`
 	ActivityPct  map[string]float64 `json:"cost_by_activity_pct"`
-	Blocked      int                `json:"guard_blocked_calls"`
-	Commits      int                `json:"commits"`
-	DocsOnly     int                `json:"docs_only_commits"`
-	QueueRows    int                `json:"queue_rows"`
-	QueueHigh    int                `json:"queue_high_rows"`
-	BodyChars    int                `json:"queue_body_chars"`
+	// CodeEditFirstCallPct is the SAME cost share under the OLD definition - a turn scored by its first tool
+	// call only - kept beside the new one so the two readings stay comparable for a window before the old
+	// target is retired (seats/architect/RULING-code-edit-share-target.md). Room metrics keeps persisting the
+	// first-call reading per turn, so this field and the log agree.
+	CodeEditFirstCallPct float64 `json:"code_edit_first_call_pct"`
+	Blocked              int     `json:"guard_blocked_calls"`
+	Commits              int     `json:"commits"`
+	DocsOnly             int     `json:"docs_only_commits"`
+	QueueRows            int     `json:"queue_rows"`
+	QueueHigh            int     `json:"queue_high_rows"`
+	BodyChars            int     `json:"queue_body_chars"`
+
+	codeEditFirstCallCost float64
 }
 
 func newSeatStats(seat string) *seatStats {
@@ -169,6 +183,7 @@ func (s *seatStats) add(o *seatStats) {
 	for k, v := range o.ActivityCost {
 		s.ActivityCost[k] += v
 	}
+	s.codeEditFirstCallCost += o.codeEditFirstCallCost
 	s.Blocked += o.Blocked
 	s.Commits += o.Commits
 	s.DocsOnly += o.DocsOnly
@@ -182,6 +197,10 @@ func (s *seatStats) finish() {
 		if s.Cost > 0 {
 			s.ActivityPct[k] = 100 * v / s.Cost
 		}
+	}
+	s.CodeEditFirstCallPct = 0
+	if s.Cost > 0 {
+		s.CodeEditFirstCallPct = 100 * s.codeEditFirstCallCost / s.Cost
 	}
 }
 
@@ -234,6 +253,44 @@ func firstToolClass(raw json.RawMessage) string {
 	return actTextOnly
 }
 
+// turnClasses is one assistant turn's TWO readings, because the two answer different questions and the
+// metric moved from one to the other (seats/architect/RULING-code-edit-share-target.md).
+//
+// The first return is the first tool call's class - the reading the report and room metrics used, and the one
+// `metrics.go` still persists per turn. It under-counts editing by construction: every edit is preceded by a
+// read, so a turn that read two files and then edited code was scored `read`.
+//
+// The second return is the class the report now uses: `code-edit` when ANY call in the turn edits code, else
+// the first call's class. Only the code-edit class follows the any-call rule - a turn that reads and then
+// writes a CHANGELOG is still scored by its first call, because the ruling's defect is the code-edit share and
+// widening every class at once would move numbers nobody asked to move.
+func turnClasses(raw json.RawMessage) (first, primary string) {
+	var parts []contentPart
+	if json.Unmarshal(raw, &parts) != nil {
+		return actTextOnly, actTextOnly
+	}
+	edits := false
+	for _, p := range parts {
+		if p.Type != "toolCall" {
+			continue
+		}
+		class := classifyToolCall(p.Name, p.Arguments)
+		if first == "" {
+			first = class
+		}
+		if class == actCodeEdit {
+			edits = true
+		}
+	}
+	if first == "" {
+		return actTextOnly, actTextOnly
+	}
+	if edits {
+		return first, actCodeEdit
+	}
+	return first, first
+}
+
 // forEachLine calls fn with every non-blank line of a JSONL file; a line that is not JSON is the caller's to skip.
 func forEachLine(path string, fn func([]byte)) error {
 	file, err := os.Open(path)
@@ -284,7 +341,11 @@ func readSessions(seatDir string, cutoff time.Time, stats *seatStats) ([]string,
 			stats.Turns++
 			stats.Cost += cost
 			stats.OutputTokens += line.Message.Usage.Output
-			stats.ActivityCost[firstToolClass(line.Message.Content)] += cost
+			first, primary := turnClasses(line.Message.Content)
+			stats.ActivityCost[primary] += cost
+			if first == actCodeEdit {
+				stats.codeEditFirstCallCost += cost
+			}
 		})
 		if err != nil {
 			return nil, err
@@ -560,9 +621,11 @@ func findCommittedOpen(commits []commitRecord, status func(id string) (string, e
 	return open, noTrailer, nil
 }
 
-// targetResult is one target's verdict.
+// targetResult is one target's verdict. Seat names the scope when the target belongs to one seat rather than
+// the room; the verdict vocabulary gains `diag`, meaning "printed, not gated".
 type targetResult struct {
 	Name   string  `json:"name"`
+	Seat   string  `json:"seat,omitempty"`
 	Value  float64 `json:"value"`
 	Limit  string  `json:"limit"`
 	Result string  `json:"result"`
@@ -575,28 +638,76 @@ func verdict(ok bool) string {
 	return "FAIL"
 }
 
-// evaluateTargets checks the room totals against the five targets. A target whose source is missing is
-// "n/a" rather than a pass.
-func evaluateTargets(room *seatStats, days float64, gitOK, queueOK bool) []targetResult {
+// verdictDiag marks a line the report prints and never gates.
+const verdictDiag = "diag"
+
+// editingSeats names the seats the code-edit target holds: the room spec's `developer` seats.
+//
+// The target is per SEAT, not per room, because the seats that may not edit code (lead, reviewer, architect)
+// carry most of a gated room's cost and would make a room-wide floor a measure of the role split
+// (seats/architect/RULING-code-edit-share-target.md). The room's own spec is the only place that says which
+// seats edit, so it is read here; a spec that cannot be read yields no editing seats and the report says so.
+func editingSeats(roomDir string) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(roomDir, "spec.json"))
+	if err != nil {
+		return nil, err
+	}
+	var spec clientruntime.RoomSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return nil, err
+	}
+	var seats []string
+	for _, seat := range spec.Seats {
+		if seat.SeatType == "developer" {
+			seats = append(seats, seat.SeatKey)
+		}
+	}
+	return seats, nil
+}
+
+// evaluateTargets checks the room totals against the four room targets, then the code-edit floor per editing
+// seat, and prints the room's own code-edit share as a diagnostic. A target whose source is missing is "n/a"
+// rather than a pass.
+func evaluateTargets(room *seatStats, days float64, gitOK, queueOK bool, editing []*seatStats) []targetResult {
 	rowsPerDay := float64(room.QueueRows) / days
 	results := []targetResult{
 		{Name: "docs-only commits %", Value: room.docsOnlyPct(), Limit: fmt.Sprintf("< %.0f", targetDocsOnlyMax)},
 		{Name: "queue rows/day", Value: rowsPerDay, Limit: fmt.Sprintf("< %.0f", targetRowsPerDay)},
 		{Name: "high-priority rows %", Value: room.highPct(), Limit: fmt.Sprintf("< %.0f", targetHighMax)},
 		{Name: "measuring cost %", Value: room.ActivityPct[actMeasuring], Limit: fmt.Sprintf("< %.0f", targetMeasuringMax)},
-		{Name: "code-edit cost %", Value: room.ActivityPct[actCodeEdit], Limit: fmt.Sprintf("> %.0f", targetCodeEditMin)},
 	}
 	pass := []bool{
-		room.docsOnlyPct() < targetDocsOnlyMax, rowsPerDay < targetRowsPerDay, room.highPct() < targetHighMax,
-		room.ActivityPct[actMeasuring] < targetMeasuringMax, room.ActivityPct[actCodeEdit] > targetCodeEditMin,
+		room.docsOnlyPct() < targetDocsOnlyMax, rowsPerDay < targetRowsPerDay,
+		room.highPct() < targetHighMax, room.ActivityPct[actMeasuring] < targetMeasuringMax,
 	}
-	available := []bool{gitOK, queueOK, queueOK, true, true}
+	available := []bool{gitOK, queueOK, queueOK, true}
 	for i := range results {
 		results[i].Result = "n/a"
 		if available[i] {
 			results[i].Result = verdict(pass[i])
 		}
 	}
+	for _, seat := range editing {
+		line := targetResult{
+			Name:  "code-edit cost %",
+			Seat:  seat.Seat,
+			Value: seat.ActivityPct[actCodeEdit],
+			Limit: fmt.Sprintf("> %.0f", targetCodeEditSeatMin),
+		}
+		if seat.Turns == 0 {
+			line.Result = "n/a"
+		} else {
+			line.Result = verdict(seat.ActivityPct[actCodeEdit] > targetCodeEditSeatMin)
+		}
+		results = append(results, line)
+	}
+	results = append(results, targetResult{
+		Name:   "code-edit cost %",
+		Seat:   "room",
+		Value:  room.ActivityPct[actCodeEdit],
+		Limit:  "diagnostic, not a target",
+		Result: verdictDiag,
+	})
 	return results
 }
 
@@ -723,7 +834,22 @@ func buildReport(room, roomDir string, window time.Duration, now time.Time,
 		report.Seats = append(report.Seats, bySeat[name])
 	}
 	report.Total.finish()
-	report.Targets = evaluateTargets(report.Total, window.Hours()/24, report.Sources["git"] == "ok", report.Sources["queue"] == "ok")
+	editing, err := editingSeats(roomDir)
+	if err != nil {
+		report.Sources["spec"] = "unavailable (" + err.Error() + ")"
+	} else {
+		report.Sources["spec"] = "ok"
+	}
+	editingStats := make([]*seatStats, 0, len(editing))
+	for _, seat := range editing {
+		stats, seen := bySeat[seat]
+		if !seen {
+			stats = newSeatStats(seat)
+		}
+		editingStats = append(editingStats, stats)
+	}
+	report.Targets = evaluateTargets(report.Total, window.Hours()/24, report.Sources["git"] == "ok",
+		report.Sources["queue"] == "ok", editingStats)
 	closed := targetResult{Name: "tasks closed after commit", Value: float64(len(report.CommittedOpen)), Limit: "0", Result: "n/a"}
 	if report.Sources["commit_tasks"] == "ok" {
 		closed.Result = verdict(len(report.CommittedOpen) == 0)
@@ -734,13 +860,13 @@ func buildReport(room, roomDir string, window time.Duration, now time.Time,
 
 func (r *Report) renderText(out io.Writer) {
 	fmt.Fprintf(out, "report: room %s, last %s, repo %s\n", r.Room, r.Since, orDash(r.Repo))
-	fmt.Fprintf(out, "sources: git %s; queue %s; tasks %s\n\n", r.Sources["git"], r.Sources["queue"], r.Sources["tasks"])
+	fmt.Fprintf(out, "sources: git %s; queue %s; tasks %s; spec %s\n\n", r.Sources["git"], r.Sources["queue"], r.Sources["tasks"], r.Sources["spec"])
 	fmt.Fprintf(out, "%-10s %9s %6s %7s %6s %9s %7s %6s %8s\n", "SEAT", "USD", "TURNS", "COMMITS", "DOCS%", "QROWS", "HIGH%", "AVGBODY", "BLOCKED")
 	for _, s := range append(append([]*seatStats{}, r.Seats...), r.Total) {
 		fmt.Fprintf(out, "%-10s %9.4f %6d %7d %6.1f %9d %7.1f %6.0f %8d\n",
 			s.Seat, s.Cost, s.Turns, s.Commits, s.docsOnlyPct(), s.QueueRows, s.highPct(), s.avgBodyChars(), s.Blocked)
 	}
-	fmt.Fprintf(out, "\ncost share by activity (%% of USD)\n%-10s", "SEAT")
+	fmt.Fprintf(out, "\ncost share by activity (%% of USD; a turn counts as code-edit when ANY of its calls edits code)\n%-10s", "SEAT")
 	for _, a := range activityOrder {
 		fmt.Fprintf(out, " %13s", a)
 	}
@@ -754,8 +880,13 @@ func (r *Report) renderText(out io.Writer) {
 	}
 	fmt.Fprintln(out, "\ntargets")
 	for _, t := range r.Targets {
-		fmt.Fprintf(out, "  %-4s %-24s %8.1f  (want %s)\n", t.Result, t.Name, t.Value, t.Limit)
+		label := t.Name
+		if t.Seat != "" {
+			label += " [" + t.Seat + "]"
+		}
+		fmt.Fprintf(out, "  %-4s %-30s %8.1f  (want %s)\n", t.Result, label, t.Value, t.Limit)
 	}
+	fmt.Fprintf(out, "\ncode-edit by FIRST tool call (the reading room metrics persists, for comparison): %.1f%%\n", r.Total.CodeEditFirstCallPct)
 	fmt.Fprintln(out)
 	switch {
 	case r.Sources["tasks"] != "ok":
