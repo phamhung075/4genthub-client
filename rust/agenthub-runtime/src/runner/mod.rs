@@ -1232,8 +1232,9 @@ pub const MAX_HELD: usize = 8;
 /// The bound this replaces was the resume ladder's own counter, and the sharing was the measured defect:
 /// `deliver_held` incremented the SAME counter the ladder counts resume attempts in and compared the total
 /// against `MAX_RESUME_ATTEMPTS`, so a text refused once, after three unrelated attempts on that seat, was
-/// dropped on its FIRST delivery with its sender told nothing - 19 lines since 22:00Z on 2026-10-16, 13 of
-/// them addressed to the lead seat. A text's bound has to be its own, and reaching it has to be a RETURN
+/// dropped on its FIRST delivery with its sender told nothing - 19 lines counted at 23:14Z in the window that
+/// began 22:00Z on 2026-10-16, 13 of them addressed to the lead seat (the window is open-ended: a recount at
+/// 23:41Z reads 33, 17 the lead's). A text's bound has to be its own, and reaching it has to be a RETURN
 /// rather than a hole.
 pub const MAX_HELD_ATTEMPTS: u32 = 3;
 
@@ -1695,7 +1696,8 @@ fn publish_hold(
 /// The AC of hub task `c94cecfc` is that a text addressed to a seat is either delivered at that seat's next
 /// turn end or REFUSED BACK to its sender with the text and the reason - never dropped in silence. Delivery
 /// is `deliver_held`'s job; this is the other arm, and it is what the bound reaches instead of deleting the
-/// text (measured 2026-10-16: 19 give-up lines since 22:00Z, every one of them a text nobody was told about).
+/// text (measured 2026-10-16 at 23:14Z: 19 give-up lines in the window that began 22:00Z, every one of them a
+/// text nobody was told about; 33 at a 23:41Z recount).
 ///
 /// The frame is the same `text` verb the sender's own send spoke, carrying the text whole and the reason it
 /// was not delivered; its `from`/`verb` name this runner and the `return` path, so the returned text is
@@ -2551,8 +2553,9 @@ mod tests {
         // THE BOUND IS THE TEXT'S, NOT THE PROCESS'S - the whole defect, in one case. The ladder's counter is
         // already past its own bound here (it reached MAX_RESUME_ATTEMPTS on unrelated attempts), and the text
         // in the queue has been offered zero times: it must still be delivered. Before this cut, `deliver_held`
-        // incremented THIS counter and compared it, so the first offer of a fresh text was dropped in silence -
-        // 19 lines since 22:00Z on 2026-10-16, 13 of them addressed to the lead seat.
+        // incremented THIS counter and compared it, so the first offer of a fresh text was dropped in
+        // silence - 19 lines counted at 23:14Z in the window that began 22:00Z on 2026-10-16, 13 of them
+        // addressed to the lead seat (the window is open-ended: 33 at a 23:41Z recount).
         assert!(
             hold_text(
                 &held,
@@ -2690,8 +2693,8 @@ mod tests {
     /// origin, which is the second acceptance criterion.
     ///
     /// Before this cut the bound dropped it: `mirror("gave up: the text <id> refused was refused 3 times while
-    /// held")`, state `blocked`, and no surface anywhere said who sent it (19 such lines since 22:00Z on
-    /// 2026-10-16, 13 addressed to the lead seat).
+    /// held")`, state `blocked`, and no surface anywhere said who sent it (19 such lines counted at 23:14Z in
+    /// the window that began 22:00Z on 2026-10-16, 13 addressed to the lead seat; 33 at a 23:41Z recount).
     #[test]
     fn a_held_text_past_its_own_bound_goes_back_to_its_sender() {
         let dir = std::env::temp_dir().join(format!("runner-giveup-{}", std::process::id()));

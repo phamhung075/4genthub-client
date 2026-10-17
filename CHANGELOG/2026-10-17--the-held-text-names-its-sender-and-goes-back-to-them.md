@@ -5,9 +5,10 @@ next free turn. Its measured defect is that at its bound the text was DROPPED IN
 incremented the SAME counter the resume ladder counts its attempts in and compared the total against
 `MAX_RESUME_ATTEMPTS` (3), so a text refused once - on a seat that had already spent three resume attempts on
 unrelated turns - was dropped on its FIRST offer, with a `gave up` line in the runner's own log as its only
-trace. Measured in the live room: 19 give-up lines since 22:00Z on 2026-10-16, 13 of them addressed to the lead
-seat; fe-dev's three lost sends are the same event seen from the sender's end, which read `relayed` for a
-message that had died.
+trace. Measured in the live room: 19 give-up lines counted at 23:14Z in the window that began 22:00Z on
+2026-10-16, 13 of them addressed to the lead seat - and the window is OPEN-ENDED, so a later recount reads more
+(33 at 23:41Z, 17 of them the lead's) rather than disagreeing; fe-dev's three lost sends are the same event seen
+from the sender's end, which read `relayed` for a message that had died.
 
 Two things were missing for a sender to be able to act on any of it. The text's own bound - a text's life is
 not the seat's turn life, and sharing one counter made the other's spending the text's death. And the ORIGIN:
@@ -43,6 +44,11 @@ only name the refused prompt's id.
   verb)` is the one request builder, used by `Client.SendText` and `RuntimeSendTextOn`; a caller with no session
   of its own (a shell, a hook) sends no `from` at all instead of a blank string the runner would have to read
   as a name.
+- `internal/clientruntime/sender.go`, `ipc.go`, `transport.go` and every client carrier
+  (`clientlifecycle`, `clientoutbox`, `clientsync`, `clientrestore`): `SendOptions.Verb` carries the verb that
+  CARRIED the frame, and `Client.SendText` / `SendTextToSeat` / `DeliverToSession` take it, so the client's
+  paths are distinguished the way the runtime's already were - the rig's `say`, its `abort`, the `wake`,
+  `messages`, and the restore `brief` - instead of every one of them claiming to be the `send` verb.
 
 ### Testing
 
@@ -71,5 +77,16 @@ only name the refused prompt's id.
   request carries `from`/`verb` when the caller has a session, and no `from` key at all when it does not.
 - `internal/clientseat/send_transport_test.go::TestSendGoesThroughTheRuntimeSocket` (extended): the payload a
   seat's send puts on the socket names the origin beside the target and the body.
-- At this change, from `wt/go-dev-scope`: `cargo test` in `rust/agenthub-runtime` = 157 passed, 0 failed (140
-  unit + 17 across `tests/`); `go vet ./...` rc 0; `go test -count=1 ./...` = 32 packages ok, 0 fail.
+- `supervisor::tests::a_multi_line_message_reaches_a_runner_seat_as_one_text_frame` (extended) and
+  `main::tests::the_cli_send_stamps_this_shells_session_and_the_send_verb` (new), both at the reviewer's gate:
+  the daemon's `from`/`verb` STAMPING and this binary's own origin were asserted NOWHERE - deleting the two
+  stamping lines in `deliver_text` left the whole suite green (the reviewer's mutation, 2026-10-17) - so the
+  frame test now asserts `frame["from"]`/`frame["verb"]`, and the origin is a pure function
+  (`send_origin_from`) whose two no-session cases are pinned (a shell that is not a seat; a name of spaces).
+  Re-measured RED: with the two stamping lines deleted the frame test fails on
+  `left: Null, right: "agenthub--demo--principal"`.
+- `clientlifecycle`: the rig's two carriers pin their own verb (`say`, `abort`) beside the text they send, so a
+  frame's verb cannot quietly become the generic `send` again.
+- At this change, from `wt/go-dev-scope` (these two commits replayed onto main `46b8b6e`): `cargo test` in
+  `rust/agenthub-runtime` = 166 passed, 0 failed (149 unit + 17 across `tests/`); `go vet ./...` rc 0;
+  `gofmt -l internal/ cmd/` clean; `go test -count=1 ./...` = 32 packages ok, 0 fail.

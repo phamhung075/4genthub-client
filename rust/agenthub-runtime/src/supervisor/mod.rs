@@ -2363,6 +2363,15 @@ mod tests {
         let frame = runner.join().expect("runner thread");
         assert_eq!(frame["type"], "text");
         assert_eq!(frame["text"], text, "the whole message is one frame");
+        // THE ORIGIN IS WHAT A HELD TEXT IS HANDED BACK WITH, and it rides the frame: the daemon stamps
+        // `from`/`verb` here, and a frame that reached a runner without them would be a text a mid-turn seat
+        // can be holding with nothing naming who sent it. The reviewer's mutation (2026-10-17) deleted the
+        // two stamping lines and the whole suite stayed green, so these two assertions are the pin.
+        assert_eq!(
+            frame["from"], "agenthub--demo--principal",
+            "the frame names the sender the daemon was given"
+        );
+        assert_eq!(frame["verb"], "send", "the frame names the verb that carried it");
         assert_eq!(answer["outcome"], "relayed");
         assert_eq!(answer["runner"]["relayed"], "prompt");
 

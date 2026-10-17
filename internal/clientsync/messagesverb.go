@@ -85,9 +85,12 @@ const humanSeatSession = "human@kernel"
 // can do at all, which is the whole reason the cloud stores the text instead of delivering it.
 //
 // It delivers through the runtime socket. THE SENDER IS GIVEN RATHER THAN INHERITED: the deliverer runs
-// OUTSIDE any seat shell and the text is the human's, so the envelope must say human@kernel.
+// OUTSIDE any seat shell and the text is the human's, so the envelope must say human@kernel. The VERB is
+// this verb's own (`messages`): the frame names the carrier, so a text a mid-turn seat cannot take comes
+// back to the deliverer naming the verb that sent it rather than the generic send.
 var sendToSession = func(_ context.Context, session, text string) error {
-	if _, err := clientruntime.RuntimeSendText(session, text, clientruntime.SendOptions{Sender: humanSeatSession}); err != nil {
+	opts := clientruntime.SendOptions{Sender: humanSeatSession, Verb: "messages"}
+	if _, err := clientruntime.RuntimeSendText(session, text, opts); err != nil {
 		return fmt.Errorf("send to %s: %w", session, err)
 	}
 	return nil

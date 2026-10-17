@@ -5,8 +5,9 @@
 //! so they stay green if the mailbox stops recording the origin, if the Hold arm stops building an entry, or if
 //! nothing calls `deliver_held` at a turn end at all. Run against the revision this branch starts from, this
 //! case fails on exactly those two: the refusal held the text while the state file went on reading `idle` (a
-//! sender told nothing - the shape of the 19 give-up lines since 22:00Z on 2026-10-16, 13 of them addressed to
-//! the lead seat), and the delivery line named the refused prompt's id instead of the session that sent it.
+//! sender told nothing - the shape of the 19 give-up lines counted at 23:14Z in the window that began 22:00Z on
+//! 2026-10-16, 13 of them addressed to the lead seat; the window is open-ended, so a 23:41Z recount reads 33),
+//! and the delivery line named the refused prompt's id instead of the session that sent it.
 //! What the text's own BOUND does - the resume ladder's counter that dropped a text on its first offer once
 //! three unrelated attempts had been spent on that seat - is the unit cases' subject, because pinning it needs
 //! a counter at its bound rather than a fresh one. This case pins the whole path instead: a real mailbox

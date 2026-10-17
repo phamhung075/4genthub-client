@@ -102,7 +102,13 @@ func RuntimeSendTextOn(socket, session, text string, opts SendOptions) ([]byte, 
 	if !opts.Raw {
 		body = sendEnvelope(sender, session, text, time.Now())
 	}
-	resp, err := NewClient(socket).Call("SendText", SendTextArgs(session, body, sender, "send"))
+	// The verb the frame is stamped with: the caller's own when it names one, `send` otherwise. It rides the
+	// frame so the runner can hand a text it could not deliver back to its sender NAMING the way it arrived.
+	verb := opts.Verb
+	if verb == "" {
+		verb = "send"
+	}
+	resp, err := NewClient(socket).Call("SendText", SendTextArgs(session, body, sender, verb))
 	if err != nil {
 		return nil, err
 	}
@@ -207,15 +213,18 @@ func ResolveIdentity(session string) (WhoamiResponse, error) {
 // restore path uses (internal/clientrestore), on the SAME transport the `4genteam send` verb delivers over.
 // The text is wrapped in the From/To/Sent envelope, attributed to this shell's own session name.
 //
+// `verb` is the client verb that CARRIED this frame, stamped onto it so a text a mid-turn seat cannot take is
+// handed back to this session naming the way it arrived. Blank means `send`.
+//
 // The exit code is the client's own: 0 delivered, ExitRemote (1) when the runtime refused it,
 // ExitUnavailable (3) when no runtime answered. A caller that must not report a policy result as a delivery
 // failure maps it at its own boundary.
-func DeliverToSession(session, text string, stdout, stderr io.Writer) int {
+func DeliverToSession(session, text, verb string, stdout, stderr io.Writer) int {
 	if ResolveTransport() != TransportRuntime {
 		fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", RuntimeMissing())
 		return clientcmd.ExitUnavailable
 	}
-	answer, err := RuntimeSendText(session, text, SendOptions{})
+	answer, err := RuntimeSendText(session, text, SendOptions{Verb: verb})
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam send: the runtime at %s refused it: %v\n", DefaultSocketPath(), err)
 		return clientcmd.ExitRemote

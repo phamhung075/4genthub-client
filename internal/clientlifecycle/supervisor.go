@@ -422,10 +422,10 @@ const saySender = "owner session"
 func rigSay(rig, seat, text string, raw bool) {
 	session := clientruntime.SeatSessionName(rig, seat)
 	if raw {
-		_ = runtimeSendText(session, text)
+		_ = runtimeSendText(session, text, "say")
 		return
 	}
-	_ = runtimeSendText(session, "From "+saySender+": "+text)
+	_ = runtimeSendText(session, "From "+saySender+": "+text, "say")
 }
 
 // runtimeSendText is the ONE place this package types text into a seat's pane. It is a package-level variable rather
@@ -433,8 +433,11 @@ func rigSay(rig, seat, text string, raw bool) {
 // rigSay ABOVE rebuilds the CLI's "From <sender>: " envelope for a plain message and sends a raw one bare, and
 // rigAbort BELOW sends the bare "/abort" keystroke. The one thing in this file that still reaches the rig tool is
 // rigIdle, which READS and types nothing (declared as an exception above).
-var runtimeSendText = func(session, text string) error {
-	return clientruntime.NewClient("").SendText(session, text)
+//
+// The VERB is the third argument and it is not decoration: it rides the frame, and a text a mid-turn seat cannot
+// take comes back to this session naming the way it arrived. The two carriers here name themselves.
+var runtimeSendText = func(session, text, verb string) error {
+	return clientruntime.NewClient("").SendText(session, text, verb)
 }
 
 // rigAbort sends /abort, the one pane text the omp runner turns into an abort of the running turn, and it goes
@@ -449,7 +452,7 @@ func rigAbort(rig, seat string) {
 	// this keystroke. The old code discarded it too (Start + Release), so this is not a new silence. The alternative
 	// is a supervisor log line, which this function cannot reach without a logger seam of its own: if a reader needs
 	// the refusal visible, THAT seam is the change to make - not a silent retry here.
-	_ = runtimeSendText(clientruntime.SeatSessionName(rig, seat), "/abort")
+	_ = runtimeSendText(clientruntime.SeatSessionName(rig, seat), "/abort", "abort")
 }
 
 func tmuxInterrupt(rig, seat string) {

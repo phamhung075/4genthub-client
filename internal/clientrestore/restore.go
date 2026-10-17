@@ -56,10 +56,12 @@ func newRestorer(log *teeLog) (*restorer, error) {
 		ensureDaemon: func(ctx context.Context) error { return clientruntime.NewClient("").EnsureDaemon(ctx) },
 		revive:       reviveRoom,
 		// send is the brief's delivery through the runtime socket. DeliverToSession takes the session name
-		// as given, and a refusal in words is what a caller gets when the runtime does not answer.
+		// as given, and a refusal in words is what a caller gets when the runtime does not answer. The frame
+		// is stamped `brief`: this delivery is the room's brief, not a plain send, and a text a mid-turn seat
+		// cannot take comes back naming it that way.
 		send: func(_ context.Context, session, text string) error {
 			var refusal strings.Builder
-			if code := clientruntime.DeliverToSession(session, text, io.Discard, &refusal); code != clientcmd.ExitOK {
+			if code := clientruntime.DeliverToSession(session, text, "brief", io.Discard, &refusal); code != clientcmd.ExitOK {
 				why := strings.TrimSpace(refusal.String())
 				if why == "" {
 					why = "the runtime did not answer and said nothing"

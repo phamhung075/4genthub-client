@@ -336,13 +336,24 @@ fn shellexpand(path: &str) -> String {
 /// The runner needs both to name a text it cannot deliver, and the session is what lets it hand the text
 /// BACK to this caller rather than drop it. A shell that is not a seat has no session name, and that is
 /// recorded as unnamed rather than guessed at from the pane's argv.
-fn agent_send_origin() -> crate::runner::Origin {
+///
+/// PURE, and it takes the value rather than reading the environment itself: `AGENTHUB_SESSION_NAME` is
+/// process-wide and every test in this binary would race for it, so what a test can pin is the mapping from
+/// "what the variable holds" to "what the frame says" - the same shape `supervisor::seat_env` has.
+fn send_origin_from(session: Option<&str>) -> crate::runner::Origin {
+    let from = session
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string);
     crate::runner::Origin {
-        from: std::env::var("AGENTHUB_SESSION_NAME")
-            .ok()
-            .filter(|s| !s.trim().is_empty()),
+        from,
         verb: Some("send".to_string()),
     }
+}
+
+/// The origin the CLI's own `send` speaks with: `send_origin_from` fed by this process's environment.
+fn agent_send_origin() -> crate::runner::Origin {
+    send_origin_from(std::env::var("AGENTHUB_SESSION_NAME").ok().as_deref())
 }
 
 /// The one line `agenthub-runtime send` prints for the answer the supervisor produced.
@@ -374,6 +385,24 @@ fn send_receipt(session: &str, answer: &serde_json::Value) -> String {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    /// The CLI's own `send` stamps BOTH halves of the origin. This exists because of the reviewer's mutation
+    /// (2026-10-17): `agent_send_origin` was asserted nowhere, so this binary's `send` could have stopped
+    /// carrying the sender and only a live room would have shown it. The verb is the frame's own; the session
+    /// is this shell's, and a shell that is not a seat - or a name that is only spaces - names NONE, so the
+    /// runner reads it as unnamed rather than guessing.
+    #[test]
+    fn the_cli_send_stamps_this_shells_session_and_the_send_verb() {
+        let named = send_origin_from(Some("agenthub--demo--go-dev"));
+        assert_eq!(named.from.as_deref(), Some("agenthub--demo--go-dev"));
+        assert_eq!(named.verb.as_deref(), Some("send"));
+        assert_eq!(
+            send_origin_from(None).from,
+            None,
+            "a shell that is not a seat has no session to name"
+        );
+        assert_eq!(send_origin_from(Some("   ")).from, None, "a blank name is no session");
+    }
 
     /// The rule the client's own receipt was cured of, applied to the runtime's second consumer of the same
     /// document: only the outcome that proves a submission is a delivery.

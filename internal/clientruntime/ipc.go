@@ -380,13 +380,16 @@ func (c *Client) SetSeatModel(room, seat, model string) error {
 	return err
 }
 
-func (c *Client) SendText(session, text string) error {
-	_, err := c.Call("SendText", SendTextArgs(session, text, ownSession(), "send"))
+// SendText delivers one message to one session. `verb` is the client verb that CARRIED the frame - the rig's
+// say, its abort, the wake - and it is stamped onto the frame so a text a mid-turn seat cannot take is handed
+// back to this session naming the way it arrived. Blank means `send`.
+func (c *Client) SendText(session, text, verb string) error {
+	_, err := c.Call("SendText", SendTextArgs(session, text, ownSession(), verb))
 	return err
 }
 
-func (c *Client) SendTextToSeat(room, seat, text string) error {
-	return c.SendText(SeatSessionName(room, seat), text)
+func (c *Client) SendTextToSeat(room, seat, text, verb string) error {
+	return c.SendText(SeatSessionName(room, seat), text, verb)
 }
 
 func (c *Client) StartRoomByName(room, cwd string) ([]SeatStatus, error) {

@@ -189,7 +189,7 @@ func (m *Manager) WakeSeatsFromEvents(ctx context.Context, events []LedgerEvent)
 		}
 
 		if m.Runtime != nil {
-			_ = m.Runtime.SendTextToSeat(room, seat, wakeText)
+			_ = m.Runtime.SendTextToSeat(room, seat, wakeText, "wake")
 		}
 	}
 	return nil
@@ -315,7 +315,7 @@ func (m *Manager) WakeSeatsForWork(ctx context.Context, machine string, work []W
 			m.OnWake(room, seat, wakeText)
 		}
 		if m.Runtime != nil {
-			_ = m.Runtime.SendTextToSeat(room, seat, wakeText)
+			_ = m.Runtime.SendTextToSeat(room, seat, wakeText, "wake")
 		}
 	}
 	return nil

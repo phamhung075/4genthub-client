@@ -19,6 +19,10 @@ type SendOptions struct {
 	// AS that human rather than as the seat the deliverer happens to run under. Blank means this shell's own
 	// session.
 	Sender string
+	// Verb is the client verb that CARRIED this frame, stamped onto it so a text a mid-turn seat cannot take
+	// is handed back naming the way it arrived. Blank means the `send` verb; the carriers whose own name is
+	// not `send` name themselves here (a rig's say, its abort, the wake, sync messages).
+	Verb string
 }
 
 // ownSession is the session name this shell's environment claims, or "" when the shell is not a seat's.

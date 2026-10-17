@@ -430,9 +430,9 @@ func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
 	previous := runtimeSendText
 	t.Cleanup(func() { runtimeSendText = previous })
 
-	var gotSession, gotText string
-	runtimeSendText = func(session, text string) error {
-		gotSession, gotText = session, text
+	var gotSession, gotText, gotVerb string
+	runtimeSendText = func(session, text, verb string) error {
+		gotSession, gotText, gotVerb = session, text, verb
 		return nil
 	}
 
@@ -440,6 +440,10 @@ func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
 
 	if gotSession != "agenthub--room1--alpha" {
 		t.Errorf("session = %q, want the room's canonical session name agenthub--room1--alpha", gotSession)
+	}
+	if gotVerb != "abort" {
+		t.Errorf("verb = %q, want \"abort\": the frame names the carrier, so a text the runtime could not deliver "+
+			"comes back naming the keystroke rather than claiming the send verb carried it", gotVerb)
 	}
 	if gotText != "/abort" {
 		t.Errorf("barrier text = %q, want the bare /abort: an envelope or any other text arrives as a MESSAGE, "+
@@ -453,9 +457,9 @@ func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
 	previous := runtimeSendText
 	t.Cleanup(func() { runtimeSendText = previous })
 
-	var sessions, texts []string
-	runtimeSendText = func(session, text string) error {
-		sessions, texts = append(sessions, session), append(texts, text)
+	var sessions, texts, verbs []string
+	runtimeSendText = func(session, text, verb string) error {
+		sessions, texts, verbs = append(sessions, session), append(texts, text), append(verbs, verb)
 		return nil
 	}
 
@@ -468,6 +472,10 @@ func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
 	for i, session := range sessions {
 		if session != "agenthub--room1--alpha" {
 			t.Errorf("send %d session = %q, want the room's canonical session name agenthub--room1--alpha", i, session)
+		}
+		if verbs[i] != "say" {
+			t.Errorf("send %d verb = %q, want \"say\": the frame names the carrier - the rig's own say - so a text "+
+				"the runtime could not deliver comes back saying which verb sent it", i, verbs[i])
 		}
 	}
 	if want := "From " + saySender + ": context was compacted"; texts[0] != want {
@@ -488,7 +496,7 @@ func TestRigSayNeverShellsOutToTheRigTool(t *testing.T) {
 	t.Cleanup(func() { runtimeSendText = previous })
 
 	called := false
-	runtimeSendText = func(session, text string) error { called = true; return nil }
+	runtimeSendText = func(session, text, verb string) error { called = true; return nil }
 	t.Setenv("PATH", t.TempDir())
 
 	rigSay("room1", "alpha", "hello", false)
