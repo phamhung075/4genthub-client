@@ -3,6 +3,7 @@
 package clientps
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -20,7 +21,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 )
 
-const usage = "usage: 4genteam ps [RIG] [--nodes | --compact | --grid] [--json]"
+const usage = "usage: 4genteam ps [--state-root DIR] [RIG] [--nodes | --compact | --grid] [--json]"
 
 // quotaMarkers are the provider messages a seat prints when it cannot answer; any of them in the
 // transcript tail means the seat is waiting at its prompt for a reason that is not its own.
@@ -78,6 +79,12 @@ func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer)
 			"shows a provider quota or credit message is reported as `quota`.")
 		return clientcmd.ExitOK
 	}
+	rootFlag, args := clientenv.StateRootFromFlags(args)
+	stateRoot, err := clientenv.ResolveStateRoot(rootFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam ps: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
+	}
 	view, asJSON, rig, wantRig := "summary", false, "", false
 	for _, arg := range args {
 		switch arg {
@@ -103,7 +110,7 @@ func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer)
 			rig = arg
 		}
 	}
-	sessions, err := listSessions(ctx)
+	sessions, err := listSessions(ctx, stateRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam ps: %v\n", err)
 		return clientcmd.ExitUnavailable
@@ -112,7 +119,6 @@ func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer)
 		// An empty answer is an answer only when it says what was looked at: the server this process would use.
 		fmt.Fprintln(stderr, "4genteam ps: no tmux sessions on the server this process would use")
 	}
-	stateRoot, _ := clientenv.ResolveStateRoot("") // no root: seats list without transcripts
 	seats := collect(stateRoot, sessions, rig)
 	if reason := emptyReason(rig, len(sessions), len(seats)); reason != "" {
 		fmt.Fprintf(stderr, "4genteam ps: %s\n", reason)
@@ -139,14 +145,18 @@ type session struct {
 	attached bool
 }
 
-func listSessions(ctx context.Context) ([]session, error) {
-	argv, err := clientenv.TmuxArgv("list-sessions", "-F", "#{session_name}\t#{session_created}\t#{session_attached}")
+func listSessions(ctx context.Context, root string) ([]session, error) {
+	argv, err := clientenv.TmuxArgvAt(root, "list-sessions", "-F", "#{session_name}\t#{session_created}\t#{session_attached}")
 	if err != nil {
 		return nil, err
 	}
 	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).Output()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && strings.Contains(string(exitErr.Stderr), "no server running") {
+		// A tmux server that is not there is NOT a failed read: it is the fact "no sessions", the same
+		// reading clientrestore takes for the same command, and tmux spells that fact two ways -
+		// "no server running on ..." for a live socket dir and "error connecting to ... (No such file or
+		// directory)" for a root where no server ever started. A failed read has output; this one has none.
+		if len(bytes.TrimSpace(out)) == 0 {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("tmux list-sessions failed: %w", err)

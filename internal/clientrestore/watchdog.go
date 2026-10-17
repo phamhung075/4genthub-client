@@ -31,7 +31,7 @@ const exitDead = 2
 const watchdogServerIDName = "rig-watchdog.server-id"
 
 // watchdogUsage is what every refusal in this verb points at, in the same shape as continueUsage.
-const watchdogUsage = "usage: 4genteam watchdog [RIG [--watch [SECONDS] [HEARTBEAT_POLLS]] | " +
+const watchdogUsage = "usage: 4genteam watchdog [--state-root DIR] [RIG [--watch [SECONDS] [HEARTBEAT_POLLS]] | " +
 	"--all --watch [SECONDS] | --check | --self-test] " + clientoffpeak.ModeFlagUsage
 
 // watchdogListingUsage is the shell's own no-argument usage line, kept verbatim (with the binary's name
@@ -57,8 +57,8 @@ var (
 	// tmuxServerIdentity is the shell's `tmux display-message -p '#{pid} #{start_time}'`, with a missing
 	// server answered as "none" rather than as an error - the crash case is exactly when there is no
 	// server to ask.
-	tmuxServerIdentity = func() string {
-		cmd, err := clientenv.TmuxCommand("display-message", "-p", "#{pid} #{start_time}")
+	tmuxServerIdentity = func(root string) string {
+		cmd, err := clientenv.TmuxCommandAt(root, "display-message", "-p", "#{pid} #{start_time}")
 		if err != nil {
 			return "none"
 		}
@@ -128,19 +128,25 @@ func (watchdogCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 				"skips the check for this run.")
 		return clientcmd.ExitOK
 	}
-	allowPeak, args := clientoffpeak.ModeFromFlags(args)
-	if len(args) == 0 {
-		return watchdogListing(stdout, stderr)
+	rootFlag, rest := clientenv.StateRootFromFlags(args)
+	root, err := resolveRoot(rootFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
 	}
-	switch args[0] {
+	allowPeak, rest := clientoffpeak.ModeFromFlags(rest)
+	if len(rest) == 0 {
+		return watchdogListing(root, stdout, stderr)
+	}
+	switch rest[0] {
 	case "--self-test":
 		return selfTest(stdout)
 	case "--check":
-		return watchdogCheck(allowPeak, stdout, stderr)
+		return watchdogCheck(allowPeak, root, stdout, stderr)
 	case "--all":
-		return watchdogAll(allowPeak, args[1:], stdout, stderr)
+		return watchdogAll(allowPeak, root, rest[1:], stdout, stderr)
 	}
-	return watchdogOne(allowPeak, args, stdout, stderr)
+	return watchdogOne(allowPeak, root, rest, stdout, stderr)
 }
 
 // verdict is the decision rule, kept pure so --self-test can exercise it without a fleet. exp = seats the
@@ -160,8 +166,8 @@ func verdict(expected, live int) string {
 
 // liveSeats is the shell's live_seats(): the rig's sessions, straight from tmux, with a missing server
 // read as zero rather than as an error.
-func liveSeats(rigName string) int {
-	return len(rigSessions(rigName, sessionNames()))
+func liveSeats(root, rigName string) int {
+	return len(rigSessions(rigName, sessionNames(root)))
 }
 
 // expectedSeats is the shell's expected_seats(): the rig's running seats as the client's own reading reports
@@ -199,12 +205,9 @@ func countRunningSeats(data string) int {
 // noteServerIdentity is the shell's note_server_identity(): read the server's pid + start time, compare it
 // with the file, and log only when it changed - a first write says so, a later change says which server
 // went away.
-func noteServerIdentity(log *teeLog) {
-	id := tmuxServerIdentity()
-	dir, err := stateDir()
-	if err != nil {
-		return
-	}
+func noteServerIdentity(log *teeLog, root string) {
+	id := tmuxServerIdentity(root)
+	dir := stateDir(root)
 	path := filepath.Join(dir, watchdogServerIDName)
 	prev := "none"
 	if data, err := os.ReadFile(path); err == nil {
@@ -232,6 +235,7 @@ func noteServerIdentity(log *teeLog) {
 // test needs. Its action IS the restorer's, bound here so the two verbs restore identically.
 type watcher struct {
 	log       *teeLog
+	root      string
 	allowPeak bool
 	stderr    io.Writer
 	logPath   string
@@ -243,15 +247,12 @@ type watcher struct {
 
 // newWatcher binds the restorer whose work this watcher drives.
 func newWatcher(restore *restorer, log *teeLog, allowPeak bool, stderr io.Writer) *watcher {
-	path := ""
-	if dir, err := logDir(); err == nil {
-		path = filepath.Join(dir, watchdogLogName)
-	}
 	return &watcher{
 		log:       log,
+		root:      restore.root,
 		allowPeak: allowPeak,
 		stderr:    stderr,
-		logPath:   path,
+		logPath:   filepath.Join(logDir(restore.root), watchdogLogName),
 		daemonUp:  restore.daemonUp,
 		gate:      restore.gate,
 		restore:   restore.restore,
@@ -261,7 +262,7 @@ func newWatcher(restore *restorer, log *teeLog, allowPeak bool, stderr io.Writer
 // check is the shell's check_rig(): one report pass over one rig, restoring when the caller asked for it
 // (action == "restore") and only then.
 func (w *watcher) check(rigName, action string) int {
-	noteServerIdentity(w.log)
+	noteServerIdentity(w.log, w.root)
 	exp, err := expectedSeats(rigName)
 	if err != nil {
 		// No verdict from a reading that failed. Both of the sentences below are facts about the room - "no
@@ -270,7 +271,7 @@ func (w *watcher) check(rigName, action string) int {
 		w.log.printf("%s: the room's node records could not be read; no action (%v)", rigName, err)
 		return clientcmd.ExitOK
 	}
-	live := liveSeats(rigName)
+	live := liveSeats(w.root, rigName)
 	switch verdict(exp, live) {
 	case verdictStopped:
 		w.log.printf("%s: daemon reports no running seats (expected 0, live %d) — deliberate stop or already handled; no action", rigName, live)
@@ -289,12 +290,8 @@ func (w *watcher) check(rigName, action string) int {
 		// The gate logged its own refusal; nothing is started, so there is nothing else to report.
 		return clientcmd.ExitOK
 	}
-	brief, err := defaultBrief(rigName)
-	if err != nil {
-		brief = ""
-	}
-	if w.restore(rigName, brief) {
-		w.log.printf("%s: restore invoked; tmux now has %d", rigName, liveSeats(rigName))
+	if w.restore(rigName, defaultBrief(w.root, rigName)) {
+		w.log.printf("%s: restore invoked; tmux now has %d", rigName, liveSeats(w.root, rigName))
 	} else {
 		w.log.printf("%s: restore FAILED — see %s", rigName, w.logPath)
 	}
@@ -309,14 +306,14 @@ func (w *watcher) watch(rigName string, interval time.Duration, beat int) {
 		rigName, seconds, beat*seconds)
 	misses, polls := 0, 0
 	for watchPollLimit == 0 || polls < watchPollLimit {
-		noteServerIdentity(w.log)
+		noteServerIdentity(w.log, w.root)
 		exp, err := expectedSeats(rigName)
 		if err != nil {
 			// A reading that FAILED is not a MISS. This counter is for seats that vanished, and treating the
 			// unreadable as zero would count a room nobody read as gone - twice - and then restore it.
 			w.log.printf("%s: the room's node records could not be read; not counted as a miss (%v)", rigName, err)
 		} else {
-			live := liveSeats(rigName)
+			live := liveSeats(w.root, rigName)
 			if verdict(exp, live) == verdictDead {
 				misses++
 				w.log.printf("%s: MISS %d/2 (daemon expects %d, tmux has 0)", rigName, misses, exp)
@@ -380,14 +377,9 @@ func selfTest(out io.Writer) int {
 
 // watchdogListing is the shell's no-argument form: the usage line, then every rig that has a brief. It
 // needs no rig tool, which is the point - a machine without one is where a reader wants the brief list.
-func watchdogListing(stdout, stderr io.Writer) int {
+func watchdogListing(root string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, watchdogListingUsage)
-	dir, err := briefDir()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
-		return clientcmd.ExitUnavailable
-	}
-	for _, brief := range briefsOnDisk(dir) {
+	for _, brief := range briefsOnDisk(briefDir(root)) {
 		fmt.Fprintf(stdout, "  rig with a brief: %s\n", strings.TrimSuffix(filepath.Base(brief), ".txt"))
 	}
 	return clientcmd.ExitOK
@@ -396,19 +388,13 @@ func watchdogListing(stdout, stderr io.Writer) int {
 // openWatchdog is the shared head of every daemon-reading form: the log (which also resolves the home)
 // and the restorer both the report and the watch will use. It is one message and
 // ExitUnavailable when the home is missing, the same rule the rest of this package follows.
-func openWatchdog(stdout, stderr io.Writer) (*teeLog, *restorer, int) {
-	log, err := openLog(watchdogLogName, stdout)
+func openWatchdog(root string, stdout, stderr io.Writer) (*teeLog, *restorer, int) {
+	log, err := openLog(watchdogLogName, root, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
 		return nil, nil, clientcmd.ExitUnavailable
 	}
-	restore, err := newRestorer(log)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
-		log.close()
-		return nil, nil, clientcmd.ExitUnavailable
-	}
-	return log, restore, clientcmd.ExitOK
+	return log, newRestorer(log, root), clientcmd.ExitOK
 }
 
 // watchdogCheck is the shell's --check: one report pass over every rig that has a brief, changing nothing.
@@ -418,20 +404,15 @@ func openWatchdog(stdout, stderr io.Writer) (*teeLog, *restorer, int) {
 // that only reads the exit code would have acted on. "Any rig came back dead" is deterministic, does not
 // depend on the order the briefs happen to be listed in, and carries the same signal the script's accident
 // carried whenever the last rig was the dead one.
-func watchdogCheck(allowPeak bool, stdout, stderr io.Writer) int {
-	dir, err := briefDir()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
-		return clientcmd.ExitUnavailable
-	}
-	log, restore, code := openWatchdog(stdout, stderr)
+func watchdogCheck(allowPeak bool, root string, stdout, stderr io.Writer) int {
+	log, restore, code := openWatchdog(root, stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
 	defer log.close()
 	w := newWatcher(restore, log, allowPeak, stderr)
 	dead := false
-	for _, brief := range briefsOnDisk(dir) {
+	for _, brief := range briefsOnDisk(briefDir(root)) {
 		if w.check(strings.TrimSuffix(filepath.Base(brief), ".txt"), "report") == exitDead {
 			dead = true
 		}
@@ -443,7 +424,7 @@ func watchdogCheck(allowPeak bool, stdout, stderr io.Writer) int {
 }
 
 // watchdogOne is the shell's two per-rig forms: a one-shot report, or a watch loop.
-func watchdogOne(allowPeak bool, args []string, stdout, stderr io.Writer) int {
+func watchdogOne(allowPeak bool, root string, args []string, stdout, stderr io.Writer) int {
 	rigName := args[0]
 	if strings.HasPrefix(rigName, "-") {
 		fmt.Fprintf(stderr, "4genteam watchdog: unknown argument %s. %s\n", rigName, watchdogUsage)
@@ -464,7 +445,7 @@ func watchdogOne(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 			return clientcmd.ExitUsage
 		}
 	}
-	log, restore, code := openWatchdog(stdout, stderr)
+	log, restore, code := openWatchdog(root, stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
@@ -479,7 +460,7 @@ func watchdogOne(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 
 // watchdogAll is the shell's --all: a watcher per rig that has a brief, concurrently, then wait. Without
 // --watch it is a usage error, because there is no useful thing for it to do.
-func watchdogAll(allowPeak bool, args []string, stdout, stderr io.Writer) int {
+func watchdogAll(allowPeak bool, root string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "--watch" {
 		fmt.Fprintln(stderr, "4genteam watchdog: --all requires --watch (or use --check)")
 		return clientcmd.ExitUsage
@@ -494,19 +475,14 @@ func watchdogAll(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 		}
 		interval = seconds
 	}
-	dir, err := briefDir()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam watchdog: %v\n", err)
-		return clientcmd.ExitUnavailable
-	}
-	log, restore, code := openWatchdog(stdout, stderr)
+	log, restore, code := openWatchdog(root, stdout, stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
 	defer log.close()
 	w := newWatcher(restore, log, allowPeak, stderr)
 	names := make([]string, 0)
-	for _, brief := range briefsOnDisk(dir) {
+	for _, brief := range briefsOnDisk(briefDir(root)) {
 		names = append(names, strings.TrimSuffix(filepath.Base(brief), ".txt"))
 	}
 	log.printf("--all: watching %d rig(s) at %ds", len(names), interval)

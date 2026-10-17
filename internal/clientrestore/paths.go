@@ -23,37 +23,47 @@ package clientrestore
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// stateSubdir is the ONE place the three directories are derived, under the REAL home
-// (clientenv.RealHome): a seat is launched with HOME pointed at the seat's own state directory, so
-// resolving these from $HOME would make a machine-level path depend on which seat happens to run the
-// client.
-func stateSubdir(name string) (string, error) {
-	home, err := realHome()
-	if err != nil {
-		return "", err
+// resolveRoot is the verb-side resolution of the client's ONE root: the `--state-root` flag when the verb
+// took one, else this machine's own. The home it reads is this package's seam, so a test never touches a
+// real home - and the root is resolved ONCE per run, which is what keeps the briefs, the logs, the
+// watchdog's server id and the tmux server this verb asks from disagreeing.
+func resolveRoot(flagValue string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
 	}
-	return clientenv.StateSubdir(home, name), nil
+	home, err := realHome()
+	if err != nil || home == "" {
+		return "", &clientcmd.CodedError{Message: clientenv.StateRootMessage, Code: clientcmd.ExitUsage}
+	}
+	return clientenv.StateSubdir(home, ""), nil
 }
 
-// briefDir, logDir and stateDir are ~/.config/4genthub/{briefs,logs,state}. They are functions
-// rather than package variables because the home can fail to resolve, and a relative path here would
-// make the briefs a function of the working directory.
-func briefDir() (string, error) { return stateSubdir("briefs") }
-func logDir() (string, error)   { return stateSubdir("logs") }
-func stateDir() (string, error) { return stateSubdir("state") }
+// stateSubdir is the ONE place the state subdirectories are derived. The root is the caller's resolved
+// root (resolveRoot), so a verb pointed at another tree reads and writes that tree and nothing else.
+func stateSubdir(root, name string) string {
+	return filepath.Join(root, name)
+}
+
+// briefDir, logDir and stateDir are <root>/{briefs,logs,state}.
+func briefDir(root string) string { return stateSubdir(root, "briefs") }
+func logDir(root string) string   { return stateSubdir(root, "logs") }
+func stateDir(root string) string { return stateSubdir(root, "state") }
 
 // The seams this package's tests replace - package-level variables rather than an interface added for
 // testing, which is the repo's rule.
 var (
 	// realHome is the account's home, from the passwd entry rather than $HOME.
 	realHome = clientenv.RealHome
-	// tmuxRead is the ONE tmux read in this package: the session names, as `tmux ls -F '#{session_name}'`
-	// printed them, with the command's error (a missing server) reported to the caller.
+	// tmuxRead is the ONE tmux read in this package: the session names of the server under the root it is
+	// handed, as `tmux ls -F '#{session_name}'` printed them (the command's error - a missing server -
+	// reported to the caller).
 	tmuxRead = tmuxSessionNames
 	// now stamps the log lines, which the shell wrote as `date -Is` (RFC3339 with the local offset).
 	now = time.Now

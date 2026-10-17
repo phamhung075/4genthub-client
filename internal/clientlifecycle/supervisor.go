@@ -93,14 +93,14 @@ func New(rig string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 		State:     map[string]*seatState{},
 	}
 	supervisor.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
-	supervisor.Seats = seatlog.RigSeats
+	supervisor.Seats = func(rig string) []string { return seatlog.RigSeats(stateRoot, rig) }
 	supervisor.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	supervisor.Idle = rigIdle
 	supervisor.IdleWhy = func(rig, seat string) string { _, why := rigIdleReason(rig, seat); return why }
 	supervisor.Say = rigSay
 	supervisor.RPCCompact = func(r, seat string) string { return supervisor.rpcCompact(r, seat) }
 	supervisor.Abort = rigAbort
-	supervisor.Interrupt = tmuxInterrupt
+	supervisor.Interrupt = func(rig, seat string) { tmuxInterrupt(stateRoot, rig, seat) }
 	// The gate's reading is the room's node records, the ONE reading this package already takes for its other
 	// gate (rigNodes), reached here without resolving a rig tool: the reading is the client's own. The seam
 	// carries all three of that reading's answers, so the resume path below can tell a read that FAILED from a
@@ -455,8 +455,8 @@ func rigAbort(rig, seat string) {
 	_ = runtimeSendText(clientruntime.SeatSessionName(rig, seat), "/abort", "abort")
 }
 
-func tmuxInterrupt(rig, seat string) {
-	cmd, err := clientenv.TmuxCommand("send-keys", "-t", clientruntime.SeatSessionName(rig, seat), "Escape")
+func tmuxInterrupt(root, rig, seat string) {
+	cmd, err := clientenv.TmuxCommandAt(root, "send-keys", "-t", clientruntime.SeatSessionName(rig, seat), "Escape")
 	if err != nil {
 		return
 	}

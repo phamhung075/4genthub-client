@@ -232,7 +232,7 @@ func TestGridReadsSeatsFromTheRuntimesTmuxServer(t *testing.T) {
 		t.Fatal("the grid never reached tmux through the runtime's root")
 	}
 	for _, got := range fake.tmuxRoots {
-		if want := clientenv.TmuxRoot(clientenv.DefaultStateRoot()); got != want {
+		if want := clientenv.TmuxRoot(root); got != want {
 			t.Errorf("TMUX_TMPDIR = %q, want %q", got, want)
 		}
 	}
@@ -657,7 +657,7 @@ func TestSmokeFeedReadsTheLiveRig(t *testing.T) {
 	defer cancel()
 
 	out := &strings.Builder{}
-	if err := runFeed(ctx, root, shared{rig: rig, back: 2, width: 120, lines: 3, detail: true}, out); err != nil {
+	if err := runFeed(ctx, shared{rig: rig, stateRoot: root, back: 2, width: 120, lines: 3, detail: true}, out); err != nil {
 		t.Fatalf("feed: %v", err)
 	}
 	captured := splitLines(out.String())
@@ -750,5 +750,25 @@ func TestSeatModelOfFallsBackToTheRoomSpec(t *testing.T) {
 	}
 	if got := seatModelOf(root, "r", "nobody", log); got != "" {
 		t.Errorf("seatModelOf of an unlisted seat = %q, want empty", got)
+	}
+}
+
+// TestGridReadsAnAbsentServerAsNoSeats: a freshly created state root has no tmux server, and tmux then
+// answers "error connecting to ... (No such file or directory)" rather than "no server running". That is
+// the fact "no seats", not a failed read - the same rule clientrestore and ps take - so the grid opens
+// with zero seats instead of refusing the verb.
+func TestGridReadsAnAbsentServerAsNoSeats(t *testing.T) {
+	fake := newFakeExec(t)
+	fake.answerHerdr(nil)
+	withSeatStore(t, "r", "lead")
+	root := withStateRoot(t)
+	fake.failures["tmux list-sessions -F #{session_name}"] = errors.New("exit status 1")
+
+	code, out, errOut := runVerbT(t, "grid", "--room", "r", "--state-root", root)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, "grid: 0 seats") {
+		t.Errorf("stdout = %q, want the grid's zero-seat line", out)
 	}
 }

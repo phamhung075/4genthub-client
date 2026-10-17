@@ -112,11 +112,32 @@ func TestListSessionsReadsTheRuntimesServerWhateverTheEnvironmentNames(t *testin
 	t.Setenv("TMUX_TMPDIR", "/not/the/runtime")
 	t.Setenv("TMUX", "/tmp/default,1,0")
 
-	sessions, err := listSessions(context.Background())
+	sessions, err := listSessions(context.Background(), clientenv.DefaultStateRoot())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(sessions) != 1 || sessions[0].name != "agenthub--r--lead" {
 		t.Fatalf("sessions = %+v, want the runtime's one seat", sessions)
+	}
+}
+
+// TestListSessionsReadsAnAbsentServerAsNoSessions: a root where no tmux server ever started is a fact - no
+// sessions - and not a failed read. tmux spells it "error connecting to <socket> (No such file or
+// directory)" when the socket directory is missing, which is every freshly created state root; the same
+// reading clientrestore takes for the same command is the one pinned here.
+func TestListSessionsReadsAnAbsentServerAsNoSessions(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\necho 'error connecting to /tmp/none/tmux-1000/default (No such file or directory)' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "tmux"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	sessions, err := listSessions(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatalf("an absent server is not a failed read: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("sessions = %+v, want none", sessions)
 	}
 }

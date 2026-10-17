@@ -13,8 +13,9 @@ const feedPollInterval = time.Second
 
 // runFeed is the read-only stream: one line per tool call and result, coloured by tool kind, tailed
 // from every seat's session log. It never writes to a seat.
-func runFeed(ctx context.Context, root string, s shared, out io.Writer) error {
-	seats, err := rigSeats(ctx, s.rig)
+func runFeed(ctx context.Context, s shared, out io.Writer) error {
+	root := s.stateRoot
+	seats, err := rigSeats(ctx, root, s.rig)
 	if err != nil {
 		return err
 	}

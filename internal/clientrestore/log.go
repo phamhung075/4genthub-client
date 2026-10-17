@@ -16,12 +16,10 @@ type teeLog struct {
 	file *os.File
 }
 
-// openLog creates the log directory and opens the verb's log for appending.
-func openLog(name string, out io.Writer) (*teeLog, error) {
-	dir, err := logDir()
-	if err != nil {
-		return nil, err
-	}
+// openLog creates the log directory and opens the verb's log for appending, under the root its caller
+// resolved - so a verb pointed at another tree writes its log there and nothing under this machine's.
+func openLog(name, root string, out io.Writer) (*teeLog, error) {
+	dir := logDir(root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}

@@ -144,7 +144,7 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	}
 	previousHome, previousTmux, previousNow := realHome, tmuxRead, now
 	realHome = func() (string, error) { return w.home, nil }
-	tmuxRead = func() (string, error) { return strings.Join(w.tmux(), "\n"), nil }
+	tmuxRead = func(string) (string, error) { return strings.Join(w.tmux(), "\n"), nil }
 	now = func() time.Time { return time.Date(2026, 10, 10, 15, 0, 0, 0, time.UTC) }
 	t.Cleanup(func() { realHome, tmuxRead, now = previousHome, previousTmux, previousNow })
 
@@ -619,7 +619,7 @@ func TestTheWallIsSkippedWithoutATerminalHost(t *testing.T) {
 	}
 
 	// Now the real wall step with no herdr on the machine: a skip with its reason.
-	opened, why := watchWall("rig-a")
+	opened, why := watchWall("rig-a", clientenv.StateSubdir(w.home, ""))
 	if opened || why != wallNoTerminal {
 		t.Errorf("watchWall with no herdr = (%v, %q), want (false, %q)", opened, why, wallNoTerminal)
 	}
@@ -656,7 +656,7 @@ func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 	}
 	t.Cleanup(func() { execLookPath, execSelfPath, execCommand = previousLook, previousSelf, previousCommand })
 
-	opened, why := watchWall("rig-a")
+	opened, why := watchWall("rig-a", clientenv.StateSubdir(home, ""))
 	if !opened {
 		t.Fatalf("watchWall = (false, %q), want it opened", why)
 	}
@@ -786,9 +786,9 @@ func TestRigSessionsReadsOnlyThisRigsSeats(t *testing.T) {
 // pair exists for, so the read must answer "none" rather than fail.
 func TestAMissingTmuxServerReadsAsNoSessions(t *testing.T) {
 	previous := tmuxRead
-	tmuxRead = func() (string, error) { return "", errors.New("no server running on /tmp/tmux-1000/default") }
+	tmuxRead = func(string) (string, error) { return "", errors.New("no server running on /tmp/tmux-1000/default") }
 	t.Cleanup(func() { tmuxRead = previous })
-	if got := sessionNames(); len(got) != 0 {
+	if got := sessionNames(""); len(got) != 0 {
 		t.Errorf("sessionNames = %q, want none", got)
 	}
 }
@@ -823,10 +823,7 @@ func TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt(t *testing.T) {
 	t.Setenv("AGENTHUB_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
 
 	var out bytes.Buffer
-	r, err := newRestorer(&teeLog{out: &out})
-	if err != nil {
-		t.Fatalf("newRestorer: %v", err)
-	}
+	r := newRestorer(&teeLog{out: &out}, clientenv.StateSubdir(home, ""))
 	if err := r.send(context.Background(), "agenthub--4genthub-min--reviewer", "Your seat: reviewer. hello"); err == nil {
 		t.Fatal("a brief no transport delivered was reported as delivered")
 	} else if !strings.Contains(err.Error(), "no runtime is answering") {

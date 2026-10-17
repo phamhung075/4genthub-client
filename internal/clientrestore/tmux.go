@@ -8,11 +8,13 @@ import (
 )
 
 // tmuxSessionNames is the shell's `tmux ls -F '#{session_name}'`, output and error as the shell saw
-// them. A machine with no tmux server answers on stderr and lists nothing, and both scripts read that as
+// them, asked of the server under root - the runtime puts that server under the state dir it was started
+// with (clientenv.TmuxRoot), so a verb handed a root asks the server that root's rooms actually run in.
+// A machine with no tmux server answers on stderr and lists nothing, and both scripts read that as
 // "no sessions" rather than as a failure, so the caller does too - a watchdog that treated a dead tmux
 // server as an error would be silent in exactly the case it exists for.
-func tmuxSessionNames() (string, error) {
-	cmd, err := clientenv.TmuxCommand("ls", "-F", "#{session_name}")
+func tmuxSessionNames(root string) (string, error) {
+	cmd, err := clientenv.TmuxCommandAt(root, "ls", "-F", "#{session_name}")
 	if err != nil {
 		return "", err
 	}
@@ -23,8 +25,8 @@ func tmuxSessionNames() (string, error) {
 // sessionNames is the raw read, with a missing server read as no sessions. tmux is the ground truth for
 // "is this rig up": the daemon's own node records said running while the server hosting ten seats was
 // gone (the 2026-10-05 crash both scripts exist for).
-func sessionNames() []string {
-	out, err := tmuxRead()
+func sessionNames(root string) []string {
+	out, err := tmuxRead(root)
 	if err != nil && strings.TrimSpace(out) == "" {
 		return nil
 	}
