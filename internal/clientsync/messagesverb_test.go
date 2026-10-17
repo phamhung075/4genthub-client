@@ -355,8 +355,12 @@ func TestMessagesVerbDeliversThroughTheRuntimeWithTheClientEnvelope(t *testing.T
 	if !strings.Contains(got.Payload.Text, "hello lead") {
 		t.Errorf("envelope = %q, want the message body in it", got.Payload.Text)
 	}
-	if !strings.Contains(got.Payload.Text, "From: "+humanSeatSession) {
-		t.Errorf("envelope = %q, want it written AS %s", got.Payload.Text, humanSeatSession)
+	if !strings.Contains(got.Payload.Text, "From: "+clientruntime.HumanSender) {
+		t.Errorf("envelope = %q, want it written AS %s", got.Payload.Text, clientruntime.HumanSender)
+	}
+	// The envelope the runtime receives carries the rail hint, not a send that would refuse for this label.
+	if !strings.Contains(got.Payload.Text, "the rail carries the reply") || strings.Contains(got.Payload.Text, "4genteam send") {
+		t.Errorf("envelope = %q, want the human's reply hint to name the rail", got.Payload.Text)
 	}
 	if strings.Contains(got.Payload.Text, decoy) {
 		t.Errorf("envelope = %q, want the deliverer's own session absent from the sender", got.Payload.Text)

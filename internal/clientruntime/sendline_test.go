@@ -53,3 +53,31 @@ func TestSendEnvelopeNamesSenderRecipientAndReply(t *testing.T) {
 		t.Errorf("an @external sender gets no reply command, got %q", ext)
 	}
 }
+
+// TestTheReplyHintNamesOnlyRoutesThatReachTheSender is the pin for the defect measured 2026-10-17: an owner
+// message arrives with `Reply: 4genteam send human@kernel "..."`, and running it answers `lists no session
+// "human@kernel"` - the one destination the hint named was one its verb could not resolve. The decision is
+// that the HINT is wrong, not send's resolution: a send addresses a runtime session, a human has none, and
+// the row that reaches the room's owner-carrying lead is the route the hint names instead.
+func TestTheReplyHintNamesOnlyRoutesThatReachTheSender(t *testing.T) {
+	const seat = "agenthub--4genthub-min--go-dev"
+	if got := sendEnvelope(HumanSender, seat, "b", time.Time{}); !strings.Contains(got, "4genteam room queue create 4genthub-min --to agenthub--4genthub-min--lead ") || strings.Contains(got, "4genteam send") {
+		t.Errorf("the human's hint:\n got %q\nwant the rail row to the room's lead and no send", got)
+	}
+	// The room is read from a seat key recipient too, so the hint cannot name another room's lead.
+	if got := sendEnvelope(HumanSender, "4genthub-min-go-dev@4genthub-min", "b", time.Time{}); !strings.Contains(got, "create 4genthub-min --to agenthub--4genthub-min--lead ") {
+		t.Errorf("the human's hint to a seat key:\n got %q\nwant the room the recipient names", got)
+	}
+	// A recipient of no readable shape leaves the placeholder rather than guessing a room.
+	if got := sendEnvelope(HumanSender, "nonsense", "b", time.Time{}); !strings.Contains(got, "create <room> --to agenthub--<room>--lead ") {
+		t.Errorf("the human's hint to an unreadable recipient:\n got %q\nwant the <room> placeholder", got)
+	}
+	for _, sender := range []string{"agenthub--4genthub-min--lead", "go-dev@4genthub-min", "room-a-lead"} {
+		if got := sendEnvelope(sender, seat, "b", time.Time{}); !strings.Contains(got, "4genteam send "+sender+` "..."`) {
+			t.Errorf("a session sender %q:\n got %q\nwant the send hint it resolves", sender, got)
+		}
+	}
+	if got := sendEnvelope(" ", seat, "b", time.Time{}); strings.Contains(got, "4genteam send") || !strings.Contains(got, "unattributable") {
+		t.Errorf("a blank sender:\n got %q\nwant no command at all", got)
+	}
+}

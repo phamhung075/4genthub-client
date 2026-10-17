@@ -77,10 +77,9 @@ waits for the next pass instead of ending the child.
 
 // HTTPTimeout is not redefined here: RequestJSON owns the timeout this package uses.
 
-// humanSeatSession is the identity a delivered message is sent AS. The text was written by a human and
-// is read in the seat's own pane, and that pane's only confirmed envelope from a human carried exactly
-// `From: human@kernel` — the same session the pane's reply hint addresses back.
-const humanSeatSession = "human@kernel"
+// The identity a delivered message is sent AS - the text was written by a human and is read in the seat's
+// own pane - lives in clientruntime with the envelope that reads it: clientruntime.HumanSender. It is not a
+// session, and the pane's reply hint names the rail for it rather than a send that would refuse.
 
 // sendToSession is the LOCAL delivery step. It is a package variable so a test can substitute it: the
 // real one types the text into a session on this machine, which no test can do — and no other machine
@@ -91,7 +90,7 @@ const humanSeatSession = "human@kernel"
 // this verb's own (`messages`): the frame names the carrier, so a text a mid-turn seat cannot take comes
 // back to the deliverer naming the verb that sent it rather than the generic send.
 var sendToSession = func(_ context.Context, session, text string) error {
-	opts := clientruntime.SendOptions{Sender: humanSeatSession, Verb: "messages"}
+	opts := clientruntime.SendOptions{Sender: clientruntime.HumanSender, Verb: "messages"}
 	if _, err := clientruntime.RuntimeSendText(session, text, opts); err != nil {
 		return fmt.Errorf("send to %s: %w", session, err)
 	}
