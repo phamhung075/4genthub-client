@@ -1525,16 +1525,23 @@ pub fn nudge_text(room: &str, seat: &str, qitem_ids: &[String], attempt: u32) ->
 /// One nudge: ask a seat's runner to hand its agent the prompt that its waiting rail work is about.
 ///
 /// The frame is the runner's own `text` verb - the frame `send_to_seat` already speaks - which
-/// `relay_frame` turns into the agent's `prompt` frame on the child channel. That channel is why this is
-/// the right mechanism and `pty::TerminalManager::send_text` is not: `send_text` pastes into the tmux
-/// pane, and the pane's input is the runner's own prompt reader (the pane's keystrokes are the human at
-/// the terminal), so a nudge sent that way is typed in the runner's name into whatever the pane's input
-/// happens to be - it does not carry the rail's identity to the agent, which is what the seat needs to
-/// act on it.
+/// `relay_frame` turns into the agent's `prompt` frame on the child channel. For a seat whose runtime
+/// publishes that channel, `pty::TerminalManager::send_text` would be the wrong mechanism: it pastes into
+/// the tmux pane, and there the pane's input is the runner's own prompt reader (the pane's keystrokes are
+/// the human at the terminal), so a nudge sent that way is typed in the runner's name into whatever the
+/// pane's input happens to be - it does not carry the rail's identity to the agent.
 ///
-/// `want_reply` is true on purpose: the recorded outcome is the runner's own answer that it relayed the
-/// frame, never "a write returned". A write into a socket no runner is reading is not a delivery, and the
-/// attempt log must not confuse the two.
+/// A SEAT WITH NO RUNNER IS THE OTHER CASE, and there the pane IS the agent's input: `agy`, `codex` and a
+/// custom command read the pane directly, and `deliver_text` reaches them by pasting. This function makes
+/// the same split, because a mailbox route to a seat that has none records an attempt nobody could
+/// receive - measured 2026-10-17 (task 022666d6): the reviewer, an idle agy seat with a queued row, was
+/// never nudged, and had the pass selected it the mailbox write would have failed for a socket that does
+/// not exist.
+///
+/// `want_reply` is true on purpose for the runner route: the recorded outcome is the runner's own answer
+/// that it relayed the frame, never "a write returned". A write into a socket no runner is reading is not
+/// a delivery, and the attempt log must not confuse the two. The pane route's outcome is the pane's own
+/// word (`submitted`/`unconfirmed`), which is all a paste can prove.
 pub fn nudge_seat(
     state_dir: &Path,
     room: &str,
@@ -1542,29 +1549,42 @@ pub fn nudge_seat(
     session_name: &str,
     qitem_ids: &[String],
     attempt: u32,
+    has_runner: bool,
 ) -> Result<serde_json::Value, String> {
     // A PARKED SEAT IS NOT NUDGED, and the refusal comes before the attempt log: the ladder's state is that
     // durable log, so a parked seat must not spend attempts of it. The rail wake is the runtime's own route to
     // a seat, which is exactly why it is gated here rather than at its caller.
     crate::park::refuse(state_dir, room, seat, "the rail prompt was not delivered")?;
     let text = nudge_text(room, seat, qitem_ids, attempt);
-    let id = format!("nudge-{}-{attempt}", std::process::id());
-    let outcome = send_to_seat(
-        state_dir,
-        session_name,
-        &serde_json::json!({
-            "id": id,
-            "type": "text",
-            // The nudge's origin is the rail, not a seat: nothing on the other end of a nudge is a session
-            // this runtime can hand a text back to, so it is named for what it is (`4genteam send` spoke
-            // the same frame above a seat, and `deliver_text` stamps its caller's session there).
-            "from": format!("the rail of room {room}"),
-            "verb": "nudge",
-            "text": text,
-        }),
-        None,
-        true,
-    );
+    let outcome = if has_runner {
+        let id = format!("nudge-{}-{attempt}", std::process::id());
+        send_to_seat(
+            state_dir,
+            session_name,
+            &serde_json::json!({
+                "id": id,
+                "type": "text",
+                // The nudge's origin is the rail, not a seat: nothing on the other end of a nudge is a session
+                // this runtime can hand a text back to, so it is named for what it is (`4genteam send` spoke
+                // the same frame above a seat, and `deliver_text` stamps its caller's session there).
+                "from": format!("the rail of room {room}"),
+                "verb": "nudge",
+                "text": text,
+            }),
+            None,
+            true,
+        )
+    } else {
+        crate::pty::TerminalManager::send_text(session_name, &text).map(|word| {
+            serde_json::json!({
+                "delivered": session_name,
+                "outcome": match word {
+                    crate::pty::SendOutcome::Submitted => "submitted",
+                    crate::pty::SendOutcome::Unconfirmed => "unconfirmed",
+                },
+            })
+        })
+    };
     let record = NudgeAttempt {
         ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         room: room.to_string(),
@@ -1577,9 +1597,11 @@ pub fn nudge_seat(
         outcome: match &outcome {
             // `frame::reply` wraps the runner's answer as `{"id":..,"ok":true,"data":{...}}`, and
             // `relay_frame`'s `text` arm answers `{"relayed":"prompt"}` - the agent-channel frame the
-            // prompt became. That word is what the log records.
+            // prompt became. That word is what the log records, and on the pane route it is the pane's
+            // own word (`submitted`/`unconfirmed`).
             Ok(answer) => answer
-                .pointer("/data/relayed")
+                .get("outcome")
+                .or_else(|| answer.pointer("/data/relayed"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("relayed")
                 .to_string(),
@@ -3100,7 +3122,7 @@ mod tests {
         )
         .expect("record");
 
-        let err = nudge_seat(&dir, "lab", "dev", "agenthub--lab--dev", &["qitem-1".to_string()], 1)
+        let err = nudge_seat(&dir, "lab", "dev", "agenthub--lab--dev", &["qitem-1".to_string()], 1, true)
             .expect_err("a parked seat is not nudged");
         assert!(
             err.contains("PARKED") && err.contains("the rail prompt was not delivered"),
@@ -3116,7 +3138,7 @@ mod tests {
         // in is reachable on the next tick rather than the next daemon, and the attempt the refusal withheld is
         // recorded now - the ladder's half of the round trip, and the inverse of the assertion above.
         std::fs::remove_file(seat_dir.join("parked.json")).expect("the record is the whole park");
-        let after = nudge_seat(&dir, "lab", "dev", "agenthub--lab--dev", &["qitem-1".to_string()], 1);
+        let after = nudge_seat(&dir, "lab", "dev", "agenthub--lab--dev", &["qitem-1".to_string()], 1, true);
         assert!(
             !matches!(&after, Err(e) if e.contains("PARKED")),
             "with the record gone the same nudge must answer for itself again: {after:?}"

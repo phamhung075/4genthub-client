@@ -223,6 +223,11 @@ pub struct PendingNudge {
     pub room: String,
     pub seat: String,
     pub session_name: String,
+    /// Whether this seat's runtime publishes a runner mailbox. It decides the nudge's ROUTE - a runner
+    /// seat is reached through the mailbox the agent reads, a seat without one (`agy`, `codex`, a custom
+    /// command) through its pane, exactly the split `deliver_text` makes - so the decision is carried from
+    /// the status the pass already read rather than re-derived from the spec on the way out.
+    pub has_runner: bool,
     pub qitem_ids: Vec<String>,
 }
 
@@ -1503,7 +1508,20 @@ impl RoomSupervisor {
     }
 
     /// Every seat the periodic nudge pass should act on: it is up, the rail is holding active rows for it,
-    /// and its runner's own state file says `idle` - the runner's word for "no turn is in flight".
+    /// and it has not said that a turn is in flight.
+    ///
+    /// THE WORD DECIDES, NOT THE DOCUMENT'S EXISTENCE, and only a word its runtime could publish counts.
+    /// `Idle` is the runner's "come in"; `Unknown` is "nobody has said anything", which is not occupancy -
+    /// no document at all, a document without the word, or a document left by an earlier runtime (a seat
+    /// reseated from omp to agy keeps the old runner's death record on disk forever). `Working` and
+    /// `NeedsInput` are the two states a nudge must not interrupt. Measured 2026-10-17 (task 022666d6): a
+    /// gate row addressed to an idle agy seat earned NO attempt for six minutes, because the old gate
+    /// compared the raw `state` to `idle` and the only document was the previous omp generation's
+    /// `agent_socket_closed` - a seat silenced by its predecessor's gravestone.
+    ///
+    /// A runtime with no runner (`agy`, `codex`, a custom command) never publishes this document, so for
+    /// those seats no word is authoritative: the pane is the only channel, and its liveness (below) is the
+    /// proof the status already rests on.
     ///
     /// The rooms are read from disk rather than from `active_rooms`, and that is the load-bearing choice:
     /// the rail is disk-scoped (a queue verb answers for any room directory), and a daemon that has just
@@ -1533,39 +1551,25 @@ impl RoomSupervisor {
                 let Some(alert) = status.alert else {
                     continue;
                 };
-                if !self.seat_is_idle(&room, &status.seat) {
+                // ONE DERIVATION: the status row carries the word the runner published beside its state
+                // (`ActivityWord`), so this pass does not read the file a second time. A second reader is
+                // how the status came to say "work is waiting" while the pass found "nothing to do".
+                let publishes = AgentRuntime::from_str_loose(&status.runtime).has_runner();
+                let busy =
+                    publishes && matches!(status.activity, ActivityWord::Working | ActivityWord::NeedsInput);
+                if busy {
                     continue;
                 }
                 out.push(PendingNudge {
                     room: room.clone(),
                     seat: status.seat,
                     session_name: status.session_name,
+                    has_runner: publishes,
                     qitem_ids: alert.waiting_qitem_ids,
                 });
             }
         }
         out
-    }
-
-    /// Whether a seat's own state file says `idle`: exactly the runner's word for "no turn in flight".
-    ///
-    /// Only that word counts. A seat that published `retrying`, `needs_input` or `blocked` is occupied or
-    /// stuck, and a nudge would either collide with a live turn or talk past a seat that already gave up;
-    /// a seat that published nothing (no state file) has not said it is ready to hear one, so it is not
-    /// `idle` either. This is the one reader that looks at the state file a second time - once here and
-    /// once inside `get_room_status`'s join - and it is deliberate: the idle gate is a *nudge* rule, not a
-    /// status rule (the alert stands whether the seat is mid-turn or quiet), so it must not be folded into
-    /// the status row and change what the status says.
-    fn seat_is_idle(&self, room: &str, seat: &str) -> bool {
-        let path = self
-            .room_dir(room)
-            .join("run")
-            .join(format!("{seat}.state.json"));
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|v| v.get("state").and_then(|s| s.as_str()).map(str::to_string))
-            .is_some_and(|state| state == "idle")
     }
 
     /// Generate the exact `whoami` payload for an active seat session (Rule 1 parity).
@@ -2395,11 +2399,18 @@ mod tests {
     }
 
     fn write_spec(state_dir: &Path, room: &str, seat: &str) {
+        write_spec_with_runtime(state_dir, room, seat, "omp");
+    }
+
+    /// The same room, with the seat's runtime chosen: the nudge pass reads the runtime to decide the
+    /// seat's delivery route and whether its word can exist at all, so a case about agy or codex must be
+    /// able to say so in the spec.
+    fn write_spec_with_runtime(state_dir: &Path, room: &str, seat: &str, runtime: &str) {
         let room_dir = state_dir.join("rooms").join(room);
         fs::create_dir_all(&room_dir).expect("room dir");
         let spec = serde_json::json!({
             "room": room,
-            "seats": [{"seat_key": seat, "seat_type": "developer", "runtime": "omp"}],
+            "seats": [{"seat_key": seat, "seat_type": "developer", "runtime": runtime}],
             "links": []
         });
         fs::write(
@@ -3071,25 +3082,141 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    /// Only the runner's own `idle` earns a nudge: `retrying`/`needs_input`/`blocked` are occupied or
-    /// stuck, a death is gone, and no state file has not said the seat is ready.
+    /// THE MEASURED DEFECT, at the level it was measured (task 022666d6): a gate row addressed to an idle
+    /// agy seat earned NO nudge attempt for six minutes. The seat's runtime publishes no word of its own -
+    /// agy has no runner - so the only document in `run/` was the PREVIOUS omp generation's
+    /// `agent_socket_closed`, written at 04:00:36Z, before the 04:02:58Z relaunch. The old gate compared
+    /// that raw `state` to `idle`, so the seat was silent until a human sent by hand.
+    ///
+    /// Two facts are pinned: the pass SELECTS the seat (unknown is not busy), and it calls `nudge_seat` on
+    /// the route the runtime actually has - the pane - where the attempt is recorded. The pane here has
+    /// echo off and a process that never reads, so nothing it proves is a submission: the log must say
+    /// `unconfirmed`, which is the honest word for a paste no reader took.
     #[tokio::test]
-    async fn only_the_runners_own_idle_word_earns_a_nudge() {
-        let dir = scratch("idle-gate");
-        let seat = seat_key("idle-gate");
-        write_spec(&dir, "demo", &seat);
+    async fn a_queued_row_for_an_idle_agy_seat_earns_a_recorded_nudge_attempt() {
+        let _server = crate::pty::test_servers::own("nudge-agy");
+        let dir = scratch("nudge-agy");
+        let room = format!("nudge-agy-{}", std::process::id());
+        let key = seat_key("nudge-agy");
+        write_spec_with_runtime(&dir, &room, &key, "agy");
         let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(
+            &session,
+            Path::new("."),
+            "sh -c 'stty -echo; sleep 300'",
+            &HashMap::new(),
+        )
+        .expect("scratch pane");
+        // The previous generation's death record, exactly as the live reviewer's `run/reviewer.state.json`
+        // held it at 06:09Z.
+        write_state_file(&dir, &room, &key, "agent_socket_closed", "2026-10-17T04:00:36.547Z");
+        let row = supervisor.queue_store(&room).expect("open the rail");
+        let created = row
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: session.clone(),
+                summary: "the owner's gate ask".into(),
+                ..Default::default()
+            })
+            .expect("create");
 
-        assert!(
-            !supervisor.seat_is_idle("demo", &seat),
-            "a seat that published nothing has not said it is ready"
+        let pending = supervisor.pending_nudges();
+        assert_eq!(
+            pending.len(),
+            1,
+            "the agy seat is up with a row addressed to its session and has said nothing this generation"
         );
-        write_state_file(&dir, "demo", &seat, "idle", "2026-10-13T20:15:30.250Z");
-        assert!(supervisor.seat_is_idle("demo", &seat));
-        for state in ["retrying", "needs_input", "blocked", "agent_exited"] {
-            write_state_file(&dir, "demo", &seat, state, "2026-10-13T20:15:30.250Z");
-            assert!(!supervisor.seat_is_idle("demo", &seat), "{state} is not idle");
+        assert_eq!(pending[0].seat, key);
+        assert!(!pending[0].has_runner, "agy has no runner mailbox");
+        assert_eq!(pending[0].qitem_ids, vec![created.qitem_id.clone()]);
+
+        crate::ipc::nudge_pass(&supervisor);
+
+        let log = fs::read_to_string(crate::runner::nudge_log_path(&dir, &room, &key))
+            .expect("the pass must record its attempt, delivered or not");
+        let line: serde_json::Value = serde_json::from_str(log.lines().next().expect("one line")).expect("json");
+        assert_eq!(line["attempt"], 1);
+        assert_eq!(line["qitem_ids"], serde_json::json!([created.qitem_id]));
+        assert_eq!(
+            line["outcome"], "unconfirmed",
+            "the pane route records the pane's own word: a paste into a pane that never read it is not a submission"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A SEAT MID-TURN IS NOT NUDGED: `working`/`retrying`/`blocked` (one word, `Working`) and
+    /// `needs_input` are the two states a nudge must not interrupt - the first would collide with a live
+    /// turn, the second talks past a seat already asking for input.
+    #[tokio::test]
+    async fn a_seat_that_says_a_turn_is_in_flight_is_not_nudged() {
+        let _server = crate::pty::test_servers::own("nudge-busy");
+        let dir = scratch("nudge-busy");
+        let room = format!("nudge-busy-{}", std::process::id());
+        let key = seat_key("nudge-busy");
+        write_spec(&dir, &room, &key);
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(&session, Path::new("."), "sleep 300", &HashMap::new())
+            .expect("scratch pane");
+        let row = supervisor.queue_store(&room).expect("open the rail");
+        row.create(CreateInput {
+            source_session: "lead".into(),
+            destination_session: session.clone(),
+            summary: "the owner's gate ask".into(),
+            ..Default::default()
+        })
+        .expect("create");
+
+        for state in ["working", "retrying", "blocked", "needs_input"] {
+            write_state_file(&dir, &room, &key, state, "2026-10-17T06:00:00.000Z");
+            assert!(
+                supervisor.pending_nudges().is_empty(),
+                "{state} is a seat saying a turn is in flight, and a nudge would interrupt it"
+            );
         }
+        // ...and the same seat one word later IS selected: the gate reads the word, not the history.
+        write_state_file(&dir, &room, &key, "idle", "2026-10-17T06:00:00.000Z");
+        assert_eq!(supervisor.pending_nudges().len(), 1, "idle is the runner's come in");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// AN UNKNOWN WORD IS NOT BUSY. A document without the `activity` word (an older runner, or a hand
+    /// written fixture) says nothing this pass can act on, and silence must cost a nudge attempt rather
+    /// than the wake: the nudge is a seat's only automatic route to a waiting row.
+    #[tokio::test]
+    async fn a_document_without_the_word_is_unknown_and_still_earns_a_nudge() {
+        let _server = crate::pty::test_servers::own("nudge-unknown");
+        let dir = scratch("nudge-unknown");
+        let room = format!("nudge-unknown-{}", std::process::id());
+        let key = seat_key("nudge-unknown");
+        write_spec(&dir, &room, &key);
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(&session, Path::new("."), "sleep 300", &HashMap::new())
+            .expect("scratch pane");
+        // `state` alone: the shape the runner wrote before `activity` was published beside it.
+        let run_dir = dir.join("rooms").join(&room).join("run");
+        fs::create_dir_all(&run_dir).expect("run dir");
+        fs::write(
+            run_dir.join(format!("{key}.state.json")),
+            serde_json::json!({"state": "idle", "classification": "", "resume_attempts": 0}).to_string(),
+        )
+        .expect("state file");
+        let row = supervisor.queue_store(&room).expect("open the rail");
+        row.create(CreateInput {
+            source_session: "lead".into(),
+            destination_session: session,
+            summary: "the owner's gate ask".into(),
+            ..Default::default()
+        })
+        .expect("create");
+
+        assert_eq!(
+            supervisor.pending_nudges().len(),
+            1,
+            "a word this runtime cannot read is unknown, and unknown is not busy"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
