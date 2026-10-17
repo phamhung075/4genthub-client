@@ -79,7 +79,9 @@ func newAuditHarness(t *testing.T, links string) *auditHarness {
 					_, _ = conn.Write([]byte(`{"ok":true,"data":[{"room":"4genthub-min","seat":"reviewer",` +
 						`"session_name":"` + liveSession + `","runtime":"omp","state":"Running"}]}` + "\n"))
 				default:
-					_, _ = conn.Write([]byte(`{"ok":true,"data":{"delivered":"` + liveSession + `"}}` + "\n"))
+					// The runtime's own success document: a verdict is part of the answer, and only `submitted`
+					// earns a `delivered` outcome line (the audit line reads the same token the printed line does).
+					_, _ = conn.Write([]byte(`{"ok":true,"data":{"delivered":"` + liveSession + `","outcome":"submitted"}}` + "\n"))
 				}
 			}(conn)
 		}

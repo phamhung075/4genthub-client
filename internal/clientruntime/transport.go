@@ -135,23 +135,46 @@ func RuntimeSendTextOn(socket, session, text string, opts SendOptions) ([]byte, 
 //
 // So: every answer except `submitted` takes an unconfirmed branch, each naming the reason that is known.
 func RuntimeSendLine(session string, answer []byte) string {
-	var doc struct {
-		Outcome string `json:"outcome"`
-	}
-	if json.Unmarshal(answer, &doc) != nil {
+	verdict, readable := SendVerdict(answer)
+	if !readable {
 		return fmt.Sprintf("Submission unconfirmed for %s: the runtime's answer could not be read as a verdict, so nothing is claimed as delivered\n", session)
 	}
-	switch doc.Outcome {
-	case "submitted":
+	switch verdict {
+	case VerdictSubmitted:
 		return fmt.Sprintf("Sent to %s\n", session)
-	case "unconfirmed":
+	case VerdictPastedUnconfirmed:
 		return fmt.Sprintf("Pasted to %s, submission unconfirmed: the pane did not change after Enter, so the text may still be staged\n", session)
-	case "relayed":
+	case VerdictRelayed:
 		return fmt.Sprintf("Relayed to %s, submission unconfirmed: the seat's runner wrote the frame into the agent's channel and the agent's own answer is not reported back, so the text is not claimed as delivered\n", session)
 	case "":
 		return fmt.Sprintf("Submission unconfirmed for %s: the runtime's answer carries no submission verdict, so nothing is claimed as delivered\n", session)
 	}
-	return fmt.Sprintf("Submission unconfirmed for %s: the runtime answered %q, which is no submission verdict, so nothing is claimed as delivered\n", session, doc.Outcome)
+	return fmt.Sprintf("Submission unconfirmed for %s: the runtime answered %q, which is no submission verdict, so nothing is claimed as delivered\n", session, verdict)
+}
+
+// The runtime's own outcome vocabulary for SendText. `submitted` is the ONLY token that proves a submission:
+// the pane changed after Enter, so the text was written where the verdict says. `relayed` says the runner
+// wrote the frame into the agent's channel and `unconfirmed` says the pane did not change - neither is the
+// agent having taken the text, which is why the audit line they earn is delivery_unconfirmed rather than
+// delivered (the printed line has said so since 2026-10-14; the audit line said delivered for every ok answer
+// until it was measured against a real answer, task 83a39aa5).
+const (
+	VerdictSubmitted         = "submitted"
+	VerdictPastedUnconfirmed = "unconfirmed"
+	VerdictRelayed           = "relayed"
+)
+
+// SendVerdict reads the runtime's own outcome token from an answer document. `readable` is false when the
+// answer is not a document this build can parse; a readable document with no token answers "", which proves
+// no more than an unreadable one does.
+func SendVerdict(answer []byte) (verdict string, readable bool) {
+	var doc struct {
+		Outcome string `json:"outcome"`
+	}
+	if json.Unmarshal(answer, &doc) != nil {
+		return "", false
+	}
+	return doc.Outcome, true
 }
 
 // runtimeJSONDocument renders a value the runtime answered with as the document `--json` prints. The answer

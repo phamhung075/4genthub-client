@@ -432,11 +432,20 @@ func runtimeSend(session, text string, opts map[string]string, socket string, ha
 		fmt.Fprintf(stderr, "4genteam send: %s\n", sendFailureSentence(socket, err))
 		return clientcmd.ExitRemote
 	}
+	// THE OUTCOME LINE CARRIES THE RUNTIME'S OWN VERDICT, the same one the printed line reads: `delivered`
+	// claims the text was written where the verdict says, so only `submitted` earns it. A relayed frame and an
+	// answer with no verdict prove no submission, and audited as delivered they would contradict the line this
+	// same call prints (task 83a39aa5).
+	verdict, _ := clientruntime.SendVerdict(raw)
+	outcome := commpolicy.OutcomeDeliveryUnconfirmed
+	if verdict == clientruntime.VerdictSubmitted {
+		outcome = commpolicy.OutcomeDelivered
+	}
 	// A delivery whose outcome cannot be recorded is reported as a failure even though the message arrived: an
 	// unrecorded outcome is exactly what the pair exists to rule out.
-	if auditErr := handle.outcome(commpolicy.OutcomeDelivered); auditErr != nil {
-		fmt.Fprintf(stderr, "4genteam send: the message was delivered, but its outcome line could not be written "+
-			"to %s: %v\n", handle.path, auditErr)
+	if auditErr := handle.outcome(outcome); auditErr != nil {
+		fmt.Fprintf(stderr, "4genteam send: the outcome of the delivery could not be audited in %s: %v\n",
+			handle.path, auditErr)
 		return ExitFailed
 	}
 	if opts["json"] == "true" {

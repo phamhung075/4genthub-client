@@ -177,6 +177,30 @@ func daemonForTheSendTest(t *testing.T, sendTextFailure string) {
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 }
 
+// daemonAnsweringTheSend is the success twin of daemonForTheSendTest: the same prelude, and SendText answered
+// with the runtime's own verdict document, so a test can pin what an ACCEPTED answer does to the pair (the
+// printed line and the audit line).
+func daemonAnsweringTheSend(t *testing.T, data string) {
+	t.Helper()
+	sock, _ := fakeRuntime(t, func(line string) string {
+		switch {
+		case strings.Contains(line, `"GetRoomLinks"`):
+			return roomLinksDoc("go-dev", "fe-dev")
+		case strings.Contains(line, `"Whoami"`):
+			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
+		case strings.Contains(line, `"GetRoomStatus"`):
+			return `{"ok":true,"data":[{"room":"4genthub-min","seat":"fe-dev",` +
+				`"session_name":"4genthub-min-fe-dev@4genthub-min","runtime":"omp","state":"Running"}]}` + "\n"
+		case strings.Contains(line, `"SendText"`):
+			return `{"ok":true,"data":` + data + `}` + "\n"
+		default:
+			return `{"ok":true,"data":{}}` + "\n"
+		}
+	})
+	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
+}
+
 // storeUnder points the audit store at a temp directory this test owns, so the outcome line it reads is the
 // one its own send wrote.
 func storeUnder(t *testing.T) string {
@@ -234,6 +258,58 @@ func TestSendToAHeldFrameSaysTheTextMayBeHeld(t *testing.T) {
 	}
 	if strings.Contains(errOut.String(), "nothing was sent") {
 		t.Errorf("stderr = %q claims nothing was sent for a frame the runner received", errOut.String())
+	}
+}
+
+// THE AUDIT LINE CARRIES THE SAME VERDICT THE PRINTED LINE DOES. Measured at 84bcd8c against a real answer:
+// SendText answered `{"delivered":…,"outcome":"relayed"}` printed "Relayed …, not claimed as delivered" and
+// exited 0, while the outcome line written for that same send was `delivered` - the audit claimed what the
+// sentence refused to (task 83a39aa5). Only `submitted` proves the text was written where the verdict says,
+// so only `submitted` earns `delivered`; every other answer is `delivery_unconfirmed`, and a send that exited
+// 0 for any of them still exits 0.
+func TestASuccessfulSendAuditsTheVerdictItPrints(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		data    string
+		outcome string
+		line    string
+	}{
+		{"the pane took the text", `{"delivered":"4genthub-min-fe-dev@4genthub-min","outcome":"submitted"}`,
+			commpolicy.OutcomeDelivered, "Sent to 4genthub-min-fe-dev@4genthub-min"},
+		{"the runner only wrote the frame into the channel", `{"delivered":"4genthub-min-fe-dev@4genthub-min","outcome":"relayed"}`,
+			commpolicy.OutcomeDeliveryUnconfirmed, "not claimed as delivered"},
+		{"the answer carries no verdict", `{"delivered":"4genthub-min-fe-dev@4genthub-min"}`,
+			commpolicy.OutcomeDeliveryUnconfirmed, "nothing is claimed as delivered"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pinGoDevShell(t)
+			store := storeUnder(t)
+			daemonAnsweringTheSend(t, c.data)
+
+			var out, errOut bytes.Buffer
+			code := sendCommand{}.Run(context.Background(),
+				[]string{"4genthub-min-fe-dev@4genthub-min", "probe", "--intent", "notice"}, &out, &errOut)
+			if code != 0 {
+				t.Fatalf("an accepted send exited %d; stdout = %q, stderr = %q", code, out.String(), errOut.String())
+			}
+			if !strings.Contains(out.String(), c.line) {
+				t.Errorf("stdout = %q, want it to contain %q", out.String(), c.line)
+			}
+			if strings.Contains(out.String(), "Sent to") && c.outcome != commpolicy.OutcomeDelivered {
+				t.Errorf("stdout = %q claims delivery for an answer that proves no submission", out.String())
+			}
+
+			lines := auditLines(t, store)
+			if len(lines) != 2 {
+				t.Fatalf("audit lines = %d, want the decision and one outcome: %+v", len(lines), lines)
+			}
+			if lines[0].Outcome != "" {
+				t.Errorf("the decision line carries outcome %q, want none", lines[0].Outcome)
+			}
+			if lines[1].Outcome != c.outcome {
+				t.Errorf("outcome line = %q, want %q, the verdict the printed line names", lines[1].Outcome, c.outcome)
+			}
+		})
 	}
 }
 
