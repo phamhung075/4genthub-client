@@ -346,14 +346,16 @@ func TestBypassSuspected(t *testing.T) {
 
 		// The native client, which is what a seat on this host actually types:
 		// the retired `rig` spellings above no longer name a file the client owns.
-		{"native send to a session", "4genteam send agenthub--r--bob hello", true},
-		{"native send by rig and seat", "4genteam send 4genthub-min bob hello", true},
-		{"native send absolute", "/usr/local/bin/4genteam send bob hello", true},
-		{"native send after env", "AGENTHUB_URL=http://x 4genteam send bob hello", true},
-		{"native collapsed spaces", "4genteam   send bob hello", true},
+		// `send` is the AUDITED path and `room queue create` is admitted, so neither is a bypass;
+		// `input` writes straight into a pane and still is.
+		{"native send to a session", "4genteam send agenthub--r--bob hello", false},
+		{"native send by rig and seat", "4genteam send 4genthub-min bob hello", false},
+		{"native send absolute", "/usr/local/bin/4genteam send bob hello", false},
+		{"native send after env", "AGENTHUB_URL=http://x 4genteam send bob hello", false},
+		{"native collapsed spaces", "4genteam   send bob hello", false},
 		{"native input sends to a seat", "4genteam input --seat bob", true},
-		{"native rail create", "4genteam room queue create 4genthub-min --to agenthub--r--bob --summary s", true},
-		{"native rail create collapsed", "4genteam room   queue   create 4genthub-min --to s", true},
+		{"native rail create", "4genteam room queue create 4genthub-min --to agenthub--r--bob --summary s", false},
+		{"native rail create collapsed", "4genteam room   queue   create 4genthub-min --to s", false},
 		{"native seatcheck is the checked path", "4genteam seatcheck send bob hello", false},
 		{"native seatcheck audit-scan reads, it does not send", "4genteam seatcheck audit-scan --file obs.txt", false},
 		{"native rail list is not a send", "4genteam room queue list 4genthub-min", false},
@@ -381,22 +383,23 @@ func TestBypassSuspectedKnownShapeIsNotALicence(t *testing.T) {
 	if BypassSuspected(known, "4genteam seatcheck send bob hello") {
 		t.Fatal("the checker's own spelling must not be flagged")
 	}
-	if !BypassSuspected(known, "4genteam send bob hello") {
-		t.Fatal("naming 4genteam seatcheck must not allow 4genteam send")
+	if BypassSuspected(known, "4genteam send bob hello") {
+		t.Fatal("the audited path is never flagged, whoever is named")
 	}
 	if !BypassSuspected(known, "4genteam input --seat bob") {
 		t.Fatal("naming 4genteam seatcheck must not allow 4genteam input")
 	}
-	if !BypassSuspected(known, "4genteam room queue create 4genthub-min --to s") {
-		t.Fatal("naming 4genteam seatcheck must not allow the rail's create")
+	if BypassSuspected(known, "4genteam room queue create 4genthub-min --to s") {
+		t.Fatal("the rail's create is admitted, whoever is named")
 	}
 	// A bare program name keeps its old, whole-program meaning.
 	if BypassSuspected([]string{"4genteam"}, "4genteam send bob hello") {
 		t.Fatal("a bare known program name allows every invocation of it")
 	}
-	// And an entry for another program's shape does not touch this one.
-	if !BypassSuspected([]string{"seatcheck"}, "4genteam send bob hello") {
-		t.Fatal("a known entry for seatcheck must not allow 4genteam send")
+	// And an entry for another program's shape does not touch this one: `4genteam input` is still
+	// unaudited even with `seatcheck` named.
+	if !BypassSuspected([]string{"seatcheck"}, "4genteam input --seat bob") {
+		t.Fatal("a known entry for seatcheck must not allow 4genteam input")
 	}
 }
 
@@ -404,7 +407,10 @@ func TestBypassSuspectedNilKnown(t *testing.T) {
 	if !BypassSuspected(nil, "rig send bob") {
 		t.Fatal("nil known list should still flag a direct rig send")
 	}
-	if !BypassSuspected(nil, "4genteam send bob hello") {
-		t.Fatal("nil known list should still flag a direct native send")
+	if BypassSuspected(nil, "4genteam send bob hello") {
+		t.Fatal("the audited path is never flagged, even with no known list")
+	}
+	if !BypassSuspected(nil, "4genteam input --seat bob") {
+		t.Fatal("nil known list should still flag raw pane input")
 	}
 }

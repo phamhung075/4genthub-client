@@ -275,19 +275,25 @@ func writeUint(h hash.Hash, v uint64) {
 	h.Write(n[:])
 }
 
-// BypassSuspected reports whether an observed command is a direct send that
-// skipped the checker. known lists wrapper commands that are never flagged: an
-// entry is either a program name (any invocation of it) or "program sub-verb"
-// (only that shape), so naming the checker cannot licence the send beside it.
+// BypassSuspected reports whether an observed command reaches a seat by a route
+// that never met the audited send path. known lists wrapper commands that are
+// never flagged: an entry is either a program name (any invocation of it) or
+// "program sub-verb" (only that shape).
 //
-// The spellings are the ones this host has: `4genteam` is the native client and
-// carries the send path (`send`, `input`, and the rail's `room queue create`).
+// THE SET IS THE UNAUDITED SEND ROUTES AND NOTHING ELSE (architect ruling,
+// 2026-10-17): raw pane input (`4genteam input`, `tmux send-keys`,
+// `tmux paste-buffer`) and the foreign `rig` spellings, which are not this client
+// on any host. `4genteam send` IS the audited path - it builds the sender's
+// policy at send time, writes the decision line, delivers and writes the outcome
+// line (internal/clientseat/sendpolicy.go) - so flagging it flagged the only route
+// the guard skill names. The rail's `room queue create` is admitted for the same
+// reason: it records a row the daemon owns, and the row is read, not injected.
+//
 // The retired `rig` spellings stay for a reason the host state does not change:
-// an `rig` on some other host's PATH is not this client and must never carry a
+// a `rig` on some other host's PATH is not this client and must never carry a
 // seat's message. On this host (measured 2026-10-15, re-measured 2026-10-17)
 // `rig` is not on PATH at all and `~/.local/bin/rig` does not exist; the client
-// is one file, `~/.local/bin/4genteam`. Binding only the retired `rig` spellings
-// left the control matching nothing on the path the client sends over.
+// is one file, `~/.local/bin/4genteam`.
 func BypassSuspected(known []string, observed string) bool {
 	fields := strings.Fields(observed)
 	i := 0
@@ -312,16 +318,8 @@ func BypassSuspected(known []string, observed string) bool {
 
 	switch cmd {
 	case "4genteam":
-		switch sub {
-		case "send", "input":
-			return true
-		case "room":
-			// The rail delivers to a seat's mail the same way `the task queue` did:
-			// it is a direct send that never met the checker.
-			return len(fields) > i+2 && fields[i+2] == "queue" && len(fields) > i+3 && fields[i+3] == "create"
-		default:
-			return false
-		}
+		// `input` writes into the pane; `send` (the audited path) and `room ...` are not flagged.
+		return sub == "input"
 	case "rig":
 		return sub == "send" || sub == "queue" || sub == "broadcast"
 	case "tmux":
