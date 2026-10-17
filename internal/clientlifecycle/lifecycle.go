@@ -62,7 +62,7 @@ var (
 )
 
 const (
-	upUsage         = "usage: 4genteam up RIG --team DIR [--state-root DIR] [--room-only] " + clientoffpeak.ModeFlagUsage
+	upUsage         = "usage: 4genteam up RIG [--team DIR] [--state-root DIR] [--room-only] " + clientoffpeak.ModeFlagUsage
 	compactUsage    = "usage: 4genteam compact RIG " + clientoffpeak.ModeFlagUsage
 	stopUsage       = "usage: 4genteam stop RIG"
 	statusUsage     = "usage: 4genteam status RIG [--state-root DIR]"
@@ -184,19 +184,23 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 			"The runtime daemon, this rig's room and its seats, and then the safeguards: agent,\n"+
 				"which owns the compaction supervisor, the watchdog, the seat-message deliverer and the status\n"+
 				"bridge, and finally the watch view and the UI.\n"+
-				"The room's seats come from the LOCAL team definition: --team names the directory that holds\n"+
-				"team.json, and there is no default, so starting a room needs no cloud round trip.\n"+
-				"--room-only stops after the room: it starts the daemon, starts the room from the definition and\n"+
-				"prints one line per seat. It EXCLUDES agent, the bridge, the watch view, the UI and herdr, whose\n"+
-				"failures are not this verb's verdict - and it must not be used to make a red go away.\n"+
+				"The room's seats come from the room's OWN record once it exists: --team DIR names the local team\n"+
+				"definition that CREATES the room (team.json, no default, no cloud round trip), and without it up\n"+
+				"starts the room from its own spec.json - the file the runtime wrote from that definition. That is\n"+
+				"one way to name a team, and the second form is what heal's safeguard repair runs.\n"+
+				"--room-only stops after the room: it starts the daemon, starts the room from the definition or its\n"+
+				"own spec.json, and prints one line per seat. It EXCLUDES agent, the bridge, the watch view, the UI\n"+
+				"and herdr, whose failures are not this verb's verdict - and it must not be used to make a red go\n"+
+				"away.\n"+
 				"The acceptance invocation, so a reader re-reads the signature instead of remembering it:\n"+
-				"  4genteam up RIG --team DIR [--state-root DIR] --room-only\n"+
+				"  4genteam up RIG [--team DIR] [--state-root DIR] --room-only\n"+
 				"WHAT IT EXITS WITH (design §2.5), counting only the room's own verdict:\n"+
 				"  0  every seat of the room is running. A room that is already up is READ, not restarted: a blind\n"+
 				"     start would cycle sessions of live agents.\n"+
 				"  2  the daemon started but a seat did not - the seats that are not running are named, with the\n"+
 				"     daemon's log path to read next\n"+
-				"  3  the invocation is wrong, or the daemon will not take the definition it was handed\n"+
+				"  3  the invocation is wrong (including: the room has no record and no --team was given), or the\n"+
+				"     daemon will not take the definition it was handed\n"+
 				"The state dir and the socket this run talks to are printed BEFORE the room is touched: with the\n"+
 				"flags absent both are chosen from this machine's own environment, and the room's own lines are\n"+
 				"read against that pair.\n"+
@@ -217,7 +221,7 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 	}
 	flags := flag.NewFlagSet("up", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	teamDir := flags.String("team", "", "the team definition directory that holds team.json (required)")
+	teamDir := flags.String("team", "", "the team definition directory that holds team.json (optional: a room with its own record starts from it)")
 	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before agent, the bridge, the watch view and the UI")
 	flagArgs, positional := splitFlagsAndPositional(rest)
 	for _, arg := range flagArgs {
@@ -231,10 +235,6 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 	}
 	name, ok := requireRig("up", positional, stderr)
 	if !ok {
-		return clientcmd.ExitRoomRefused
-	}
-	if strings.TrimSpace(*teamDir) == "" {
-		fmt.Fprintf(stderr, "4genteam up: --team DIR is required - the room's seats are read from the team definition it holds, and there is no default. %s\n", upUsage)
 		return clientcmd.ExitRoomRefused
 	}
 	root, err := clientenv.ResolveStateRoot(rootFlag)
@@ -302,26 +302,16 @@ func upTakesFlag(name string) bool {
 }
 
 func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, stderr io.Writer) int {
-	// The definition is read FIRST: a --team typo is a caller error, and it must be reported before a daemon
-	// is started or a seat is touched. The room name must be the room the file defines, which is the same
-	// rule clientpolicy applies to its own --room.
+	// The team is read FIRST: a --team typo is a caller error, and it must be reported before a daemon is
+	// started or a seat is touched. The room name must be the room the input names, which is the same rule
+	// clientpolicy applies to its own --room.
 	// A bad invocation is 3 for this verb, not the CLI-wide ExitUsage (2): 2 is what a PARTIAL START is here
 	// (design §2.5), and one number cannot mean both things to a caller reading an exit code.
-	spec, err := clientteam.LoadRoomSpec(teamDir)
+	spec, err := roomSpecFor(name, teamDir, stateDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
 		return clientcmd.ExitRoomRefused
 	}
-	if spec.Room != name {
-		fmt.Fprintf(stderr, "4genteam up: %s defines the room %q, not %q - --room must name the room the definition defines. %s\n",
-			teamDir, spec.Room, name, upUsage)
-		return clientcmd.ExitRoomRefused
-	}
-	// THE ROOM'S OWN SPEC IS READ BEFORE THE DEFINITION'S SPEC IS SENT, because StartRoom WRITES spec.json
-	// from what it is sent: a definition carries a seat's cwd only when someone declared one there, so a
-	// team run that ignored the live file would overwrite five distinct per-seat cwds with nothing
-	// (measured 2026-10-17 in this room). A cwd the definition declares still wins - that is an edit.
-	spec = carrySeatCwds(spec, stateDir)
 	daemonLog, err := ensureDaemon(stateDir, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
@@ -539,6 +529,30 @@ func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, s
 		return clientcmd.ExitPartialStart
 	}
 	return clientcmd.ExitOK
+}
+
+// roomSpecFor resolves the room's seats the one way this verb takes them: from the local definition when
+// --team names one, and otherwise from the room's own spec.json - the record the runtime wrote from that
+// definition when it last started the room.
+//
+// THE TWO FORMS ARE ONE RULE, NOT TWO FLAGS: a definition is what CREATES a room's record, and after that
+// the record is what a start reads. heal's safeguard repair runs `up ROOM` with no definition to name, and
+// before this it was refused by up's own usage gate every time, so the finding it reported could never be
+// fixed. --team does not go away: giving it is how a room is created, and how its seats are edited.
+func roomSpecFor(name, teamDir, stateDir string) (clientruntime.RoomSpec, error) {
+	if strings.TrimSpace(teamDir) == "" {
+		return clientteam.LoadLiveRoomSpec(stateDir, name)
+	}
+	spec, err := clientteam.LoadRoomSpec(teamDir)
+	if err != nil {
+		return clientruntime.RoomSpec{}, err
+	}
+	if spec.Room != name {
+		return clientruntime.RoomSpec{}, fmt.Errorf(
+			"%s defines the room %q, not %q - --room must name the room the definition defines. %s",
+			teamDir, spec.Room, name, upUsage)
+	}
+	return carrySeatCwds(spec, stateDir), nil
 }
 
 // carrySeatCwds folds each seat's working directory from the room's OWN spec file into the definition's

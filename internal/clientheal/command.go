@@ -123,7 +123,10 @@ func machineDeps(root string, client *clientruntime.Client, fix bool) Deps {
 			if err != nil {
 				return err
 			}
-			out, err := exec.Command(self, "up", room).CombinedOutput()
+			// THE ROOT IS PASSED ON: heal reads its findings against ITS root, so the repair must start the
+			// room in that same root - a child up left to resolve its own default would repair a different
+			// machine state than the one that was diagnosed.
+			out, err := exec.Command(self, "up", room, "--state-root", root).CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("%w: %s", err, lastLine(string(out)))
 			}

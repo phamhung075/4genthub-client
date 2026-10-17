@@ -1,7 +1,9 @@
 package clientteam
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
@@ -86,6 +88,40 @@ func optionalField(row map[string]any, name string) *string {
 		return nil
 	}
 	return &value
+}
+
+// LoadLiveRoomSpec reads the room's OWN record - the spec.json the runtime wrote when it last started the
+// room - into the same shape a definition yields.
+//
+// WHY IT EXISTS: once a room exists, its spec.json is the authority on its seats (the runtime wrote it from
+// the definition, and it carries the per-seat cwds the definition did not). `up` with no --team starts the
+// room from here, which is the invocation heal's safeguard repair runs: before it, that repair was refused
+// by up's own usage gate every time, because the only way to name a team was a definition directory.
+// A definition still names a team that has no record yet - it is what CREATES the record - so this loader
+// refuses a missing file with the --team hint rather than starting an empty room.
+func LoadLiveRoomSpec(root, room string) (clientruntime.RoomSpec, error) {
+	path := clientruntime.RoomSpecPath(root, room)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return clientruntime.RoomSpec{}, usageError(fmt.Sprintf(
+			"room %s has no record to start from: %s is unreadable (%v). A room's first start needs --team DIR, the definition it is created from",
+			room, path, err))
+	}
+	var spec clientruntime.RoomSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return clientruntime.RoomSpec{}, usageError(fmt.Sprintf(
+			"cannot read the room's own spec %s: %v", path, err))
+	}
+	if spec.Room != "" && spec.Room != room {
+		return clientruntime.RoomSpec{}, usageError(fmt.Sprintf(
+			"%s records the room %q, not %q - a room's own spec can only start that room", path, spec.Room, room))
+	}
+	if len(spec.Seats) == 0 {
+		return clientruntime.RoomSpec{}, usageError(fmt.Sprintf(
+			"%s lists no seats - a room with no record of its seats is created from --team DIR", path))
+	}
+	spec.Room = room
+	return spec, nil
 }
 
 // stringMap reads a seat's env object. A definition is written by hand and the runtime takes a map of
