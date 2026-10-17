@@ -212,13 +212,14 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 	if err != nil {
 		return reportError(err, stderr)
 	}
+	state.stateRoot = stateRoot
 	if err := requireRoomAndSeats(stateRoot, state.rig, state.seats); err != nil {
 		return reportError(err, stderr)
 	}
 
 	switch verb {
 	case "feed":
-		if err := runFeed(ctx, stateRoot, state, stdout); err != nil {
+		if err := runFeed(ctx, state, stdout); err != nil {
 			return reportError(err, stderr)
 		}
 		return clientcmd.ExitOK

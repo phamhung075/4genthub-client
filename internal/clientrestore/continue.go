@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
@@ -18,7 +19,7 @@ import (
 // question, so it is named here rather than borrowed, the same rule ExitStartFailed and ExitPeak follow.
 const ExitRestoreFailed = 1
 
-const continueUsage = "usage: 4genteam continue [RIG [BRIEF|--no-brief] | --all] " + clientoffpeak.ModeFlagUsage
+const continueUsage = "usage: 4genteam continue [--state-root DIR] [RIG [BRIEF|--no-brief] | --all] " + clientoffpeak.ModeFlagUsage
 
 // continueListingUsage is the shell's own no-argument usage line, kept in its shape (the script printed
 // it with its own name twice, rig-continue.sh:96, so this prints this binary's name and the verb). It is a
@@ -43,23 +44,31 @@ func (continueCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 				"  --all  every stopped rig that has a brief; the run exits non-zero when a rig it visited is\n"+
 				"         not up (its restore failed, or the peak gate refused it)\n"+
 				"  no argument  list the rigs and the briefs on disk\n\n"+
+				"  --state-root DIR  the state root to read and write (default <home>/.config/4genthub): the\n"+
+				"         briefs, the logs and the tmux server asked are all this root's\n\n"+
 				"The DeepSeek peak gate runs BEFORE a restore: with "+clientoffpeak.ModeEnv+" on (the default) a\n"+
 				"room whose seats run a deepseek/ model is refused at peak, and "+clientoffpeak.FlagAllowPeak+
 				" skips the check for this run.")
 		return clientcmd.ExitOK
 	}
-	allowPeak, rest := clientoffpeak.ModeFromFlags(args)
-	return runContinue(allowPeak, rest, stdout, stderr)
+	rootFlag, rest := clientenv.StateRootFromFlags(args)
+	root, err := resolveRoot(rootFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
+	}
+	allowPeak, rest := clientoffpeak.ModeFromFlags(rest)
+	return runContinue(allowPeak, root, rest, stdout, stderr)
 }
 
 // runContinue dispatches the shell's own three cases: nothing (list), --all, and one rig with an optional
 // brief. `--all` is a rig-name-shaped argument, so it is only recognised in the rig's position - a brief
 // FILE is never read as a flag, which is the one place the shell's `case` and this can disagree.
-func runContinue(allowPeak bool, args []string, stdout, stderr io.Writer) int {
+func runContinue(allowPeak bool, root string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		return list(stdout, stderr)
+		return list(root, stdout, stderr)
 	}
-	log, err := openLog(continueLogName, stdout)
+	log, err := openLog(continueLogName, root, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
 		return clientcmd.ExitUnavailable
@@ -70,7 +79,7 @@ func runContinue(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "4genteam continue: unexpected argument %s - --all takes none. %s\n", args[1], continueUsage)
 			return clientcmd.ExitUsage
 		}
-		return continueAll(allowPeak, log, stderr)
+		return continueAll(allowPeak, root, log, stderr)
 	}
 	rigName := args[0]
 	if strings.HasPrefix(rigName, "-") {
@@ -84,18 +93,9 @@ func runContinue(allowPeak bool, args []string, stdout, stderr io.Writer) int {
 	if brief == "" && !noBrief {
 		// The default: <home>/.config/4genthub/briefs/<rig>.txt. It is resolved here rather than in the
 		// caller so the help, the listing and this default cannot name three different files.
-		defaultPath, err := defaultBrief(rigName)
-		if err != nil {
-			fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
-			return clientcmd.ExitUnavailable
-		}
-		brief = defaultPath
+		brief = defaultBrief(root, rigName)
 	}
-	restore, err := newRestorer(log)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
-		return clientcmd.ExitUnavailable
-	}
+	restore := newRestorer(log, root)
 	return continueOne(restore, rigName, brief, allowPeak, stderr)
 }
 
@@ -128,13 +128,9 @@ func briefArgument(args []string, stderr io.Writer) (brief string, noBrief bool,
 	return args[0], false, clientcmd.ExitOK
 }
 
-// defaultBrief is the shell's `$BRIEFDIR/<rig>.txt`.
-func defaultBrief(rigName string) (string, error) {
-	dir, err := briefDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, rigName+".txt"), nil
+// defaultBrief is the shell's `$BRIEFDIR/<rig>.txt`, in the root the verb resolved.
+func defaultBrief(root, rigName string) string {
+	return filepath.Join(briefDir(root), rigName+".txt")
 }
 
 // continueOne restores and briefs one rig: the shell's continue_rig(), preceded by the daemon and the
@@ -146,7 +142,7 @@ func defaultBrief(rigName string) (string, error) {
 // because the room's models are read through it.
 func continueOne(restore *restorer, rigName, brief string, allowPeak bool, stderr io.Writer) int {
 	restore.daemonUp()
-	if len(rigSessions(rigName, sessionNames())) == 0 {
+	if len(rigSessions(rigName, sessionNames(restore.root))) == 0 {
 		if code := restore.gate(rigName, "continue", allowPeak, stderr); code != clientcmd.ExitOK {
 			return code
 		}
@@ -163,27 +159,19 @@ func continueOne(restore *restorer, rigName, brief string, allowPeak bool, stder
 // decide the exit code: it ended 0 however many rigs failed, so a caller reading only the code could not
 // tell a run that resumed every room from one that resumed none. The run visits every rig and then
 // reports, the same shape `watchdog --all --check` uses.
-func continueAll(allowPeak bool, log *teeLog, stderr io.Writer) int {
-	dir, err := briefDir()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
-		return clientcmd.ExitUnavailable
-	}
+func continueAll(allowPeak bool, root string, log *teeLog, stderr io.Writer) int {
+	dir := briefDir(root)
 	briefs := briefsOnDisk(dir)
 	if len(briefs) == 0 {
 		log.printf("--all: no brief files in %s, nothing to continue", dir)
 		return clientcmd.ExitOK
 	}
-	restore, err := newRestorer(log)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
-		return clientcmd.ExitUnavailable
-	}
+	restore := newRestorer(log, root)
 	restore.daemonUp()
 	var notUp []string
 	for _, brief := range briefs {
 		rigName := strings.TrimSuffix(filepath.Base(brief), ".txt")
-		if len(rigSessions(rigName, sessionNames())) == 0 {
+		if len(rigSessions(rigName, sessionNames(root))) == 0 {
 			if code := restore.gate(rigName, "continue", allowPeak, stderr); code != clientcmd.ExitOK {
 				// A refusal for one rig is not a reason to skip the others: the room it refused stays
 				// stopped, and a room that is not on DeepSeek is restored normally. It is still a rig this
@@ -217,7 +205,7 @@ func briefsOnDisk(dir string) []string {
 // list is the shell's no-argument form: which rooms exist, which briefs are on disk, and the usage line. The
 // briefs are the files on disk, and the room list is the runtime's own (ListAllRooms, with each room's seat
 // states). When the runtime cannot be read the section says so on one line rather than printing an empty list.
-func list(stdout, stderr io.Writer) int {
+func list(root string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "Rigs that can be continued:")
 	client := clientruntime.NewClient("")
 	rooms, err := client.ListAllRooms()
@@ -235,11 +223,7 @@ func list(stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "briefs on disk:")
-	dir, err := briefDir()
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam continue: %v\n", err)
-		return clientcmd.ExitUnavailable
-	}
+	dir := briefDir(root)
 	for _, brief := range briefsOnDisk(dir) {
 		fmt.Fprintf(stdout, "  %s\n", strings.TrimSuffix(filepath.Base(brief), ".txt"))
 	}

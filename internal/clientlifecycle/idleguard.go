@@ -74,12 +74,12 @@ type IdleGuard struct {
 func NewIdleGuard(rig, lead string, quiet, stall int, stateRoot string, out io.Writer) *IdleGuard {
 	g := &IdleGuard{Rig: rig, Lead: lead, Quiet: float64(quiet), Stall: float64(stall), State: map[string]*stallState{}}
 	g.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
-	g.Seats = seatlog.RigSeats
+	g.Seats = func(rig string) []string { return seatlog.RigSeats(stateRoot, rig) }
 	g.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	g.Modified = modTime
 	g.Idle = rigIdle
 	g.Say = rigSay
-	g.Interrupt = tmuxInterrupt
+	g.Interrupt = func(rig, seat string) { tmuxInterrupt(stateRoot, rig, seat) }
 	g.Active = func(rig string) ([]clientruntime.QueueRow, error) {
 		return clientruntime.NewClient("").QueueList(rig, clientruntime.QueueListFilter{ActiveOnly: true})
 	}

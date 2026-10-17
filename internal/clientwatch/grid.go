@@ -54,13 +54,20 @@ const (
 )
 
 // rigSeats is the seats with a live tmux session; the omp state dirs outlive removed seats.
-func rigSeats(ctx context.Context, rig string) ([]string, error) {
-	argv, err := clientenv.TmuxArgv("list-sessions", "-F", "#{session_name}")
+func rigSeats(ctx context.Context, root, rig string) ([]string, error) {
+	argv, err := clientenv.TmuxArgvAt(root, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		return nil, err
 	}
 	out, err := execCommand(ctx, argv[0], argv[1:]...)
 	if err != nil {
+		// A tmux server that is not there is the fact "no seats", not a failed read - the reading
+		// clientrestore and ps already take for this command. tmux's own wording differs by root
+		// ("no server running on ...", or "error connecting to ... (No such file or directory)" for a
+		// root where no server ever started), so the test is the missing output, not the sentence.
+		if strings.TrimSpace(out) == "" {
+			return []string{}, nil
+		}
 		return nil, fmt.Errorf("tmux list-sessions failed: %w", err)
 	}
 	seats := []string{}
@@ -131,7 +138,7 @@ func textOf(object map[string]any, key string) string {
 
 // runGrid opens one pane per seat. Columns are split first, then each column into equal rows.
 func runGrid(ctx context.Context, s shared, out io.Writer) error {
-	seats, err := rigSeats(ctx, s.rig)
+	seats, err := rigSeats(ctx, s.stateRoot, s.rig)
 	if err != nil {
 		return err
 	}
@@ -260,7 +267,7 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 			seats[seat] = true
 		}
 	} else {
-		live, err := rigSeats(ctx, s.rig)
+		live, err := rigSeats(ctx, s.stateRoot, s.rig)
 		if err != nil {
 			return err
 		}

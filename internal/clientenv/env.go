@@ -79,6 +79,35 @@ func DefaultStateRoot() string {
 // rather than guesses, so it has to be reachable without breaking the machine running the test.
 var realHome = RealHome
 
+// StateRootFromFlags pulls `--state-root DIR` (or `--state-root=DIR`) out of a verb's arguments, wherever
+// it sits, and returns the flag's value with the rest of the arguments in order. The LAST occurrence wins,
+// the way a repeated flag does elsewhere. A verb parses its root through this and then resolves it through
+// ResolveStateRoot, so every flag-taking verb reads the flag the same way - and a root is never half-read,
+// one part from the flag and another from the default.
+func StateRootFromFlags(args []string) (value string, rest []string) {
+	rest = make([]string, 0, len(args))
+	skipValue := false
+	for i, arg := range args {
+		if skipValue {
+			skipValue = false
+			continue
+		}
+		name, inline, hasInline := strings.Cut(arg, "=")
+		switch {
+		case name != "--state-root":
+			rest = append(rest, arg)
+		case hasInline:
+			value = inline
+		case i+1 < len(args):
+			value = args[i+1]
+			skipValue = true
+		default:
+			value = ""
+		}
+	}
+	return value, rest
+}
+
 // ResolveStateRoot is the ONE resolution every verb uses: the flag when it is given, else this machine's
 // own default. It REFUSES when both are empty - a machine with no resolvable home and no flag gets that
 // message rather than a path that depends on where the client was run from.

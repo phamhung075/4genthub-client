@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -36,8 +37,8 @@ func isolate(t *testing.T) string {
 		return nil
 	}
 	realHome = func() (string, error) { return home, nil }
-	tmuxRead = func() (string, error) { return "", nil }
-	tmuxServerIdentity = func() string { return "1 2" }
+	tmuxRead = func(string) (string, error) { return "", nil }
+	tmuxServerIdentity = func(string) string { return "1 2" }
 	watchdogNodesJSON = func(string) (string, error) { return "[]", nil }
 	watchSleep = func(time.Duration) {}
 	watchPollLimit = 0
@@ -66,7 +67,7 @@ func writeBrief(t *testing.T, home, rigName string) {
 // call past the end repeats the last state, so a test need only name the polls it cares about.
 func drivePolls(states []string) {
 	idx := -1
-	tmuxRead = func() (string, error) {
+	tmuxRead = func(string) (string, error) {
 		if idx >= 0 && states[idx] == "alive" {
 			return "agenthub--demo--seat\n", nil
 		}
@@ -81,9 +82,10 @@ func drivePolls(states []string) {
 	}
 }
 
-func testWatcher(buf *bytes.Buffer) *watcher {
+func testWatcher(t *testing.T, buf *bytes.Buffer) *watcher {
 	return &watcher{
 		log:      &teeLog{out: buf},
+		root:     t.TempDir(),
 		stderr:   io.Discard,
 		logPath:  "/tmp/rig-watchdog.log",
 		daemonUp: func() {},
@@ -183,7 +185,7 @@ func TestAnUnreadableRoomIsNotReportedAsStopped(t *testing.T) {
 	isolate(t)
 	watchdogNodesJSON = func(string) (string, error) { return "", errors.New("HTTP 500 from /api/ps") }
 	buf := &bytes.Buffer{}
-	w := testWatcher(buf)
+	w := testWatcher(t, buf)
 	if code := w.check("demo", "report"); code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want %d: an unreadable room is not a dead one", code, clientcmd.ExitOK)
 	}
@@ -203,7 +205,7 @@ func TestWatchDoesNotCountAnUnreadableRoomAsAMiss(t *testing.T) {
 	watchdogNodesJSON = func(string) (string, error) { return "", errors.New("HTTP 500 from /api/ps") }
 	watchPollLimit = 2
 	buf := &bytes.Buffer{}
-	w := testWatcher(buf)
+	w := testWatcher(t, buf)
 	restores := 0
 	w.restore = func(string, string) bool { restores++; return true }
 	w.watch("demo", time.Minute, defaultWatchBeat)
@@ -226,7 +228,7 @@ func TestWatchOneMissDoesNotRestore(t *testing.T) {
 	drivePolls([]string{"dead"})
 	watchPollLimit = 1
 	buf := &bytes.Buffer{}
-	w := testWatcher(buf)
+	w := testWatcher(t, buf)
 	restores := 0
 	w.restore = func(string, string) bool { restores++; return true }
 	w.watch("demo", time.Minute, defaultWatchBeat)
@@ -249,7 +251,7 @@ func TestWatchTwoMissesRestoreOnce(t *testing.T) {
 	drivePolls([]string{"dead", "dead"})
 	watchPollLimit = 2
 	buf := &bytes.Buffer{}
-	w := testWatcher(buf)
+	w := testWatcher(t, buf)
 	restores := 0
 	w.restore = func(string, string) bool { restores++; return true }
 	w.watch("demo", time.Minute, defaultWatchBeat)
@@ -276,7 +278,7 @@ func TestWatchCounterResetWhenALiveRigRecovers(t *testing.T) {
 	drivePolls([]string{"dead", "alive"})
 	watchPollLimit = 2
 	buf := &bytes.Buffer{}
-	w := testWatcher(buf)
+	w := testWatcher(t, buf)
 	restores := 0
 	w.restore = func(string, string) bool { restores++; return true }
 	w.watch("demo", time.Minute, defaultWatchBeat)
@@ -297,7 +299,7 @@ func TestWatchHeartbeatOnlyEveryNPolls(t *testing.T) {
 	drivePolls([]string{"alive"})
 	watchPollLimit = 4
 	buf := &bytes.Buffer{}
-	w := testWatcher(buf)
+	w := testWatcher(t, buf)
 	w.watch("demo", time.Minute, 2)
 
 	out := buf.String()
@@ -318,7 +320,7 @@ func TestWatchWritesOneHeartbeatPerPoll(t *testing.T) {
 	isolate(t)
 	drivePolls([]string{"alive"})
 	watchPollLimit = 3
-	w := testWatcher(&bytes.Buffer{})
+	w := testWatcher(t, &bytes.Buffer{})
 	w.watch("demo", time.Minute, defaultWatchBeat)
 
 	if len(beats) != 3 {
@@ -335,11 +337,11 @@ func TestWatchWritesOneHeartbeatPerPoll(t *testing.T) {
 // servers, and an unchanged poll is silent.
 func TestServerIdentityFirstWriteAndChange(t *testing.T) {
 	home := isolate(t)
-	tmuxServerIdentity = func() string { return "100 2026-01-01" }
+	tmuxServerIdentity = func(string) string { return "100 2026-01-01" }
 	buf := &bytes.Buffer{}
 	log := &teeLog{out: buf}
 
-	noteServerIdentity(log)
+	noteServerIdentity(log, clientenv.StateSubdir(home, ""))
 	if got := buf.String(); !strings.Contains(got, "tmux server identity: 100 2026-01-01 (no change recorded before this poll)") {
 		t.Errorf("first write did not log the identity:\n%s", got)
 	}
@@ -353,14 +355,14 @@ func TestServerIdentityFirstWriteAndChange(t *testing.T) {
 	}
 
 	buf.Reset()
-	tmuxServerIdentity = func() string { return "200 2026-01-02" }
-	noteServerIdentity(log)
+	tmuxServerIdentity = func(string) string { return "200 2026-01-02" }
+	noteServerIdentity(log, clientenv.StateSubdir(home, ""))
 	if got := buf.String(); !strings.Contains(got, "tmux SERVER CHANGED: 100 2026-01-01 -> 200 2026-01-02 (the previous server is gone)") {
 		t.Errorf("change did not log the transition:\n%s", got)
 	}
 
 	buf.Reset()
-	noteServerIdentity(log)
+	noteServerIdentity(log, clientenv.StateSubdir(home, ""))
 	if buf.Len() != 0 {
 		t.Errorf("an unchanged identity logged: %s", buf.String())
 	}
@@ -371,7 +373,7 @@ func TestCheckReport(t *testing.T) {
 	isolate(t)
 	drivePolls([]string{"dead"})
 	buf := &bytes.Buffer{}
-	w := testWatcher(buf)
+	w := testWatcher(t, buf)
 	if code := w.check("demo", "report"); code != exitDead {
 		t.Fatalf("dead report exit %d, want %d (%d is ExitUsage's number, answering a different question)",
 			code, exitDead, clientcmd.ExitUsage)
@@ -382,7 +384,7 @@ func TestCheckReport(t *testing.T) {
 
 	drivePolls([]string{"alive"})
 	buf.Reset()
-	w = testWatcher(buf)
+	w = testWatcher(t, buf)
 	if code := w.check("demo", "report"); code != clientcmd.ExitOK {
 		t.Fatalf("healthy report exit %d, want 0", code)
 	}
@@ -397,7 +399,7 @@ func TestRestoreRunsTheGateBeforeRestoring(t *testing.T) {
 	isolate(t)
 	drivePolls([]string{"dead"})
 	buf := &bytes.Buffer{}
-	w := testWatcher(buf)
+	w := testWatcher(t, buf)
 	var order []string
 	w.daemonUp = func() { order = append(order, "daemon") }
 	w.gate = func(string, string, bool, io.Writer) int { order = append(order, "gate"); return clientcmd.ExitOK }
@@ -447,7 +449,7 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 	watchdogNodesJSON = func(string) (string, error) {
 		return `[{"lifecycleState":"running"}]`, nil
 	}
-	tmuxRead = func() (string, error) { return "agenthub--zulu--seat\n", nil }
+	tmuxRead = func(string) (string, error) { return "agenthub--zulu--seat\n", nil }
 
 	var out, errBuf bytes.Buffer
 	code := watchdogCommand{}.Run(context.Background(), []string{"--check"}, &out, &errBuf)

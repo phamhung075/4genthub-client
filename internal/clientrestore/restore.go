@@ -25,6 +25,7 @@ const briefSendTimeout = 40 * time.Second
 // implementation, so the two verbs cannot restore differently.
 type restorer struct {
 	log    *teeLog
+	root   string
 	briefs string
 	// ensureDaemon and revive are the two steps that reach the runtime: the daemon up, and the room's
 	// stopped seats started again from the spec it holds. They are fields so a test restores a whole room
@@ -45,14 +46,11 @@ var restoreSteps func(*restorer)
 
 // newRestorer wires the real world: the rig tool the caller resolved, the brief directory the shell used,
 // `rig send` for the brief, and this same binary for the watch wall.
-func newRestorer(log *teeLog) (*restorer, error) {
-	briefs, err := briefDir()
-	if err != nil {
-		return nil, err
-	}
+func newRestorer(log *teeLog, root string) *restorer {
 	r := &restorer{
 		log:          log,
-		briefs:       briefs,
+		root:         root,
+		briefs:       briefDir(root),
 		ensureDaemon: func(ctx context.Context) error { return clientruntime.NewClient("").EnsureDaemon(ctx) },
 		revive:       reviveRoom,
 		// send is the brief's delivery through the runtime socket. DeliverToSession takes the session name
@@ -70,12 +68,12 @@ func newRestorer(log *teeLog) (*restorer, error) {
 			}
 			return nil
 		},
-		wall: watchWall,
+		wall: func(rig string) (bool, string) { return watchWall(rig, root) },
 	}
 	if restoreSteps != nil {
 		restoreSteps(r)
 	}
-	return r, nil
+	return r
 }
 
 // restore is the shell's continue_rig() body, and it answers whether the rig ended up usable: false when
@@ -90,7 +88,7 @@ func newRestorer(log *teeLog) (*restorer, error) {
 //  3. no seats means the brief would go to nobody, so this aborts for that rig instead of reporting a
 //     success it did not get.
 func (r *restorer) restore(rigName, brief string) bool {
-	if len(rigSessions(rigName, sessionNames())) > 0 {
+	if len(rigSessions(rigName, sessionNames(r.root))) > 0 {
 		r.log.printf("%s: already live, skipping restore", rigName)
 	} else {
 		r.log.printf("%s: restoring from latest snapshot (every seat resumes its own session)", rigName)
@@ -101,7 +99,7 @@ func (r *restorer) restore(rigName, brief string) bool {
 			r.log.printf("%s: restore command failed: %v", rigName, err)
 		}
 	}
-	seats := rigSeats(rigName, sessionNames())
+	seats := rigSeats(rigName, sessionNames(r.root))
 	r.log.printf("%s: seats live: %d", rigName, len(seats))
 	if len(seats) == 0 {
 		r.log.printf("%s: no seats up, aborting for this rig", rigName)
@@ -201,7 +199,7 @@ const wallNoTerminal = "no terminal host"
 // --room RIG`: the Python's group and its `watch` sub-verb are one verb here). herdr hosts the wall, so a
 // machine without it is a skip with a reason; the wall's own output goes to this verb's log, where the
 // shell redirected it too.
-func watchWall(rigName string) (bool, string) {
+func watchWall(rigName, root string) (bool, string) {
 	if _, err := execLookPath("herdr"); err != nil {
 		return false, wallNoTerminal
 	}
@@ -209,10 +207,7 @@ func watchWall(rigName string) (bool, string) {
 	if err != nil {
 		return false, "see log"
 	}
-	dir, err := logDir()
-	if err != nil {
-		return false, "see log"
-	}
+	dir := logDir(root)
 	out, err := os.OpenFile(filepath.Join(dir, continueLogName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return false, "see log"
