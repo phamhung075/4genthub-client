@@ -34,14 +34,14 @@ DETAIL
 Exit `0`: your tier decided, so act on the printed answer and note it in your task. Exit `5`: it escalated, and the JSON names the next tier in `escalate_to`. Follow exactly one step:
 
 - `escalate_to: "lead"` (from a seat): send the lead the question with the recommended option, so the answer is one word. The lead repeats the call with `--tier lead`.
-- `escalate_to: "owner"` (from the lead, or any tier on an owner-only category): the owner answers, so the question goes on the room's rail as an owner-decision row addressed to the room's principal session:
+- `escalate_to: "owner"` (from the lead, or any tier on an owner-only category): the owner answers, so the question goes on the room's rail as an owner-decision row addressed to the room's lead:
 
   ```bash
-  4genteam room queue create <room> --to principal@<room> --tag owner-decision \
+  4genteam room queue create <room> --to agenthub--<room>--lead --tag owner-decision \
     --summary "<the decision, ≤120 chars>" --body "<the options, the recommended one, and why it is open>"
   ```
 
-  It prints the `qitem-<…>` id and `4genteam room queue show <room> <id>` reads the row back; put that id in your report and stop the branch that depends on the answer. `principal@<room>` is the principal session's address (session `agenthub--<room>--principal`). A row to any other session is not an escalation: the daemon accepts any session name, so a misaddressed ask is silent rather than refused.
+  It prints the `qitem-<…>` id and `4genteam room queue show <room> <id>` reads the row back; put that id in your report and stop the branch that depends on the answer. The room has no principal seat, so the lead is the seat that carries an owner ask to the owner; `--to` takes a seat the room declares (session name, `<seat>@<room>`, or the bare seat key), and the create refuses any value that names no seat, listing the room's seats.
 
 The question format, categories and escalation rules are in `room-decision-request`.
 

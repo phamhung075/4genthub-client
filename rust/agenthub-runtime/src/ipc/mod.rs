@@ -223,11 +223,17 @@ impl IpcServer {
 
             // The room's durable rail. Every arm opens the room's own store and answers with the row
             // RE-READ from it, so what a caller is told is what the next read shows.
-            IpcRequest::QueueCreate { room, input } => match supervisor.queue_store(&room) {
-                Ok(store) => match store.create(input) {
-                    Ok(row) => serde_json::to_value(row)
-                        .map(IpcResponse::success)
-                        .unwrap_or_else(|e| IpcResponse::err(format!("serialize row: {e}"))),
+            IpcRequest::QueueCreate { room, mut input } => match supervisor.queue_store(&room) {
+                Ok(store) => match supervisor.resolve_queue_destination(&room, &input.destination_session) {
+                    Ok(destination) => {
+                        input.destination_session = destination;
+                        match store.create(input) {
+                            Ok(row) => serde_json::to_value(row)
+                                .map(IpcResponse::success)
+                                .unwrap_or_else(|e| IpcResponse::err(format!("serialize row: {e}"))),
+                            Err(e) => IpcResponse::err(e),
+                        }
+                    }
                     Err(e) => IpcResponse::err(e),
                 },
                 Err(e) => IpcResponse::err(e),
