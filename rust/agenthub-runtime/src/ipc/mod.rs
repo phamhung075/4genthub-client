@@ -315,11 +315,12 @@ async fn nudge_loop(supervisor: Arc<RoomSupervisor>, mut shutdown: tokio::sync::
     }
 }
 
-/// One pass: for every seat the rail is holding work for whose runner says it is idle, deliver the nudge
-/// once - through the seat's runner mailbox, the channel the agent actually reads - and record the
-/// attempt. The ladder is bounded and its state is the durable attempt log, so a restart resumes the same
-/// ladder instead of starting a fresh one against a seat that has already been asked twice.
-fn nudge_pass(supervisor: &RoomSupervisor) {
+/// One pass: for every seat the rail is holding work for that has not said a turn is in flight, deliver
+/// the nudge once - through the seat's runner mailbox where its runtime publishes one, through its pane
+/// where it does not - and record the attempt. The ladder is bounded and its state is the durable attempt
+/// log, so a restart resumes the same ladder instead of starting a fresh one against a seat that has
+/// already been asked twice.
+pub(crate) fn nudge_pass(supervisor: &RoomSupervisor) {
     let state_dir = supervisor.state_dir();
     for pending in supervisor.pending_nudges() {
         let key = crate::runner::nudge_key(&pending.seat, &pending.qitem_ids);
@@ -343,6 +344,7 @@ fn nudge_pass(supervisor: &RoomSupervisor) {
             &pending.session_name,
             &pending.qitem_ids,
             attempt,
+            pending.has_runner,
         ) {
             Ok(answer) => info!(
                 "nudged {}/{} (attempt {attempt}/{}): {answer}",
