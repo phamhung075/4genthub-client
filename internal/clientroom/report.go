@@ -69,10 +69,12 @@ three of five seats may not edit code and hold more than half the cost, so a roo
 split, not the effort (seats/architect/RULING-code-edit-share-target.md).
 
 Paired with the floor, one DIAGNOSTIC line per EDITING seat: the edit yield - the commits the gate PASSED whose
-Seat: trailer names that seat, over that seat's code-edit USD. A commit counts when its Task: names a task a
-queue row tagged gate, closed by the reviewer, names in its summary or body; a task the gate passed for another
-seat credits nobody, and a commit that only moves a submodule pin never counts. The line prints its inputs and
-the commits the join dropped, by reason; its own floor waits for a ruling after five daily windows.
+Seat: trailer names that seat, over that seat's code-edit USD. A commit counts when its Task: names a task that
+a queue row tagged gate, closed by the reviewer, names in its summary or body - by the task's 8-character id or
+by a commit sha, because gate rows here usually speak in tips - and the seat credited is that row's SOURCE seat,
+the seat that filed the gate. A task the gate passed for another seat credits nobody, and a commit that only
+moves a submodule pin never counts. The line prints its inputs and the commits the join dropped, by reason; its
+own floor waits for a ruling after five daily windows.
 
 A sixth check this verb adds is not one of the five: tasks closed after a commit that cites them, wanted 0.
 Below them: the tasks open more than 24h, and the commits that carry no Task: trailer.`
