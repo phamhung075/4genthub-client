@@ -34,13 +34,20 @@ the children it started beat into another one, and a machine's logs sat outside 
 
 ### The owner's move (one command pair, old renamed `.obsolete`)
 
+`<root>/logs` is NOT an empty target: it already holds `rig-continue.log`, `rig-watchdog.log` and
+`heartbeat/bridge.json` (the two restore verbs and the bridge already wrote under the root). So the source
+is spelled with a trailing `/.` - that copies the CONTENTS into the existing directory, where
+`cp -a src dst` would create `<root>/logs/logs/`, and `heartbeat/` then merges file by file:
+
 ```
-cp -a ~/.local/state/4genthub/logs ~/.config/4genthub/logs \
+cp -a ~/.local/state/4genthub/logs/. ~/.config/4genthub/logs/ \
   && mv ~/.local/state/4genthub/logs ~/.local/state/4genthub/logs.obsolete
 ```
 
-An `$XDG_STATE_HOME` that pointed somewhere else is no longer consulted: move that tree by the same pair
-to `~/.config/4genthub/logs` if it holds the logs the operator wants to keep.
+The copy ADDS and cleans nothing: it deletes nothing in the target, replaces nothing, and leaves every
+file the root already held where it is; the old tree is kept whole under `logs.obsolete`. An
+`$XDG_STATE_HOME` that pointed somewhere else is no longer consulted: move that tree by the same pair to
+`~/.config/4genthub/logs` if it holds the logs the operator wants to keep.
 
 ### Testing
 
