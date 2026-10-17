@@ -879,6 +879,29 @@ impl RoomSupervisor {
             std::thread::sleep(Duration::from_millis(100));
         }
 
+        // A RUNNER-LESS SEAT'S STATE DOCUMENT BELONGS TO THIS LAUNCH, because nothing else will write one:
+        // the previous generation's word - the reviewer's `agent_socket_closed`, written 04:00:36Z, three
+        // hours before the 07:02:33Z pane that carried the live seat - would otherwise outlive the pane and
+        // be read by every reader of the file (the watch, the room report, a status read). Written with the
+        // PANE's pid, so a claim left behind names the process that can still be checked, and with
+        // `activity: unknown`, because a pane that is up has not said what it is doing. Publishing runtimes
+        // are left alone: their runner writes the document, and a launch record would claim a handshake it
+        // has not made (the `Starting` arm of `get_room_status` exists for exactly that).
+        if !AgentRuntime::from_str_loose(&seat.runtime).has_runner() {
+            if let Some(pid) = pane.pid {
+                let state_path = room_dir.join("run").join(format!("{}.state.json", seat.seat_key));
+                if let Err(e) = crate::runner::write_state_with_pid(
+                    &state_path,
+                    "running",
+                    "the pane is up; this runtime publishes no readiness channel",
+                    0,
+                    pid,
+                ) {
+                    warn!("cannot publish the launch state for {room}/{}: {e}", seat.seat_key);
+                }
+            }
+        }
+
         let status = SeatStatus {
             room: room.to_string(),
             seat: seat.seat_key.clone(),
@@ -1595,9 +1618,6 @@ impl RoomSupervisor {
                 continue;
             };
             for status in statuses {
-                if status.state != SeatLifecycleState::Running {
-                    continue;
-                }
                 let Some(alert) = status.alert else {
                     continue;
                 };
@@ -1605,9 +1625,25 @@ impl RoomSupervisor {
                 // (`ActivityWord`), so this pass does not read the file a second time. A second reader is
                 // how the status came to say "work is waiting" while the pass found "nothing to do".
                 let publishes = AgentRuntime::from_str_loose(&status.runtime).has_runner();
-                let busy =
-                    publishes && matches!(status.activity, ActivityWord::Working | ActivityWord::NeedsInput);
-                if busy {
+                if publishes {
+                    // A PUBLISHING SEAT'S OWN WORD IS THE AUTHORITY: a state that is not `Running` means the
+                    // generation that wrote it is done, and a nudge would talk past a dead pipe.
+                    if status.state != SeatLifecycleState::Running {
+                        continue;
+                    }
+                    let busy = matches!(status.activity, ActivityWord::Working | ActivityWord::NeedsInput);
+                    if busy {
+                        continue;
+                    }
+                } else if !TerminalManager::pane_is_live(&status.session_name) {
+                    // A SEAT WITH NO RUNNER PUBLISHES NOTHING, so its state document is either absent or a
+                    // PREVIOUS generation's word. Measured 2026-10-17: the agy reviewer's
+                    // `agent_socket_closed` was written at 04:00:36Z, hours before the 07:02:33Z pane that
+                    // carried the live seat, and a gate on that word silenced the seat for good while a
+                    // direct send (which types into the pane) worked. The pane is the proof this runtime can
+                    // take: the session exists and a process is attached to it. The alert above is still the
+                    // trigger, so a seat that is owed nothing stays quiet, and the ladder below still bounds
+                    // a pane that exists with a dead process.
                     continue;
                 }
                 out.push(PendingNudge {
@@ -3247,6 +3283,192 @@ mod tests {
             line["outcome"], "unconfirmed",
             "the pane route records the pane's own word: a paste into a pane that never read it is not a submission"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE STATE WORD IS NOT THIS SEAT'S LIVENESS. A runtime with no runner publishes nothing, so the only
+    /// document in `run/` may be a PREVIOUS generation's word - and a gate on that word either silences a
+    /// live seat (`agent_socket_closed`, the measured 04:00:36Z document under a 07:02:33Z pane) or keeps a
+    /// dead one talking (`idle`). The pane decides: a session with a process attached is live whatever the
+    /// document says, and "no document at all" is the same live seat on a first launch.
+    #[tokio::test]
+    async fn a_runner_less_seats_liveness_is_its_pane_whatever_the_word_in_the_file() {
+        let _server = crate::pty::test_servers::own("nudge-word");
+        let dir = scratch("nudge-word");
+        let room = format!("nudge-word-{}", std::process::id());
+        let key = seat_key("nudge-word");
+        write_spec_with_runtime(&dir, &room, &key, "agy");
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(
+            &session,
+            Path::new("."),
+            "sh -c 'stty -echo; sleep 300'",
+            &HashMap::new(),
+        )
+        .expect("scratch pane");
+        supervisor
+            .queue_store(&room)
+            .expect("open the rail")
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: session.clone(),
+                summary: "the owner's gate ask".into(),
+                ..Default::default()
+            })
+            .expect("create");
+
+        for state in ["agent_socket_closed", "agent_exited", "stopped", "idle"] {
+            write_state_file(&dir, &room, &key, state, "2026-10-17T04:00:36.547Z");
+            assert_eq!(
+                supervisor.pending_nudges().len(),
+                1,
+                "the pane is up, so `{state}` is not this seat's liveness"
+            );
+        }
+        fs::remove_file(
+            dir.join("rooms")
+                .join(&room)
+                .join("run")
+                .join(format!("{key}.state.json")),
+        )
+        .expect("remove the file");
+        assert_eq!(
+            supervisor.pending_nudges().len(),
+            1,
+            "a first launch has no document, and the pane is still the only proof it can give"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A PANE WHOSE PROCESS IS GONE IS NOT A LIVE SEAT, and neither the session nor its pid says so: measured
+    /// here 2026-10-17, a pane kept by `remain-on-exit` still answers `has-session` 0 and still reports the dead
+    /// process's pid, with only `#{pane_dead}=1` marking the death. The alert alone (which requires the session)
+    /// would nudge into that pane forever, so the pane's own dead bit is what excludes it - and a probe that
+    /// FAILED is not that bit (the read-failure rule `dce05c8` measured: an unreadable pid is not a dead pane).
+    #[tokio::test]
+    async fn a_runner_less_seat_whose_pane_is_dead_is_not_a_candidate() {
+        let _server = crate::pty::test_servers::own("nudge-deadpane");
+        let dir = scratch("nudge-deadpane");
+        let room = format!("nudge-deadpane-{}", std::process::id());
+        let key = seat_key("nudge-deadpane");
+        write_spec_with_runtime(&dir, &room, &key, "agy");
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(
+            &session,
+            Path::new("."),
+            "sh -c 'stty -echo; sleep 0.4'",
+            &HashMap::new(),
+        )
+        .expect("scratch pane");
+        let kept = std::process::Command::new("tmux")
+            .args(["set-option", "-t", &session, "remain-on-exit", "on"])
+            .output()
+            .expect("this test needs tmux");
+        assert!(kept.status.success(), "the pane must be kept after its command exits");
+        // The command has exited and the pane is kept: the session and its pid survive, the process does not.
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(
+            TerminalManager::is_session_alive(&session),
+            "the fixture rests on the session outliving its pane's process"
+        );
+        assert!(!TerminalManager::pane_is_live(&session), "its process is gone");
+        supervisor
+            .queue_store(&room)
+            .expect("open the rail")
+            .create(CreateInput {
+                source_session: "lead".into(),
+                destination_session: session.clone(),
+                summary: "the owner's gate ask".into(),
+                ..Default::default()
+            })
+            .expect("create");
+
+        assert!(
+            supervisor.pending_nudges().is_empty(),
+            "a pane with no process behind it is not a seat a nudge can reach"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// AND A LIVE PANE IS NOT A REASON TO NUDGE: the pane proves the seat is reachable, and the ALERT is
+    /// still the trigger - a seat owed nothing stays quiet, however long its pane has been up.
+    #[tokio::test]
+    async fn a_runner_less_seat_with_nothing_owed_is_not_nudged() {
+        let _server = crate::pty::test_servers::own("nudge-owed");
+        let dir = scratch("nudge-owed");
+        let room = format!("nudge-owed-{}", std::process::id());
+        let key = seat_key("nudge-owed");
+        write_spec_with_runtime(&dir, &room, &key, "agy");
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(
+            &session,
+            Path::new("."),
+            "sh -c 'stty -echo; sleep 300'",
+            &HashMap::new(),
+        )
+        .expect("scratch pane");
+
+        assert!(
+            supervisor.pending_nudges().is_empty(),
+            "a waiting pane with no row addressed to it has nothing to be nudged about"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A RUNNER-LESS LAUNCH OWNS ITS STATE DOCUMENT. Nothing in the seat will rewrite the file, so the
+    /// PREVIOUS generation's death word must not outlive the pane the room just started - and the document
+    /// must name the process that can still be checked, the pane's pid, not the daemon's, which outlives
+    /// every seat it starts.
+    #[tokio::test]
+    async fn a_runner_less_launch_writes_a_state_document_the_pane_can_back() {
+        let _server = crate::pty::test_servers::own("launch-state");
+        let dir = scratch("launch-state");
+        let room = format!("launch-state-{}", std::process::id());
+        let key = seat_key("launch-state");
+        seat_worktree(&dir, &room, &key);
+        let spec = startable_spec(&room, &key, "sleep 30");
+        // The document the previous generation left, in the shape and time the live reviewer's held it.
+        write_state_file(&dir, &room, &key, "agent_socket_closed", "2026-10-17T04:00:36.547Z");
+        let supervisor = supervisor_at(&dir);
+
+        let status = supervisor
+            .start_seat(&room, &spec.seats[0], &spec)
+            .expect("the pane is up");
+        assert_eq!(status.state, SeatLifecycleState::Running);
+
+        let path = dir
+            .join("rooms")
+            .join(&room)
+            .join("run")
+            .join(format!("{key}.state.json"));
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("the launch published its state"))
+                .expect("json");
+        assert_eq!(
+            doc["state"], "running",
+            "the pane is up, so the launch's own word replaces the previous generation's death"
+        );
+        assert_eq!(
+            doc["activity"], "unknown",
+            "a pane that is up has not said what it is doing, and `running` is not a turn word"
+        );
+        assert_eq!(
+            doc["pid"].as_u64().unwrap() as u32,
+            crate::pty::pane_pid(&RoomSupervisor::session_name(&room, &key)).unwrap(),
+            "the claim names the pane's process, the one that can still be checked"
+        );
+        let written: chrono::DateTime<chrono::Utc> =
+            doc["updated_at"].as_str().unwrap().parse().expect("rfc3339");
+        assert!(
+            written > chrono::Utc::now() - chrono::Duration::minutes(5),
+            "a stale timestamp would make the launch read as the old document, got {}",
+            doc["updated_at"]
+        );
+
+        let _ = supervisor.stop_seat(&room, &key);
         let _ = fs::remove_dir_all(&dir);
     }
 

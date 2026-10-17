@@ -206,6 +206,28 @@ pub fn pane_pid(session_name: &str) -> Result<u32, String> {
     parse_pane_pid(&String::from_utf8_lossy(&out.stdout))
 }
 
+/// Whether tmux reports the session's pane as dead, or the read's failure in its own words - the same split
+/// `PaneRecord` keeps for the pid, and for the same measured reason.
+fn pane_dead(session_name: &str) -> Result<bool, String> {
+    let out = tmux_command()
+        .args(["list-panes", "-t", session_name, "-F", "#{pane_dead}"])
+        .output()
+        .map_err(|e| format!("tmux list-panes could not be run: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("tmux list-panes exited {} with nothing on stderr", out.status)
+        } else {
+            format!("tmux list-panes refused: {stderr}")
+        });
+    }
+    match String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").trim() {
+        "0" => Ok(false),
+        "1" => Ok(true),
+        other => Err(format!("tmux reported an unreadable pane state {other:?}")),
+    }
+}
+
 /// The one line `list-panes -F #{pane_pid}` is expected to answer, parsed without inventing a value.
 ///
 /// Separate from the process call so both branches can be tested without a tmux server: "0" is a pane whose
@@ -387,6 +409,19 @@ impl TerminalManager {
             .args(["has-session", "-t", session_name])
             .output();
         out.map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    /// THE PANE'S OWN LIVENESS, the strongest proof a runtime with no runner can give: the session exists AND
+    /// tmux does not report its pane dead.
+    ///
+    /// `#{pane_dead}` is the only field that answers the second half. Measured here 2026-10-17: a pane kept by
+    /// `remain-on-exit` after its command exited still answers `has-session` 0 and still reports the PID of the
+    /// dead process (`118226 1` from `list-panes`), so neither the session nor a nonzero pid can tell the two
+    /// apart. A pane that exits without `remain-on-exit` takes the session with it, and then the first half
+    /// answers. A FAILED READ IS NOT A DEATH (the rule `dce05c8` measured for the pid): only tmux reporting the
+    /// pane dead excludes here, because a probe that failed must not silence a live seat.
+    pub fn pane_is_live(session_name: &str) -> bool {
+        Self::is_session_alive(session_name) && !matches!(pane_dead(session_name), Ok(true))
     }
 
     /// Capture pane text scrollback for telemetry/watch.

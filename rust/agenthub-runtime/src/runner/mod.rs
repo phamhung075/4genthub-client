@@ -1617,6 +1617,21 @@ pub fn nudge_seat(
 /// The seat's own state, written where the daemon and `ps` can read it (the reference writes a
 /// `runner-state.json` beside the session for the same reason, `pi-runner-protocol.js:26`).
 pub fn write_state(state_path: &Path, state: &str, classification: &str, attempts: u32) -> Result<(), String> {
+    write_state_with_pid(state_path, state, classification, attempts, std::process::id())
+}
+
+/// The same document, with the pid that BACKS the claim named by the caller. The runner publishes its own
+/// pid because it is the process that can still update the word; a launch with no runner has no such
+/// process, and the pane it just proved alive is the only thing that can disprove a stale death - so the
+/// caller names the pane's pid instead of a daemon pid that outlives the seat and would make every claim
+/// read as live.
+pub fn write_state_with_pid(
+    state_path: &Path,
+    state: &str,
+    classification: &str,
+    attempts: u32,
+    pid: u32,
+) -> Result<(), String> {
     let payload = serde_json::json!({
         "state": state,
         // THE WORD, PUBLISHED WHERE THE STATE IS PUBLISHED, derived from the same string in the same call
@@ -1630,7 +1645,7 @@ pub fn write_state(state_path: &Path, state: &str, classification: &str, attempt
         // it a reader cannot tell a seat that IS working from one that WAS working when its runner died. Measured
         // 2026-10-15: a seat whose agent had been killed out from under its pane kept the word `working` in this
         // file for 42 minutes, and nothing was left to correct it.
-        "pid": std::process::id(),
+        "pid": pid,
         "updated_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
     });
     if let Some(parent) = state_path.parent() {
