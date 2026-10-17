@@ -154,13 +154,28 @@ func Breach(limits Limits, usage Usage) (string, string) {
 }
 
 // Parked is the record a safeguard leaves in a seat's own directory: which seat, why it was stopped, when,
-// and the numbers that stopped it, so the reason outlives the process that found it.
+// the numbers that stopped it, and the way back - so the reason AND the exit outlive the process that found
+// them.
 type Parked struct {
 	Seat   string  `json:"seat"`
 	Reason string  `json:"reason"`
 	At     string  `json:"at"`
 	Cost   float64 `json:"cost_usd"`
 	Calls  int     `json:"calls"`
+	Exit   string  `json:"exit"`
+}
+
+// ParkExit is the way back from a park, written into every record. It is part of the record because a reader
+// who finds the file without the rail row or a refusal in hand has nothing else to read. The owner ruled the
+// exit BY HAND (2026-10-16 22:31Z): the record's existence IS the park, so removing it is the exit - and the
+// ORDER matters, measured rather than argued: `4genteam room reseat` sends StopSeat and then RestartSeat
+// (internal/clientroom/room.go:423/:426), and the runtime's restart_seat refuses BEFORE its own stop while the
+// record exists (rust/agenthub-runtime/src/supervisor/mod.rs:1011, via ipc/mod.rs:143), so a reseat run before
+// the removal STOPS the seat and leaves it stopped rather than running. The room and seat are written out
+// rather than left as placeholders, so the command can be copied out of the file.
+func ParkExit(rig, seat string) string {
+	return fmt.Sprintf("remove this file FIRST, then `4genteam room reseat %s %s`; the record's absence is the "+
+		"exit, and a reseat before the removal leaves the seat stopped", rig, seat)
 }
 
 // ParkedPath is the park record of one seat.

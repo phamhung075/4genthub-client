@@ -50,6 +50,36 @@ func TestSaveAndLoadRoundTripAndTheFileIs0600(t *testing.T) {
 	}
 }
 
+// A reader who finds the record alone must learn the way back FROM THE FILE - not from the rail row and not
+// from a refusal in hand. The exit is by hand (owner's ruling, 2026-10-16 22:31Z): the record's absence is
+// what lets the seat take work again, and the ORDER is the measured half of it - a reseat run before the
+// removal stops the seat and leaves it stopped, because the runtime refuses the restart before its own stop.
+func TestTheParkRecordNamesTheWayBack(t *testing.T) {
+	seatDir := t.TempDir()
+	parked := Parked{Seat: "dev", Reason: "spent 31.40 USD in the last 24h, over the 25.00 USD ceiling",
+		At: "2026-10-16T12:00:00Z", Cost: 31.4, Calls: 12, Exit: ParkExit("room-a", "dev")}
+	if err := WriteParked(seatDir, parked); err != nil {
+		t.Fatalf("WriteParked: %v", err)
+	}
+	raw, err := os.ReadFile(ParkedPath(seatDir))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// The concrete command and the ORDER, not a placeholder and not the softer outcome: the file is what an
+	// operator copies from, and a reseat run first leaves the seat stopped.
+	for _, want := range []string{`"exit"`, "remove this file FIRST", "room reseat room-a dev",
+		"a reseat before the removal leaves the seat stopped"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("the record must carry %q, so a reader holding only the file learns the way back:\n%s",
+				want, string(raw))
+		}
+	}
+	if got, ok := ReadParked(seatDir); !ok || got.Exit != ParkExit("room-a", "dev") {
+		t.Errorf("ReadParked = %+v, %v; want the exit text back: the field is part of the record's meaning",
+			got, ok)
+	}
+}
+
 // Measure reads two windows from two files: the assistant turns inside 24h out of the session transcripts, and
 // the guard log's lines inside the minute. Every line these tests plant also has a REASON to be skipped -
 // too old, not an assistant turn, not JSON - because a reader that counted those would park a seat over

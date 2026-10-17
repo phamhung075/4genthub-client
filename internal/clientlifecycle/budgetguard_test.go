@@ -120,12 +120,32 @@ func TestASeatOverItsUSDBudgetIsParkedOnceAndNamedOnce(t *testing.T) {
 	if !strings.Contains(row.Body, "Remove the record") || !strings.Contains(row.Body, "seats/dev/parked.json") {
 		t.Errorf("body = %q, want the record named as the way back, at its path", row.Body)
 	}
+	// The row is also the park's only return channel: by hand, the exit files no row of its own, so this row
+	// asks the reader to close it with why the seat came back.
+	if !strings.Contains(row.Body, "CLOSE THIS ROW") || !strings.Contains(row.Body, "why it came back") {
+		t.Errorf("body = %q, want it to ask the reader to close this row with why the seat came back", row.Body)
+	}
+	// F1's gap, closed: the sentence that tells the operator how to bring the seat back is the sentence that
+	// has to carry the ORDER, because a reseat run first STOPS the seat (measured: internal/clientroom/room.go
+	// sends StopSeat then RestartSeat, and the runtime's restart_seat refuses before its own stop while the
+	// record exists). A softer claim here reads as harmless and is not.
+	for _, want := range []string{"Remove the record FIRST, then", "a reseat before the removal stops the seat"} {
+		if !strings.Contains(row.Body, want) {
+			t.Errorf("body = %q, want %q: the exit's ORDER is what the operator must read", row.Body, want)
+		}
+	}
 	parked, ok := f.records["dev"]
 	if !ok {
 		t.Fatal("the park must be recorded in the seat's own directory")
 	}
 	if parked.Seat != "dev" || parked.Cost != 31.4 || !strings.Contains(parked.Reason, "25.00") {
 		t.Errorf("record = %+v, want the seat, the spend and the ceiling it crossed", parked)
+	}
+	// The record is what outlives the process, so it carries the way back too: the operator who finds the file
+	// must not have to guess the exit.
+	if parked.Exit != roombudget.ParkExit("room-a", "dev") {
+		t.Errorf("record = %+v, want Exit = %q: the park's own record names the by-hand exit, with the seat's own room",
+			parked, roombudget.ParkExit("room-a", "dev"))
 	}
 	if f.beats != 1 {
 		t.Errorf("heartbeats = %d, want one per pass", f.beats)
