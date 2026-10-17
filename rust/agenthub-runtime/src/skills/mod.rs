@@ -148,4 +148,95 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    /// The seat tier carries the seat's own role: one skill per seat, resolved for that seat alone, read
+    /// from the room's seat directory. The seat-type's role text, its rules and its output format used to
+    /// reach a seat as a rendered `guidance/role.md`; the render no longer carries them, so this is the
+    /// only delivery, and a missing 4genthub-min seat directory has to fail here rather than be found by a
+    /// seat that has no contract. Landmarks beside the assertion: the share tier still resolves, and every
+    /// OTHER seat's role skill stays out of this seat's set - a resolver handed one directory could show an
+    /// absence for free.
+    #[test]
+    fn a_seat_resolves_its_own_role_skill_and_no_other_seats() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("skills");
+        let resolver = SkillResolver::new(root);
+        // (seat, a landmark from the type's role text, a landmark from its rules)
+        let cases = [
+            ("lead", "You are the lead seat", "One task per assignment"),
+            ("architect", "You are the architect seat", "Options and trade-offs"),
+            ("go-dev", "You own implementation", "Smallest safe change"),
+            ("fe-dev", "You own implementation", "Smallest safe change"),
+            ("reviewer", "You are the reviewer seat", "Review against the task"),
+        ];
+        let seats: Vec<&str> = cases.iter().map(|(seat, _, _)| *seat).collect();
+
+        for (seat, role_landmark, rule_landmark) in cases {
+            let resolved = resolver.resolve_for_seat("4genthub-min", seat);
+            assert!(
+                resolved.iter().any(|s| s.tier == SkillTier::Shared),
+                "{seat}: the share tier resolved nothing, so this case is reading a root it cannot see"
+            );
+
+            let want_name = format!("{seat}-role");
+            let role = resolved
+                .iter()
+                .find(|s| s.name == want_name)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{seat}: no skill named {want_name}; the seat tier holds {:?}",
+                        resolved
+                            .iter()
+                            .filter(|s| s.tier == SkillTier::Seat)
+                            .map(|s| s.name.as_str())
+                            .collect::<Vec<_>>()
+                    )
+                });
+            assert_eq!(role.tier, SkillTier::Seat, "{seat}: {want_name} resolved outside the seat tier");
+            assert!(
+                role.path.to_string_lossy().ends_with(&format!(
+                    "rooms/4genthub-min/{seat}/{want_name}/SKILL.md"
+                )),
+                "{seat}: {want_name} came from {}",
+                role.path.display()
+            );
+            let meta = role
+                .metadata
+                .as_ref()
+                .unwrap_or_else(|| panic!("{seat}: {want_name} carries no frontmatter"));
+            assert_eq!(meta.name, want_name);
+            assert!(!meta.description.trim().is_empty(), "{seat}: {want_name} has no description");
+            assert_eq!(
+                meta.extra.get("seat-type-version").and_then(|v| v.as_str()),
+                Some("1.4.12"),
+                "{seat}: {want_name} does not name the seat-type-version its text was ported at"
+            );
+            assert!(
+                role.content.contains(role_landmark),
+                "{seat}: {want_name} does not carry its type's role text ({role_landmark:?})"
+            );
+            assert!(
+                role.content.contains(rule_landmark),
+                "{seat}: {want_name} does not carry its type's rules ({rule_landmark:?})"
+            );
+            assert!(
+                role.content.contains("## Output format"),
+                "{seat}: {want_name} does not carry its type's output format"
+            );
+
+            for other in &seats {
+                if other != &seat {
+                    assert!(
+                        !resolved.iter().any(|s| s.name == format!("{other}-role")),
+                        "{seat}: the seat tier handed this seat {other}'s role"
+                    );
+                }
+            }
+        }
+
+        // Landmark on the seat tier that predates this one: fe-dev's own skills stay theirs.
+        let fe = resolver.resolve_for_seat("4genthub-min", "fe-dev");
+        assert!(fe.iter().any(|s| s.name == "taste-skill" && s.tier == SkillTier::Seat));
+        let go = resolver.resolve_for_seat("4genthub-min", "go-dev");
+        assert!(!go.iter().any(|s| s.name == "taste-skill"));
+    }
 }

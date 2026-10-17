@@ -5,6 +5,14 @@
 // checks this document (clientpolicy), the launch path hands it to the runtime (clientlifecycle,
 // clientroom, clientseat), and every one of them needs the SAME bytes - so there is one definition of them,
 // next to the fetch, and clientpolicy imports it rather than composing a second one.
+//
+// THIS IS THE ONLY FILE HALF THE CLIENT STILL READS. The render used to carry `agent.yaml`, `startup.files`,
+// a skills list and `guidance/role.md` (retired: a seat's skills come from the client tree's share, room and
+// seat tiers, and its role is the seat tier's `<seat>-role` skill). What writes a seat's other files is the
+// RUNTIME, not the client and not the render: `install_seat_skills` copies the resolved skill tree into
+// `<seat dir>/skills/` (rust/agenthub-runtime/src/supervisor/mod.rs:400) and `start_seat` writes the seat's
+// tool surface, `<seat dir>/mcp.json`, at every start (same file, :704). So a reader looking for who
+// produced a file in a seat's launch directory starts there, and this package is only the policy document.
 package clientsync
 
 import (

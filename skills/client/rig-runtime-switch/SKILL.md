@@ -87,9 +87,11 @@ The reads are native:
 
 ## Gotchas seen live
 
-- Role files (`agents/<seat>/guidance/role.md`) mention MCP tools because the rendered seat carries
-  them; on a seat rendered WITHOUT an mcp block those instructions are inert, and the kickoff message
-  is what says so. The kickoff is still what makes the seat's *brief* runtime-correct.
+- A seat's own role and instructions arrive as **skills** — the client skill tree's share, room and seat
+  tiers — and its tool surface as `<seat dir>/mcp.json`, written by the runtime at every start. On a seat
+  whose seat type declares no mcp block that file carries no server, so tool instructions in a skill are
+  inert, and the kickoff message is what says so. The kickoff is still what makes the seat's *brief*
+  runtime-correct.
 - The old runtime's `needs-input` dialog dies with the seat's restart — the user's "wait for reset" option
   is superseded by the switch (the handover files are the continuity).
 - omp seats are per-token billed and share one `DEEPSEEK_API_KEY`; concurrent sessions can make
