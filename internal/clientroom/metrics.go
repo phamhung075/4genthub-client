@@ -44,7 +44,9 @@ Every line: ts (UTC ISO-8601), schema (1), room, seat, session (transcript id, n
   tool       tool target_class outcome ms blocked_rule bytes_out
   commit     sha files docs_only task
   queue_row  qitem priority tag summary_chars body_chars to
-Activity is the report classifier: code-edit doc-edit measuring-bash test/build queue-write queue-poll read text-only other.
+Activity is a turn's FIRST-tool class: code-edit doc-edit measuring-bash test/build queue-write queue-poll read
+text-only other. The report scores code-edit by ANY call, so the two are deliberately different readings - the
+report prints both (seats/architect/RULING-code-edit-share-target.md).
 target_class is a command's verb (never the command line). task is a hub task id only where the turn or the
 commit trailer names one, else null. Commands, contents, queue bodies and tokens are never written.
 

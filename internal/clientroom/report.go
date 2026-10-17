@@ -1,15 +1,18 @@
 // `room report`: one read-only measurement of one room over a time window.
 //
-// The report exists so the five targets below are read off the room's own records instead of an ad-hoc
-// script. Four sources feed it, and each is read the way its owner exposes it:
+// The report exists so the targets below are read off the room's own records instead of an ad-hoc script.
+// Five sources feed it, and each is read the way its owner exposes it:
 //
 //   - the seats' session transcripts (<state-dir>/rooms/<room>/seats/<seat>/sessions/*.jsonl): every
-//     assistant message carries its cost and is classified by its FIRST tool call;
+//     assistant message carries its cost and is classified by its FIRST tool call, and as code-edit when ANY
+//     of its calls edits code - both readings are kept (see `turnClasses`);
 //   - the seats' tool-calls.jsonl: how many calls the seat's guard blocked;
 //   - the room's queue, asked from the runtime daemon (QueueList) - this client links no SQLite driver and
 //     the daemon is the queue store's only owner. Only counts and lengths are used: a body is never printed;
 //   - `git log --since` of the repository the seats worked in, where a commit's `Seat:` trailer names the
-//     seat that made it (a commit without one is counted as "other").
+//     seat that made it (a commit without one is counted as "other");
+//   - the room's spec.json: which seats are `developer` seats, i.e. which of them the code-edit target holds
+//     (seats/architect/RULING-code-edit-share-target.md).
 //
 // A source that cannot be read is printed as `unavailable (<reason>)`; it is never a zero. Nothing here
 // writes anything.
@@ -40,10 +43,10 @@ import (
 const reportUsage = `usage: 4genteam room report ROOM [--since 24h] [--json] [--state-root DIR] [--socket PATH]
 
 One read-only measurement of one room over one window; it writes nothing. The numbers come from the room's own
-records rather than an ad-hoc script, so the five targets below are read the same way twice, and a source that
+records rather than an ad-hoc script, so the targets below are read the same way twice, and a source that
 cannot be read prints "unavailable (<reason>)" instead of a zero.
 
-Four sources: the seats' session transcripts (every assistant turn's cost, classified by the FIRST tool call,
+Five sources: the seats' session transcripts (every assistant turn's cost, classified by the FIRST tool call,
 and by ANY call for the code-edit class) and tool-calls.jsonl (the guard-blocked count); the room's queue, asked
 from the runtime daemon - counts and lengths only, never a body; and git log --since of the repository the
 seats' session headers name most often, where a commit's Seat: trailer names the seat that made it, Task: names
