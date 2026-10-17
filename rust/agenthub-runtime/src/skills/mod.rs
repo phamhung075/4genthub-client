@@ -49,7 +49,8 @@ impl SkillResolver {
             if let Some(end_idx) = content[3..].find("---") {
                 let yaml_str = &content[3..3 + end_idx];
                 let body = content[3 + end_idx + 3..].trim().to_string();
-                let meta: Option<SkillMetadata> = serde_yaml::from_str(yaml_str).ok();
+                let meta: Option<SkillMetadata> = serde_yaml::from_str(yaml_str)
+                    .map_err(|e| format!("{}: frontmatter does not parse: {e}", path.display()))?;
                 return Ok((meta, body));
             }
         }
@@ -57,12 +58,12 @@ impl SkillResolver {
     }
 
     /// Resolve all skills for a specific seat in a room.
-    pub fn resolve_for_seat(&self, room: &str, seat: &str) -> Vec<ResolvedSkill> {
+    pub fn resolve_for_seat(&self, room: &str, seat: &str) -> Result<Vec<ResolvedSkill>, String> {
         let mut resolved = Vec::new();
 
         // 1. Shared skills (skills/share/*)
         let share_dir = self.skills_root.join("share");
-        self.collect_skills_in_dir(&share_dir, SkillTier::Shared, &mut resolved);
+        self.collect_skills_in_dir(&share_dir, SkillTier::Shared, &mut resolved)?;
 
         // 2. Room skills (skills/rooms/<room>/*)
         let room_dir = self.skills_root.join("rooms").join(room);
@@ -75,50 +76,54 @@ impl SkillResolver {
                         if skill_file.is_file() {
                             // Directory has SKILL.md -> room level skill
                             let name = entry.file_name().to_string_lossy().to_string();
-                            if let Ok((meta, body)) = Self::parse_skill_file(&skill_file) {
-                                resolved.push(ResolvedSkill {
-                                    name,
-                                    path: skill_file,
-                                    content: body,
-                                    metadata: meta,
-                                    tier: SkillTier::Room,
-                                });
-                            }
+                            let (meta, body) = Self::parse_skill_file(&skill_file)?;
+                            resolved.push(ResolvedSkill {
+                                name,
+                                path: skill_file,
+                                content: body,
+                                metadata: meta,
+                                tier: SkillTier::Room,
+                            });
                         } else if entry.file_name() == seat {
                             // 3. Seat directory matching this seat (skills/rooms/<room>/<seat>/*)
-                            self.collect_skills_in_dir(&path, SkillTier::Seat, &mut resolved);
+                            self.collect_skills_in_dir(&path, SkillTier::Seat, &mut resolved)?;
                         }
                     }
                 }
             }
         }
 
-        resolved
+        Ok(resolved)
     }
 
-    fn collect_skills_in_dir(&self, dir: &Path, tier: SkillTier, out: &mut Vec<ResolvedSkill>) {
+    fn collect_skills_in_dir(
+        &self,
+        dir: &Path,
+        tier: SkillTier,
+        out: &mut Vec<ResolvedSkill>,
+    ) -> Result<(), String> {
         if !dir.is_dir() {
-            return;
+            return Ok(());
         }
-        let Ok(entries) = fs::read_dir(dir) else { return };
+        let Ok(entries) = fs::read_dir(dir) else { return Ok(()) };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
                 let skill_file = path.join("SKILL.md");
                 if skill_file.is_file() {
                     let name = entry.file_name().to_string_lossy().to_string();
-                    if let Ok((meta, body)) = Self::parse_skill_file(&skill_file) {
-                        out.push(ResolvedSkill {
-                            name,
-                            path: skill_file,
-                            content: body,
-                            metadata: meta,
-                            tier,
-                        });
-                    }
+                    let (meta, body) = Self::parse_skill_file(&skill_file)?;
+                    out.push(ResolvedSkill {
+                        name,
+                        path: skill_file,
+                        content: body,
+                        metadata: meta,
+                        tier,
+                    });
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -171,7 +176,9 @@ mod tests {
         let seats: Vec<&str> = cases.iter().map(|(seat, _, _)| *seat).collect();
 
         for (seat, role_landmark, rule_landmark) in cases {
-            let resolved = resolver.resolve_for_seat("4genthub-min", seat);
+            let resolved = resolver
+                .resolve_for_seat("4genthub-min", seat)
+                .expect("the skill tree resolves for this seat");
             assert!(
                 resolved.iter().any(|s| s.tier == SkillTier::Shared),
                 "{seat}: the share tier resolved nothing, so this case is reading a root it cannot see"
@@ -234,9 +241,59 @@ mod tests {
         }
 
         // Landmark on the seat tier that predates this one: fe-dev's own skills stay theirs.
-        let fe = resolver.resolve_for_seat("4genthub-min", "fe-dev");
+        let fe = resolver
+            .resolve_for_seat("4genthub-min", "fe-dev")
+            .expect("the skill tree resolves for fe-dev");
         assert!(fe.iter().any(|s| s.name == "taste-skill" && s.tier == SkillTier::Seat));
-        let go = resolver.resolve_for_seat("4genthub-min", "go-dev");
+        let go = resolver
+            .resolve_for_seat("4genthub-min", "go-dev")
+            .expect("the skill tree resolves for go-dev");
         assert!(!go.iter().any(|s| s.name == "taste-skill"));
+    }
+
+    /// A frontmatter that is PRESENT but does not parse is a NAMED failure: the resolver returns the skill
+    /// file and the yaml problem instead of resolving the skill with `metadata: None`. This is the defect a
+    /// reviewer's gate measured - an unquoted `: ` inside one seat-role description made serde_yaml refuse
+    /// the block, the skill resolved with no name, description or seat-type-version, and the only thing that
+    /// failed was a test's own "carries no frontmatter" assertion.
+    #[test]
+    fn a_frontmatter_that_does_not_parse_is_named_and_never_dropped() {
+        let root = std::env::temp_dir().join(format!("skill_bad_fm_{}", std::process::id()));
+        let skill_file = root.join("rooms").join("demo").join("bad").join("SKILL.md");
+        fs::create_dir_all(skill_file.parent().unwrap()).unwrap();
+        fs::write(
+            &skill_file,
+            "---\nname: bad\ndescription: you own this contract: own coordination\n---\nbody\n",
+        )
+        .unwrap();
+
+        let err = SkillResolver::new(&root)
+            .resolve_for_seat("demo", "nobody")
+            .expect_err("a malformed frontmatter must refuse resolution, not resolve the skill");
+        assert!(err.contains("SKILL.md"), "the refusal names the file: {err}");
+        assert!(
+            err.contains("frontmatter does not parse"),
+            "the refusal names the problem: {err}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A file with NO frontmatter stays legal, and resolves with no metadata - the half that must not turn
+    /// into an error. (The seat-role case above asserts the other half against the real tree: a valid block
+    /// still parses and carries its name, description and seat-type-version.)
+    #[test]
+    fn a_file_without_frontmatter_still_resolves() {
+        let root = std::env::temp_dir().join(format!("skill_no_fm_{}", std::process::id()));
+        let skill_dir = root.join("share").join("plain");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "# Plain skill\nno frontmatter here\n").unwrap();
+
+        let resolved = SkillResolver::new(&root)
+            .resolve_for_seat("demo", "nobody")
+            .expect("no frontmatter is legal");
+        assert_eq!(resolved.len(), 1);
+        assert!(resolved[0].metadata.is_none());
+        assert!(resolved[0].content.contains("no frontmatter here"));
+        let _ = fs::remove_dir_all(&root);
     }
 }

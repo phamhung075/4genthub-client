@@ -1,6 +1,6 @@
 ---
 name: short-output
-description: Keep a seat's thinking and replies short to save output tokens. Use on every turn: think in pointer lines, answer result-first, never paste large output. Complements token-economy, which covers documents and messages between seats.
+description: "Keep a seat's thinking and replies short to save output tokens. Use on every turn: think in pointer lines, answer result-first, never paste large output. Complements token-economy, which covers documents and messages between seats."
 ---
 
 # Short Output

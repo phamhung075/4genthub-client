@@ -454,7 +454,7 @@ fn install_seat_skills(state_dir: &Path, room: &str, seat: &str, seat_dir: &Path
     if target.exists() {
         fs::remove_dir_all(&target).map_err(|e| format!("cannot clear {}: {e}", target.display()))?;
     }
-    for skill in crate::skills::SkillResolver::new(root).resolve_for_seat(room, seat) {
+    for skill in crate::skills::SkillResolver::new(root).resolve_for_seat(room, seat)? {
         let Some(source) = skill.path.parent() else { continue };
         copy_dir(source, &target.join(&skill.name))
             .map_err(|e| format!("cannot install the skill {}: {e}", skill.name))?;
@@ -2430,6 +2430,16 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
+        // THE SKILLS ROOT IS ISOLATED HERE, because a seat's skills tree is named in the state root's `.env`
+        // and the process environment is the documented fallback - so without this the suite resolves the
+        // HOST's tree (measured 2026-10-17: `AGENTHUB_CLIENT_SKILLS` from the seat's environment pointed at
+        // the main checkout, and a malformed skill in it failed every start this suite performs). A test
+        // names its own tree; the path need not exist, since no tree means no skills.
+        fs::write(
+            dir.join(".env"),
+            format!("{SKILLS_ROOT_ENV}={}\n", dir.join("no-skills").display()),
+        )
+        .expect("isolated .env");
         dir
     }
 
