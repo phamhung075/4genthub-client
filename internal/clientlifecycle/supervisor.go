@@ -94,6 +94,8 @@ func New(rig string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 	}
 	supervisor.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 	supervisor.Seats = func(rig string) []string { return seatlog.RigSeats(stateRoot, rig) }
+	// The same resolver the idle guard binds: an agy seat's context is read from its live transcript,
+	// not from the omp log it left behind (measured 2026-10-17: ps said 53k while the stale file said 14h).
 	supervisor.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	supervisor.Idle = rigIdle
 	supervisor.IdleWhy = func(rig, seat string) string { _, why := rigIdleReason(rig, seat); return why }

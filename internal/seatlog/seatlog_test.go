@@ -72,9 +72,60 @@ func TestSeatLogPrefersAnOmpStateDirectoryAndFallsBackToClaude(t *testing.T) {
 	if path, runtime := SeatLog(stateRoot, "my-rig", "lead"); path != log || runtime != "omp" {
 		t.Errorf("SeatLog = (%q, %q), want the omp session", path, runtime)
 	}
-	// No state directory and no configured Claude projects directory: no log, and the runtime says so.
-	if path, runtime := SeatLog(stateRoot, "my-rig", "absent"); path != "" || runtime != "claude" {
-		t.Errorf("SeatLog = (%q, %q), want no log and the claude fallback", path, runtime)
+	// No state directory and no configured Claude projects directory: no log, so no runtime is named.
+	if path, runtime := SeatLog(stateRoot, "my-rig", "absent"); path != "" || runtime != "" {
+		t.Errorf("SeatLog = (%q, %q), want no log", path, runtime)
+	}
+}
+
+// TestSeatLogReadsAnAgySeatsTranscriptBesideAnOmpEraLog pins the third false alarm of 2026-10-17: the
+// reviewer's seat directory still holds the session file of the omp runtime it no longer runs, so a
+// resolver that prefers any omp jsonl reads tens of thousands of seconds of silence while the agy
+// transcript was written minutes earlier. The newer of the two logs is the live one; only a seat with
+// neither falls through to the Claude Code log.
+func TestSeatLogReadsAnAgySeatsTranscriptBesideAnOmpEraLog(t *testing.T) {
+	stateRoot := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	seatDir := filepath.Join(stateRoot, "rooms", "my-rig", "seats", "reviewer")
+	sessions := filepath.Join(seatDir, "sessions")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(sessions, "2026-10-16T22-47.jsonl")
+	if err := os.WriteFile(stale, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-14 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	const conversation = "agy-conversation-1"
+	if err := os.WriteFile(filepath.Join(seatDir, "agy-conversation"), []byte(conversation+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(home, ".gemini", "antigravity-cli", "brain", conversation,
+		".system_generated", "logs", "transcript.jsonl")
+	if err := os.MkdirAll(filepath.Dir(transcript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if path, runtime := SeatLog(stateRoot, "my-rig", "reviewer"); path != transcript || runtime != "agy" {
+		t.Errorf("SeatLog = (%q, %q), want the agy transcript", path, runtime)
+	}
+
+	// An omp log written after the transcript still wins: the rule is the newer log, not the runtime.
+	newer := filepath.Join(sessions, "2026-10-17T08-37.jsonl")
+	if err := os.WriteFile(newer, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if path, runtime := SeatLog(stateRoot, "my-rig", "reviewer"); path != newer || runtime != "omp" {
+		t.Errorf("SeatLog = (%q, %q), want the newer omp log", path, runtime)
 	}
 }
 

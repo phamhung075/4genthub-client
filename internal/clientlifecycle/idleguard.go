@@ -78,6 +78,9 @@ func NewIdleGuard(rig, lead string, quiet, stall int, stateRoot string, out io.W
 	g := &IdleGuard{Rig: rig, Lead: lead, Root: stateRoot, Quiet: float64(quiet), Stall: float64(stall), State: map[string]*stallState{}}
 	g.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 	g.Seats = func(rig string) []string { return seatlog.RigSeats(stateRoot, rig) }
+	// seatlog.SeatLog is the ONE resolver: it reads the newer of the omp session and the agy transcript,
+	// so the stall clock cannot count an agy seat from the omp-era file it left behind (the false alarm
+	// raised three times on 2026-10-17).
 	g.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	g.Modified = modTime
 	g.Idle = rigIdle

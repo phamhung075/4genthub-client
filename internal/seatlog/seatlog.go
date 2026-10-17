@@ -63,18 +63,44 @@ func Kilo(tokens int) string {
 	return fmt.Sprintf("%.2fM", float64(tokens)/1_000_000)
 }
 
-// SeatLog is seat_log: (the seat's newest session log, its runtime), where the omp state directory is
-// tried first and the Claude Code log is the fallback. An omp state directory with no session in it (the rig orchestrator
-// writes one for a Claude Code seat too, holding only its guide) does not count as an omp seat. An empty path means the seat has no log this
-// machine can read, which the caller skips rather than guessing at.
+// SeatLog is seat_log: (the seat's newest session log, its runtime), the newer of the omp session and
+// the agy transcript, with the Claude Code log as the fallback. A seat that switched runtime keeps the
+// old runtime's log, so existence alone does not say which one is live. An omp state directory with no
+// session in it (the rig orchestrator writes one for a Claude Code seat too, holding only its guide)
+// does not count as an omp seat. An empty path means the seat has no log this machine can read, which
+// the caller skips rather than guessing at.
 func SeatLog(stateRoot, rig, seat string) (string, string) {
-	seatDir := clientruntime.SeatDir(stateRoot, rig, seat)
-	if info, err := os.Stat(seatDir); err == nil && info.IsDir() {
-		if session := NewestSession(seatDir); session != "" {
-			return session, "omp"
-		}
+	omp := NewestSession(clientruntime.SeatDir(stateRoot, rig, seat))
+	agy := AgyTranscript(stateRoot, rig, seat)
+	switch {
+	case agy != "" && (omp == "" || newest([]string{omp, agy}) == agy):
+		return agy, "agy"
+	case omp != "":
+		return omp, "omp"
 	}
-	return claudeLog(rig, seat), "claude"
+	path := claudeLog(rig, seat)
+	if path == "" {
+		return "", ""
+	}
+	return path, "claude"
+}
+
+// AgyTranscript is the transcript of the conversation the seat's agy runtime records, or "" when the
+// seat has none: agy names its conversation in <seat dir>/agy-conversation and keeps the log under the
+// operator's home. Without it an agy seat whose directory still holds an omp-era session file reads as
+// silent, which is the false alarm the idle guard raised three times on 2026-10-17.
+func AgyTranscript(stateRoot, rig, seat string) string {
+	id, err := os.ReadFile(filepath.Join(clientruntime.SeatDir(stateRoot, rig, seat), "agy-conversation"))
+	home, homeErr := os.UserHomeDir()
+	if err != nil || homeErr != nil || strings.TrimSpace(string(id)) == "" {
+		return ""
+	}
+	path := filepath.Join(home, ".gemini", "antigravity-cli", "brain", strings.TrimSpace(string(id)),
+		".system_generated", "logs", "transcript.jsonl")
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 // NewestSession is newest_session: the most recently written *.jsonl under <seat dir>/sessions.
