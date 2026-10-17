@@ -35,7 +35,7 @@ Stale worktrees (`/tmp/wt-*`, `/tmp/gate-*`, prunable entries in `git worktree l
 ## Ruled (architect, 2026-10-11: `ai_docs/core-architecture/seat-worktrees.md`)
 
 - **Your worktree and branch:** `<roomDir>/wt/<seat>` on `<rig>/<seat>`, for example `4genthub-min/go-dev`. The reviewer's worktree is detached. Inside it, `agenthub_client` is on the same branch name, and `.claude` is detached. Never run `git submodule update` there.
-- **Staging:** `git add -- <paths>` (`-N` for a new file), then check `git diff --cached --stat` before every commit. `git add -A`, `git add .` and `commit -a` stay forbidden. A plain `git commit` after that check is allowed.
+- **The commit form (owner, pathspec fleet-wide, 2026-10-17):** commit by pathspec and do not stage first - `git commit -m "..." -- <paths>`; a new file gets `git add -N -- <new>` first, then the same pathspec commit. `git add -A`, `git add .` and `commit -a` stay forbidden.
 - **Ready for a gate:** tell the lead your tip as `<rig>/<seat>=<sha>`.
 - **The merge routine (the lead's):**
   1. The lead merges each ready tip `--no-ff` into `<rig>/integration`.
