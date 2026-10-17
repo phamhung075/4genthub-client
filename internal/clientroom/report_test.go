@@ -71,14 +71,24 @@ func TestParseSince(t *testing.T) {
 	}
 }
 
-func TestParseGitLogReadsSeatTrailerAndDocsOnly(t *testing.T) {
+func TestParseGitLogReadsSeatTrailerDocsOnlyAndPinOnly(t *testing.T) {
 	const id = "0b6c1c4e-8f1d-4f0e-9a52-0123456789ab"
-	out := recordSep + "s1" + fieldSep + "t1" + fieldSep + "agenthub--room-a--go-dev" + fieldSep + id + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\nx.go\nCHANGELOG/a.md\n" +
-		recordSep + "s2" + fieldSep + "t2" + fieldSep + "agenthub--room-a--lead" + fieldSep + "not-a-uuid" + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\nREADME.md\nai_docs/y.txt\n" +
-		recordSep + "s3" + fieldSep + "t3" + fieldSep + "agenthub--other--lead" + fieldSep + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\nz.md\n" +
-		recordSep + "s4" + fieldSep + "t4" + fieldSep + fieldSep + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n"
+	// --raw lines: ":<oldmode> <newmode> <oldsha> <newsha> <status>\t<path>". A submodule pointer is 160000,
+	// and a commit that only moves one landed no code - it must not pass for anybody.
+	raw := func(mode, path string) string {
+		return ":000000 " + mode + " 0000000 1234567 A\t" + path + "\n"
+	}
+	out := recordSep + "s1" + fieldSep + "t1" + fieldSep + "agenthub--room-a--go-dev" + fieldSep + id + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\n" +
+		raw("100644", "x.go") + raw("100644", "CHANGELOG/a.md") +
+		recordSep + "s2" + fieldSep + "t2" + fieldSep + "agenthub--room-a--lead" + fieldSep + "not-a-uuid" + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\n" +
+		raw("100644", "README.md") + raw("100644", "ai_docs/y.txt") +
+		recordSep + "s3" + fieldSep + "t3" + fieldSep + "agenthub--other--lead" + fieldSep + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\n" +
+		raw("100644", "z.md") +
+		recordSep + "s4" + fieldSep + "t4" + fieldSep + fieldSep + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n" +
+		recordSep + "s5" + fieldSep + "t5" + fieldSep + "agenthub--room-a--go-dev" + fieldSep + fieldSep + "2026-10-16T10:00:00Z" + fieldSep + "\n\n" +
+		raw("160000", "agenthub_client")
 	got := parseGitLog(out, "room-a")
-	want := []commitRecord{{Seat: "go-dev", SHA: "s1", Title: "t1", TaskID: id}, {Seat: "lead", DocsOnly: true, SHA: "s2", Title: "t2"}, {DocsOnly: true, SHA: "s3", Title: "t3"}, {SHA: "s4", Title: "t4"}}
+	want := []commitRecord{{Seat: "go-dev", SHA: "s1", Title: "t1", TaskID: id}, {Seat: "lead", DocsOnly: true, SHA: "s2", Title: "t2"}, {DocsOnly: true, SHA: "s3", Title: "t3"}, {SHA: "s4", Title: "t4"}, {Seat: "go-dev", PinOnly: true, SHA: "s5", Title: "t5"}}
 	if len(got) != len(want) {
 		t.Fatalf("got %d commits, want %d: %v", len(got), len(want), got)
 	}
@@ -381,7 +391,7 @@ func TestAReadThenEditTurnCountsAsCodeEdit(t *testing.T) {
 	}
 
 	stats := newSeatStats("dev")
-	if _, err := readSessions(seatDir, now.Add(-24*time.Hour), stats); err != nil {
+	if _, _, err := readSessions(seatDir, now.Add(-24*time.Hour), stats); err != nil {
 		t.Fatal(err)
 	}
 	stats.finish()
@@ -471,7 +481,7 @@ func TestTheRoomCodeEditLineIsDiagnosticWhileEachEditingSeatIsGated(t *testing.T
 	var out strings.Builder
 	report.renderText(&out)
 	text := out.String()
-	for _, want := range []string{"PASS code-edit cost % [go-dev]", "FAIL code-edit cost % [fe-dev]", "diag code-edit cost % [room]", "(want diagnostic, not a target)", "code-edit by FIRST tool call"} {
+	for _, want := range []string{"PASS code-edit cost % [go-dev]", "FAIL code-edit cost % [fe-dev]", "diag code-edit cost % [room]", "(want diagnostic, not a target)", "(want > 25, cap 40)", "code-edit floor: 25 (+5 per complete UTC day every editing seat passes, never down, cap 40)", "edit yield (gate-passed commits per code-edit USD; diagnostic)", "dropped: no Task: 2", "code-edit by FIRST tool call"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text lacks %q:\n%s", want, text)
 		}
@@ -513,7 +523,8 @@ func TestOneSeatsCodeEditTargetDoesNotMoveWithTheOthers(t *testing.T) {
 		return targetResult{}
 	}
 
-	first := evaluateTargets(room, 1, true, true, []*seatStats{goDev, feDev})
+	floor := codeEditFloor{Base: codeEditFloorBase, Step: codeEditFloorStep, Cap: codeEditCeil, Floor: codeEditFloorBase}
+	first := evaluateTargets(room, 1, true, true, []*seatStats{goDev, feDev}, floor, nil)
 	if got := line(first, "go-dev"); got.Result != "PASS" || got.Value != 50 {
 		t.Fatalf("go-dev line = %+v, want PASS at 50", got)
 	}
@@ -522,7 +533,7 @@ func TestOneSeatsCodeEditTargetDoesNotMoveWithTheOthers(t *testing.T) {
 	}
 
 	raised := seatWith("fe-dev", 90)
-	second := evaluateTargets(room, 1, true, true, []*seatStats{goDev, raised})
+	second := evaluateTargets(room, 1, true, true, []*seatStats{goDev, raised}, floor, nil)
 	if got := line(second, "fe-dev"); got.Result != "PASS" || got.Value != 90 {
 		t.Fatalf("fe-dev line = %+v, want PASS at 90", got)
 	}
@@ -533,5 +544,160 @@ func TestOneSeatsCodeEditTargetDoesNotMoveWithTheOthers(t *testing.T) {
 		if got := line(targets, "room"); got.Result != verdictDiag {
 			t.Errorf("room line = %+v, want %q", got, verdictDiag)
 		}
+	}
+}
+
+// THE EDIT YIELD IS THE FLOOR'S PAIR, AND ITS JOIN IS THE GATE'S OWN RECORD. A commit counts for a seat only
+// when its Task: names a task a gate row CLOSED BY THE REVIEWER names and its Seat: trailer names the same
+// seat; a task the gate passed for another seat credits nobody, a pin-only commit never counts, and every drop
+// is counted so a zero numerator is explained rather than mysterious
+// (seats/architect/RULING-code-edit-share-target.md, Addendum 3).
+func TestGatePassedCommitsCreditOnlyTheSeatTheGatePassed(t *testing.T) {
+	const (
+		gatedTask = "9d2f6730-1111-4111-8111-111111111111"
+		otherTask = "0b0b0b0b-2222-4222-8222-222222222222"
+		pinnedFor = "ccccdddd-3333-4333-8333-333333333333"
+	)
+	now := time.Now().UTC()
+	stamp := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	doneBy := func(session string) []clientruntime.QueueTransition {
+		return []clientruntime.QueueTransition{{State: "done", ActorSession: session, Ts: stamp}}
+	}
+	rows := []clientruntime.QueueRow{
+		// The pass: a gate row filed by go-dev, closed by the reviewer, naming the task by its 8-char id.
+		{QitemID: "q1", State: "done", Tags: []string{"gate"}, SourceSession: "agenthub--room-a--go-dev",
+			Summary: "GATE task 9d2f6730: the guard", Transitions: doneBy("agenthub--room-a--reviewer")},
+		// The same shape closed by the LEAD is not a pass: the reviewer's close is what a pass is.
+		{QitemID: "q2", State: "done", Tags: []string{"gate"}, SourceSession: "agenthub--room-a--fe-dev",
+			Summary: "GATE task 0b0b0b0b: nobody gated it", Transitions: doneBy("agenthub--room-a--lead")},
+		// The normal shape here speaks in a tip ("GATE: client cacacaca"), so the row names the COMMIT and the
+		// commit's Task: trailer names the task.
+		{QitemID: "q3", State: "done", Tags: []string{"gate"}, SourceSession: "agenthub--room-a--fe-dev",
+			Summary: "GATE: client cacacaca", Body: "4 files", Transitions: doneBy("agenthub--room-a--reviewer")},
+		// A second task, passed for go-dev only.
+		{QitemID: "q4", State: "done", Tags: []string{"gate"}, SourceSession: "agenthub--room-a--go-dev",
+			Summary: "GATE task ccccdddd: the pin", Transitions: doneBy("agenthub--room-a--reviewer")},
+		// A row that is not tagged gate is not a gate row however it closed.
+		{QitemID: "q5", State: "done", SourceSession: "agenthub--room-a--go-dev",
+			Summary: "GATE task 9d2f6730: untagged", Transitions: doneBy("agenthub--room-a--reviewer")},
+	}
+	commits := []commitRecord{
+		{SHA: "cacacaca00000000000000000000000000000000", Seat: "fe-dev", TaskID: gatedTask, Files: 2},
+		{SHA: "1111aaaa00000000000000000000000000000000", Seat: "go-dev", TaskID: gatedTask, Files: 2},
+		{SHA: "2222bbbb00000000000000000000000000000000", Seat: "fe-dev", TaskID: pinnedFor, Files: 2},
+		{SHA: "3333cccc00000000000000000000000000000000", Seat: "go-dev", TaskID: pinnedFor, Files: 1, PinOnly: true},
+		{SHA: "4444dddd00000000000000000000000000000000", Seat: "go-dev", TaskID: otherTask, Files: 1},
+		{SHA: "5555eeee00000000000000000000000000000000", Seat: "go-dev", Files: 1},
+	}
+	passed := passedTasks(rows, "room-a", "reviewer", commits)
+	if !passed[gatedTask[:8]]["go-dev"] || !passed[gatedTask[:8]]["fe-dev"] || passed[pinnedFor[:8]]["fe-dev"] || passed[otherTask[:8]] != nil || len(passed) != 2 {
+		t.Fatalf("passed = %v, want the two gated tasks credited to the seat that filed the gate", passed)
+	}
+	goDev, feDev := newSeatStats("go-dev"), newSeatStats("fe-dev")
+	goDev.Cost, feDev.Cost, goDev.Turns, feDev.Turns = 4, 0.5, 2, 1
+	goDev.ActivityCost[actCodeEdit] = 1
+	feDev.ActivityCost[actCodeEdit] = 0.5
+	goDev.finish()
+	feDev.finish()
+	yields, drops := editYields(commits, passed, []*seatStats{goDev, feDev})
+	if len(yields) != 2 || yields[0].Seat != "go-dev" || yields[1].Seat != "fe-dev" {
+		t.Fatalf("yields = %+v, want one line per editing seat, in spec order", yields)
+	}
+	if yields[0].Commits != 1 || yields[0].CodeEditUSD != 1 || yields[0].PerUSD != 1 || yields[0].Result != verdictDiag {
+		t.Errorf("go-dev yield = %+v, want 1 commit / 1 USD = 1 per USD, diag", yields[0])
+	}
+	if yields[1].Commits != 1 || yields[1].CodeEditUSD != 0.5 || yields[1].PerUSD != 2 {
+		t.Errorf("fe-dev yield = %+v, want 1 commit / 0.5 USD = 2 per USD", yields[1])
+	}
+	if want := (yieldDrops{NoTask: 1, NotPassed: 1, OtherSeat: 1, PinOnly: 1}); drops != want {
+		t.Errorf("drops = %+v, want %+v: every dropped commit is counted by reason", drops, want)
+	}
+
+	floor := codeEditFloor{Base: 25, Step: 5, Cap: 40, Floor: 25, Days: 7}
+	room := newSeatStats("ROOM")
+	room.finish()
+	var out strings.Builder
+	(&Report{Room: "room-a", Since: "24h", Total: room,
+		Sources:   map[string]string{"git": "ok", "queue": "ok"},
+		Floor:     floor,
+		Targets:   evaluateTargets(room, 1, true, true, []*seatStats{goDev, feDev}, floor, yields),
+		EditYield: yields, YieldDrops: drops}).renderText(&out)
+	for _, want := range []string{
+		"diag edit yield (commits/USD) [go-dev]", "diag edit yield (commits/USD) [fe-dev]",
+		"edit yield (gate-passed commits per code-edit USD; diagnostic)",
+		"commits /    1.0000 USD =  1.0000 per USD",
+		"commits /    0.5000 USD =  2.0000 per USD",
+		"dropped: no Task: 1, task not gate-passed 1, gate passed for another seat 1, pin-only 1",
+		"code-edit floor: 25 (+5 per complete UTC day every editing seat passes, never down, cap 40); replayed 7 days, stepped 0",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("text lacks %q:\n%s", want, out.String())
+		}
+	}
+	// A source that did not answer makes the ratio n/a, never zero.
+	unread := (&Report{Room: "room-a", Since: "24h", Total: newSeatStats("ROOM"),
+		Sources: map[string]string{"git": "ok", "queue": "unavailable (daemon down)"},
+		Floor:   codeEditFloor{Base: 25, Step: 5, Cap: 40, Floor: 25}, EditYield: yields, YieldDrops: drops})
+	out.Reset()
+	unread.renderText(&out)
+	if !strings.Contains(out.String(), "edit yield: unavailable (git ok; queue unavailable (daemon down))") {
+		t.Errorf("an unread queue printed a ratio:\n%s", out.String())
+	}
+	for _, target := range evaluateTargets(newSeatStats("ROOM"), 1, true, false, nil, unread.Floor, yields) {
+		if target.Name == "edit yield (commits/USD)" && target.Result != "n/a" {
+			t.Errorf("yield target = %+v, want n/a without the queue", target)
+		}
+	}
+}
+
+// THE FLOOR RATCHETS: 25, +5 for every complete UTC day on which EVERY editing seat passes, never down, cap 40
+// - and one failing seat holds it, because a floor that a failing seat cannot hold is a floor nobody reads.
+func TestTheCodeEditFloorRatchetsAndAFailingSeatHoldsIt(t *testing.T) {
+	now := time.Date(2026, 10, 17, 8, 0, 0, 0, time.UTC)
+	day := func(back int) string { return now.AddDate(0, 0, -back).Format("2006-01-02") }
+	daysBySeat := map[string]seatDays{
+		"go-dev": {day(3): {CodeEdit: 60, Total: 100}, day(2): {CodeEdit: 60, Total: 100}, day(1): {CodeEdit: 60, Total: 100}},
+		"fe-dev": {day(3): {CodeEdit: 60, Total: 100}, day(2): {CodeEdit: 60, Total: 100}, day(1): {CodeEdit: 10, Total: 100}},
+	}
+	floor := ratchetedFloor(daysBySeat, []string{"go-dev", "fe-dev"}, now)
+	// Days 7..4 have no records and cannot step; day 3 steps 25 -> 30, day 2 steps 30 -> 35, and day 1's
+	// failing fe-dev holds 35.
+	if floor.Floor != 35 || floor.Stepped != 2 || floor.Days != codeEditFloorDays || floor.Cap != codeEditCeil {
+		t.Fatalf("floor = %+v, want 35 after 2 steps over 7 replayed days", floor)
+	}
+	if base := ratchetedFloor(nil, []string{"go-dev", "fe-dev"}, now); base.Floor != codeEditFloorBase || base.Stepped != 0 {
+		t.Fatalf("floor with no records = %+v, want the base %v", base, codeEditFloorBase)
+	}
+	full := map[string]seatDays{"go-dev": {}, "fe-dev": {}}
+	for back := 1; back <= codeEditFloorDays; back++ {
+		full["go-dev"][day(back)] = daySplit{CodeEdit: 90, Total: 100}
+		full["fe-dev"][day(back)] = daySplit{CodeEdit: 90, Total: 100}
+	}
+	if got := ratchetedFloor(full, []string{"go-dev", "fe-dev"}, now); got.Floor != codeEditCeil || got.Stepped != codeEditFloorDays {
+		t.Fatalf("floor = %+v, want the ceiling %v after every day", got, codeEditCeil)
+	}
+
+	dev := newSeatStats("go-dev")
+	dev.Turns, dev.Cost = 1, 100
+	dev.ActivityCost[actCodeEdit] = 50
+	dev.finish()
+	lines := evaluateTargets(newSeatStats("ROOM"), 1, true, true, []*seatStats{dev},
+		codeEditFloor{Base: codeEditFloorBase, Step: codeEditFloorStep, Cap: codeEditCeil, Floor: codeEditFloorBase}, nil)
+	seatLine := lines[4]
+	if seatLine.Result != "PASS" || seatLine.Limit != "> 25, cap 40" {
+		t.Fatalf("seat line = %+v, want PASS with the limit %q", seatLine, "> 25, cap 40")
+	}
+	stepped := evaluateTargets(newSeatStats("ROOM"), 1, true, true, []*seatStats{dev},
+		codeEditFloor{Base: codeEditFloorBase, Step: codeEditFloorStep, Cap: codeEditCeil, Floor: 30}, nil)
+	if got := stepped[4]; got.Result != "PASS" || got.Limit != "> 30, cap 40" {
+		t.Fatalf("seat line at a stepped floor = %+v, want the stepped limit", got)
+	}
+	low := newSeatStats("fe-dev")
+	low.Turns, low.Cost = 1, 100
+	low.ActivityCost[actCodeEdit] = 26
+	low.finish()
+	if got := evaluateTargets(newSeatStats("ROOM"), 1, true, true, []*seatStats{low},
+		codeEditFloor{Base: codeEditFloorBase, Step: codeEditFloorStep, Cap: codeEditCeil, Floor: 30}, nil)[4]; got.Result != "FAIL" {
+		t.Fatalf("a seat under a stepped floor = %+v, want FAIL: the floor moved, the seat did not", got)
 	}
 }
