@@ -32,11 +32,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
-const reportUsage = `usage: 4genteam room report ROOM [--since 24h] [--json] [--state-dir DIR] [--socket PATH]
+const reportUsage = `usage: 4genteam room report ROOM [--since 24h] [--json] [--state-root DIR] [--socket PATH]
 
 One read-only measurement of one room over one window; it writes nothing. The numbers come from the room's own
 records rather than an ad-hoc script, so the five targets below are read the same way twice, and a source that
@@ -784,6 +785,11 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, reportUsage)
 		return clientcmd.ExitOK
 	}
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam room report: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitRoomRefused)
+	}
 	opts, rest, err := clientruntime.SplitFlags(args, queueFlagSpecs(
 		clientruntime.FlagSpec{Name: "since", Value: true}, clientruntime.FlagSpec{Name: "json"}))
 	if err != nil {
@@ -800,7 +806,7 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		return clientcmd.ExitRoomRefused
 	}
 	pairArgs := append(append(make([]string, 0, len(rest)+4), rest...),
-		"--state-dir", opts["state-dir"], "--socket", opts["socket"])
+		"--state-root", rootFlag, "--socket", opts["socket"])
 	inv, code, ok := parseInvocation("report", pairArgs, 1, stdout, stderr)
 	if !ok {
 		return code

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
 func (s shared) workingDir() string {
@@ -151,7 +152,15 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 	}
 	state := shared{}
 	flags.StringVar(&state.rig, "room", "", "the room to watch")
-	flags.StringVar(&state.stateRoot, "state-root", "", "the omp state root")
+	// THE ROOT IS READ THROUGH THE ONE PARSER, so this group's flag set no longer names it: the root is
+	// stripped wherever it sits and the runtime's spelling is refused before a pane is opened. A root this
+	// group cannot resolve stays ExitUnavailable (resolveStateRoot below), the group's own decision.
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam %s: %v\n", verb, rootErr)
+		return clientcmd.ExitUsage
+	}
+	state.stateRoot = rootFlag
 	seats := stringList{}
 	switch verb {
 	case "feed":

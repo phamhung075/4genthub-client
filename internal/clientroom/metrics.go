@@ -26,12 +26,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 const metricsSchema = 1
 
-const metricsUsage = `usage: 4genteam room metrics ROOM [--since 24h] [--seat S] [--print] [--state-dir DIR] [--socket PATH]
+const metricsUsage = `usage: 4genteam room metrics ROOM [--since 24h] [--seat S] [--print] [--state-root DIR] [--socket PATH]
 
 Appends new events to <state-dir>/rooms/ROOM/metrics/<seat>.jsonl (mode 0600), one flat JSON object per line.
 Incremental and idempotent: a cursor (metrics/.cursor.json) records what was read, so a second run appends nothing.
@@ -446,6 +447,11 @@ func runMetrics(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, metricsUsage)
 		return clientcmd.ExitOK
 	}
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam room metrics: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitRoomRefused)
+	}
 	opts, rest, err := clientruntime.SplitFlags(args, queueFlagSpecs(
 		clientruntime.FlagSpec{Name: "since", Value: true}, clientruntime.FlagSpec{Name: "seat", Value: true}, clientruntime.FlagSpec{Name: "print"}))
 	if err != nil {
@@ -461,7 +467,7 @@ func runMetrics(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam room metrics: %v. %s\n", err, metricsUsage)
 		return clientcmd.ExitRoomRefused
 	}
-	pairArgs := append(append(make([]string, 0, len(rest)+4), rest...), "--state-dir", opts["state-dir"], "--socket", opts["socket"])
+	pairArgs := append(append(make([]string, 0, len(rest)+4), rest...), "--state-root", rootFlag, "--socket", opts["socket"])
 	inv, code, ok := parseInvocation("metrics", pairArgs, 1, stdout, stderr)
 	if !ok {
 		return code

@@ -62,7 +62,7 @@ var (
 )
 
 const (
-	upUsage         = "usage: 4genteam up RIG --team DIR [--state-dir DIR] [--room-only] " + clientoffpeak.ModeFlagUsage
+	upUsage         = "usage: 4genteam up RIG --team DIR [--state-root DIR] [--room-only] " + clientoffpeak.ModeFlagUsage
 	compactUsage    = "usage: 4genteam compact RIG " + clientoffpeak.ModeFlagUsage
 	stopUsage       = "usage: 4genteam stop RIG"
 	statusUsage     = "usage: 4genteam status RIG [--state-root DIR]"
@@ -190,7 +190,7 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 				"prints one line per seat. It EXCLUDES agent, the bridge, the watch view, the UI and herdr, whose\n"+
 				"failures are not this verb's verdict - and it must not be used to make a red go away.\n"+
 				"The acceptance invocation, so a reader re-reads the signature instead of remembering it:\n"+
-				"  4genteam up RIG --team DIR [--state-dir DIR] --room-only\n"+
+				"  4genteam up RIG --team DIR [--state-root DIR] --room-only\n"+
 				"WHAT IT EXITS WITH (design §2.5), counting only the room's own verdict:\n"+
 				"  0  every seat of the room is running. A room that is already up is READ, not restarted: a blind\n"+
 				"     start would cycle sessions of live agents.\n"+
@@ -207,10 +207,17 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 		return clientcmd.ExitOK
 	}
 	allowPeak, rest := clientoffpeak.ModeFromFlags(args)
+	// THE ROOT IS READ THROUGH THE ONE PARSER, before a flag set exists: it strips `--state-root DIR`
+	// (wherever it sits, last wins) and REFUSES the runtime's spelling with exit 2 before this verb has
+	// started anything. The flag set below therefore names no root at all.
+	rootFlag, rest, rootErr := clientenv.StateRootFromFlags(rest)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitUsage)
+	}
 	flags := flag.NewFlagSet("up", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	teamDir := flags.String("team", "", "the team definition directory that holds team.json (required)")
-	stateDir := flags.String("state-dir", "", "where the runtime keeps its state: the flag, else ~/.config/4genthub")
 	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before agent, the bridge, the watch view and the UI")
 	flagArgs, positional := splitFlagsAndPositional(rest)
 	for _, arg := range flagArgs {
@@ -230,7 +237,7 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 		fmt.Fprintf(stderr, "4genteam up: --team DIR is required - the room's seats are read from the team definition it holds, and there is no default. %s\n", upUsage)
 		return clientcmd.ExitRoomRefused
 	}
-	root, err := clientenv.ResolveStateRoot(*stateDir)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
 		return clientcmd.ExitRoomRefused
@@ -280,14 +287,15 @@ func flagName(arg string) string {
 	return name
 }
 
-func upFlagTakesValue(name string) bool { return name == "team" || name == "state-dir" }
+func upFlagTakesValue(name string) bool { return name == "team" }
 
 // upTakesFlag is this verb's own flag list, so an argument it does not take is refused HERE with the
 // argument NAMED: the flag package's own message says `-any-time`, and the shape this replaces was a verb
-// that quietly ignored the extra argument.
+// that quietly ignored the extra argument. The root is NOT here: StateRootFromFlags has already taken it
+// (and refused the runtime's spelling), so a flag set that still named it would be a second reader.
 func upTakesFlag(name string) bool {
 	switch name {
-	case "team", "state-dir", "room-only", "h", "help":
+	case "team", "room-only", "h", "help":
 		return true
 	}
 	return false
@@ -387,7 +395,7 @@ func ensureDaemonImpl(stateDir string, stderr io.Writer) (string, error) {
 		return logPath, fmt.Errorf("cannot write the daemon's log at %s: %w", logPath, err)
 	}
 	defer logFile.Close()
-	cmd := exec.Command(runtimeBin, "--state-dir", stateDir, "--socket", client.SocketPath, "daemon")
+	cmd := runtimeDaemonCommand(runtimeBin, stateDir, client.SocketPath)
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	detach(cmd)
 	if err := cmd.Start(); err != nil {
@@ -407,6 +415,13 @@ func ensureDaemonImpl(stateDir string, stderr io.Writer) (string, error) {
 // daemonLogPath is where the runtime daemon's own output goes: beside the state it serves, so a partial room
 // and the reason for it are read from one tree.
 func daemonLogPath(stateDir string) string { return filepath.Join(stateDir, "daemon.log") }
+
+// runtimeDaemonCommand is the daemon spawn's argv in one place: `--state-dir` is the RUNTIME binary's own
+// flag and it does not move when the client's spelling became `--state-root` (architect ruling 2026-10-17,
+// R2). A variable rather than an inline exec so the argv is assertable without spawning a daemon.
+var runtimeDaemonCommand = func(bin, stateDir, socketPath string) *exec.Cmd {
+	return exec.Command(bin, "--state-dir", stateDir, "--socket", socketPath, "daemon")
+}
 
 // runtimeBinary is the runtime executable: PATH first, then the per-user install.
 func runtimeBinary() (string, error) {
@@ -980,13 +995,19 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 		fmt.Fprintf(stderr, "4genteam compact-run: %v\n", err)
 		return options, false
 	}
+	// THE ROOT IS READ THROUGH THE ONE PARSER, so this loop's flag set does not name it: the root is
+	// stripped wherever it sits and the runtime's spelling is refused before a pass runs.
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam compact-run: %v\n", rootErr)
+		return options, false
+	}
 	flags := flag.NewFlagSet("compact-run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	rig := flags.String("room", "", "the rig to supervise (required)")
 	quietFlag := flags.Int("quiet", quiet, "seconds of log silence that mean the job is finished")
 	every := flags.Int("every", 10, "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
-	stateRoot := flags.String("state-root", "", "where the client keeps its state: the flag, else ~/.config/4genthub")
 	if err := flags.Parse(args); err != nil {
 		return options, false
 	}
@@ -994,7 +1015,7 @@ func ParseCompactRunOptions(args []string, stderr io.Writer) (CompactRunOptions,
 		fmt.Fprintf(stderr, "4genteam compact-run: --room is required - there is no default rig. %s\n", compactRunUsage)
 		return options, false
 	}
-	root, err := clientenv.ResolveStateRoot(*stateRoot)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam compact-run: %v\n", err)
 		return options, false
