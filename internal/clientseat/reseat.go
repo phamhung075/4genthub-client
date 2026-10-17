@@ -8,9 +8,11 @@ package clientseat
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 
@@ -421,7 +423,7 @@ func runtimeSend(session, text string, opts map[string]string, socket string, ha
 			fmt.Fprintf(stderr, "4genteam send: the outcome of the failed delivery could not be audited in %s: %v\n",
 				handle.path, auditErr)
 		}
-		fmt.Fprintf(stderr, "4genteam send: the runtime at %s refused it: %v; nothing was sent\n", socket, err)
+		fmt.Fprintf(stderr, "4genteam send: %s\n", sendFailureSentence(socket, err))
 		return clientcmd.ExitRemote
 	}
 	// A delivery whose outcome cannot be recorded is reported as a failure even though the message arrived: an
@@ -437,4 +439,46 @@ func runtimeSend(session, text string, opts map[string]string, socket string, ha
 	}
 	fmt.Fprint(stdout, clientruntime.RuntimeSendLine(session, raw))
 	return clientcmd.ExitOK
+}
+
+// sendFailureSentence names the failure the delivery got. THREE facts, three sentences, because the delivery
+// path is three-way and one sentence for all of them was false for two: a refusal means nothing was written
+// anywhere; a runner the daemon could not hear from - and a socket that went quiet - means the frame reached
+// the runner's mailbox, so the text may be held for the seat's next turn and "nothing was sent" is a claim
+// nobody measured. The U3 gate caught exactly that sentence against a delivery the runtime had HELD (task
+// 83a39aa5).
+func sendFailureSentence(socket string, err error) string {
+	if nothingWasSent(err) {
+		return fmt.Sprintf("the runtime at %s refused it: %v; nothing was sent", socket, err)
+	}
+	var refused *clientruntime.DaemonRefused
+	if errors.As(err, &refused) && clientruntime.IsNoAnswer(refused.Reason) {
+		return fmt.Sprintf("%s; the text may be held for the seat's next turn, so the delivery is unconfirmed",
+			refused.Reason)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return fmt.Sprintf("the runtime at %s did not answer within its %s call deadline (%v); the text may be "+
+			"held for the seat's next turn, so the delivery is unconfirmed", socket, clientruntime.CallDeadline, err)
+	}
+	return fmt.Sprintf("the runtime at %s answered the call with something this client cannot read as a "+
+		"refusal (%v); the text may be held for the seat's next turn, so the delivery is unconfirmed", socket, err)
+}
+
+// nothingWasSent reports whether the failure guarantees the request never left this client: the daemon
+// refused it (its own refusal, or an older daemon that could not frame it), or no daemon was reachable at
+// the socket. Every other failure leaves the request between this client and the runner, where only the
+// runtime can say whether the text was held - and an unreadable answer is that same unknown, so it may not
+// be reported as a refusal.
+func nothingWasSent(err error) bool {
+	var refused *clientruntime.DaemonRefused
+	if errors.As(err, &refused) {
+		return !clientruntime.IsNoAnswer(refused.Reason)
+	}
+	var tooOld *clientruntime.RuntimeTooOld
+	if errors.As(err, &tooOld) {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }

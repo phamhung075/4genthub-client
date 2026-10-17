@@ -106,9 +106,10 @@ func (c *Client) EnsureDaemon(ctx context.Context) error {
 	return errors.New("agenthub-runtime daemon started but socket was not ready within 3 seconds")
 }
 
-// callDeadline is how long an ordinary request waits: a verb that reads or writes an answer settles in
-// milliseconds, so a socket gone quiet is a fault worth naming in ten seconds.
-const callDeadline = 10 * time.Second
+// CallDeadline is how long an ordinary request waits: a verb that reads or writes an answer settles in
+// milliseconds, so a socket gone quiet is a fault worth naming in ten seconds. Exported because a caller
+// that reports a timeout has to name it, and the runtime's own reply bound (8 s) is kept under it.
+const CallDeadline = 10 * time.Second
 
 // seatStartDeadline is how long the client waits for a verb that STARTS A SEAT and therefore waits for that
 // seat to prove itself. It MUST outlast the runtime's own readiness window - `SEAT_READY_WINDOW_SECS = 60` in
@@ -122,7 +123,7 @@ const seatStartDeadline = 90 * time.Second
 
 // Call sends a request and reads a response.
 func (c *Client) Call(action string, payload any) (*IpcResponse, error) {
-	return c.CallWithDeadline(action, payload, callDeadline)
+	return c.CallWithDeadline(action, payload, CallDeadline)
 }
 
 // CallWithDeadline is Call for a verb whose answer legitimately takes longer than an ordinary request.
@@ -291,6 +292,26 @@ var framingMarkers = []string{"invalid request JSON", "unknown variant"}
 // IsFramingFailure reports whether the runtime's refusal is about the REQUEST rather than about the work.
 func IsFramingFailure(reason string) bool {
 	for _, marker := range framingMarkers {
+		if strings.Contains(reason, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// noAnswerMarkers are the runtime's own words for a runner that did not answer within the daemon's reply
+// bound (REPLY_TIMEOUT, rust/agenthub-runtime/src/runner/mod.rs). That is NOT a refusal of the work: the
+// daemon wrote the frame to the runner's mailbox, so the text may be held for the seat's next turn, and a
+// verb that printed "nothing was sent" for it would state something nobody measured - the U3 gate caught
+// exactly that sentence against a delivery the runner had HELD (task 83a39aa5). A marker rather than a kind
+// for the reason IsFramingFailure gives: the runtime that must be read may be older than this client, so
+// the words are the only channel both builds share.
+var noAnswerMarkers = []string{"no answer from the runner for"}
+
+// IsNoAnswer reports whether the runtime's refusal is its own reply bound elapsing rather than a refusal of
+// the work.
+func IsNoAnswer(reason string) bool {
+	for _, marker := range noAnswerMarkers {
 		if strings.Contains(reason, marker) {
 			return true
 		}

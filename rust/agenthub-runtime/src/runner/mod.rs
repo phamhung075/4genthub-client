@@ -36,8 +36,20 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
+
+/// How long the daemon waits for the runner's answer to one frame before it reports the wait as elapsed.
+/// It MUST stay under the client's own ordinary call deadline (10 s, `CallDeadline` in
+/// `internal/clientruntime/ipc.go`): the daemon's named error is what lets the client tell a HELD text
+/// from a refusal, and the client's own socket deadline would bury that in a bare i/o timeout.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// The reply socket's suffix is UNIQUE PER CALL. It used to be one path per seat per daemon
+/// (`<seat>.reply-<pid>`), unlinked and rebound on every call, so two overlapping deliveries to one seat
+/// shared the path: the second bind unlinked the first listener and both replies landed on it, while the
+/// first call's accept waited forever (U3 gate, task `83a39aa5`: 1 run in 3 failed on exactly this leg).
+static REPLY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The pane's input cap, and the rejection wording, are the reference's (`P:34-36`) — an operator who
 /// sees this line should see the same one they see today.
@@ -972,11 +984,15 @@ pub fn send_to_seat(
         .to_string();
 
     let reply_listener = if want_reply {
+        // UNIQUE PER CALL, not per seat and daemon: the comment on `REPLY_SEQ` says what the shared path
+        // cost. The unlink stays as cheap insurance against a stale file from a crashed process that had
+        // the same pid and sequence.
+        let seq = REPLY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = state_dir
             .join("rooms")
             .join(&target.room)
             .join("run")
-            .join(format!("{}.reply-{}.sock", target.seat, std::process::id()));
+            .join(format!("{}.reply-{}-{seq}.sock", target.seat, std::process::id()));
         let _ = fs::remove_file(&path);
         Some((UnixListener::bind(&path).map_err(|e| {
             format!("cannot bind a reply socket {}: {e}", path.display())
@@ -1019,15 +1035,11 @@ pub fn send_to_seat(
     match reply_listener {
         None => Ok(serde_json::json!({"id": id, "ok": true})),
         Some((listener, path)) => {
-            listener
-                .set_nonblocking(false)
-                .map_err(|e| format!("cannot wait on the reply socket: {e}"))?;
-            let (stream, _) = listener
-                .accept()
-                .map_err(|e| format!("no answer from the runner for {}/{}: {e}", target.room, target.seat))?;
-            let mut reader = BufReader::new(stream);
-            let line = frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES)?;
+            let reply = read_reply(&listener, &target.room, &target.seat, Instant::now() + REPLY_TIMEOUT);
+            // The socket file goes on EVERY path, a timeout and a refusal alike: a unique name that leaked
+            // would leave one stale inode per failed call.
             let _ = fs::remove_file(&path);
+            let line = reply?;
             let answered: serde_json::Value = serde_json::from_str(line.trim())
                 .map_err(|e| format!("the runner's answer is not a frame: {e}"))?;
             if answered.get("type").and_then(|v| v.as_str()) == Some("payload") {
@@ -1044,6 +1056,60 @@ pub fn send_to_seat(
             Ok(answered)
         }
     }
+}
+
+/// Wait for the runner's one reply line, BOUNDED at both ends: the accept and the read both end at
+/// `deadline`, and an elapsed wait is a NAMED error rather than a blocking accept forever.
+///
+/// The name is load-bearing on the other side of the socket: the client reports a delivery as UNCONFIRMED
+/// (never "nothing was sent") when the reason carries `no answer from the runner for`
+/// (`internal/clientruntime.IsNoAnswer`), because the frame WAS written to the runner's mailbox and the text
+/// may be held for its next turn. Anything that is not the wait elapsing keeps its own words.
+fn read_reply(listener: &UnixListener, room: &str, seat: &str, deadline: Instant) -> Result<String, String> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("cannot wait on the reply socket: {e}"))?;
+    let stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(reply_timed_out(room, seat));
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => return Err(format!("no answer from the runner for {room}/{seat}: {e}")),
+        }
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(reply_timed_out(room, seat));
+    }
+    stream
+        .set_read_timeout(Some(remaining))
+        .map_err(|e| format!("cannot bound the read of the runner's answer: {e}"))?;
+    let mut reader = BufReader::new(stream);
+    match frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES) {
+        Ok(line) => Ok(line),
+        Err(e) => {
+            // A socket that went quiet for the whole window is the same fact as an accept that never fired:
+            // the runner held no answer open. An error before the deadline keeps its own words.
+            if Instant::now() >= deadline {
+                Err(reply_timed_out(room, seat))
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// The one sentence both sides key on when the runner never answered.
+fn reply_timed_out(room: &str, seat: &str) -> String {
+    format!(
+        "no answer from the runner for {room}/{seat} within {}s: the frame reached its mailbox, so the text \
+         may be held for its next turn",
+        REPLY_TIMEOUT.as_secs()
+    )
 }
 
 /// Keep a room's spill tree inside its budget, opportunistically, on the side that wrote a spill.
@@ -2862,6 +2928,104 @@ mod tests {
             .mailbox(state_dir);
         fs::create_dir_all(path.parent().expect("the run dir")).expect("run dir");
         path
+    }
+
+    /// TWO DELIVERIES IN FLIGHT TO ONE SEAT BOTH GET THEIR OWN REPLY. The reply path was one per seat per
+    /// daemon, unlinked and rebound on every call, so the second call's bind unlinked the first listener and
+    /// the first call waited forever (U3 gate, task `83a39aa5`). The fake runner answers each frame after a
+    /// pause, so the two calls genuinely overlap, and a third call afterwards proves the mailbox is intact.
+    ///
+    /// RED before the fix: the first `send_to_seat` blocks in an untimed accept - the test hangs.
+    #[test]
+    fn two_overlapping_deliveries_to_one_seat_both_receive_their_replies() {
+        let dir = std::env::temp_dir().join(format!("runner-reply-race-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mailbox = target_mailbox(&dir, "demo", "dev");
+        let listener = UnixListener::bind(&mailbox).expect("the seat's mailbox");
+        let peer = thread::spawn(move || {
+            for _ in 0..3 {
+                let (stream, _) = listener.accept().expect("a delivery connects");
+                let mut reader = BufReader::new(stream);
+                let line = frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES).expect("a frame");
+                let value: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
+                // The pause is what makes the overlap real: both calls are inside their wait together.
+                thread::sleep(Duration::from_millis(50));
+                let reply_to = value["replyTo"].as_str().expect("the reply socket");
+                let mut back = UnixStream::connect(reply_to).expect("a reply socket to answer on");
+                writeln!(
+                    back,
+                    "{}",
+                    serde_json::json!({"id": value["id"], "ok": true, "data": {"relayed": "prompt"}})
+                )
+                .expect("answer");
+            }
+        });
+        let deliver = |id: &'static str| {
+            let dir = dir.clone();
+            thread::spawn(move || {
+                send_to_seat(
+                    &dir,
+                    "demo/dev",
+                    &serde_json::json!({"id": id, "type": "text", "text": "probe"}),
+                    None,
+                    true,
+                )
+            })
+        };
+        let first = deliver("send-1");
+        let second = deliver("send-2");
+        let first = first.join().expect("the first call returns").expect("the first delivery is answered");
+        let second = second.join().expect("the second call returns").expect("the second delivery is answered");
+        assert_eq!(first["id"], "send-1", "each call reads ITS OWN reply: {first}");
+        assert_eq!(second["id"], "send-2", "each call reads ITS OWN reply: {second}");
+        send_to_seat(
+            &dir,
+            "demo/dev",
+            &serde_json::json!({"id": "send-3", "type": "text", "text": "probe"}),
+            None,
+            true,
+        )
+        .expect("the mailbox is still usable after the overlap");
+        peer.join().expect("the fake runner");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// AN UNANSWERED REPLY ENDS IN A NAMED ERROR, NOT AN UNTIMED WAIT. The bound is what a caller reads as
+    /// the difference between "the runner never answered" (the frame reached its mailbox; the text may be
+    /// held) and a bare hang.
+    #[test]
+    fn an_unanswered_reply_ends_in_a_named_error_not_an_untimed_wait() {
+        let dir = std::env::temp_dir().join(format!("runner-reply-bound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("unanswered.sock");
+        let listener = UnixListener::bind(&path).expect("a reply listener nothing will answer");
+        let started = Instant::now();
+        let err = read_reply(&listener, "demo", "dev", started + Duration::from_millis(100))
+            .expect_err("no answer is an error");
+        assert!(err.contains("no answer from the runner for demo/dev"), "{err}");
+        assert!(err.contains("may be held for its next turn"), "the text's fate is named: {err}");
+        assert!(started.elapsed() < Duration::from_secs(2), "the wait is bounded: {:?}", started.elapsed());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A CONNECTION THAT NEVER WRITES IS BOUNDED TOO: the accept firing is not the answer arriving, and a
+    /// silent socket must end at the same named error rather than block the read.
+    #[test]
+    fn a_silent_reply_connection_ends_in_the_same_named_error_not_an_untimed_read() {
+        let dir = std::env::temp_dir().join(format!("runner-reply-silent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("silent.sock");
+        let listener = UnixListener::bind(&path).expect("a reply listener");
+        let peer = UnixStream::connect(&path).expect("a peer that never answers");
+        let started = Instant::now();
+        let err = read_reply(&listener, "demo", "dev", started + Duration::from_millis(100))
+            .expect_err("a silent peer is an error");
+        assert!(err.contains("no answer from the runner for demo/dev"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(2), "the read is bounded: {:?}", started.elapsed());
+        drop(peer);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A PARKED SEAT IS NOT NUDGED. The rail wake is the runtime's own route to a seat - the nudge hands the

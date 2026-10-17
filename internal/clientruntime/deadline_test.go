@@ -26,8 +26,18 @@ func TestTheSeatStartDeadlineOutlastsTheRuntimesReadyWindow(t *testing.T) {
 		t.Fatalf("seatStartDeadline = %s, want more than the runtime's %s readiness window: a verdict landing "+
 			"near the end of that window would read as an i/o timeout, not a verdict", seatStartDeadline, runtimeReadyWindow)
 	}
-	if callDeadline >= seatStartDeadline {
-		t.Fatalf("callDeadline = %s is not shorter than seatStartDeadline = %s: the seat-start verb is back on "+
-			"the ordinary deadline", callDeadline, seatStartDeadline)
+	if CallDeadline >= seatStartDeadline {
+		t.Fatalf("CallDeadline = %s is not shorter than seatStartDeadline = %s: the seat-start verb is back on "+
+			"the ordinary deadline", CallDeadline, seatStartDeadline)
+	}
+	// The daemon's own reply bound is REPLY_TIMEOUT = 8 s (rust/agenthub-runtime/src/runner/mod.rs): the wait
+	// for a runner's answer to one frame must END before this client's socket deadline does, or the daemon's
+	// named error (the frame reached the mailbox; the runner never answered) is lost to a bare i/o timeout and
+	// the text's fate cannot be reported (task 83a39aa5). Named here because it cannot be read across the
+	// language boundary, and pinned so a raised number has to face this test.
+	const runtimeReplyBound = 8 * time.Second
+	if CallDeadline <= runtimeReplyBound {
+		t.Fatalf("CallDeadline = %s does not outlast the runtime's %s reply bound: the daemon's named error "+
+			"could never reach this client before its own deadline fired", CallDeadline, runtimeReplyBound)
 	}
 }
