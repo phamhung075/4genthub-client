@@ -84,9 +84,10 @@ type fixture struct {
 func newFixture(t *testing.T, steps ...step) *fixture {
 	t.Helper()
 	f := &fixture{rigJSON: fixtureNodes, steps: steps}
-	// Every cycle of the bridge now beats. The seam is replaced here, for every test that builds its
-	// bridge through this fixture, so no test writes into the machine's own log directory; the beat is
-	// recorded so a test can assert it happened.
+	// Every iteration of the bridge's run loop beats (a one-shot cycle does not - see
+	// TestTheRunLoopBeatsAndTheOneShotDoesNot). The seam is replaced here, for every test that builds
+	// its bridge through this fixture, so no test writes into the machine's own log directory; the beat
+	// is recorded so a test can assert it happened.
 	previousBeat := clientservices.WriteHeartbeat
 	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
 		f.beats = append(f.beats, safeguard+"/"+rig)
@@ -196,20 +197,32 @@ func TestCycleSendsOnChangeAndOnHeartbeat(t *testing.T) {
 	}
 }
 
-// A cycle beats ONCE, as its first act, even when it finds nothing to send and returns early: a bridge
-// that stopped between beats and a machine with no news must not look the same.
-func TestCycleWritesOneHeartbeatPerCycle(t *testing.T) {
+// THE BEAT IS THE RUN LOOP'S, NOT THE CYCLE'S.
+//
+// Measured 2026-10-17, six times in ninety minutes: the owner was alerted `bridge silent (last beat 0s
+// ago)` while the bridge never restarted and beat every 20 s. The cause was not a pgrep miss (a probe
+// reading pgrep every 50 ms for 150 s, 2345 reads, reproduced none): `bridge once` - the CHECK verb -
+// ran one Cycle, which stamped the DAEMON's heartbeat file with the one-shot's own pid and exited.
+// verifyRow then read a fresh beat whose pid was not live and published silent until the daemon's next
+// beat, up to 20 s
+// later - the row's age 0 was the one-shot's beat, not the daemon's. The heartbeat file may only ever
+// name the long-running bridge, so the loop beats and a one-shot does not.
+func TestTheRunLoopBeatsAndTheOneShotDoesNot(t *testing.T) {
 	f := newFixture(t)
-	f.cycle()
-	f.cycle() // the unchanged payload is not resent: this one returns early and must still have beaten
-
-	if len(f.beats) != 2 {
-		t.Fatalf("heartbeats = %d (%v), want one per cycle (2)", len(f.beats), f.beats)
+	// The check verb (`bridge once`, `bridge run --once`): one cycle, then exit. It must leave the
+	// daemon's heartbeat alone - its pid is about to die.
+	f.bridge.Run(context.Background(), true)
+	if len(f.beats) != 0 {
+		t.Fatalf("a one-shot cycle beat %d time(s) (%v): the daemon's heartbeat now names a pid that has exited, and the row reads silent until the next real beat",
+			len(f.beats), f.beats)
 	}
-	for _, beat := range f.beats {
-		if beat != "bridge/" {
-			t.Errorf("heartbeat = %q, want bridge/ (the bridge is one per machine, so no rig)", beat)
-		}
+
+	// The loop: one iteration, then the context ends.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	f.bridge.Run(ctx, false)
+	if len(f.beats) != 1 || f.beats[0] != "bridge/" {
+		t.Fatalf("the run loop beat %v, want exactly one bridge/ beat (the bridge is one per machine, so no rig)", f.beats)
 	}
 }
 

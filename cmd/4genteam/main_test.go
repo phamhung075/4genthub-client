@@ -84,8 +84,14 @@ func TestPortedVerbsRefuseOnTheEnvironment(t *testing.T) {
 // agenthub runtime, so a machine with no rig tool is not refused for it. With no rig on PATH the verb reaches
 // its own argument check (here, a missing cloud setting) instead of stopping at the matrix.
 func TestBridgeIsNotGovernedByThePlatformMatrix(t *testing.T) {
+	// THE VERB IS POINTED AT A TEMP TREE AND TOLD THERE IS NO CLOUD. Before 2026-10-17 this test drove
+	// `bridge once` with the machine's own state root: the cycle stamped the REAL bridge heartbeat with
+	// the test process's pid (measured: six false `bridge silent` rows in ninety minutes, each until
+	// the daemon's next beat), and with a credential in the environment it would have sent a real report.
+	t.Setenv("AGENTHUB_URL", "")
+	t.Setenv("AGENTHUB_TOKEN", "")
 	var out, errOut bytes.Buffer
-	if code := run([]string{"bridge", "once"}, &out, &errOut); code == clientcmd.ExitUnavailable {
+	if code := run([]string{"bridge", "once", "--state-root", t.TempDir()}, &out, &errOut); code == clientcmd.ExitUnavailable {
 		t.Fatalf("exit code = %d: the bridge was refused as if it needed rig", code)
 	}
 	if strings.Contains(errOut.String(), "rig is not on PATH") {

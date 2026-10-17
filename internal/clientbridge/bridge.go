@@ -309,11 +309,11 @@ func (b *Bridge) ApplyVerdicts(body []byte) {
 // fails loud and actionable, because a rejected credential never recovers by retrying and a bridge
 // that cannot report must say so instead of looping quietly.
 func (b *Bridge) Cycle(ctx context.Context) time.Duration {
-	// The beat is the FIRST thing the cycle does, before any early return: a cycle that finds nothing
-	// to send, or that fails, still proves the bridge is alive. The bridge is one per machine, so no rig.
-	if err := clientservices.WriteHeartbeat(b.Root, clientservices.Bridge, ""); err != nil {
-		b.note("heartbeat", fmt.Sprintf("heartbeat write failed: %v", err))
-	}
+	// NO BEAT HERE: the heartbeat names the process that is the bridge, and Cycle is also what the
+	// CHECK verb (`bridge once`, `bridge run --once`) runs. A one-shot that beat would stamp this file
+	// with a pid that exits with it, and verifyRow would publish `silent` - a fresh beat whose pid is
+	// not live - until the daemon's next beat. Measured 2026-10-17: six such false alerts in ninety
+	// minutes, every one of them a `bridge once` from a test suite. The beat is the loop's (Run).
 	payload := b.BuildPayload()
 	for where, record := range b.LocalRecord(payload.Seats) {
 		if record.SinceLastInSync == "changed" {
@@ -396,6 +396,15 @@ func (b *Bridge) fail(message string) time.Duration {
 // one-shot run can be used as a check rather than only as a report.
 func (b *Bridge) Run(ctx context.Context, once bool) int {
 	for {
+		// THE BEAT BELONGS TO THE LOOP, before any early return of the cycle: a loop that finds nothing
+		// to send, or that fails, still proves the bridge is alive. A one-shot does NOT beat - it is a
+		// check, its pid dies with it, and a heartbeat naming it makes the row read silent (see Cycle).
+		// The bridge is one per machine, so no rig.
+		if !once {
+			if err := clientservices.WriteHeartbeat(b.Root, clientservices.Bridge, ""); err != nil {
+				b.note("heartbeat", fmt.Sprintf("heartbeat write failed: %v", err))
+			}
+		}
 		delay := b.Cycle(ctx)
 		if once {
 			if b.backoff == 0 && !b.stripDetail {
