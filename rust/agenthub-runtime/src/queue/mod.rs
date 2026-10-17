@@ -173,25 +173,24 @@ const PRIORITIES: [&str; 3] = ["low", "normal", "high"];
 const PROD_BREAK_TAG: &str = "prod-break";
 const SUMMARY_MAX_CHARS: usize = 120;
 const BODY_MAX_CHARS: usize = 600;
-/// Lowercase-kebab tags a row may carry: the kinds of row the rail is used for.
-const ALLOWED_TAGS: [&str; 18] = [
+/// Lowercase-kebab tags a NEW row may carry: the kinds of row the rail is used for. `status`, `ack`,
+/// `checkpoint` and `report` were retired on 2026-10-17 - they cost ~30 of 311 rows in 12h and carried no
+/// fact a destination acts on - so a create naming one is refused by name. A row written before the
+/// retirement keeps its tag: the rule is about what may be ADDED, not about rewriting the rail.
+const ALLOWED_TAGS: [&str; 14] = [
     "prod-break",
     "gate",
     "ruling",
-    "status",
     "owner-decision",
-    "report",
     "finding",
     "guide",
     "docs",
     "defect",
     "skill-check",
     "landing",
-    "ack",
     "assignment",
     "handoff",
     "board",
-    "checkpoint",
     "reseat",
 ];
 /// A repeated identical `list` by one session inside this window, with no new row, is answered "no change".
@@ -1241,7 +1240,7 @@ mod tests {
                 summary: "lineage".into(),
                 chain_of_record: vec!["qitem-1".into(), "qitem-2".into()],
                 reply_to: Some("qitem-2".into()),
-                tags: vec!["status".into(), "prod-break".into()],
+                tags: vec!["finding".into(), "prod-break".into()],
                 priority: Some("high".into()),
                 tier: Some("T1".into()),
                 ..Default::default()
@@ -1251,7 +1250,7 @@ mod tests {
         let shown = store.show(&row.qitem_id).expect("show");
         assert_eq!(shown.chain_of_record, vec!["qitem-1", "qitem-2"]);
         assert_eq!(shown.reply_to.as_deref(), Some("qitem-2"));
-        assert_eq!(shown.tags, vec!["status", "prod-break"]);
+        assert_eq!(shown.tags, vec!["finding", "prod-break"]);
         assert_eq!(shown.priority, "high");
         assert_eq!(shown.tier.as_deref(), Some("T1"));
     }
@@ -1456,7 +1455,7 @@ mod tests {
     #[test]
     fn high_requires_the_prod_break_tag() {
         let (_dir, store) = temp_store();
-        let err = store.create(typed(Some("high"), &["status"], "s", "")).unwrap_err();
+        let err = store.create(typed(Some("high"), &["finding"], "s", "")).unwrap_err();
         assert!(err.contains("'high' requires tag 'prod-break'"), "{err}");
         let row = store
             .create(typed(Some("high"), &["prod-break"], "s", ""))
@@ -1503,6 +1502,44 @@ mod tests {
             assert!(err.contains("tag rule") && err.contains(bad), "{err}");
         }
         store.create(typed(None, &["gate", "owner-decision"], "s", "")).expect("allowed tags");
+    }
+
+    /// The four low-value tags are RETIRED: a create naming one is refused BY NAME, and the refusal carries
+    /// the list that remains, so a seat is not left guessing what replaced it.
+    #[test]
+    fn the_retired_low_value_tags_are_refused_by_name() {
+        let (_dir, store) = temp_store();
+        for retired in ["status", "ack", "checkpoint", "report"] {
+            let err = store.create(typed(None, &[retired], "s", "")).unwrap_err();
+            assert!(err.contains("tag rule"), "{retired}: {err}");
+            assert!(err.contains(retired), "{retired}: the refusal does not name it: {err}");
+            assert!(err.contains("allowed (lowercase kebab)"), "{retired}: {err}");
+            assert!(!ALLOWED_TAGS.contains(&retired), "{retired} is still in ALLOWED_TAGS");
+        }
+        assert_eq!(ALLOWED_TAGS.len(), 14);
+    }
+
+    /// A row written BEFORE the retirement keeps the tag it carries: the refusal is a rule about what may be
+    /// added, and a row is a record. The row is inserted the way a store written by the older daemon holds it.
+    #[test]
+    fn a_retired_tag_stays_on_a_row_that_already_carries_it() {
+        let (_dir, store) = temp_store();
+        store
+            .conn
+            .execute(
+                "INSERT INTO queue_rows \
+                 (qitem_id, state, summary, body, source_session, destination_session, chain_of_record, \
+                  reply_to, blocked_on, wake_after_seconds, closure_reason, closure_target, priority, tags, \
+                  tier, ts_created, ts_updated) \
+                 VALUES ('q_pre_retirement', 'pending', 'written before the retirement', '', 'seat-a', 'seat-b', \
+                         '[]', NULL, NULL, NULL, NULL, NULL, 'normal', '[\"status\"]', NULL, \
+                         '2026-10-17T00:00:00.000000Z', '2026-10-17T00:00:00.000000Z')",
+                [],
+            )
+            .expect("seed a row carrying a retired tag");
+        let rows = store.list(&ListFilter::default()).expect("list");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].tags, vec!["status".to_string()]);
     }
 
     #[test]

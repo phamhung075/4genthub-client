@@ -7,6 +7,7 @@
 package clientroom
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -335,6 +336,28 @@ func TestQueueUsageStatesTheTypedRowRules(t *testing.T) {
 	for _, want := range []string{"low|normal|high", "prod-break", "<= 120", "body <= 600", "no change since"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("usage lacks %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// THE FOUR LOW-VALUE TAGS ARE RETIRED, and the help a seat reads must not offer them: the daemon refuses a
+// create carrying one by name, and a usage line that still listed it would send the seat to a refusal. The
+// list is the client's copy of the daemon's, so it is pinned here as the 14 that remain - a row created
+// before the retirement keeps its tag; only new creates are refused.
+func TestTheRetiredTagsLeaveTheListAndTheUsage(t *testing.T) {
+	want := []string{"prod-break", "gate", "ruling", "owner-decision", "finding", "guide", "docs",
+		"defect", "skill-check", "landing", "assignment", "handoff", "board", "reseat"}
+	if !slices.Equal(clientruntime.QueueTags, want) {
+		t.Fatalf("QueueTags = %q, want the 14 the daemon accepts", clientruntime.QueueTags)
+	}
+	var out strings.Builder
+	printQueueUsage(&out, "create")
+	for _, retired := range []string{"status", "ack", "checkpoint", "report"} {
+		if slices.Contains(clientruntime.QueueTags, retired) {
+			t.Errorf("QueueTags still carries the retired tag %q", retired)
+		}
+		if strings.Contains(out.String(), ", "+retired+",") || strings.Contains(out.String(), retired+",") {
+			t.Errorf("the usage still offers the retired tag %q:\n%s", retired, out.String())
 		}
 	}
 }

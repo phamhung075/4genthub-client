@@ -16,8 +16,11 @@ import "encoding/json"
 //     `#[serde(default)]`. Everything else always rides the frame, because the daemon's deserializer treats
 //     those as required and a shorter struct is a different request than the caller meant.
 
-// QueueTags are the tags a row may carry, the daemon's own list (queue/mod.rs ALLOWED_TAGS).
-var QueueTags = []string{"prod-break", "gate", "ruling", "status", "owner-decision", "report", "finding", "guide", "docs", "defect", "skill-check", "landing", "ack", "assignment", "handoff", "board", "checkpoint", "reseat"}
+// QueueTags are the tags a NEW row may carry, the daemon's own list (queue/mod.rs ALLOWED_TAGS). The four
+// low-value tags - status, ack, checkpoint, report - were retired on 2026-10-17: the daemon refuses a create
+// that carries one, naming it and this list. A row written before the retirement keeps the tag it carries;
+// only a create is refused, because a row is a record and this is a rule about what may be added.
+var QueueTags = []string{"prod-break", "gate", "ruling", "owner-decision", "finding", "guide", "docs", "defect", "skill-check", "landing", "assignment", "handoff", "board", "reseat"}
 
 // QueueStates are the five states a row may occupy, in the daemon's own order: handed-off is intermediate
 // (acceptance pending), done is terminal.
