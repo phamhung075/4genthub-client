@@ -383,6 +383,50 @@ fn append_transition(
     .map_err(|e| format!("cannot append transition for '{}': {}", qitem_id, e))
 }
 
+/// CLOSING A ROW IS THE WAKE FOR EVERY ROW BLOCKED ON IT. `blocked_on` names the row that has to move
+/// first, so the moment that row reaches a terminal state each dependent returns to `pending` with
+/// `blocked_on` cleared and ONE transition naming the closure - the wake the nudge pass then acts on.
+///
+/// Only an exact `blocked_on` = qitem id is a dependency: a free-text label ("review", "ci green") names
+/// nothing this store can match, so it wakes by a seat reading it. A row blocked with NO `blocked_on`
+/// (a seat parked by hand) is left exactly where it stands - nothing on the rail says when it should wake,
+/// and inventing a wake would be a second rule.
+fn unblock_dependents(
+    tx: &rusqlite::Transaction<'_>,
+    closed: &str,
+    actor_session: &str,
+    ts: &str,
+) -> Result<Vec<String>, String> {
+    let mut stmt = tx
+        .prepare("SELECT qitem_id FROM queue_rows WHERE state = 'blocked' AND blocked_on = ?1")
+        .map_err(|e| format!("cannot read rows blocked on '{closed}': {e}"))?;
+    let dependents: Vec<String> = stmt
+        .query_map([closed], |r| r.get::<_, String>(0))
+        .and_then(|rows| rows.collect::<Result<Vec<_>, _>>())
+        .map_err(|e| format!("cannot read rows blocked on '{closed}': {e}"))?;
+    drop(stmt);
+    for dependent in &dependents {
+        tx.execute(
+            "UPDATE queue_rows SET state = 'pending', blocked_on = NULL, ts_updated = ?1 \
+             WHERE qitem_id = ?2",
+            rusqlite::params![ts, dependent],
+        )
+        .map_err(|e| format!("cannot unblock '{dependent}': {e}"))?;
+        append_transition(
+            tx,
+            dependent,
+            ts,
+            Some("blocked"),
+            "pending",
+            actor_session,
+            &format!("unblocked: '{closed}' closed"),
+            None,
+            None,
+        )?;
+    }
+    Ok(dependents)
+}
+
 impl QueueStore {
     /// Opens (creating if absent) `<room_dir>/queue.sqlite` and applies the schema. Idempotent.
     pub fn open(room_dir: &Path) -> Result<Self, String> {
@@ -692,6 +736,11 @@ impl QueueStore {
             input.closure_reason.as_deref(),
             input.closure_target.as_deref(),
         )?;
+        // The other road to a terminal state is `update`, so the wake must follow it too: a blocker
+        // closed `--state done` (or moved `handed-off`) wakes its dependents exactly as `close` does.
+        if TERMINAL_STATES.contains(&effective_state.as_str()) {
+            unblock_dependents(&tx, &input.qitem_id, &input.actor_session, &ts)?;
+        }
         tx.commit()
             .map_err(|e| format!("cannot commit update for '{}': {}", input.qitem_id, e))?;
         self.show(&input.qitem_id)
@@ -857,6 +906,7 @@ impl QueueStore {
             )
             .map_err(|e| format!("cannot close queue row '{}': {}", input.qitem_id, e))?;
         }
+        unblock_dependents(&tx, &input.qitem_id, &input.actor_session, &ts)?;
         tx.commit()
             .map_err(|e| format!("cannot commit close for '{}': {}", input.qitem_id, e))?;
         self.show(&input.qitem_id)
@@ -1229,6 +1279,103 @@ mod tests {
         assert_eq!(updated.wake_after_seconds, Some(600));
         assert_eq!(updated.summary, "blocked on review");
         assert_eq!(store.show(&row.qitem_id).unwrap(), updated);
+    }
+
+    /// CLOSING A BLOCKER WAKES ITS ROWS, EXACTLY ONCE AND ONLY ITS OWN. A dependent blocked on the
+    /// closed row returns to `pending` with `blocked_on` cleared and one transition naming the close; a
+    /// row blocked on a different id, and a row blocked with no `blocked_on` at all (a seat parked by
+    /// hand), stand still. Measured shape (task 005e0aad): a row claimed and blocked on a still-open gate
+    /// was nudged twice before its blocker ever closed.
+    #[test]
+    fn closing_a_blocker_returns_its_blocked_rows_to_pending_once() {
+        let (_dir, store) = temp_store();
+        let blocker = new_row(&store, "lead", "reviewer", "the gate");
+        let dependent = new_row(&store, "lead", "fe-dev", "waits for the gate");
+        let elsewhere = new_row(&store, "lead", "fe-dev", "waits for another row");
+        let parked = new_row(&store, "lead", "fe-dev", "parked by hand");
+
+        for (row, blocked_on) in [
+            (&dependent, Some(blocker.qitem_id.clone())),
+            (&elsewhere, Some("qitem-some-other-gate".to_string())),
+            (&parked, None),
+        ] {
+            store
+                .update(UpdateInput {
+                    qitem_id: row.qitem_id.clone(),
+                    actor_session: "lead".into(),
+                    state: Some("blocked".into()),
+                    blocked_on,
+                    ..Default::default()
+                })
+                .expect("block");
+        }
+
+        store
+            .close(close_input(&blocker.qitem_id, "no-follow-on", None))
+            .expect("close the blocker");
+
+        let woken = store.show(&dependent.qitem_id).expect("show the dependent");
+        assert_eq!(woken.state, "pending");
+        assert_eq!(woken.blocked_on, None);
+        let wake: Vec<_> = woken
+            .transitions
+            .iter()
+            .filter(|t| t.from_state.as_deref() == Some("blocked"))
+            .collect();
+        assert_eq!(wake.len(), 1, "exactly one wake: {:?}", woken.transitions);
+        assert_eq!(wake[0].state, "pending");
+        assert!(
+            wake[0].transition_note.contains(&blocker.qitem_id),
+            "the wake names its blocker: {}",
+            wake[0].transition_note
+        );
+
+        for (row, label) in [(&elsewhere, "another row"), (&parked, "no blocked_on")] {
+            let still = store.show(&row.qitem_id).expect("show");
+            assert_eq!(still.state, "blocked", "{label} must not wake");
+            assert_eq!(
+                still.transitions.iter().filter(|t| t.state == "pending").count(),
+                1,
+                "{label}: only the create's pending, no wake"
+            );
+        }
+
+        // The blocker is terminal, so it cannot be closed twice - "exactly one wake" is structural, not
+        // a count this test has to police on the nudge side.
+        assert!(store
+            .close(close_input(&blocker.qitem_id, "no-follow-on", None))
+            .is_err());
+    }
+
+    /// The other road to terminal is `update --state done`, and it must wake dependents the same way:
+    /// the rail has two close paths and a wake that followed only one of them would be the same lie.
+    #[test]
+    fn marking_a_blocker_done_by_update_also_wakes_its_rows() {
+        let (_dir, store) = temp_store();
+        let blocker = new_row(&store, "lead", "reviewer", "the gate");
+        let dependent = new_row(&store, "lead", "fe-dev", "waits for the gate");
+        store
+            .update(UpdateInput {
+                qitem_id: dependent.qitem_id.clone(),
+                actor_session: "lead".into(),
+                state: Some("blocked".into()),
+                blocked_on: Some(blocker.qitem_id.clone()),
+                ..Default::default()
+            })
+            .expect("block");
+        store
+            .update(UpdateInput {
+                qitem_id: blocker.qitem_id.clone(),
+                actor_session: "reviewer".into(),
+                state: Some("done".into()),
+                closure_reason: Some("no-follow-on".into()),
+                ..Default::default()
+            })
+            .expect("done by update");
+
+        let woken = store.show(&dependent.qitem_id).expect("show");
+        assert_eq!(woken.state, "pending");
+        assert_eq!(woken.blocked_on, None);
     }
 
     #[test]
