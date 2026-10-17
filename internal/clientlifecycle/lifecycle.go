@@ -65,8 +65,8 @@ const (
 	upUsage         = "usage: 4genteam up RIG --team DIR [--state-dir DIR] [--room-only] " + clientoffpeak.ModeFlagUsage
 	compactUsage    = "usage: 4genteam compact RIG " + clientoffpeak.ModeFlagUsage
 	stopUsage       = "usage: 4genteam stop RIG"
-	statusUsage     = "usage: 4genteam status RIG"
-	logUsage        = "usage: 4genteam log RIG"
+	statusUsage     = "usage: 4genteam status RIG [--state-root DIR]"
+	logUsage        = "usage: 4genteam log RIG [--state-root DIR]"
 	uiUsage         = "usage: 4genteam ui"
 	compactRunUsage = "usage: 4genteam compact-run --room RIG [--quiet SECONDS] [--every SECONDS] [--once][--state-root DIR]"
 )
@@ -341,14 +341,14 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 	if !recordRigFor(name, stderr) {
 		return clientcmd.ExitUnavailable
 	}
-	if !startAuthority(stdout, stderr) {
+	if !startAuthority(stateDir, stdout, stderr) {
 		return ExitStartFailed
 	}
 
 	// 7.5: the SAME check `doctor` makes, run after agent's start grace and BEFORE the watch view, the UI
 	// and herdr. A safeguard that did not come up is named here, with the line a reader will see in
 	// `doctor`, rather than discovered hours later on a quiet rig.
-	rows, ok := waitSafeguards(name)
+	rows, ok := waitSafeguards(name, stateDir)
 	if !ok {
 		reportDown(rows, stderr)
 		return clientcmd.ExitUnavailable
@@ -772,7 +772,12 @@ func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "4genteam compact: agent is not running, and the compaction supervisor is agent's child now - start it with `4genteam up %s`, or compact the room's seats through the runtime with `4genteam room compact %s`.\n", name, name)
 		return clientcmd.ExitUnavailable
 	}
-	rows := clientservices.NotRunning(rowsFor(name))
+	root, err := clientenv.ResolveStateRoot("")
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam compact: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	rows := clientservices.NotRunning(rowsFor(name, root))
 	for _, row := range rows {
 		if row.Safeguard == clientservices.Compact {
 			fmt.Fprintln(stderr, clientservices.StateLine(row))
@@ -829,8 +834,9 @@ func (statusCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 		return clientcmd.ExitOK
 	}
 	asJSON := false
+	rootFlag, remaining := clientenv.StateRootFromFlags(args)
 	var rest []string
-	for _, arg := range args {
+	for _, arg := range remaining {
 		if arg == "--json" {
 			asJSON = true
 			continue
@@ -841,7 +847,12 @@ func (statusCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	rows := rowsFor(name)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam status: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	rows := rowsFor(name, root)
 	if asJSON {
 		body, err := json.MarshalIndent(rows, "", "  ")
 		if err != nil {
@@ -854,7 +865,7 @@ func (statusCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 	for _, row := range rows {
 		fmt.Fprintln(stdout, clientservices.StateLine(row))
 	}
-	SupervisorStatus(name, stdout, stderr)
+	SupervisorStatus(name, root, stdout, stderr)
 	return clientcmd.ExitOK
 }
 
@@ -868,15 +879,17 @@ func (logCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer
 		printHelp(stdout, logUsage, "Follow the compaction supervisor's log for a rig.")
 		return clientcmd.ExitOK
 	}
-	name, ok := requireRig("log", args, stderr)
+	rootFlag, rest := clientenv.StateRootFromFlags(args)
+	name, ok := requireRig("log", rest, stderr)
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	logPath, err := LogPath(name)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam log: %v\n", err)
-		return clientcmd.ExitUnavailable
+		return clientcmd.ExitUsage
 	}
+	logPath := LogPath(name, root)
 	tail, err := exec.LookPath("tail")
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam log: tail is not on PATH, and this verb follows a log with it\n")

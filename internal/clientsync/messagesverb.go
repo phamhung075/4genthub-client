@@ -41,6 +41,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientbridge"
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
@@ -70,6 +71,7 @@ supervises this shape with --watch: one pass every 10 s, one heartbeat per pass,
 waits for the next pass instead of ending the child.
 
   --limit <n>  the page size asked of the cloud (the cloud's own default and clamp apply)
+  --state-root DIR  the state root the heartbeat is written under (default ~/.config/4genthub)
   --dry-run    pull and print, send and acknowledge nothing (a --room read is one pass; refused with --watch)
   --out <dir>  where the delivered ledger lives (default ` + "`~/.config/4genthub/seats`" + `)`
 
@@ -115,7 +117,9 @@ func messagesLedgerPath(out, room, seat string) string {
 	return filepath.Join(out, "delivered", room+"-"+seat+".ids")
 }
 
-// RunMessagesVerb drives the pull-deliver-ack loop and returns a process exit code.
+// RunMessagesVerb drives the pull-deliver-ack loop and returns a process exit code. The state root is
+// resolved here once (--state-root, else this machine's own) and threaded to every path below, so the
+// heartbeat lands under the root the run was pointed at.
 func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		_, _ = io.WriteString(stdout, messagesUsage)
@@ -126,6 +130,12 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintf(stderr, "4genteam sync messages: %v\n%s\n", err, messagesUsage)
 		return clientcmd.ExitUsage
 	}
+	root, err := clientenv.ResolveStateRoot(parsed.root)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam sync messages: %v\n", err)
+		return clientcmd.ExitUsage
+	}
+	parsed.root = root
 	baseURL, err := RequireEnv("AGENTHUB_URL")
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -262,6 +272,7 @@ type messagesArgs struct {
 	room, seat, session string
 	rig                 string
 	out                 string
+	root                string
 	limit               int
 	dryRun, watch       bool
 }
@@ -272,7 +283,7 @@ func parseMessagesArgs(args []string) (messagesArgs, error) {
 	var parsed messagesArgs
 	for i := 0; i < len(args); i++ {
 		switch arg := args[i]; {
-		case arg == "--session" || arg == "--out" || arg == "--limit" || arg == "--room":
+		case arg == "--session" || arg == "--out" || arg == "--limit" || arg == "--room" || arg == "--state-root":
 			if i+1 >= len(args) {
 				return messagesArgs{}, fmt.Errorf("%s needs a value", arg)
 			}
@@ -284,6 +295,8 @@ func parseMessagesArgs(args []string) (messagesArgs, error) {
 				parsed.out = args[i]
 			case "--room":
 				parsed.rig = args[i]
+			case "--state-root":
+				parsed.root = args[i]
 			case "--limit":
 				n, convErr := strconv.Atoi(args[i])
 				if convErr != nil || n <= 0 {
@@ -511,7 +524,7 @@ func runMessagesWatch(ctx context.Context, baseURL, token string, parsed message
 	fmt.Fprintf(stdout, "%s: delivering for every running seat, one pass every %s\n", parsed.rig, clientservices.MessagesEvery)
 	for ctx.Err() == nil {
 		messagesPass(ctx, baseURL, token, parsed, stdout, stderr)
-		if err := clientservices.WriteHeartbeat(clientservices.Messages, parsed.rig); err != nil {
+		if err := clientservices.WriteHeartbeat(parsed.root, clientservices.Messages, parsed.rig); err != nil {
 			fmt.Fprintf(stderr, "4genteam sync messages: writing the heartbeat: %v\n", err)
 		}
 		select {

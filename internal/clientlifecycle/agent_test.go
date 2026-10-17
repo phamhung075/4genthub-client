@@ -31,7 +31,7 @@ type childrenFixture struct {
 func newChildrenFixture(t *testing.T, rigs ...string) *childrenFixture {
 	t.Helper()
 	fixture := &childrenFixture{healthFixture: newHealthFixture(t, rigs)}
-	fixture.manager = newAgentManager(func(line string) { fixture.logged = append(fixture.logged, line) })
+	fixture.manager = newAgentManager(fixture.root, func(line string) { fixture.logged = append(fixture.logged, line) })
 	// The inherited lifecycle test seams: the spawn is a recorder, the start grace is short, and nothing
 	// signals anything.
 	restoreAll(t)
@@ -80,7 +80,7 @@ func (f *childrenFixture) startsOf(needle string) int {
 
 // compactStarts is the compaction supervisor of the fixture's one listed room.
 func (f *childrenFixture) compactStarts() int {
-	return f.startsOf("compact-run --room demo")
+	return f.startsOf("compact-run --room demo --state-root " + f.root)
 }
 
 // TestEverySupervisionPassWritesAgentOwnHeartbeat: agent's own row is what a machine with no systemd has
@@ -98,7 +98,7 @@ func TestEverySupervisionPassWritesAgentOwnHeartbeat(t *testing.T) {
 	f.manager.pass()
 	f.manager.pass()
 
-	beat, ok := clientservices.ReadHeartbeat(clientservices.Agent, "")
+	beat, ok := clientservices.ReadHeartbeat(f.root, clientservices.Agent, "")
 	if !ok {
 		t.Fatal("agent wrote no heartbeat for itself")
 	}
@@ -114,26 +114,24 @@ func TestEverySupervisionPassWritesAgentOwnHeartbeat(t *testing.T) {
 // per-room guards (the idle guard and the budget guard) per listed rig, and ONE bridge per machine, each
 // with the arguments and the derived threshold 7.4 gives it.
 func TestTheChildListIsSevenOne(t *testing.T) {
-	specs, err := agentSpecs([]string{"demo", "other"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	const root = "/srv/state"
+	specs := agentSpecs([]string{"demo", "other"}, root)
 	var described []string
 	for _, spec := range specs {
 		described = append(described, strings.Join(spec.argv, " ")+" @"+spec.threshold.String())
 	}
 	want := []string{
-		"compact-run --room demo @30s",
-		"watchdog demo --watch @3m0s",
-		"sync messages --room demo --watch @30s",
-		"idle-run --room demo @1m30s",
-		"budget-run --room demo @45s",
-		"compact-run --room other @30s",
-		"watchdog other --watch @3m0s",
-		"sync messages --room other --watch @30s",
-		"idle-run --room other @1m30s",
-		"budget-run --room other @45s",
-		"bridge run @6m0s",
+		"compact-run --room demo --state-root /srv/state @30s",
+		"watchdog demo --watch --state-root /srv/state @3m0s",
+		"sync messages --room demo --watch --state-root /srv/state @30s",
+		"idle-run --room demo --state-root /srv/state @1m30s",
+		"budget-run --room demo --state-root /srv/state @45s",
+		"compact-run --room other --state-root /srv/state @30s",
+		"watchdog other --watch --state-root /srv/state @3m0s",
+		"sync messages --room other --watch --state-root /srv/state @30s",
+		"idle-run --room other --state-root /srv/state @1m30s",
+		"budget-run --room other --state-root /srv/state @45s",
+		"bridge run --state-root /srv/state @6m0s",
 	}
 	if strings.Join(described, "|") != strings.Join(want, "|") {
 		t.Errorf("children = %v\nwant %v", described, want)
@@ -174,7 +172,11 @@ func TestAChildThatDiesIsRestartedWithBackoffFromOneSecond(t *testing.T) {
 	// Only the children of the ONE listed rig, plus the single bridge: nothing else is ever started.
 	for _, argv := range f.spawned {
 		joined := strings.Join(argv, " ")
-		if !strings.HasSuffix(joined, " demo") && joined != "bridge run" && joined != "watchdog demo --watch" && joined != "sync messages --room demo --watch" {
+		if !strings.Contains(joined, "--state-root "+f.root) {
+			t.Errorf("spawned %v without the resolved root", argv)
+			continue
+		}
+		if !strings.HasPrefix(joined, "bridge run ") && !strings.Contains(joined, "demo") {
 			t.Errorf("spawned %v, which belongs to no listed rig", argv)
 		}
 	}
@@ -278,7 +280,7 @@ func TestATransitionIsPublishedToTheSocketAndTheAlertLog(t *testing.T) {
 		t.Errorf("published = %+v, want the compaction supervisor stopped", changed)
 	}
 
-	tail := clientservices.TailAlerts()
+	tail := clientservices.TailAlerts(f.root)
 	var lines []string
 	for _, line := range tail {
 		lines = append(lines, line)
@@ -324,7 +326,7 @@ func TestTheSupervisionFactsArePersistedForDoctor(t *testing.T) {
 	}
 	// The heartbeat of a child agent spawned is the CHILD's to write, so agent's own state must not pretend
 	// to have one: no beat was written by the fake child.
-	if _, ok := clientservices.ReadHeartbeat(clientservices.Compact, "demo"); ok {
+	if _, ok := clientservices.ReadHeartbeat(f.root, clientservices.Compact, "demo"); ok {
 		t.Error("a heartbeat appeared that no child wrote")
 	}
 }
@@ -367,7 +369,7 @@ func TestUpRefusesWhenACredentialIsMissingWithoutPrintingItsValue(t *testing.T) 
 		return clientcmd.ExitOK
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
+	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	openUI = func(io.Writer) { ran = append(ran, "ui") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
@@ -408,8 +410,8 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 		return clientcmd.ExitOK
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
-	waitSafeguards = func(string) ([]clientservices.Health, bool) {
+	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
+	waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
 		ran = append(ran, "wait")
 		return []clientservices.Health{
 			{Rig: "demo", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
@@ -453,7 +455,7 @@ func TestStartAgentLeavesARunningAuthorityAlone(t *testing.T) {
 	agentRunning = func() int { return 4242 }
 
 	var out, errOut bytes.Buffer
-	if !startAgent(&out, &errOut) {
+	if !startAgent("/srv/state", &out, &errOut) {
 		t.Fatalf("startAgent refused a running agent: %q", errOut.String())
 	}
 	if spawned != 0 {

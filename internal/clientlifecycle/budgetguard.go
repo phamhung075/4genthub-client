@@ -38,6 +38,8 @@ const (
 type BudgetGuard struct {
 	Rig  string
 	Lead string // the seat told, by its seat key: the rail's destination is that seat's session name
+	// Root is the state root the verb resolved: the heartbeat and this guard's log live under it.
+	Root string
 
 	Now    func() time.Time
 	Seats  func(rig string) []string
@@ -61,7 +63,7 @@ type BudgetGuard struct {
 // NewBudgetGuard is a guard wired to the real world: the room's limits file, each seat's own logs, the
 // runtime's StopSeat, and the room's rail.
 func NewBudgetGuard(rig, lead, stateRoot string, out io.Writer) *BudgetGuard {
-	g := &BudgetGuard{Rig: rig, Lead: lead, over: map[string]int{}}
+	g := &BudgetGuard{Rig: rig, Lead: lead, Root: stateRoot, over: map[string]int{}}
 	g.Now = func() time.Time { return time.Now() }
 	g.Seats = func(r string) []string {
 		// The RUNNING seats, from the runtime that runs them: a seat the runtime does not list cannot be
@@ -203,7 +205,7 @@ func (g *BudgetGuard) row(seat string, usage roombudget.Usage, reason string) cl
 // beat is the safeguard's heartbeat, the same one idle-run writes: agent reads it to tell a guard that is
 // working from a guard that died.
 func (g *BudgetGuard) beat() {
-	if err := clientservices.WriteHeartbeat(clientservices.Budget, g.Rig); err != nil {
+	if err := clientservices.WriteHeartbeat(g.Root, clientservices.Budget, g.Rig); err != nil {
 		g.Log("cannot write the heartbeat: " + err.Error())
 	}
 }
@@ -270,10 +272,6 @@ func (budgetRunCommand) Run(ctx context.Context, args []string, stdout, stderr i
 }
 
 // BudgetLogPath is the guard's log for one rig.
-func BudgetLogPath(rig string) (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return dir + "/budget-guard-" + rig + ".log", nil
+func BudgetLogPath(rig, root string) string {
+	return filepath.Join(LogDir(root), "budget-guard-"+rig+".log")
 }

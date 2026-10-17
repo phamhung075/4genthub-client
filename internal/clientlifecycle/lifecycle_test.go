@@ -59,7 +59,7 @@ func stubHeartbeat(t *testing.T) *[]string {
 	t.Helper()
 	var calls []string
 	previous := clientservices.WriteHeartbeat
-	clientservices.WriteHeartbeat = func(safeguard, rig string) error {
+	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
 		calls = append(calls, safeguard+"/"+rig)
 		return nil
 	}
@@ -95,25 +95,36 @@ func restoreAll(t *testing.T) {
 	// are replaced with recorders here, so a `up` test can assert the ORDER without touching the machine's
 	// own state file.
 	recordRigFor = func(string, io.Writer) bool { return true }
-	startAuthority = func(io.Writer, io.Writer) bool { return true }
-	waitSafeguards = func(string) ([]clientservices.Health, bool) {
+	startAuthority = func(string, io.Writer, io.Writer) bool { return true }
+	waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
 		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
 	}
 }
 
-// TestLogDirIsTheClientservicesComputation: the lifecycle log directory is clientservices.LogDir, so the
-// supervisor's log, the bridge's log, the heartbeat files and alerts.log cannot land in two places.
-func TestLogDirIsTheClientservicesComputation(t *testing.T) {
-	previous := clientservices.LogDir
-	clientservices.LogDir = func() (string, error) { return "/tmp/clientservices-logs", nil }
-	t.Cleanup(func() { clientservices.LogDir = previous })
-
-	dir, err := LogDir()
-	if err != nil {
-		t.Fatal(err)
+// TestEveryLogPathIsUnderTheResolvedRoot: the supervisor's log, the bridge's log, the message deliverer's
+// log and the two guards' logs are all <root>/logs/<name>, for the root the verb resolved - so a verb
+// pointed at another tree writes its logs there and nothing under this machine's.
+func TestEveryLogPathIsUnderTheResolvedRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "another-root")
+	want := filepath.Join(root, "logs")
+	if got := LogDir(root); got != want {
+		t.Errorf("LogDir(%q) = %q, want %q", root, got, want)
 	}
-	if dir != "/tmp/clientservices-logs" {
-		t.Errorf("LogDir() = %q, want the clientservices seam's answer", dir)
+	for _, c := range []struct {
+		name string
+		path string
+	}{
+		{"supervisor", LogPath("demo", root)},
+		{"messages", MessagesLogPath("demo", root)},
+		{"bridge", BridgeLogPath(root)},
+		{"idle guard", IdleLogPath("demo", root)},
+		{"budget guard", BudgetLogPath("demo", root)},
+		{"agent", AgentLogPath(root)},
+		{"watchdog child", WatchdogLogPath("demo", root)},
+	} {
+		if filepath.Dir(c.path) != want {
+			t.Errorf("%s log = %q, want it under %q", c.name, c.path, want)
+		}
 	}
 }
 
@@ -128,7 +139,7 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 		return diedChild{}, nil
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
+	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 	openUI = func(io.Writer) {}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
@@ -166,8 +177,8 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 		return clientcmd.ExitOK
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
-	startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
-	waitSafeguards = func(string) ([]clientservices.Health, bool) {
+	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
+	waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
 		ran = append(ran, "waitSafeguards")
 		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
 	}
@@ -250,8 +261,8 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 				return c.room
 			}
 			recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
-			startAuthority = func(io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
-			waitSafeguards = func(string) ([]clientservices.Health, bool) {
+			startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
+			waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
 				ran = append(ran, "waitSafeguards")
 				return nil, true
 			}
@@ -365,7 +376,7 @@ func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 		return diedChild{}, nil
 	}
 	agentRunning = func() int { return 4242 }
-	rowsFor = func(string) []clientservices.Health {
+	rowsFor = func(string, string) []clientservices.Health {
 		return []clientservices.Health{
 			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Running, PID: 99, AgeS: 3},
 			{Rig: "some-rig", Safeguard: clientservices.Watchdog, State: clientservices.Silent, AgeS: 400},
@@ -390,7 +401,7 @@ func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 func TestCompactNamesTheRowWhenTheSupervisorIsNotRunning(t *testing.T) {
 	restoreAll(t)
 	agentRunning = func() int { return 4242 }
-	rowsFor = func(string) []clientservices.Health {
+	rowsFor = func(string, string) []clientservices.Health {
 		return []clientservices.Health{
 			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
 		}

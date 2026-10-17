@@ -133,24 +133,18 @@ func RemoveRig(state AgentState, rig string) AgentState {
 // tail is for the reading and the exit code for the decision.
 const AlertsTail = 10
 
-// AlertsLogPath is where every safeguard transition is appended: <LogDir>/alerts.log. It is the one
-// surface that reaches an operator without the cloud, and 7.3 states plainly that it reaches nobody
-// until someone runs `doctor` - the alert itself still travels on the next `ready`.
-func AlertsLogPath() (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "alerts.log"), nil
+// AlertsLogPath is where every safeguard transition is appended: <root>/logs/alerts.log, for the root
+// its caller resolved. It is the one surface that reaches an operator without the cloud, and 7.3 states
+// plainly that it reaches nobody until someone runs `doctor` - the alert itself still travels on the
+// next `ready`.
+func AlertsLogPath(root string) string {
+	return filepath.Join(LogDir(root), "alerts.log")
 }
 
 // AppendAlert adds one line to alerts.log. A failure to write is returned rather than swallowed: agent
 // reports it in its own log, because an alert that silently failed to land is the incident again.
-func AppendAlert(line string) error {
-	path, err := AlertsLogPath()
-	if err != nil {
-		return err
-	}
+func AppendAlert(root, line string) error {
+	path := AlertsLogPath(root)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -167,12 +161,8 @@ func AppendAlert(line string) error {
 
 // TailAlerts is the last lines of alerts.log, for `doctor`. A missing file is an empty tail and not an
 // error: an alert log nobody has written to yet is exactly what a fresh machine has.
-func TailAlerts() []string {
-	path, err := AlertsLogPath()
-	if err != nil {
-		return nil
-	}
-	raw, err := os.ReadFile(path)
+func TailAlerts(root string) []string {
+	raw, err := os.ReadFile(AlertsLogPath(root))
 	if err != nil {
 		return nil
 	}

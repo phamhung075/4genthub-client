@@ -32,7 +32,7 @@ func isolate(t *testing.T) string {
 	// machine's own log directory; the beat is recorded for the focused test that asserts it.
 	oldBeat := clientservices.WriteHeartbeat
 	beats = nil
-	clientservices.WriteHeartbeat = func(safeguard, rig string) error {
+	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
 		beats = append(beats, safeguard+"/"+rig)
 		return nil
 	}

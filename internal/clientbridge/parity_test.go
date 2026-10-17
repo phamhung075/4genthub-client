@@ -163,7 +163,7 @@ func TestLocalRecordParityWithThePythonBridge(t *testing.T) {
 	var dump referenceDump
 	readFixture(t, "python_dump.json", &dump)
 
-	bridge := NewBridge(dump.MachineID, 0, nil, nil, nil, t.TempDir(), filepath.Join(t.TempDir(), "state.json"), nil)
+	bridge := NewBridge(dump.MachineID, t.TempDir(), 0, nil, nil, nil, t.TempDir(), filepath.Join(t.TempDir(), "state.json"), nil)
 	got := bridge.LocalRecord(dump.Seats)
 	if len(got) != len(dump.LocalRecord) {
 		t.Fatalf("local record = %d entries, want %d", len(got), len(dump.LocalRecord))

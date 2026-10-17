@@ -85,7 +85,7 @@ func newBudgetFixture(t *testing.T) *budgetFixture {
 	f.guard = guard
 
 	previous := clientservices.WriteHeartbeat
-	clientservices.WriteHeartbeat = func(string, string) error { f.beats++; return nil }
+	clientservices.WriteHeartbeat = func(string, string, string) error { f.beats++; return nil }
 	t.Cleanup(func() { clientservices.WriteHeartbeat = previous })
 	return f
 }

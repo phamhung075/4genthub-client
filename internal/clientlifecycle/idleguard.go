@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -43,8 +44,10 @@ type stallState struct {
 // IdleGuard is one `idle-run`. Every external reading is a field, so one pass is testable with no rig, no
 // tmux, no Jev and no waiting.
 type IdleGuard struct {
-	Rig   string
-	Lead  string
+	Rig  string
+	Lead string
+	// Root is the state root the verb resolved: the heartbeat and this guard's log live under it.
+	Root  string
 	Quiet float64 // every seat idle this long: the room has stopped
 	Stall float64 // a seat that is not idle but logs nothing this long: it is stuck
 
@@ -72,7 +75,7 @@ type IdleGuard struct {
 
 // NewIdleGuard is a guard wired to the real world.
 func NewIdleGuard(rig, lead string, quiet, stall int, stateRoot string, out io.Writer) *IdleGuard {
-	g := &IdleGuard{Rig: rig, Lead: lead, Quiet: float64(quiet), Stall: float64(stall), State: map[string]*stallState{}}
+	g := &IdleGuard{Rig: rig, Lead: lead, Root: stateRoot, Quiet: float64(quiet), Stall: float64(stall), State: map[string]*stallState{}}
 	g.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 	g.Seats = func(rig string) []string { return seatlog.RigSeats(stateRoot, rig) }
 	g.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
@@ -157,7 +160,7 @@ func (g *IdleGuard) Step(ctx context.Context) {
 	if idleAll && counted > 0 && now-newest >= g.Quiet && newest > g.decided {
 		g.decide(ctx, silence, newest)
 	}
-	if err := clientservices.WriteHeartbeat(clientservices.RoomGuard, g.Rig); err != nil {
+	if err := clientservices.WriteHeartbeat(g.Root, clientservices.RoomGuard, g.Rig); err != nil {
 		g.Log("cannot write the heartbeat: " + err.Error())
 	}
 }
@@ -310,10 +313,6 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 }
 
 // IdleLogPath is the guard's log for one rig.
-func IdleLogPath(rig string) (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return dir + "/idle-guard-" + rig + ".log", nil
+func IdleLogPath(rig, root string) string {
+	return filepath.Join(LogDir(root), "idle-guard-"+rig+".log")
 }

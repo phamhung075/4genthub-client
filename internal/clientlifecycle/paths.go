@@ -2,8 +2,8 @@
 // running supervisor, and the args the client needs an external program for.
 //
 // The Python derived all of these from its own checkout (paths.py: CLIENT_DIR/"logs"). A compiled
-// binary has no checkout, so the log directory comes from the
-// XDG state location under the REAL user's home, and every external program is resolved by name.
+// binary has no checkout, so the log directory comes from the state root its caller RESOLVED once per
+// run (clientenv.ResolveStateRoot), and every external program is resolved by name.
 package clientlifecycle
 
 import (
@@ -23,34 +23,23 @@ func SupervisorPattern(rig string) string {
 
 // LogDir is where the lifecycle verbs keep their logs. It DELEGATES to clientservices.LogDir because the
 // log directory has ONE computation in the client: the supervisor's log, the bridge's log, the heartbeat
-// files and alerts.log must not be able to land in two places, which is what a second copy of the XDG
-// rule here would eventually do.
-func LogDir() (string, error) { return clientservices.LogDir() }
+// files and alerts.log must not be able to land in two places, which is what a second copy of the rule
+// here would eventually do. The root is the caller's resolved root, so a verb pointed at another tree
+// writes its logs there.
+func LogDir(root string) string { return clientservices.LogDir(root) }
 
 // LogPath is the supervisor's log for one rig.
-func LogPath(rig string) (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "compact-supervisor-"+rig+".log"), nil
+func LogPath(rig, root string) string {
+	return filepath.Join(LogDir(root), "compact-supervisor-"+rig+".log")
 }
 
 // MessagesLogPath is the seat-message deliverer's log for one rig: what every pass printed, so a message
 // that would not land stays readable after the fact rather than only in the operator's scrollback.
-func MessagesLogPath(rig string) (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "messages-"+rig+".log"), nil
+func MessagesLogPath(rig, root string) string {
+	return filepath.Join(LogDir(root), "messages-"+rig+".log")
 }
 
 // BridgeLogPath is the status bridge's log.
-func BridgeLogPath() (string, error) {
-	dir, err := LogDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "bridge.log"), nil
+func BridgeLogPath(root string) string {
+	return filepath.Join(LogDir(root), "bridge.log")
 }
