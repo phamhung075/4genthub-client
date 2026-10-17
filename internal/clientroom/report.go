@@ -40,7 +40,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
-const reportUsage = `usage: 4genteam room report ROOM [--since 24h] [--json] [--state-root DIR] [--socket PATH]
+const reportUsage = `usage: 4genteam room report ROOM [--since 24h] [--json] [--thinking] [--state-root DIR] [--socket PATH]
 
 One read-only measurement of one room over one window; it writes nothing. The numbers come from the room's own
 records rather than an ad-hoc script, so the targets below are read the same way twice, and a source that
@@ -77,7 +77,11 @@ moves a submodule pin never counts. The line prints its inputs and the commits t
 own floor waits for a ruling after five daily windows.
 
 A sixth check this verb adds is not one of the five: tasks closed after a commit that cites them, wanted 0.
-Below them: the tasks open more than 24h, and the commits that carry no Task: trailer.`
+Below them: the tasks open more than 24h, and the commits that carry no Task: trailer.
+
+--thinking adds a per-seat baseline for the thinking system: the turns in the window, how many held a
+thinking block, and the provider's reasoningTokens against the output tokens. It is printed and never gated;
+--json carries the same fields (thinking_turns, thinking_tokens, thinking_turn_pct, thinking_token_pct).`
 
 // The activity classes a turn falls into.
 const (
@@ -199,6 +203,10 @@ type seatStats struct {
 	QueueRows            int     `json:"queue_rows"`
 	QueueHigh            int     `json:"queue_high_rows"`
 	BodyChars            int     `json:"queue_body_chars"`
+	ThinkingTurns        int     `json:"thinking_turns"`
+	ThinkingTokens       int64   `json:"thinking_tokens"`
+	ThinkingTokenPct     float64 `json:"thinking_token_pct"`
+	ThinkingTurnPct      float64 `json:"thinking_turn_pct"`
 
 	codeEditFirstCallCost float64
 }
@@ -221,6 +229,8 @@ func (s *seatStats) add(o *seatStats) {
 	s.QueueRows += o.QueueRows
 	s.QueueHigh += o.QueueHigh
 	s.BodyChars += o.BodyChars
+	s.ThinkingTurns += o.ThinkingTurns
+	s.ThinkingTokens += o.ThinkingTokens
 }
 
 func (s *seatStats) finish() {
@@ -233,6 +243,11 @@ func (s *seatStats) finish() {
 	if s.Cost > 0 {
 		s.CodeEditFirstCallPct = 100 * s.codeEditFirstCallCost / s.Cost
 	}
+	s.ThinkingTokenPct = 0
+	if s.OutputTokens > 0 {
+		s.ThinkingTokenPct = 100 * float64(s.ThinkingTokens) / float64(s.OutputTokens)
+	}
+	s.ThinkingTurnPct = pct(s.ThinkingTurns, s.Turns)
 }
 
 func (s *seatStats) docsOnlyPct() float64  { return pct(s.DocsOnly, s.Commits) }
@@ -256,8 +271,9 @@ type sessionLine struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 		Usage   struct {
-			Output int64 `json:"output"`
-			Cost   struct {
+			Output          int64 `json:"output"`
+			ReasoningTokens int64 `json:"reasoningTokens"`
+			Cost            struct {
 				Total float64 `json:"total"`
 			} `json:"cost"`
 		} `json:"usage"`
@@ -284,8 +300,8 @@ func firstToolClass(raw json.RawMessage) string {
 	return actTextOnly
 }
 
-// turnClasses is one assistant turn's TWO readings, because the two answer different questions and the
-// metric moved from one to the other (seats/architect/RULING-code-edit-share-target.md).
+// turnClasses is one assistant turn's readings, because they answer different questions and the metric moved
+// from one to the other (seats/architect/RULING-code-edit-share-target.md).
 //
 // The first return is the first tool call's class - the reading the report and room metrics used, and the one
 // `metrics.go` still persists per turn. It under-counts editing by construction: every edit is preceded by a
@@ -295,13 +311,19 @@ func firstToolClass(raw json.RawMessage) string {
 // the first call's class. Only the code-edit class follows the any-call rule - a turn that reads and then
 // writes a CHANGELOG is still scored by its first call, because the ruling's defect is the code-edit share and
 // widening every class at once would move numbers nobody asked to move.
-func turnClasses(raw json.RawMessage) (first, primary string) {
+//
+// The third return says the turn held a `thinking` content block. Its token count is not taken from the
+// block (a redacted block carries none): the caller sums the provider's own `usage.reasoningTokens`.
+func turnClasses(raw json.RawMessage) (first, primary string, thinking bool) {
 	var parts []contentPart
 	if json.Unmarshal(raw, &parts) != nil {
-		return actTextOnly, actTextOnly
+		return actTextOnly, actTextOnly, false
 	}
 	edits := false
 	for _, p := range parts {
+		if p.Type == "thinking" {
+			thinking = true
+		}
 		if p.Type != "toolCall" {
 			continue
 		}
@@ -314,12 +336,12 @@ func turnClasses(raw json.RawMessage) (first, primary string) {
 		}
 	}
 	if first == "" {
-		return actTextOnly, actTextOnly
+		return actTextOnly, actTextOnly, thinking
 	}
 	if edits {
-		return first, actCodeEdit
+		return first, actCodeEdit, thinking
 	}
-	return first, first
+	return first, first, thinking
 }
 
 // forEachLine calls fn with every non-blank line of a JSONL file; a line that is not JSON is the caller's to skip.
@@ -382,7 +404,7 @@ func readSessions(seatDir string, cutoff time.Time, stats *seatStats) ([]string,
 				return
 			}
 			cost := line.Message.Usage.Cost.Total
-			first, primary := turnClasses(line.Message.Content)
+			first, primary, thinking := turnClasses(line.Message.Content)
 			key := at.UTC().Format("2006-01-02")
 			split := days[key]
 			split.Total += cost
@@ -396,6 +418,10 @@ func readSessions(seatDir string, cutoff time.Time, stats *seatStats) ([]string,
 			stats.Turns++
 			stats.Cost += cost
 			stats.OutputTokens += line.Message.Usage.Output
+			stats.ThinkingTokens += line.Message.Usage.ReasoningTokens
+			if thinking {
+				stats.ThinkingTurns++
+			}
 			stats.ActivityCost[primary] += cost
 			if first == actCodeEdit {
 				stats.codeEditFirstCallCost += cost
@@ -1203,6 +1229,22 @@ func (r *Report) renderText(out io.Writer) {
 	fmt.Fprintf(out, "commits without Task trailer: %d\n", r.NoTrailer)
 }
 
+// renderThinking prints the thinking baseline: per seat, the turns an assistant message was spent on, how
+// many of them held a thinking block, and the provider's reasoning-token count against the output count.
+// It reads the same window as the report and gates nothing.
+func (r *Report) renderThinking(out io.Writer) {
+	fmt.Fprintf(out, "thinking share by seat (thinking tokens are the provider's reasoningTokens; a turn counts as thinking when its content holds a thinking block)\n")
+	fmt.Fprintf(out, "%-10s %6s %11s %6s %10s %9s %7s\n", "SEAT", "TURNS", "THINKTURNS", "TURN%", "THINKTOK", "OUTTOK", "TOK%")
+	rows := append([]*seatStats{}, r.Seats...)
+	if r.Total != nil {
+		rows = append(rows, r.Total)
+	}
+	for _, s := range rows {
+		fmt.Fprintf(out, "%-10s %6d %11d %6.1f %10d %9d %7.1f\n",
+			s.Seat, s.Turns, s.ThinkingTurns, s.ThinkingTurnPct, s.ThinkingTokens, s.OutputTokens, s.ThinkingTokenPct)
+	}
+}
+
 func runReport(args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, reportUsage)
@@ -1214,7 +1256,8 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		return clientcmd.CodeOf(rootErr, clientcmd.ExitRoomRefused)
 	}
 	opts, rest, err := clientruntime.SplitFlags(args, queueFlagSpecs(
-		clientruntime.FlagSpec{Name: "since", Value: true}, clientruntime.FlagSpec{Name: "json"}))
+		clientruntime.FlagSpec{Name: "since", Value: true}, clientruntime.FlagSpec{Name: "json"},
+		clientruntime.FlagSpec{Name: "thinking"}))
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam room report: %v. %s\n", err, reportUsage)
 		return clientcmd.ExitRoomRefused
@@ -1256,5 +1299,9 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		return clientcmd.ExitOK
 	}
 	report.renderText(stdout)
+	if _, thinking := opts["thinking"]; thinking {
+		fmt.Fprintln(stdout)
+		report.renderThinking(stdout)
+	}
 	return clientcmd.ExitOK
 }

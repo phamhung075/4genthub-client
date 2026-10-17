@@ -347,6 +347,19 @@ func TestRoomReportEndToEndAgainstTheDaemon(t *testing.T) {
 	if code != clientcmd.ExitOK || json.Unmarshal([]byte(stdout[strings.Index(stdout, "{"):]), &decoded) != nil || decoded.Room != "room-a" {
 		t.Fatalf("--json: exit %d, stderr %q, stdout %q", code, stderr, stdout)
 	}
+	if len(decoded.Seats) != 1 || decoded.Seats[0].ThinkingTurns != 1 {
+		t.Errorf("--json thinking turns = %+v, want the fixture's 1 of 3 turns", decoded.Seats)
+	}
+
+	code, stdout, stderr = runRoom(t, append(daemon.args("report", "room-a"), "--since", "24h", "--thinking")...)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("--thinking: exit %d, stderr %q", code, stderr)
+	}
+	for _, want := range []string{"thinking share by seat", "THINKTOK", "33.3"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("--thinking stdout lacks %q:\n%s", want, stdout)
+		}
+	}
 }
 
 func TestRoomReportRefusesBadInput(t *testing.T) {
@@ -699,5 +712,49 @@ func TestTheCodeEditFloorRatchetsAndAFailingSeatHoldsIt(t *testing.T) {
 	if got := evaluateTargets(newSeatStats("ROOM"), 1, true, true, []*seatStats{low},
 		codeEditFloor{Base: codeEditFloorBase, Step: codeEditFloorStep, Cap: codeEditCeil, Floor: 30}, nil)[4]; got.Result != "FAIL" {
 		t.Fatalf("a seat under a stepped floor = %+v, want FAIL: the floor moved, the seat did not", got)
+	}
+}
+
+// The thinking baseline: a turn is a thinking turn when its content holds a `thinking` block, and its
+// thinking tokens are the provider's own reasoning count for that turn.
+func TestThinkingShareIsMeasuredPerSeatFromTheTranscript(t *testing.T) {
+	now := time.Now().UTC()
+	seatDir := filepath.Join(t.TempDir(), "seats", "go-dev")
+	if err := os.MkdirAll(filepath.Join(seatDir, "sessions"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	turn := func(output, reasoning int64, parts string) string {
+		return fmt.Sprintf(`{"type":"message","timestamp":%q,"message":{"role":"assistant","content":[%s],"usage":{"output":%d,"reasoningTokens":%d,"cost":{"total":1}}}}`,
+			now.Add(-time.Hour).Format(time.RFC3339Nano), parts, output, reasoning)
+	}
+	lines := []string{
+		turn(100, 60, `{"type":"thinking"},{"type":"text","text":"hi"},{"type":"toolCall","name":"edit","arguments":{"path":"/r/a.go"}}`),
+		turn(40, 0, `{"type":"toolCall","name":"bash","arguments":{"command":"grep -rn x ."}}`),
+		turn(60, 40, `{"type":"thinking"},{"type":"text","text":"done"}`),
+	}
+	if err := os.WriteFile(filepath.Join(seatDir, "sessions", "s.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := newSeatStats("go-dev")
+	if _, _, err := readSessions(seatDir, now.Add(-24*time.Hour), stats); err != nil {
+		t.Fatal(err)
+	}
+	stats.finish()
+
+	if stats.Turns != 3 || stats.ThinkingTurns != 2 || stats.ThinkingTokens != 100 || stats.OutputTokens != 200 {
+		t.Fatalf("turns/thinking turns/thinking tokens/output tokens = %d %d %d %d, want 3 2 100 200",
+			stats.Turns, stats.ThinkingTurns, stats.ThinkingTokens, stats.OutputTokens)
+	}
+	if stats.ThinkingTokenPct != 50 || fmt.Sprintf("%.1f", stats.ThinkingTurnPct) != "66.7" {
+		t.Errorf("thinking token/turn share = %v %v, want 50 and 66.7", stats.ThinkingTokenPct, stats.ThinkingTurnPct)
+	}
+
+	var out strings.Builder
+	(&Report{Room: "room-a", Since: "24h", Seats: []*seatStats{stats}}).renderThinking(&out)
+	for _, want := range []string{"thinking share by seat", "go-dev", "66.7", "100", "200", "50.0"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("text lacks %q:\n%s", want, out.String())
+		}
 	}
 }
