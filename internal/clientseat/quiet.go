@@ -139,10 +139,11 @@ func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 // rig daemon's node table today, the runtime's producer at cutover.
 //
 // WHY THE PROGRAM NAME IS GONE FROM HERE. This used to exec `rig ps --nodes --json`, resolved with
-// exec.LookPath("rig"). `rig`, where it exists at all, is the compat shim to 4genteam, whose own `ps` carries
-// `activity` (a log mtime) and NO `agentActivity` at all - and on this host the lookup is DEAD outright
-// (measured 2026-10-15: `command -v rig` prints nothing, and ~/.local/bin/rig does not exist), so neither the name
-// nor the shim could ever have answered. The word therefore never arrived, quietly: a matched node
+// exec.LookPath("rig"). `rig` is not this client: where an `rig` exists at all it is a different program, and the
+// `ps` such a program serves carries `activity` (a log mtime) and NO `agentActivity` at all - and on this host the
+// lookup is DEAD outright (measured 2026-10-15, re-measured 2026-10-17: `command -v rig` prints nothing, and
+// ~/.local/bin/rig does not exist), so neither the name nor the program could ever have answered. The word
+// therefore never arrived, quietly: a matched node
 // with no field, an empty word, a gate that can never open. Asking the daemon through the client's own transport
 // removes the question of WHICH program answered, and with it the whole class.
 //

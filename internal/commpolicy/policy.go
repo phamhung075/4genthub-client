@@ -280,11 +280,14 @@ func writeUint(h hash.Hash, v uint64) {
 // entry is either a program name (any invocation of it) or "program sub-verb"
 // (only that shape), so naming the checker cannot licence the send beside it.
 //
-// The spellings are the ones this host has, measured 2026-10-15: `4genteam` is
-// the native client and carries the send path (`send`, `input`, and the rail's
-// `room queue create`), while `rig` on PATH is `@reference/cli`, a different file
-// that must never carry a seat's message. Binding only the retired `rig`
-// spellings left the control matching nothing on the path the client sends over.
+// The spellings are the ones this host has: `4genteam` is the native client and
+// carries the send path (`send`, `input`, and the rail's `room queue create`).
+// The retired `rig` spellings stay for a reason the host state does not change:
+// an `rig` on some other host's PATH is not this client and must never carry a
+// seat's message. On this host (measured 2026-10-15, re-measured 2026-10-17)
+// `rig` is not on PATH at all and `~/.local/bin/rig` does not exist; the client
+// is one file, `~/.local/bin/4genteam`. Binding only the retired `rig` spellings
+// left the control matching nothing on the path the client sends over.
 func BypassSuspected(known []string, observed string) bool {
 	fields := strings.Fields(observed)
 	i := 0
