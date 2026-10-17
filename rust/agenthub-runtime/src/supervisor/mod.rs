@@ -326,6 +326,68 @@ fn install_agy_guard_hook(home: &Path) -> Result<(), String> {
     fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+/// The name of the entry the runtime owns in agy's global `mcp_config.json`. It is the same name the omp seat
+/// dir carries, so a seat's tools are called the same thing whichever runtime hosts it.
+const AGY_MCP_SERVER: &str = "agenthub_http";
+
+/// What an agy session runs to reach the cloud. agy spawns its own environment with every server it starts, so
+/// the LINE reads the seat's variables at connect time instead of the file holding a copy of them, and a session
+/// that is not a seat (`AGENTHUB_SEAT` unset) starts no bridge at all. agy speaks stdio to `mcp-proxy`, which
+/// speaks Streamable HTTP to the seat's own daemon: the transport a `url` entry would use, in the one form that
+/// needs no credential in agy's shared config file.
+const AGY_MCP_COMMAND: &str = concat!(
+    "if [ -n \"$AGENTHUB_SEAT\" ]; then exec mcp-proxy --transport streamablehttp",
+    " --headers Accept 'application/json, text/event-stream'",
+    " --headers Authorization \"Bearer $AGENTHUB_TOKEN\"",
+    " \"$AGENTHUB_URL/mcp\"; fi"
+);
+
+/// The entry agy loads for the seat's tools.
+fn agy_mcp_entry() -> serde_json::Value {
+    serde_json::json!({"command": "sh", "args": ["-c", AGY_MCP_COMMAND], "disabled": false})
+}
+
+/// Make sure agy's global `mcp_config.json` carries the seat's MCP server, and touch nothing else in it: the file
+/// also holds the owner's own servers. A file that is not a JSON object is an error rather than a file to
+/// overwrite, and so is an `mcpServers` that is not an object.
+fn install_agy_mcp_server(home: &Path) -> Result<(), String> {
+    let path = home.join(".gemini").join("config").join("mcp_config.json");
+    let mut config = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .filter(serde_json::Value::is_object)
+            .ok_or_else(|| format!("{} is not a JSON object; the agy MCP server was not installed", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    if config.get("mcpServers").is_some_and(|servers| !servers.is_object()) {
+        return Err(format!(
+            "{} has an mcpServers that is not an object; the agy MCP server was not installed",
+            path.display()
+        ));
+    }
+    if config.get("mcpServers").is_none() {
+        config["mcpServers"] = serde_json::json!({});
+    }
+    let entry = agy_mcp_entry();
+    if config["mcpServers"].get(AGY_MCP_SERVER) == Some(&entry) {
+        return Ok(());
+    }
+    config["mcpServers"][AGY_MCP_SERVER] = entry;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    let text = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    fs::write(&path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// Everything an agy seat's start installs in agy's OWN files, in one place: agy is the runtime whose tool guard
+/// and whose MCP server both live in its config, and both are inert outside a seat.
+fn install_agy_start_files(home: &Path) -> Result<(), String> {
+    install_agy_guard_hook(home)?;
+    install_agy_mcp_server(home)
+}
+
 /// The variable that names the client's skill tree (`share/`, `rooms/<room>/`, `rooms/<room>/<seat>/`). It is
 /// read from the state root's `.env`, else from the daemon's own environment.
 const SKILLS_ROOT_ENV: &str = "AGENTHUB_CLIENT_SKILLS";
@@ -659,8 +721,8 @@ impl RoomSupervisor {
             .map_err(|e| format!("cannot write the seat's tool hook: {e}"))?;
         install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
         if matches!(AgentRuntime::from_str_loose(&seat.runtime), AgentRuntime::Agy) {
-            let home = std::env::var_os("HOME").ok_or("HOME is not set, so agy's hooks.json cannot be found")?;
-            install_agy_guard_hook(Path::new(&home))?;
+            let home = std::env::var_os("HOME").ok_or("HOME is not set, so agy's own config cannot be found")?;
+            install_agy_start_files(Path::new(&home))?;
         }
 
         // Build command line according to runtime. An omp seat's pane runs THIS binary as a runner, which
@@ -3288,6 +3350,50 @@ mod tests {
         fs::write(&path, "[1]").unwrap();
         assert!(install_agy_guard_hook(&home).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "[1]");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// AN AGY SEAT REACHES THE CLOUD THROUGH AGY'S OWN SERVER FILE, and the entry is added beside the owner's own
+    /// servers without touching them. It carries no credential - the shell line reads the seat's own variables at
+    /// connect time - and it starts nothing at all outside a seat, which is what keeps one global file safe to
+    /// hold.
+    #[test]
+    fn the_agy_mcp_server_joins_the_global_file_and_leaves_the_rest() {
+        let home = scratch("agy-mcp");
+        let path = home.join(".gemini/config/mcp_config.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"mcpServers":{"deepseek":{"command":"node","args":["server.cjs"]}}}"#).unwrap();
+        install_agy_mcp_server(&home).unwrap();
+        let first = fs::read_to_string(&path).unwrap();
+        install_agy_mcp_server(&home).unwrap();
+        assert_eq!(first, fs::read_to_string(&path).unwrap(), "a second install changed the file");
+        let config: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(config["mcpServers"]["deepseek"]["command"], "node", "the owner's own server was touched");
+        let server = &config["mcpServers"][AGY_MCP_SERVER];
+        assert_eq!(server["command"], "sh");
+        assert_eq!(server["disabled"], false, "agy leaves a disabled server unloaded");
+        let line = server["args"][1].as_str().unwrap();
+        assert!(line.contains("mcp-proxy --transport streamablehttp"), "{line}");
+        assert!(line.contains(r#""$AGENTHUB_URL/mcp""#), "the bridge must reach the seat's own daemon: {line}");
+        assert!(line.contains("Bearer $AGENTHUB_TOKEN"), "the token is read, never stored: {line}");
+        assert!(line.contains(r#"[ -n "$AGENTHUB_SEAT" ]"#), "a session that is not a seat starts no bridge: {line}");
+        fs::write(&path, r#"{"mcpServers":[]}"#).unwrap();
+        assert!(install_agy_mcp_server(&home).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"mcpServers":[]}"#);
+        fs::write(&path, "[1]").unwrap();
+        assert!(install_agy_mcp_server(&home).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "[1]");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// An agy start installs BOTH of agy's own files: a seat that comes up guarded but unable to call the cloud is
+    /// the defect this pairing is here to prevent.
+    #[test]
+    fn an_agy_start_installs_the_guard_hook_and_the_mcp_server() {
+        let home = scratch("agy-start");
+        install_agy_start_files(&home).unwrap();
+        assert!(home.join(".gemini/config/hooks.json").is_file(), "no guard hook was installed");
+        assert!(home.join(".gemini/config/mcp_config.json").is_file(), "no MCP server was installed");
         let _ = fs::remove_dir_all(&home);
     }
 
