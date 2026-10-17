@@ -113,7 +113,7 @@ func (d *fakeDaemon) requests() []string {
 // verb prints is the pair it must have resolved from these.
 func (d *fakeDaemon) args(verb string, positionals ...string) []string {
 	args := append([]string{verb}, positionals...)
-	return append(args, "--state-dir", d.stateDir, "--socket", d.socket)
+	return append(args, "--state-root", d.stateDir, "--socket", d.socket)
 }
 
 // runRoom drives the verb the way the dispatcher does: the three streams
@@ -430,7 +430,7 @@ func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
 		}
 	}
 	// The rig orchestrator's state home is NOT in that list, and the omission is deliberate: the pair this verb
-	// prints echoes back the --state-dir the caller passed, so a substring test there would fail on the checkout
+	// prints echoes back the --state-root the caller passed, so a substring test there would fail on the checkout
 	// path rather than on the verb. What the verb touched is the
 	// wire, and assertRequests above already pins it to one StopRoom and nothing else.
 	// The directory is LEFT IN PLACE, and the report says so: spec.json, seats/ and logs/ are what makes the

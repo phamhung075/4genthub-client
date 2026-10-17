@@ -31,11 +31,12 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/roombudget"
 )
 
-const limitsUsage = `usage: 4genteam room limits ROOM [--usd N] [--calls N] [--on|--off] [--state-dir DIR] [--socket PATH]
+const limitsUsage = `usage: 4genteam room limits ROOM [--usd N] [--calls N] [--on|--off] [--state-root DIR] [--socket PATH]
 
 Reads or writes <state-dir>/rooms/ROOM/limits.json, the file the room's budget safeguard (` + "`4genteam budget-run --room ROOM`" + `)
 enforces. With none of --usd/--calls/--on/--off it prints the limits in force and writes nothing; with any of them
@@ -73,6 +74,11 @@ func runLimits(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, limitsUsage)
 		return clientcmd.ExitOK
 	}
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam room limits: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitRoomRefused)
+	}
 	opts, rest, err := clientruntime.SplitFlags(args, queueFlagSpecs(
 		clientruntime.FlagSpec{Name: "usd", Value: true},
 		clientruntime.FlagSpec{Name: "calls", Value: true},
@@ -83,7 +89,7 @@ func runLimits(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam room limits: %v. %s\n", err, limitsUsage)
 		return clientcmd.ExitRoomRefused
 	}
-	pairArgs := append(append(make([]string, 0, len(rest)+4), rest...), "--state-dir", opts["state-dir"], "--socket", opts["socket"])
+	pairArgs := append(append(make([]string, 0, len(rest)+4), rest...), "--state-root", rootFlag, "--socket", opts["socket"])
 	inv, code, ok := parseInvocation("limits", pairArgs, 1, stdout, stderr)
 	if !ok {
 		return code

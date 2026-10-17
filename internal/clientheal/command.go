@@ -17,7 +17,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
-const usage = "usage: 4genteam heal ROOM [--check] [--json] [--state-dir DIR] [--socket PATH]"
+const usage = "usage: 4genteam heal ROOM [--check] [--json] [--state-root DIR] [--socket PATH]"
 
 // Commands registers the verb.
 func Commands() []clientcmd.Command { return []clientcmd.Command{healCommand{}} }
@@ -42,12 +42,18 @@ func (healCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 	flags.SetOutput(stderr)
 	check := flags.Bool("check", false, "report only; fix nothing")
 	asJSON := flags.Bool("json", false, "print the findings as JSON")
-	stateDir := flags.String("state-dir", "", "the state root: the flag, else ~/.config/4genthub")
 	socket := flags.String("socket", "", "the runtime daemon's socket")
+	// THE ROOT IS READ THROUGH THE ONE PARSER, so the scan below only has to carry the socket: the root is
+	// stripped wherever it sits and the runtime's spelling is refused here, with this verb's code.
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam heal: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitUsage)
+	}
 	var flagArgs, rest []string
 	for i := 0; i < len(args); i++ {
 		switch {
-		case args[i] == "--state-dir" || args[i] == "--socket":
+		case args[i] == "--socket":
 			flagArgs = append(flagArgs, args[i])
 			if i+1 < len(args) {
 				i++
@@ -63,7 +69,7 @@ func (healCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stderr, "4genteam heal: one room name is required. "+usage)
 		return clientcmd.ExitUsage
 	}
-	root, err := clientenv.ResolveStateRoot(*stateDir)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam heal: %v\n", err)
 		return clientcmd.ExitUnavailable

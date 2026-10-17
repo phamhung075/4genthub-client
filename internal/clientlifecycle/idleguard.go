@@ -271,6 +271,13 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 				"--stall seconds is interrupted and told to continue, up to three times, then the lead is told.")
 		return clientcmd.ExitOK
 	}
+	// THE ROOT IS READ THROUGH THE ONE PARSER, so this loop's flag set does not name it: the root is
+	// stripped wherever it sits and the runtime's spelling is refused before a pass runs.
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam idle-run: %v\n", rootErr)
+		return clientcmd.ExitUsage
+	}
 	flags := flag.NewFlagSet("idle-run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	rig := flags.String("room", "", "the rig to guard (required)")
@@ -279,7 +286,6 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 	stall := flags.Int("stall", 900, "seconds a working seat may log nothing before it is told to continue")
 	every := flags.Int("every", 30, "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
-	stateRoot := flags.String("state-root", "", "where the client keeps its state: the flag, else ~/.config/4genthub")
 	if err := flags.Parse(args); err != nil {
 		return clientcmd.ExitUsage
 	}
@@ -287,7 +293,7 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintf(stderr, "4genteam idle-run: --room is required - there is no default rig. %s\n", idleRunUsage)
 		return clientcmd.ExitUsage
 	}
-	root, err := clientenv.ResolveStateRoot(*stateRoot)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam idle-run: %v\n", err)
 		return clientcmd.ExitUsage

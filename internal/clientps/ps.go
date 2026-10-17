@@ -79,7 +79,12 @@ func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer)
 			"shows a provider quota or credit message is reported as `quota`.")
 		return clientcmd.ExitOK
 	}
-	rootFlag, args := clientenv.StateRootFromFlags(args)
+	rootFlag, rest, err := clientenv.StateRootFromFlags(args)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam ps: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
+	}
+	args = rest
 	stateRoot, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam ps: %v\n", err)

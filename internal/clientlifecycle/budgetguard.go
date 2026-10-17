@@ -233,13 +233,19 @@ func (budgetRunCommand) Run(ctx context.Context, args []string, stdout, stderr i
 				"the call ceiling per minute, held for two passes. Limits SHIP OFF: nothing is measured until they are on.")
 		return clientcmd.ExitOK
 	}
+	// THE ROOT IS READ THROUGH THE ONE PARSER, so this loop's flag set does not name it: the root is
+	// stripped wherever it sits and the runtime's spelling is refused before a pass runs.
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam budget-run: %v\n", rootErr)
+		return clientcmd.ExitUsage
+	}
 	flags := flag.NewFlagSet("budget-run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	rig := flags.String("room", "", "the rig to guard (required)")
 	lead := flags.String("lead", "lead", "the seat told when a seat is parked")
 	every := flags.Int("every", int(clientservices.BudgetEvery/time.Second), "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
-	stateRoot := flags.String("state-root", "", "where the client keeps its state: the flag, else ~/.config/4genthub")
 	if err := flags.Parse(args); err != nil {
 		return clientcmd.ExitUsage
 	}
@@ -247,7 +253,7 @@ func (budgetRunCommand) Run(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintf(stderr, "4genteam budget-run: --room is required - there is no default rig. %s\n", budgetRunUsage)
 		return clientcmd.ExitUsage
 	}
-	root, err := clientenv.ResolveStateRoot(*stateRoot)
+	root, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam budget-run: %v\n", err)
 		return clientcmd.ExitUsage

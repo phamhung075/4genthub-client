@@ -35,6 +35,7 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
@@ -49,17 +50,17 @@ const sessionEnv = "AGENTHUB_SESSION_NAME"
 // lines to find the verb they typed.
 const queueGroupUsage = `usage: 4genteam room queue (list ROOM | show ROOM QITEM_ID | create ROOM --to SESSION --summary TEXT |
                              update ROOM QITEM_ID | claim ROOM QITEM_ID | close ROOM QITEM_ID --reason R)
-                             [--state-dir DIR] [--socket PATH]`
+                             [--state-root DIR] [--socket PATH]`
 
 // queueSubUsages is one line per sub-verb, so a usage error prints the shape of the verb the caller
 // actually typed instead of the whole group's grammar - room.go's own rule for the four verbs above it.
 var queueSubUsages = map[string]string{
-	"list":   "usage: 4genteam room queue list ROOM [--destination SESSION] [--source SESSION] [--state S[,S]] [--active-only] [--limit N] [--state-dir DIR] [--socket PATH]",
-	"show":   "usage: 4genteam room queue show ROOM QITEM_ID [--state-dir DIR] [--socket PATH]",
-	"create": "usage: 4genteam room queue create ROOM --to SESSION --summary TEXT<=120 [--body TEXT<=600] [--priority low|normal|high] [--reply-to QITEM_ID] [--tag T] [--state-dir DIR] [--socket PATH]",
-	"update": "usage: 4genteam room queue update ROOM QITEM_ID [--state S] [--note TEXT] [--summary TEXT] [--closure-reason R] [--closure-target SESSION] [--blocked-on QITEM_ID] [--wake-after SECONDS] [--state-dir DIR] [--socket PATH]",
-	"claim":  "usage: 4genteam room queue claim ROOM QITEM_ID [--state-dir DIR] [--socket PATH]",
-	"close":  "usage: 4genteam room queue close ROOM QITEM_ID --reason R [--target SESSION] [--note TEXT] [--state-dir DIR] [--socket PATH]",
+	"list":   "usage: 4genteam room queue list ROOM [--destination SESSION] [--source SESSION] [--state S[,S]] [--active-only] [--limit N] [--state-root DIR] [--socket PATH]",
+	"show":   "usage: 4genteam room queue show ROOM QITEM_ID [--state-root DIR] [--socket PATH]",
+	"create": "usage: 4genteam room queue create ROOM --to SESSION --summary TEXT<=120 [--body TEXT<=600] [--priority low|normal|high] [--reply-to QITEM_ID] [--tag T] [--state-root DIR] [--socket PATH]",
+	"update": "usage: 4genteam room queue update ROOM QITEM_ID [--state S] [--note TEXT] [--summary TEXT] [--closure-reason R] [--closure-target SESSION] [--blocked-on QITEM_ID] [--wake-after SECONDS] [--state-root DIR] [--socket PATH]",
+	"claim":  "usage: 4genteam room queue claim ROOM QITEM_ID [--state-root DIR] [--socket PATH]",
+	"close":  "usage: 4genteam room queue close ROOM QITEM_ID --reason R [--target SESSION] [--note TEXT] [--state-root DIR] [--socket PATH]",
 }
 
 func queueSubUsage(sub string) string {
@@ -105,7 +106,7 @@ func runQueue(args []string, stdout, stderr io.Writer) int {
 func printQueueUsage(out io.Writer, sub string) {
 	fmt.Fprintln(out, queueSubUsage(sub))
 	fmt.Fprintln(out, "\nThe pair is printed by every sub-verb - `room: <room>@<state-dir> socket: <socket>` - because neither half")
-	fmt.Fprintln(out, "is resolved implicitly. --state-dir is the flag, else ~/.config/4genthub;")
+	fmt.Fprintln(out, "is resolved implicitly. --state-root is the flag, else ~/.config/4genthub;")
 	fmt.Fprintln(out, "--socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this machine's own.")
 	fmt.Fprintln(out, "\nThe daemon owns the room's rail and is its only writer: every verb renders the rows the daemon")
 	fmt.Fprintln(out, "re-read from its store, so the state printed is the state the next read shows. list prints")
@@ -148,12 +149,11 @@ func (a queueArgs) option(name string) (string, bool) {
 	return value, ok
 }
 
-// queueFlagSpecs is one sub-verb's flag table: its own flags, plus the two pair flags every sub-verb of this
-// group takes. The pair flags are NAMED here and resolved elsewhere - parseQueue hands them back to
-// room.go's own parser - so listing them is what keeps `room queue list ROOM --socket PATH` from reading the
-// socket as an extra positional.
+// queueFlagSpecs is one sub-verb's flag table: its own flags, plus the socket. The ROOT is not here because
+// it is taken off the argument list BEFORE this table is consulted (clientenv.StateRootFromFlags), which is
+// also where the runtime's spelling is refused with the ruling's own code instead of this group's 3.
 func queueFlagSpecs(own ...clientruntime.FlagSpec) []clientruntime.FlagSpec {
-	specs := []clientruntime.FlagSpec{{Name: "state-dir", Value: true}, {Name: "socket", Value: true}}
+	specs := []clientruntime.FlagSpec{{Name: "socket", Value: true}}
 	return append(specs, own...)
 }
 
@@ -168,6 +168,11 @@ func parseQueue(sub string, args []string, own []clientruntime.FlagSpec, positio
 		printQueueUsage(stdout, sub)
 		return queueArgs{}, clientcmd.ExitOK, false
 	}
+	rootFlag, args, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		fmt.Fprintf(stderr, "4genteam room queue %s: %v\n", sub, rootErr)
+		return queueArgs{}, clientcmd.CodeOf(rootErr, clientcmd.ExitRoomRefused), false
+	}
 	opts, rest, err := clientruntime.SplitFlags(args, queueFlagSpecs(own...))
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam room queue %s: %v. %s\n", sub, err, queueSubUsage(sub))
@@ -178,7 +183,7 @@ func parseQueue(sub string, args []string, own []clientruntime.FlagSpec, positio
 		return queueArgs{}, clientcmd.ExitRoomRefused, false
 	}
 	pairArgs := append(append(make([]string, 0, len(rest)+4), rest...),
-		"--state-dir", opts["state-dir"], "--socket", opts["socket"])
+		"--state-root", rootFlag, "--socket", opts["socket"])
 	inv, code, ok := parseInvocation("queue "+sub, pairArgs, len(positionals), stdout, stderr)
 	if !ok {
 		return queueArgs{}, code, false
