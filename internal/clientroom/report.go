@@ -48,9 +48,10 @@ cannot be read prints "unavailable (<reason>)" instead of a zero.
 
 Five sources: the seats' session transcripts (every assistant turn's cost, classified by the FIRST tool call,
 and by ANY call for the code-edit class) and tool-calls.jsonl (the guard-blocked count); the room's queue, asked
-from the runtime daemon - counts and lengths only, never a body; and git log --since of the repository the
-seats' session headers name most often, where a commit's Seat: trailer names the seat that made it, Task: names
-a hub task, and a commit whose every file is documentation counts as docs-only.
+from the runtime daemon - counts and lengths only, never a body; the room's spec.json, which says which seats
+are developer seats and so which carry the code-edit target; and git log --since of the repository the seats'
+session headers name most often, where a commit's Seat: trailer names the seat that made it, Task: names a hub
+task, and a commit whose every file is documentation counts as docs-only.
 
 The window is --since: 24h by default, and 90m or 7d are read the same way. It is LIVE - two runs minutes
 apart answer differently - and --json prints the same answer as one object.
