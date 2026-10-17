@@ -167,12 +167,15 @@ type Parked struct {
 
 // ParkExit is the way back from a park, written into every record. It is part of the record because a reader
 // who finds the file without the rail row or a refusal in hand has nothing else to read. The owner ruled the
-// exit BY HAND (2026-10-16 22:31Z): the record's existence IS the park, so removing it is the exit - and a
-// reseat on its own restarts a seat that the routes still refuse work. The room and seat are written out
+// exit BY HAND (2026-10-16 22:31Z): the record's existence IS the park, so removing it is the exit - and the
+// ORDER matters, measured rather than argued: `4genteam room reseat` sends StopSeat and then RestartSeat
+// (internal/clientroom/room.go:423/:426), and the runtime's restart_seat refuses BEFORE its own stop while the
+// record exists (rust/agenthub-runtime/src/supervisor/mod.rs:1011, via ipc/mod.rs:143), so a reseat run before
+// the removal STOPS the seat and leaves it stopped rather than running. The room and seat are written out
 // rather than left as placeholders, so the command can be copied out of the file.
 func ParkExit(rig, seat string) string {
-	return fmt.Sprintf("remove this file, then `4genteam room reseat %s %s`; the record's absence is the exit, "+
-		"and a reseat alone leaves the seat refused work", rig, seat)
+	return fmt.Sprintf("remove this file FIRST, then `4genteam room reseat %s %s`; the record's absence is the "+
+		"exit, and a reseat before the removal leaves the seat stopped", rig, seat)
 }
 
 // ParkedPath is the park record of one seat.

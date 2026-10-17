@@ -125,6 +125,15 @@ func TestASeatOverItsUSDBudgetIsParkedOnceAndNamedOnce(t *testing.T) {
 	if !strings.Contains(row.Body, "CLOSE THIS ROW") || !strings.Contains(row.Body, "why it came back") {
 		t.Errorf("body = %q, want it to ask the reader to close this row with why the seat came back", row.Body)
 	}
+	// F1's gap, closed: the sentence that tells the operator how to bring the seat back is the sentence that
+	// has to carry the ORDER, because a reseat run first STOPS the seat (measured: internal/clientroom/room.go
+	// sends StopSeat then RestartSeat, and the runtime's restart_seat refuses before its own stop while the
+	// record exists). A softer claim here reads as harmless and is not.
+	for _, want := range []string{"Remove the record FIRST, then", "a reseat before the removal stops the seat"} {
+		if !strings.Contains(row.Body, want) {
+			t.Errorf("body = %q, want %q: the exit's ORDER is what the operator must read", row.Body, want)
+		}
+	}
 	parked, ok := f.records["dev"]
 	if !ok {
 		t.Fatal("the park must be recorded in the seat's own directory")
