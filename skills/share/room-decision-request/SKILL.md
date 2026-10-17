@@ -35,15 +35,15 @@ A JSON array, 1 to 4 questions, 2 to 4 options each, labels under 75 characters,
 Jev answers on your own machine (it needs `TYPESAFE_API_KEY` in `~/.config/4genthub/.env`); the server is not called and `$AGENTHUB_URL` is not needed. It prints the JSON outcome. Exit codes: `0` this tier decided (act on the chosen options), `5` escalated (see `escalate_to`), `1` the Jev log could not be written, `2` usage or a missing key.
 
 - **Seat**: `escalate_to: "lead"` means send the lead the question with the recommended option, so the answer is one word. The lead repeats the call with `--tier lead`.
-- **Lead**: `escalate_to: "owner"` means the owner decides. Stop the branch that depends on it and raise the ask on the room's rail, addressed to the principal session and tagged `owner-decision`:
+- **Lead**: `escalate_to: "owner"` means the owner decides. Stop the branch that depends on it and raise the ask on the room's rail as an `owner-decision` row addressed to the room's lead:
 
   ```bash
-  4genteam room queue create <room> --to principal@<room> --tag owner-decision \
+  4genteam room queue create <room> --to agenthub--<room>--lead --tag owner-decision \
     --summary "<the decision, ≤120 chars>" \
     --body "<the brief: what is open, the options in order, the recommended one (≤600 chars)>"
   ```
 
-  `principal@<room>` is the principal session's address (session `agenthub--<room>--principal`). A row to any other session is not an escalation: the daemon accepts any session name, so a misaddressed ask is silent rather than refused. The create prints the `qitem-<…>` id, `4genteam room queue show <room> <id>` reads it back, and the id goes in your report. The owner answers on the dashboard under **Decision Requests**.
+  The room has no principal seat, so the lead is the seat that carries an owner ask to the owner. `--to` takes a seat the room declares - its session name, `<seat>@<room>`, or the bare seat key - and the create REFUSES any value that names no seat, listing the room's seats, so a misaddressed ask fails loudly instead of sitting unread. The create prints the `qitem-<…>` id, `4genteam room queue show <room> <id>` reads it back, and the id goes in your report. The owner answers on the dashboard under **Decision Requests**.
 
 The threshold is `JEV_DECISION_THRESHOLD` from `~/.config/4genthub/.env` at every tier (read the value there; this text carries none). **Category** is a free token (`a-z`, `0-9`, `_`, `-`); omit it for `general`. `credentials` and `spend`, and the categories in `DECISION_OWNER_ONLY_CATEGORIES` (for example `omp_cap`), go to the owner whatever the confidence, decided by code with no Jev call. Every step is appended to `~/.config/4genthub/jev_decisions.log`.
 

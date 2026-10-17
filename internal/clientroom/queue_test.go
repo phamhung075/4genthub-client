@@ -95,12 +95,12 @@ func TestRoomQueueListOnAnEmptyRailSaysSo(t *testing.T) {
 
 // TestRoomQueueCreateSendsTheEnvSessionAsSource pins the create: the SOURCE is the seat's own session read
 // from the environment - the request frame names it, and nothing on the command line could have. The
-// DESTINATION goes out as the seat's session name even though the caller wrote the `seat@room` form: that
-// name is the key the nudge pass matches, and a row under any other spelling wakes nobody.
+// DESTINATION goes to the daemon AS THE CALLER TYPED IT: resolving `seat@room` into the session name is the
+// runtime's job at create time (`resolve_queue_destination`, pinned by the runtime's own test), so the row,
+// the alert and the nudge pass read one key no matter which client wrote it.
 func TestRoomQueueCreateSendsTheEnvSessionAsSource(t *testing.T) {
 	t.Setenv(sessionEnv, testSeat)
 	daemon := newFakeDaemon(t, map[string]string{
-		"GetRoomStatus": okData("[" + seatJSON("reviewer", "agy", "running") + "]"),
 		"QueueCreate": okData(queueRowFrame("qitem-new", "pending", "normal", "hand me the build log",
 			queueTransitionFrame(1, "2026-10-14T00:17:00Z", "", "pending", testSeat, "created"))),
 	})
@@ -120,102 +120,8 @@ func TestRoomQueueCreateSendsTheEnvSessionAsSource(t *testing.T) {
 		t.Errorf("stderr = %q, want nothing: the create was answered", stderr)
 	}
 	assertRequests(t, daemon,
-		`{"action":"GetRoomStatus","payload":{"room":"`+testRoom+`"}}`,
 		`{"action":"QueueCreate","payload":{"input":{"source_session":"`+testSeat+
-			`","destination_session":"agenthub--`+testRoom+`--reviewer","summary":"hand me the build log"},"room":"`+testRoom+`"}}`)
-}
-
-// TestRoomQueueCreateResolvesEverySeatSpellingToOneNudgeKey pins the regression this fix exists for: the
-// session name, `<seat>@<room>` and the bare seat key are ONE stored destination, because the nudge pass
-// compares destination_session against session names - so the three spellings cannot drift into three keys,
-// two of which wake nobody.
-func TestRoomQueueCreateResolvesEverySeatSpellingToOneNudgeKey(t *testing.T) {
-	t.Setenv(sessionEnv, testSeat)
-	for _, spelling := range []string{"agenthub--" + testRoom + "--reviewer", "reviewer@" + testRoom, "reviewer"} {
-		t.Run(spelling, func(t *testing.T) {
-			daemon := newFakeDaemon(t, map[string]string{
-				"GetRoomStatus": okData("[" + seatJSON("reviewer", "agy", "running") + "]"),
-				"QueueCreate": okData(queueRowFrame("qitem-new", "pending", "normal", "hand me the build log",
-					queueTransitionFrame(1, "2026-10-14T00:17:00Z", "", "pending", testSeat, "created"))),
-			})
-			code, _, stderr := runRoom(t, daemon.args("queue", "create", testRoom,
-				"--to", spelling, "--summary", "hand me the build log")...)
-			if code != clientcmd.ExitOK {
-				t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
-			}
-			assertRequests(t, daemon,
-				`{"action":"GetRoomStatus","payload":{"room":"`+testRoom+`"}}`,
-				`{"action":"QueueCreate","payload":{"input":{"source_session":"`+testSeat+
-					`","destination_session":"agenthub--`+testRoom+`--reviewer","summary":"hand me the build log"},"room":"`+testRoom+`"}}`)
-		})
-	}
-}
-
-// TestRoomQueueCreateRefusesADestinationThatNamesNoSeat pins the loud half: a value naming no seat and no
-// session is refused with the value, the room's own seats and their sessions, and the write never leaves the
-// host - a stored row nobody can be nudged for is the failure this refusal replaces.
-func TestRoomQueueCreateRefusesADestinationThatNamesNoSeat(t *testing.T) {
-	t.Setenv(sessionEnv, testSeat)
-	daemon := newFakeDaemon(t, map[string]string{
-		"GetRoomStatus": okData("[" + seatJSON("reviewer", "agy", "running") + "]"),
-	})
-
-	code, stdout, stderr := runRoom(t, daemon.args("queue", "create", testRoom,
-		"--to", "reviewr@"+testRoom, "--summary", "hand me the build log")...)
-	if code != clientcmd.ExitRoomRefused {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, stderr)
-	}
-	if stdout != "" {
-		t.Errorf("stdout = %q, want nothing: a refused create prints no row", stdout)
-	}
-	for _, want := range []string{`"reviewr@` + testRoom + `"`, "agenthub--" + testRoom + "--reviewer", "Nothing was written"} {
-		if !strings.Contains(stderr, want) {
-			t.Errorf("stderr = %q, want it to carry %q", stderr, want)
-		}
-	}
-	assertRequests(t, daemon, `{"action":"GetRoomStatus","payload":{"room":"`+testRoom+`"}}`)
-}
-
-// TestRoomQueueCreateRefusesADestinationOnAnotherRoom pins the room guard: the seat key resolves only against
-// the room the row is on, so a destination carrying another room's name is refused rather than resolved to a
-// name this daemon does not run.
-func TestRoomQueueCreateRefusesADestinationOnAnotherRoom(t *testing.T) {
-	t.Setenv(sessionEnv, testSeat)
-	daemon := newFakeDaemon(t, map[string]string{
-		"GetRoomStatus": okData("[" + seatJSON("reviewer", "agy", "running") + "]"),
-	})
-
-	code, _, stderr := runRoom(t, daemon.args("queue", "create", testRoom,
-		"--to", "reviewer@other-room", "--summary", "hand me the build log")...)
-	if code != clientcmd.ExitRoomRefused {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, stderr)
-	}
-	if !strings.Contains(stderr, `"other-room"`) || !strings.Contains(stderr, "Nothing was written") {
-		t.Errorf("stderr = %q, want the other room named and the write refused", stderr)
-	}
-	assertRequests(t, daemon, `{"action":"GetRoomStatus","payload":{"room":"`+testRoom+`"}}`)
-}
-
-// TestRoomQueueCreateKeepsThePrincipalAddressForTheOwner pins the one address with no seat behind it:
-// `principal@<room>` is the decision skills' spelling for the owner, so it resolves to the principal
-// session's name and is accepted even though the room fields no such seat.
-func TestRoomQueueCreateKeepsThePrincipalAddressForTheOwner(t *testing.T) {
-	t.Setenv(sessionEnv, testSeat)
-	daemon := newFakeDaemon(t, map[string]string{
-		"GetRoomStatus": okData("[" + seatJSON("lead", "omp", "running") + "]"),
-		"QueueCreate": okData(queueRowFrame("qitem-new", "pending", "normal", "decide X",
-			queueTransitionFrame(1, "2026-10-14T00:17:00Z", "", "pending", testSeat, "created"))),
-	})
-
-	code, _, stderr := runRoom(t, daemon.args("queue", "create", testRoom,
-		"--to", "principal@"+testRoom, "--summary", "decide X")...)
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
-	}
-	assertRequests(t, daemon,
-		`{"action":"GetRoomStatus","payload":{"room":"`+testRoom+`"}}`,
-		`{"action":"QueueCreate","payload":{"input":{"source_session":"`+testSeat+
-			`","destination_session":"agenthub--`+testRoom+`--principal","summary":"decide X"},"room":"`+testRoom+`"}}`)
+			`","destination_session":"reviewer@`+testRoom+`","summary":"hand me the build log"},"room":"`+testRoom+`"}}`)
 }
 
 // TestRoomQueueCreateWithoutTheSessionEnvRefusesAndSendsNothing pins the actor rule's refusal half: with

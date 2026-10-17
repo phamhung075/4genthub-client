@@ -235,16 +235,22 @@ pub struct PendingNudge {
 /// more than one spelling and a spelling the join missed reads as "nothing waiting" - the exact lie the
 /// alert exists to prevent.
 ///
-/// The three that exist in this tree's world: the session name this runtime derives
+/// The four that exist in this tree's world: the session name this runtime derives
 /// (`agenthub--<room>--<seat>`, the same one `SendTextToSeat` and the pane's `AGENTHUB_SESSION_NAME` use),
 /// the bare seat key (what the design's own room recipe named and what a row written by hand usually
-/// says), and the rig orchestrator session name the live rig's rows carry (`<rig>-<seat>@<rig>`, where this
-/// runtime's room IS the rig name). A row written by a seat on the live rail is addressed with the third.
-fn addressed_names(room: &str, session: &str, seat: &str) -> [String; 3] {
+/// says), the rig orchestrator session name the live rig's rows carry (`<rig>-<seat>@<rig>`, where this
+/// runtime's room IS the rig name), and `seat@room` - the spelling the client stored verbatim before
+/// `resolve_queue_destination` existed. New rows are written as the session name; the other three are the
+/// backlog this join must still read.
+fn addressed_names(room: &str, session: &str, seat: &str) -> [String; 4] {
     [
         session.to_string(),
         seat.to_string(),
         format!("{room}-{seat}@{room}"),
+        // `seat@room` is the spelling a row was written in while create stored what it was given (measured
+        // 2026-10-17: 32 rows on 4genthub-min, the owner asks among them). Create resolves new rows to the
+        // session name, so this entry is the RAIL's backlog, not a second canonical form.
+        format!("{seat}@{room}"),
     ]
 }
 
@@ -1050,6 +1056,49 @@ impl RoomSupervisor {
             .map_err(|e| format!("cannot read room spec: {e}"))?;
         let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
         Ok(spec.links)
+    }
+
+    /// Resolve the address a row's destination was written as into the session name the rail keys it by.
+    ///
+    /// THE ALERT AND THE NUDGE PASSES COMPARE `destination_session` WITH THE NAMES OF A SEAT (see
+    /// `addressed_names`), so a row stored under a spelling they do not read wakes nobody. Measured
+    /// 2026-10-17: `--to reviewer@4genthub-min` sat for ten minutes with no nudge while its session-name
+    /// twin woke the seat in a second. Every accepted spelling therefore resolves to the session name AT
+    /// WRITE TIME, so the row, the alert and the nudge read one key; a value naming no seat of THIS room is
+    /// refused by name, with the seats that would have worked, because storing it is the silent loss.
+    pub fn resolve_queue_destination(&self, room: &str, typed: &str) -> Result<String, String> {
+        let content = fs::read_to_string(self.room_dir(room).join("spec.json"))
+            .map_err(|e| format!("cannot read room spec: {e}"))?;
+        let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        let value = typed.trim();
+        let (key, named_room) = match value.split_once('@') {
+            Some((key, named)) => (key, Some(named)),
+            None => (value, None),
+        };
+        if let Some(named) = named_room {
+            if named != room {
+                return Err(format!(
+                    "--to {value:?} names room {named:?}, and this row is on {room}: a destination resolves only against the seats of the room the row is on. Nothing was written."
+                ));
+            }
+        }
+        for seat in &spec.seats {
+            let session = Self::session_name(room, &seat.seat_key);
+            let orchestrator = format!("{room}-{}@{room}", seat.seat_key);
+            let keyed = format!("{room}-{}", seat.seat_key);
+            if value == session || value == orchestrator || key == seat.seat_key || key == keyed {
+                return Ok(session);
+            }
+        }
+        let listed: Vec<String> = spec
+            .seats
+            .iter()
+            .map(|seat| format!("{} ({})", seat.seat_key, Self::session_name(room, &seat.seat_key)))
+            .collect();
+        Err(format!(
+            "--to {value:?} names no seat of {room} and no session of it, so the row would be stored under a destination no nudge can match; the room's seats are {}, and a row is addressed by a seat's session name, <seat>@{room}, or the bare seat key. Nothing was written.",
+            listed.join(", ")
+        ))
     }
 
     pub fn get_room_status(&self, room: &str) -> Result<Vec<SeatStatus>, String> {
@@ -2930,9 +2979,9 @@ mod tests {
     }
 
     /// The rail's rows have been written with more than one spelling of a seat's name, and the join has to
-    /// see all of them: a row addressed to the native session name, to the rig orchestrator session name, or to the
-    /// bare seat key all belong to the same seat. A spelling the join missed would read as "nothing
-    /// waiting" - the lie the alert exists to prevent.
+    /// see all of them: a row addressed to the native session name, to the rig orchestrator session name, to
+    /// the bare seat key, or to `seat@room` all belong to the same seat. A spelling the join missed would
+    /// read as "nothing waiting" - the lie the alert exists to prevent.
     #[tokio::test]
     async fn waiting_rows_match_every_spelling_the_rail_has_used() {
         let dir = scratch("waiting-rows");
@@ -2946,10 +2995,12 @@ mod tests {
             // The three rows are written before the join reads, and the join opens the rail for itself - the
             // same path a seat's own request takes.
             let store = supervisor.queue_store("demo").expect("open the rail");
+            let seat_at_room = format!("{seat}@demo");
             for (to, summary) in [
                 (session.as_str(), "native"),
                 (orchestrator.as_str(), "orchestrator"),
                 (seat.as_str(), "bare key"),
+                (seat_at_room.as_str(), "seat at room"),
             ] {
                 let row = store
                     .create(CreateInput {
@@ -2992,10 +3043,63 @@ mod tests {
         let waiting = supervisor
             .waiting_rows("demo", &session, &seat)
             .expect("the rail is readable");
-        assert_eq!(waiting.len(), 3, "waiting = {waiting:?}");
+        assert_eq!(waiting.len(), 4, "waiting = {waiting:?}");
         for id in expected_ids {
             assert!(waiting.contains(&id), "{id} missing from {waiting:?}");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A create resolves every accepted spelling to the session name the alert and the nudge pass read, and
+    /// REFUSES a value naming no seat of the room by name, with the seats that would have worked.
+    ///
+    /// The session name and the rig orchestrator form are what the live rail already carried; the bare seat
+    /// key and `seat@room` are what a hand-written row and the client's verb wrote before this resolution
+    /// existed. `seat@room` is the case the measurement named: a row stored in it nudged nobody while its
+    /// session-name twin was nudged in a second. `principal@<room>` is refused with the rest - the room
+    /// declares five seats and no principal, so resolving it would be the same silence under a familiar
+    /// name.
+    #[tokio::test]
+    async fn a_queue_destination_resolves_to_the_session_name_or_refuses_by_name() {
+        let dir = scratch("queue-destination");
+        let seat = seat_key("dest");
+        write_spec(&dir, "demo", &seat);
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name("demo", &seat);
+        for spelling in [
+            session.clone(),
+            format!("demo-{seat}@demo"),
+            format!("{seat}@demo"),
+            seat.clone(),
+        ] {
+            assert_eq!(
+                supervisor
+                    .resolve_queue_destination("demo", &spelling)
+                    .expect("a seat the room declares resolves"),
+                session,
+                "spelling {spelling:?}"
+            );
+        }
+
+        let refused = supervisor
+            .resolve_queue_destination("demo", "nobody@demo")
+            .expect_err("a value naming no seat is refused");
+        assert!(
+            refused.contains("names no seat of demo") && refused.contains(&format!("{seat} ({session})")),
+            "{refused}"
+        );
+        assert!(refused.contains("Nothing was written"), "{refused}");
+
+        let principal = supervisor
+            .resolve_queue_destination("demo", "principal@demo")
+            .expect_err("the room declares no principal seat");
+        assert!(principal.contains("\"principal@demo\""), "{principal}");
+
+        let other_room = supervisor
+            .resolve_queue_destination("demo", &format!("{seat}@elsewhere"))
+            .expect_err("a row resolves only against its own room");
+        assert!(other_room.contains("\"elsewhere\""), "{other_room}");
+
         let _ = fs::remove_dir_all(&dir);
     }
 
