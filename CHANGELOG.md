@@ -1422,6 +1422,35 @@ only `{room, cwd}` and the runtime cannot invent seats.
 - The full `up` was NOT run here: `recordRig` writes the SHARED rigd.json and `startRigd` starts this
   machine's rigd, which is the owner's live state — the second reason `--room-only` exists.
 
+## 2026-10-18 — the .env rule reads the record shapes the runtimes write, and the pane fallback names its limit
+
+The step-2 E2E on rig scratch-e2e-130032 (owner-granted, 2026-10-18) proved exactly-once across a 60 s
+connector outage and the high-entropy `unsure` case, but a seeded `.env` read produced NO `env_file`
+withheld event. The cause was vocabulary, measured, not theory: `Event` paired only Claude Code's
+`tool_use`/`tool_result` words, while the transcript this client actually tails is the OMP runner's, whose
+call is a `toolCall` item carrying `arguments` and whose result is a `message` with role `toolResult` and
+`toolCallId`; and a Claude Code seat has no `sessions/*.jsonl`, so its source is a pane capture, plain
+text with no tool-call boundary at all.
+
+### Fixed
+- `internal/clientsync/redaction.go`: `toolRecord` normalizes one transcript object, as its runtime wrote
+  it, into the call/result pair the rule decides on - `tool_use` and `toolCall` are both calls (`input`
+  and `arguments`), `tool_result` and a message's `toolCallId` are both results. `envFileEvent` reads only
+  the normalized two, so a further runtime is one new case, not a second rule. The uploaded text is still
+  the runtime's own record.
+
+### Known limitations
+- `internal/clientsync/agent.go`: the `rig capture` fallback hands the gate plain text, so 4.3.3's pairing
+  cannot apply to it; a pane line showing a `.env` read is uploaded after `Redact` and the pattern,
+  known-value and `unsure` rules are its only gate. Stated at `ingest` and pinned by
+  `TestEventPaneCaptureTextNamingAnEnvFileIsAPlainMessage`; the fix is a structured source for the
+  fallback, not a wider text rule.
+
+### Tests
+- `internal/clientsync/redaction_test.go`: `TestEventWithholdsAnOMPToolCallAndItsPairedResult` (red before
+  the fix: `reason = ""`; green after) and the pane-capture limitation test. The Claude Code cases are
+  unchanged and stay green.
+
 ## 2026-10-13 — the connector speaks TLS, and a test that dials proves it
 
 `DialConnector` never installed TLS: for an `https` base URL it mapped the scheme to `wss`, appended `:443`,

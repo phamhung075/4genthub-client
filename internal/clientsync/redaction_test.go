@@ -174,6 +174,59 @@ func TestEventWithholdsEnvFileCallsAndTheirPairedResults(t *testing.T) {
 	}
 }
 
+// The OMP runner's own vocabulary, taken verbatim in shape from the go-dev seat's session file: a call
+// is a toolCall item inside message.content carrying `arguments`, and the paired result is a message
+// whose role is toolResult and whose id sits on the message as `toolCallId`. Before toolRecord the
+// gate read only Claude Code's words, so a seeded .env read on an OMP seat was uploaded (measured
+// 2026-10-18, the step-2 E2E): this test is the red-before/green-after pair for that gap.
+func TestEventWithholdsAnOMPToolCallAndItsPairedResult(t *testing.T) {
+	redactor := NewEventRedactor()
+
+	call := `{"type":"message","id":"msg_1","message":{"role":"assistant","content":[{"type":"text","text":"Reading it"},{"type":"toolCall","id":"call_00_env","name":"bash","arguments":{"command":"cat /project/.env"}}]}}`
+	event, reason := redactor.Event(call)
+	assertWithheld(t, event, reason, reasonEnvFile, len(call))
+
+	// The pairing is the id the call gave, read off the message rather than a content block.
+	paired := `{"type":"message","id":"msg_2","message":{"role":"toolResult","toolName":"bash","toolCallId":"call_00_env","content":[{"type":"text","text":"SAFE=1"}]}}`
+	event, reason = redactor.Event(paired)
+	assertWithheld(t, event, reason, reasonEnvFile, len(paired))
+
+	// A result for a different call is not withheld: the vocabulary changed, the pairing did not.
+	unrelated := `{"type":"message","id":"msg_3","message":{"role":"toolResult","toolName":"bash","toolCallId":"call_00_other","content":[{"type":"text","text":"ok"}]}}`
+	if _, reason := redactor.Event(unrelated); reason != "" {
+		t.Fatalf("an unrelated OMP toolResult was withheld: reason=%q", reason)
+	}
+
+	// An OMP call naming no .env path is not withheld either.
+	plain := `{"type":"message","id":"msg_4","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_00_plain","name":"bash","arguments":{"command":"cat /project/main.go"}}]}}`
+	if _, reason := redactor.Event(plain); reason != "" {
+		t.Fatalf("an OMP call naming main.go was withheld: reason=%q", reason)
+	}
+}
+
+// The pane-capture fallback's LIMITATION, pinned rather than guessed at. agent.go falls back to
+// `rig capture` when a seat's transcript read returns nothing (a Claude Code seat on this machine has
+// no sessions/*.jsonl, measured 2026-10-18), and a pane is plain text: a terminal line carries no
+// tool-call boundary, so a command that reads a .env file cannot be told apart from prose that names
+// one. 4.3.3 is scoped to "an event whose tool input names a path", so the env_file rule does not
+// apply here and the line is uploaded after Redact - the pattern and known-value rules still run, and
+// the `unsure` rule still withholds an unrecognised long token. Closing this gap means giving the
+// fallback a structured source (Claude Code's own project JSONL), not widening this rule to text.
+func TestEventPaneCaptureTextNamingAnEnvFileIsAPlainMessage(t *testing.T) {
+	line := "cat /project/.env"
+	event, reason := NewEventRedactor().Event(line)
+	if reason != "" {
+		t.Fatalf("a pane line was withheld: reason=%q, and the pinned answer is that it is not", reason)
+	}
+	if event["type"] != "message" {
+		t.Fatalf("event type = %v, want %q", event["type"], "message")
+	}
+	payload, _ := event["payload"].(map[string]any)
+	if text, _ := payload["text"].(string); text != line {
+		t.Fatalf("event text = %q, want the line untouched (%q)", text, line)
+	}
+}
+
 // The "unsure" detector (4.4): a 32-plus character high-entropy token that survived redaction
 // withholds the line; a long LOW-entropy token does not fire it.
 func TestEventWithholdsOnAHighEntropyToken(t *testing.T) {

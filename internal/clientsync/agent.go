@@ -399,6 +399,13 @@ func (d *AgentDaemon) register(stream *sessionStream, state string) error {
 // stored cursor - the transcript grew past the tail between two reads, so the window slid - is reported
 // and restarted from the window's start: an unanswered resume is a gap, and a gap this client CHOOSES to
 // re-send is visible in the stream, while one it hides is not.
+//
+// THE CAPTURE FALLBACK IS A LIMITATION, DELIBERATELY NAMED: a pane is plain text, with no tool-call
+// boundary, so 4.3.3's .env pairing (a call naming the path, and the result carrying its id) cannot run
+// on it. A pane line that shows a .env read is therefore uploaded after Redact, and the pattern,
+// known-value and unsure rules are the only gate it passes. Measured 2026-10-18: a Claude Code seat has
+// no sessions/*.jsonl, so this fallback is its ordinary source. The answer is a structured source, not a
+// wider text rule - see TestEventPaneCaptureTextNamingAnEnvFileIsAPlainMessage.
 func (d *AgentDaemon) ingest(ctx context.Context, stream *sessionStream) error {
 	if stream.suspended {
 		return nil

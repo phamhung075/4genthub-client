@@ -303,29 +303,58 @@ func shannonEntropy(s string) float64 {
 
 // envFileEvent walks a parsed transcript entry and reports whether it is a .env-naming tool call or
 // the result paired with one. A call that names a .env path has its id REMEMBERED, so the result that
-// later carries that id in `tool_use_id` is withheld too - the pairing is the redactor's state.
+// later carries that id is withheld too - the pairing is the redactor's state.
 func (r *EventRedactor) envFileEvent(root any) bool {
 	withhold := false
 	walkJSONObjects(root, func(object map[string]any) {
-		kind, _ := object["type"].(string)
+		kind, id, input := toolRecord(object)
 		switch kind {
-		case "tool_use":
-			id, _ := object["id"].(string)
-			if id != "" && namesEnvFile(object["input"]) {
+		case "call":
+			if id != "" && namesEnvFile(input) {
 				if r.envCallIDs == nil {
 					r.envCallIDs = map[string]bool{}
 				}
 				r.envCallIDs[id] = true
 				withhold = true
 			}
-		case "tool_result":
-			id, _ := object["tool_use_id"].(string)
+		case "result":
 			if id != "" && r.envCallIDs[id] {
 				withhold = true
 			}
 		}
 	})
 	return withhold
+}
+
+// toolRecord normalizes ONE transcript object, as the runtime wrote it, into the two things the .env
+// rule pairs on: a call with an id and an input, or the result that carries a remembered id. The
+// runtimes this client reads are measured (2026-10-18, the step-2 E2E on rig scratch-e2e-130032 and
+// the go-dev seat's own session file):
+//
+//	Claude Code  {"type":"tool_use","id":…,"input":…}, {"type":"tool_result","tool_use_id":…}
+//	OMP runner   {"type":"toolCall","id":…,"arguments":…} in message.content, and a message whose
+//	             role is "toolResult" carrying "toolCallId"
+//
+// The rule below reads only the normalized two, so a further runtime is one new case here and not a
+// second pairing. The uploaded text is still the runtime's own record: this normalization decides
+// what is withheld, it does not rewrite the payload.
+func toolRecord(object map[string]any) (kind, id string, input any) {
+	switch object["type"] {
+	case "tool_use":
+		id, _ = object["id"].(string)
+		return "call", id, object["input"]
+	case "toolCall":
+		// OMP names a call's arguments "arguments"; "input" is Claude Code's word.
+		id, _ = object["id"].(string)
+		return "call", id, object["arguments"]
+	case "tool_result":
+		id, _ = object["tool_use_id"].(string)
+		return "result", id, nil
+	}
+	if id, _ = object["toolCallId"].(string); id != "" {
+		return "result", id, nil
+	}
+	return "", "", nil
 }
 
 // namesEnvFile reports whether any string value anywhere inside a tool input names a .env path. It
