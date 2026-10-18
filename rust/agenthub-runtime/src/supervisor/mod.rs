@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -252,6 +253,41 @@ fn addressed_names(room: &str, session: &str, seat: &str) -> [String; 4] {
         // session name, so this entry is the RAIL's backlog, not a second canonical form.
         format!("{seat}@{room}"),
     ]
+}
+
+/// The instant of a seat's newest recorded tool call, read from the tail of its own `tool-calls.jsonl`.
+///
+/// The guard appends one line per tool call for EVERY runtime (`SEAT_TOOL_HOOK`), agy included - and agy
+/// is the reason this exists: its launch publishes no readiness channel, so its state document is written
+/// once and never rewritten. A freshness stamp taken from that document alone said "quiet for 28 hours"
+/// while the seat was closing gate rows (measured 2026-10-18 on 4genthub-min's reviewer: `updated_at`
+/// 08:02:52, last logged tool call 08:49:22). The log is a fact about the seat's own work, and its newest
+/// line is the only stamp a runnerless seat ever produces after launch.
+///
+/// The read is the file's TAIL, not the file: the log is append-only and unbounded (1.4 MB after ten days),
+/// and a status call must not read it whole. The first line of a mid-file window is a fragment and is
+/// dropped; the newest parseable `at` wins. An absent or unreadable log is `None`, never a guessed time.
+fn last_tool_call_at(path: &Path) -> Option<DateTime<Utc>> {
+    const TAIL_BYTES: u64 = 8 * 1024;
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES))).ok()?;
+    let mut buf = Vec::new();
+    file.take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines = text.lines();
+    if len > TAIL_BYTES {
+        lines.next();
+    }
+    lines
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|v| {
+            v.get("at")?
+                .as_str()
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        })
+        .map(|t| t.with_timezone(&Utc))
+        .last()
 }
 
 /// The alert rule, on the facts alone: a seat that is up with active rows waiting for it carries one.
@@ -1530,11 +1566,27 @@ impl RoomSupervisor {
         // The launch instant `start_seat` records is a different fact - when the pane was created - and it
         // was the only thing `last_active` ever held, which is why a seat that had been idle for hours read
         // as freshly active. A missing or unparseable stamp is `None`, not a guessed time.
-        let last_active = published
+        //
+        // A RUNTIME THAT PUBLISHES NOTHING AFTER LAUNCH (agy) has only its own tool log: the guard appends
+        // a line per tool call, so the newest one is the seat's real freshness. Reading it here rather than
+        // teaching the guard to rewrite the state document keeps the word honest: the activity stays
+        // `Unknown` (which never authorises a reseat), and only the stamp moves. The newer of the two wins;
+        // neither log is allowed to move the stamp backwards.
+        let state_stamp = published
             .as_ref()
             .and_then(|v| v.get("updated_at").and_then(|t| t.as_str()))
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
             .map(|t| t.with_timezone(&Utc));
+        let tool_stamp = last_tool_call_at(
+            &self.room_dir(room)
+                .join("seats")
+                .join(seat)
+                .join("tool-calls.jsonl"),
+        );
+        let last_active = match (state_stamp, tool_stamp) {
+            (Some(state), Some(tool)) => Some(state.max(tool)),
+            (state, tool) => state.or(tool),
+        };
 
         let waiting_qitem_ids = match self.waiting_rows(room, &session, seat) {
             Ok(ids) => ids,
@@ -2962,6 +3014,59 @@ mod tests {
         // stamp (it is read before the death is written), and the alert is absent, not empty.
         assert_eq!(statuses[0].state, SeatLifecycleState::Stopped);
         assert!(statuses[0].alert.is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A runtime that publishes nothing after launch (agy) is read from its own tool log, and the newer of
+    /// the two stamps wins in both directions: a seat's freshness may be moved forward by a tool call, but
+    /// neither source may move it backwards.
+    #[tokio::test]
+    async fn last_active_is_the_newer_of_the_document_and_the_tool_log() {
+        let dir = scratch("last-active-tool-log");
+        let seat = seat_key("last-active-tool-log");
+        write_spec(&dir, "demo", &seat);
+        let launch = "2026-10-18T08:02:52.882Z";
+        write_state_file(&dir, "demo", &seat, "running", launch);
+        // The launch document's word is `unknown` and nothing rewrites it for this runtime.
+        let seat_dir = dir.join("rooms").join("demo").join("seats").join(&seat);
+        fs::create_dir_all(&seat_dir).expect("seat dir");
+        let log = seat_dir.join("tool-calls.jsonl");
+        let called = "2026-10-18T08:49:22.618Z";
+        fs::write(
+            &log,
+            format!(
+                "{}x\n{{\"at\":\"{launch}\",\"tool\":\"bash\"}}\n{{\"at\":\"{called}\",\"tool\":\"bash\"}}\n",
+                "x".repeat(9 * 1024)
+            ),
+        )
+        .expect("tool log");
+
+        let supervisor = supervisor_at(&dir);
+        let statuses = supervisor.get_room_status("demo").expect("status");
+        assert_eq!(
+            statuses[0].last_active,
+            Some(
+                DateTime::parse_from_rfc3339(called)
+                    .unwrap()
+                    .with_timezone(&Utc)
+            ),
+            "the tool log moves the seat's freshness forward past a document written once at launch"
+        );
+        // The freshness is a timestamp, never a claim about the turn: `unknown` still refuses a reseat.
+        assert_eq!(statuses[0].activity, ActivityWord::Unknown);
+
+        // And a newer document is not dragged back by the older tool line.
+        let republished = "2026-10-18T09:30:00.000Z";
+        write_state_file(&dir, "demo", &seat, "idle", republished);
+        let statuses = supervisor.get_room_status("demo").expect("status");
+        assert_eq!(
+            statuses[0].last_active,
+            Some(
+                DateTime::parse_from_rfc3339(republished)
+                    .unwrap()
+                    .with_timezone(&Utc)
+            )
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
