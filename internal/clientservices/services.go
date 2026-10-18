@@ -57,6 +57,14 @@ const (
 	Stopped = "stopped"
 	Silent  = "silent"
 	Failing = "failing"
+	// CloneDirty is the clone row's one failing state: the shared checkout holds changes, and every one of
+	// them belongs to no seat's worktree. It is a failure because a change nobody owns is a change nobody
+	// will commit or review.
+	CloneDirty = "clone_dirty"
+	// GuardAbsent is the hooks row's one failing state: the checkout NAMES a hooks folder (core.hooksPath is
+	// set) and no hook in it carries the git guard's marker. That is a switched-off guard, as opposed to a
+	// guard that was never installed, which is a note and not a failure.
+	GuardAbsent = "guard_absent"
 )
 
 // The longest legitimate sleep of each safeguard, from 7.4. 7.4's silence threshold is three times

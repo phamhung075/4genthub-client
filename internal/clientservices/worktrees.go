@@ -30,7 +30,22 @@ const (
 	// Integration is the room's own worktree: the place a room's seats meet through a merge of their
 	// tips, and only the lead writes there.
 	Integration = "integration"
+	// Clone is `doctor`'s row about the SHARED checkout: a change sitting in it belongs to no seat, because
+	// a seat commits in its own worktree. 4.1's third measured failure was a generated file and eleven
+	// landing-branch files sitting changed there with no seat owning them, and nothing read the checkout at
+	// all. Like Worktrees it is about a FACT rather than a process, and it is the MACHINE's row: every
+	// room's worktrees are registered in one checkout, so it carries no rig.
+	Clone = "clone"
+	// Hooks is `doctor`'s row about the hooks folder GIT actually runs for the checkout, and whether the
+	// client's git guard is installed in it. 4.4's fifth risk is the reason it exists: a hook can be
+	// switched off, so the guard's presence has to be read rather than assumed. It is the machine's row for
+	// the same reason Clone is.
+	Hooks = "hooks"
 )
+
+// GuardMarker is the line every hook script of the client's git guard carries: ONE constant, so the
+// installer and the `hooks` row cannot disagree about what the guard looks like.
+const GuardMarker = "4genteam git guard"
 
 // SkillsRootEnv names the OpenRig checkout: the SAME variable `team publish-skills` reads as its
 // library root, so one variable points at the repository whose `scripts/team/<rig>/team.json` this

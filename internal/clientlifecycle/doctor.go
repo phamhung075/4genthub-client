@@ -130,6 +130,26 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	for _, worktreeRow := range worktreeRows {
 		rows = append(rows, worktreeRow.Row)
 	}
+	// The two MACHINE rows (4.1's third failure and 4.4's fifth risk): the changes sitting in the shared
+	// checkout that belong to no seat, and whether the git guard is present in the hooks folder git actually
+	// runs. Both are read from the checkout `up` and the worktrees row already resolve, and neither carries a
+	// rig, so they are appended whatever rig the caller named.
+	cloneRows := cloneRowFor(rig)
+	for _, clone := range cloneRows {
+		rows = append(rows, clone.Row)
+		if clone.Note != "" {
+			fmt.Fprintf(stderr, "4genteam doctor: %s\n", clone.Note)
+		}
+	}
+	hooksRows := hooksRowFor(rig)
+	for _, hooks := range hooksRows {
+		rows = append(rows, hooks.Row)
+		if hooks.Row.State == clientservices.GuardAbsent {
+			for _, line := range hooksReasonLines(hooks) {
+				fmt.Fprintln(stderr, line)
+			}
+		}
+	}
 	orphanRows := orphanRowsFor(rig)
 	for _, orphan := range orphanRows {
 		rows = append(rows, orphan.Row)
@@ -156,6 +176,18 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		// The worktrees row's reasons and details ride beside its row the same way.
 		for _, worktreeRow := range worktreeRows {
 			for _, line := range worktreeLines(worktreeRow) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
+		// So do the two machine rows': the paths a dirty shared checkout holds are the actionable part of
+		// the clone row, and the folder git uses is the actionable part of the hooks row.
+		for _, clone := range cloneRows {
+			for _, line := range cloneLines(clone) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
+		for _, hooks := range hooksRows {
+			for _, line := range hooksLines(hooks) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
@@ -187,6 +219,22 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 			}
 			for _, line := range worktreeReasonLines(worktreeRow) {
 				fmt.Fprintln(stderr, line)
+			}
+		}
+		// And the two machine rows' reasons: a dirty shared checkout's paths, and the hooks folder with no
+		// guard in it, are why those rows are down.
+		for _, clone := range cloneRows {
+			if clone.Row.Safeguard == row.Safeguard {
+				for _, line := range cloneReasonLines(clone) {
+					fmt.Fprintln(stderr, line)
+				}
+			}
+		}
+		for _, hooks := range hooksRows {
+			if hooks.Row.Safeguard == row.Safeguard {
+				for _, line := range hooksReasonLines(hooks) {
+					fmt.Fprintln(stderr, line)
+				}
 			}
 		}
 	}

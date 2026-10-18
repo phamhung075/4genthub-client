@@ -82,6 +82,7 @@ func restoreAll(t *testing.T) {
 	spawn, grace := spawnChild, SupervisorStartGrace
 	stop, nodes := stopPattern, rigNodes
 	rows, authorityUp := rowsFor, agentRunning
+	clone, hooks := cloneRowFor, hooksRowFor
 	t.Cleanup(func() {
 		ensureDaemon, ensureWorktrees, ensureRig = daemon, worktrees, rigStep
 		recordRigFor = record
@@ -90,7 +91,13 @@ func restoreAll(t *testing.T) {
 		spawnChild, SupervisorStartGrace = spawn, grace
 		stopPattern, rigNodes = stop, nodes
 		rowsFor, agentRunning = rows, authorityUp
+		cloneRowFor, hooksRowFor = clone, hooks
 	})
+	// The clone and hooks rows read the checkout this binary was built in, so every case that is not ABOUT
+	// them starts from a clean checkout, like the worktrees step above: a lifecycle assertion must not depend
+	// on whether the operator's shared checkout has a file open.
+	cloneRowFor = func(string) []cloneRow { return nil }
+	hooksRowFor = func(string) []hooksRow { return nil }
 	// A test in this package runs with the peak gate reading NO nodes: the gate then has nothing to
 	// decide, and no test here reaches the machine's own daemon, rig or clock. A test about the gate
 	// replaces rigNodes with the reading it wants to be judged on.

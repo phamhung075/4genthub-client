@@ -54,11 +54,18 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 	previousStatePath := clientservices.AgentStatePath
 	previousNow, previousLive := clientservices.Now, clientservices.Live
 	previousOrphans := orphanRowsFor
+	previousClone, previousHooks := cloneRowFor, hooksRowFor
 	t.Cleanup(func() {
 		clientservices.AgentStatePath = previousStatePath
 		clientservices.Now, clientservices.Live = previousNow, previousLive
 		orphanRowsFor = previousOrphans
+		cloneRowFor, hooksRowFor = previousClone, previousHooks
 	})
+	// The clone and hooks rows read the checkout this binary was built in: a case about the safeguard rows
+	// must not go red because the operator's shared checkout has a file open, or because this machine has not
+	// installed the guard. The two cases that assert those rows replace these.
+	cloneRowFor = func(string) []cloneRow { return nil }
+	hooksRowFor = func(string) []hooksRow { return nil }
 	// The orphan row reads the queue and the node list through the rig tool, and no test in this file runs
 	// a daemon: the default here is a report with NO orphan row at all, so every case below sees exactly
 	// the safeguard rows it was written for. A case that wants the row replaces this.
