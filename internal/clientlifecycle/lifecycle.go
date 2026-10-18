@@ -106,6 +106,8 @@ func Commands() []clientcmd.Command {
 		budgetRunCommand{},
 		doctorCommand{},
 		agentCommand{},
+		overlapCommand{},
+		stuckCommand{},
 	}
 }
 

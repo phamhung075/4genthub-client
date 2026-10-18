@@ -200,6 +200,11 @@ type agentManager struct {
 	children map[string]*agentChild
 	pending  map[string]clientservices.Health
 	last     []clientservices.Health
+
+	// lastOverlap and lastStuck are when the two detectors last ran: the zero value is "never", so the first
+	// pass scans and a room `up` adds while agent runs is looked at on the next pass, not ten minutes later.
+	lastOverlap time.Time
+	lastStuck   time.Time
 }
 
 func newAgentManager(root string, log func(string)) *agentManager {
@@ -242,6 +247,16 @@ func (m *agentManager) pass() {
 	specs := agentSpecs(state.Rigs, m.root)
 	now := clientservices.Now()
 	m.reconcile(specs, now)
+	// THE TWO DETECTORS RIDE THIS LOOP (ruling 4.5 and plan item 5: every ten minutes), on their own timers
+	// rather than as more children, because 7.1's reason for keeping supervision in one process is that a
+	// second always-on process is a second thing to supervise. Two timers rather than one because the two
+	// read different things, and one being slow must not delay the other.
+	if m.overlapDue(now) {
+		m.scanOverlaps(state.Rigs, now)
+	}
+	if m.stuckDue(now) {
+		m.scanStuck(state.Rigs, now)
+	}
 	rows := clientservices.Verify(context.Background(), clientservices.Env{
 		Root:       m.root,
 		Rigs:       state.Rigs,

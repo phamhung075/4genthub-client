@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
@@ -64,6 +65,18 @@ func LoadRoomSpec(teamDir string) (clientruntime.RoomSpec, error) {
 		spec.Overlays[overlay.seat] = overlay.slugs
 	}
 	return spec, nil
+}
+
+// RoomBaseBranch is the branch team.json says the room's lead merges into (`room.base_branch`). A team file
+// that cannot be read, or names none, answers "": "not set" is a fact and the caller has its own default, and
+// an unreadable definition is already named by the rows that read the same file. It sits beside LoadRoomSpec
+// because team.json has ONE reader (loadTeam), so the overlap detector cannot disagree with `up` about it.
+func RoomBaseBranch(teamDir string) string {
+	loaded, err := loadTeam(teamDir)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stringField(loaded.room, "base_branch"))
 }
 
 // definedField is the one field where a missing key and an empty value must NOT collapse: an omitted
