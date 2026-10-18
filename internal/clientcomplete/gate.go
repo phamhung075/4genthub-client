@@ -1,8 +1,12 @@
 package clientcomplete
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -189,6 +193,63 @@ func (r register) pathOnlyWarnings(criteria []string) []string {
 			"redacts a path to <path> before Jev sees it, so the criterion is judged blind; name a fact the "+
 			"judge can read: the test command with its exit code, a base/head sha prefix, or the counts "+
 			"(files_changed, lines_changed, lines_added, lines_deleted) with this bundle's value", i+1, criterion))
+	}
+	return warnings
+}
+
+// shaToken is a sha a criterion may name: the register's 7-char floor, and at most one 40-hex commit sha.
+// Either case is accepted, because a criterion may spell a sha the way it was pasted.
+var shaToken = regexp.MustCompile(`(?i)\b[0-9a-f]{7,40}\b`)
+
+// fullSHA is rev-parse's answer for a commit: 40 lowercase hex digits and nothing else.
+var fullSHA = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// commitNamed resolves a hex token to the full commit sha it names, or "" when it names no commit at all
+// (an ordinary word that happens to be hex, a sha this repository does not hold). `^{commit}` refuses a
+// tree or a blob, and --end-of-options keeps a ref that begins with `-` from being read as a flag. The
+// FULL sha is what is wanted here, not cat-file's yes/no: an abbreviated token must compare equal to the
+// canonical --base the evidence bundle carries.
+func commitNamed(ctx context.Context, token string) string {
+	command := exec.CommandContext(ctx, "git", "rev-parse", "--verify", "--end-of-options", token+"^{commit}")
+	var out bytes.Buffer
+	command.Stdout = &out
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil {
+		return ""
+	}
+	sha := strings.TrimSpace(out.String())
+	if !fullSHA.MatchString(sha) {
+		return ""
+	}
+	return sha
+}
+
+// baseMismatchWarnings names the criteria that state a base the gate is not measuring. The gate judges
+// <--base>..HEAD, and a criterion whose only base is another commit measures something else: the verdict
+// then refuses it (unjudgeable) AFTER the reviewer passed and the work is pushed, when the seat can only
+// rewrite the criterion. The verb knows the mismatch the moment it reads --base, so it says it first.
+//
+// A criterion is excluded from this warning when its sha is --base or the bundle's head_sha: both are diff
+// facts the bundle carries. Resolution is one `git rev-parse` per distinct token, cached; a token that
+// names no commit in this repository (a word that looks like hex, a sha from another repository) is not a
+// base the verb can call wrong. One line per criterion, naming its first foreign sha; exit codes unchanged.
+func baseMismatchWarnings(ctx context.Context, criteria []string, base, head string) []string {
+	resolved := make(map[string]string)
+	var warnings []string
+	for i, criterion := range criteria {
+		for _, token := range shaToken.FindAllString(normaliseSpace(criterion), -1) {
+			full, seen := resolved[token]
+			if !seen {
+				full = commitNamed(ctx, token)
+				resolved[token] = full
+			}
+			if full == "" || full == base || full == head {
+				continue
+			}
+			warnings = append(warnings, fmt.Sprintf("criterion_%d names %s, --base is %s; the gate measures %s..HEAD",
+				i+1, full, base, base))
+			break
+		}
 	}
 	return warnings
 }

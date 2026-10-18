@@ -150,6 +150,12 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 		return clientcmd.ExitRemote
 	}
 
+	// The verb knows --base before the gate runs, so a criterion measuring another base is named first: the
+	// gate would refuse it as unjudgeable only after the reviewer passed, and this warning costs one line.
+	for _, warning := range baseMismatchWarnings(ctx, state.Criteria, body.BaseSHA, body.HeadSHA) {
+		fmt.Fprintf(stderr, "4genteam complete: warning: %s\n", warning)
+	}
+
 	verdict := evaluate(ctx, cfg, state.Criteria, body)
 	for _, warning := range verdict.Warnings {
 		fmt.Fprintf(stderr, "4genteam complete: warning: %s\n", warning)

@@ -855,3 +855,89 @@ func TestCompletionFailureWithAnUnreadableStateNamesTheError(t *testing.T) {
 		t.Fatalf("stderr %q does not name the unreadable state", errs)
 	}
 }
+
+// commitHere records an empty commit on the repository repo(t) made current, and returns its sha: a commit
+// the evidence bundle will NOT carry as base or head, which is what a mismatched criterion names.
+func commitHere(t *testing.T, message string) string {
+	t.Helper()
+	git := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("commit", "-q", "--allow-empty", "-m", message)
+	return git("rev-parse", "HEAD")
+}
+
+// TestACriterionNamingAnotherBaseWarnsBeforeTheGate is the lead's measured failure (task c898d908): a
+// criterion naming the branch commit's parent while --base named the parent's parent. The gate refuses it
+// unjudgeable AFTER the reviewer passed; the verb knows --base when it reads it, so it says so first, one
+// line per criterion, and the exit code is unchanged.
+func TestACriterionNamingAnotherBaseWarnsBeforeTheGate(t *testing.T) {
+	base := repo(t)                   // the base commit, and HEAD one change on top
+	foreign := commitHere(t, "named") // a commit the bundle carries neither as base nor as head
+	head := commitHere(t, "the head") // what --base..HEAD will actually measure
+	_ = head
+	taskServer(t, `["the acceptance command `+"`git --version`"+` exits 0; see `+foreign+`",
+		"the acceptance command `+"`git --version`"+` exits 0"]`)
+	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95},"criterion_2":{"noul":0.95}}}`)
+	t.Setenv(enforcementEnv, "")
+	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
+	if code != clientcmd.ExitOK {
+		t.Fatalf("the warning must not change the exit code: exit %d, stderr %q", code, errs)
+	}
+	want := "warning: criterion_1 names " + foreign + ", --base is " + base + "; the gate measures " + base + "..HEAD"
+	if !strings.Contains(errs, want) {
+		t.Fatalf("stderr %q does not carry %q", errs, want)
+	}
+	if strings.Contains(errs, "warning: criterion_2 names") {
+		t.Errorf("only the criterion naming another base is warned: stderr %q", errs)
+	}
+}
+
+// TestACriterionNamingTheBaseOrTheHeadIsNotWarned: both shas are diff facts the bundle carries, so a
+// criterion citing either is measuring what the gate measures.
+func TestACriterionNamingTheBaseOrTheHeadIsNotWarned(t *testing.T) {
+	base := repo(t)
+	head := strings.TrimSpace(func() string {
+		out, err := exec.Command("git", "rev-parse", "HEAD").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}())
+	for _, sha := range []string{base, head} {
+		t.Run(sha[:7], func(t *testing.T) {
+			taskServer(t, `["the acceptance command `+"`git --version`"+` exits 0, base `+sha+`"]`)
+			jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+			t.Setenv(enforcementEnv, "")
+			code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
+			if code != clientcmd.ExitOK {
+				t.Fatalf("exit %d, stderr %q", code, errs)
+			}
+			if strings.Contains(errs, "names "+sha) {
+				t.Errorf("a criterion naming %s is not warned: stderr %q", sha[:7], errs)
+			}
+		})
+	}
+}
+
+// TestAHexWordThatNamesNoCommitIsNotABase: a 7+ hex run is only a candidate; a token this repository
+// cannot resolve to a commit names no base, so there is nothing to warn about.
+func TestAHexWordThatNamesNoCommitIsNotABase(t *testing.T) {
+	base := repo(t)
+	taskServer(t, `["the acceptance command `+"`git --version`"+` exits 0 at deadbeef1"]`)
+	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	t.Setenv(enforcementEnv, "")
+	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, stderr %q", code, errs)
+	}
+	if strings.Contains(errs, "names ") {
+		t.Errorf("a token that resolves to no commit is not warned: stderr %q", errs)
+	}
+}
