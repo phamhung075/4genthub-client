@@ -3,6 +3,17 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-18 — the git guard lands, and `doctor` reports stranded handoffs
+
+### Added
+- `4genteam guard install|uninstall|run`: the guard's rules as a decision over git's own facts - a seat's push is refused, a commit in the shared checkout is refused, a commit whose author is not the repository's seat identity is refused, and a change that looks like it carries a credential warns. `install` writes pre-commit/pre-push into the hooks folder git resolves, moves a foreign hook aside to `<name>.pre-4genteam` and RUNS it after allowing, and never overwrites an existing backup (an unreadable backup refuses); `uninstall` restores it in one atomic rename. `run` is what the hooks call: a push fails closed, a commit does not. Tests: `clientguard` (rule table, installer, chained hook, unreadable backup, e2e).
+- `4genteam doctor` gains the `orphan_handoffs` row (7.11): the room's pending rail rows whose destination seat is not running, each named with its qitem under the row line and on stderr. An unreadable rail or seat reading is `silent` with the reason, never a clean report. Tests: `clientlifecycle.TestDoctorReportsOrphanHandoffsAndNamesEachQitem`, `TestAnUnreadableOrphanReadIsNotACleanReport`.
+- `4genteam team prune --team DIR [--dry-run]`: deletes the cloud room's seats the team definition does not name, through `clientteam.RoomSeatsOutsideTeam` - the same predicate, so a listing that cannot be read refuses rather than guessing. Tests: `clientteam`.
+
+### Changed
+- The guard verb and its installer take the client's own command shape (`Run(ctx, args, stdout, stderr)`) and the guard marker lives with the guard (`clientguard.GuardMarker`), so the installer and the `hooks` reader share one definition.
+- The orphan row is computed from the runtime's own readings (`QueueList`, `RoomNodes`) rather than from the predecessor CLI, so each room's row is answered by the daemon that owns it.
+
 ## 2026-10-14 — `rig-shim` removed; `compact` names the runtime's own verb
 
 ### Removed
