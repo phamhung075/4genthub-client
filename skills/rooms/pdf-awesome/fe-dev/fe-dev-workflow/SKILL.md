@@ -47,7 +47,7 @@ ask the lead.
    - `git diff` - only what the task needs;
    - behaviour in a real browser with the `fe-pdf-awesome-driven` skill: `node checks/all.mjs --pw <dir>`
      (front door, real PDF import, three viewports, AA contrast in both themes, reduced motion). A new
-     path (parts, move pages, export) gets its own assertions in `check-load.mjs` in the same commit.
+     path (parts, move pages, export) gets its own assertions in `check-parts.mjs` in the same commit.
      If you could not run it, say the browser check is pending. Never claim a result you did not see
      this session.
 5. **Record**: one `=== Progress N ===` on the task. If the project keeps a changelog, one line.

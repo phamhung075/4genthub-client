@@ -6,7 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const checks = ['check-load', 'check-responsive', 'check-contrast', 'check-motion']
+const checks = ['check-load', 'check-parts', 'check-responsive', 'check-contrast', 'check-motion']
 const passthrough = process.argv.slice(2)
 const results = []
 for (const name of checks) {

@@ -12,7 +12,7 @@ and CRUD-animation checks are gone because this app has none of them; the rest i
 ## Quick start
 
 ```bash
-# run from inside the pdf-awesome worktree (or pass --root). Four checks, one summary, exit 1 on any failure.
+# run from inside the pdf-awesome worktree (or pass --root). Five checks, one summary, exit 1 on any failure.
 node <this skill>/checks/all.mjs --pw <dir with node_modules/@playwright/test>
 
 # one check
@@ -35,6 +35,7 @@ node <this skill>/checks/check-load.mjs --pw <dir>
 | Check | The question | A FAIL means |
 |---|---|---|
 | [check-load](checks/check-load.mjs) | Does `/` render with zero console errors and zero failed requests, do the entry controls exist, and does importing a real generated 3-page PDF through `#pdfInput` give 3 thumbnails and enable `#btnNext`? | The app is broken, or import is. |
+| [check-parts](checks/check-parts.mjs) | Import a 6-page PDF, reach export, create two named parts, assign pages 1-3 and 4-6 through the range controls, and does each part's Save download `<name>.pdf`? | The split-into-parts flow is broken. |
 | [check-responsive](checks/check-responsive.mjs) | Desktop 1440, laptop 1280, phone 390 (emulated): no sideways drag, viewport meta right, buttons inside the viewport? | A form factor is unusable. Buttons under 44px on the phone are reported, not failed. |
 | [check-contrast](checks/check-contrast.mjs) | Every text run against its effective background, AA 4.5:1 (3:1 large), in the **light and the dark theme** (`localStorage pdf_theme`)? | Text a user has to squint at. |
 | [check-motion](checks/check-motion.mjs) | Under `prefers-reduced-motion: reduce`, does any visible element keep an animation over 500ms or loop forever? | A user who asked for less motion still gets looping decoration. |
@@ -42,14 +43,15 @@ node <this skill>/checks/check-load.mjs --pw <dir>
 ## When to run which
 
 - Any UI change: `all.mjs`. Quote the failing line (selector, px/weight, ratio) in your handoff.
-- A change to import, parts or export: extend `check-load.mjs` with the new path (import a generated
-  PDF, create a part, move pages, assert the DOM) in the same commit as the feature; a path with no
+- A change to import, parts or export: extend `check-parts.mjs` (or `check-load.mjs` for import) with the
+  new path (drag-drop assignment, per-thumb assignment, rename, remove, one-PDF-per-part export) in the same commit as the feature; a path with no
   browser check is a path you cannot claim works. `makePdf(n)` in [lib.mjs](lib.mjs) builds an
   n-page PDF in memory.
 - Never claim a browser result you did not capture this session. No browser: say the check is pending.
 
 ## Measured state - 2026-10-18 (first run, project at its current `main`)
 
+- parts: PASS on main `ce7735c` (both parts download as Alice.pdf and Bob.pdf).
 - load: PASS (3 thumbnails for a 3-page PDF, no console errors, no failed requests).
 - responsive: PASS on all three viewports; 13 phone buttons are under 44px (theme toggle 28x28,
   language buttons 33x20, help 28x28).
@@ -83,4 +85,4 @@ node <this skill>/checks/check-load.mjs --pw <dir>
 |---|---|
 | [lib.mjs](lib.mjs) | Static server, Playwright and project resolution, viewports, `waitForReady`, page watcher, `makePdf`, color maths. |
 | [checks/all.mjs](checks/all.mjs) | The runner: each check in its own process, one summary, one exit code. |
-| [checks/](checks) | The four checks above. |
+| [checks/](checks) | The five checks above. |
