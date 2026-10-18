@@ -152,6 +152,13 @@ fn child_argv(runtime: &AgentRuntime, seat_dir: &Path, seat: &SeatSpec) -> Resul
             // in for it.
             argv.push("--mcp-config".to_string());
             argv.push(seat_dir.join("mcp.json").to_string_lossy().to_string());
+            // The seat's workflow, which omp loads from its agent dir by itself; claude reads no file of the
+            // seat dir unless it is named (see `install_seat_skills`).
+            let workflow = seat_dir.join(crate::supervisor::SEAT_WORKFLOW_FILE);
+            if workflow.is_file() {
+                argv.push("--append-system-prompt-file".to_string());
+                argv.push(workflow.to_string_lossy().to_string());
+            }
             if let Some(model) = seat.model.as_deref().filter(|m| !m.trim().is_empty()) {
                 argv.push("--model".to_string());
                 argv.push(model.to_string());
@@ -2204,6 +2211,37 @@ mod tests {
             "an unspecified posture must deny, not ask: {argv:?}"
         );
         assert_eq!(child_program(&AgentRuntime::ClaudeCode, &seat), "claude");
+    }
+
+    /// A claude seat gets its workflow file as an appended system prompt once the supervisor has written it,
+    /// and no such flag while the seat has none.
+    #[test]
+    fn claude_argv_appends_the_seats_workflow_when_it_exists() {
+        let seat = SeatSpec {
+            seat_key: "architect".into(),
+            seat_type: "architect".into(),
+            runtime: "claude-code".into(),
+            model: None,
+            permission_policy: None,
+            cwd: None,
+            agent_dir: None,
+            policy_document: None,
+            env: Default::default(),
+        };
+        let dir = std::env::temp_dir().join(format!("runner-workflow-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("seat dir");
+        let file = dir.join(crate::supervisor::SEAT_WORKFLOW_FILE);
+        let _ = fs::remove_file(&file);
+        let argv = child_argv(&AgentRuntime::ClaudeCode, &dir, &seat).expect("argv");
+        assert!(!argv.iter().any(|a| a == "--append-system-prompt-file"), "no workflow, no flag: {argv:?}");
+        fs::write(&file, "# architect\n").expect("workflow");
+        let argv = child_argv(&AgentRuntime::ClaudeCode, &dir, &seat).expect("argv");
+        let expected = file.to_string_lossy().to_string();
+        assert!(
+            argv.windows(2).any(|pair| pair[0] == "--append-system-prompt-file" && pair[1] == expected),
+            "the workflow file is appended: {argv:?}"
+        );
+        fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     /// The gate finding, as a table: the documented vocabulary (`docs/AGENT-SETUP.md:389`), the value the

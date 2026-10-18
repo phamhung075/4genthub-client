@@ -240,6 +240,13 @@ of the client's part. This route needs no cloud module and no overlay: a seat re
 then its room's room-level skills, then its own seat-level skills, and nothing from another room,
 another seat or `client/`.
 
+**A seat's workflow is always in its context.** A skill reaches the model only when its description
+matches the turn, so the seat's working method does not rely on that: the body of the seat's own
+`<seat>-workflow` skill (frontmatter stripped) is also written to `<seat dir>/AGENTS.md` at every start.
+omp loads that file from its agent dir by itself; a claude seat gets it as `--append-system-prompt-file`.
+A seat with no workflow skill has no such file left behind. The workflows share one crew protocol,
+`share/seat-crew`: how a seat runs DeepSeek workers in parallel through `deepseek-offload`.
+
 Two facts about the publish route, because they decide which tree to point it at: `team
 import-project` reads a **project's** own tree at `.claude/skills`, one directory per skill, each
 holding `SKILL.md`, and refuses a directory that has none — so it publishes a flat tree, not a

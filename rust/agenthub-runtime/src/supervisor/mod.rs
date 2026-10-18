@@ -558,6 +558,12 @@ const SKILLS_ROOT_ENV: &str = "AGENTHUB_CLIENT_SKILLS";
 /// replacing a shared skill of the same name. The directory is runtime-owned, so it is rebuilt every start
 /// and a skill removed from the tree does not linger. No tree configured means no skills, which is not an
 /// error: a machine with no tree has nothing to install.
+///
+/// THE SEAT'S WORKFLOW IS ALWAYS IN CONTEXT, NOT LOADED ON DEMAND: a skill reaches the model only when its
+/// description matches the turn, and a seat that never asked "how do I work here" never read its own method.
+/// The body of the seat's `<seat>-workflow` skill is therefore also written to `<seat dir>/AGENTS.md`, which
+/// omp loads at every start from its agent dir and claude receives through `--append-system-prompt-file`.
+/// That file is runtime-owned like `skills/`: a seat with no workflow skill has none left behind.
 fn install_seat_skills(state_dir: &Path, room: &str, seat: &str, seat_dir: &Path) -> Result<(), String> {
     let root = env_file_vars(state_dir)
         .remove(SKILLS_ROOT_ENV)
@@ -568,13 +574,29 @@ fn install_seat_skills(state_dir: &Path, room: &str, seat: &str, seat_dir: &Path
     if target.exists() {
         fs::remove_dir_all(&target).map_err(|e| format!("cannot clear {}: {e}", target.display()))?;
     }
+    let workflow_name = format!("{seat}-workflow");
+    let mut workflow = None;
     for skill in crate::skills::SkillResolver::new(root).resolve_for_seat(room, seat)? {
         let Some(source) = skill.path.parent() else { continue };
         copy_dir(source, &target.join(&skill.name))
             .map_err(|e| format!("cannot install the skill {}: {e}", skill.name))?;
+        if skill.name == workflow_name {
+            workflow = Some(skill.content);
+        }
+    }
+    let agents_md = seat_dir.join(SEAT_WORKFLOW_FILE);
+    match workflow {
+        Some(body) => fs::write(&agents_md, format!("{body}\n"))
+            .map_err(|e| format!("cannot write {}: {e}", agents_md.display()))?,
+        None if agents_md.exists() => fs::remove_file(&agents_md)
+            .map_err(|e| format!("cannot clear {}: {e}", agents_md.display()))?,
+        None => {}
     }
     Ok(())
 }
+
+/// The seat's always-loaded workflow, in the seat dir (see `install_seat_skills`).
+pub(crate) const SEAT_WORKFLOW_FILE: &str = "AGENTS.md";
 
 /// Copy a directory tree, replacing what is at `to`. Every file under a skill goes with it (a skill may
 /// carry baselines and references beside its SKILL.md).
@@ -4388,6 +4410,31 @@ mod tests {
         names.sort();
         assert_eq!(names, ["both", "common", "own-skill", "room-skill"], "no stale, no other seat's skill");
         assert!(seat_dir.join("skills/own-skill/baseline.json").is_file(), "files beside SKILL.md go too");
+    }
+
+    /// The seat's `<seat>-workflow` body - frontmatter stripped - becomes `<seat dir>/AGENTS.md`, the file the
+    /// agent reads at every start; another seat's workflow is not it, and a seat whose workflow skill is gone
+    /// keeps no stale copy.
+    #[test]
+    fn a_seats_workflow_skill_becomes_its_always_loaded_agents_file() {
+        let state = scratch("workflow-state");
+        let tree = scratch("workflow-tree");
+        let skill = |rel: &str, body: &str| {
+            let dir = tree.join(rel);
+            fs::create_dir_all(&dir).expect("dir");
+            fs::write(dir.join("SKILL.md"), format!("---\nname: x\ndescription: d\n---\n{body}\n")).expect("skill");
+        };
+        skill("rooms/r/dev/dev-workflow", "# dev - how this seat works");
+        skill("rooms/r/other/other-workflow", "# other");
+        fs::write(state.join(".env"), format!("{SKILLS_ROOT_ENV}={}\n", tree.display())).expect("env");
+        let seat_dir = state.join("rooms/r/seats/dev");
+        install_seat_skills(&state, "r", "dev", &seat_dir).expect("install");
+        let agents = seat_dir.join(SEAT_WORKFLOW_FILE);
+        assert_eq!(fs::read_to_string(&agents).expect("AGENTS.md"), "# dev - how this seat works\n");
+
+        fs::remove_dir_all(tree.join("rooms/r/dev/dev-workflow")).expect("drop the workflow");
+        install_seat_skills(&state, "r", "dev", &seat_dir).expect("reinstall");
+        assert!(!agents.exists(), "a removed workflow leaves no stale AGENTS.md");
     }
 
     /// A skill file's mode comes from the COPY, not from this process's umask: the source's bits are decided by
