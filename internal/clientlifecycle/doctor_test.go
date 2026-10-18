@@ -528,3 +528,37 @@ func TestDoctorIsReadOnly(t *testing.T) {
 		t.Errorf("doctor acted: %v", did)
 	}
 }
+
+// TestDoctorJSONCarriesTheReasonsTheLinesShow is the gap a monitor had: the human report names the stranded
+// qitems beside the row, and --json printed 7.2's fields alone, so a reader of --json saw the row and not
+// one of the facts that made it actionable. The reasons are the SAME lines, from the same wrapper, and a
+// row with none omits the key - so a healthy row prints what it printed before.
+func TestDoctorJSONCarriesTheReasonsTheLinesShow(t *testing.T) {
+	f := newHealthFixture(t, []string{"demo"})
+	f.everythingRunning()
+	orphanRowFor(t, "demo", clientservices.Stopped,
+		orphanHandoff{Qitem: "qitem-20261009-aaaa", Destination: "demo-writer@demo"})
+
+	code, out, _ := doctor(t, f, "--json")
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit = %d, want %d", code, clientcmd.ExitUnavailable)
+	}
+	var rows []struct {
+		clientservices.Health
+		Reasons []string `json:"reasons"`
+	}
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		t.Fatalf("doctor --json did not print rows: %v\n%s", err, out)
+	}
+	reasons := map[string][]string{}
+	for _, row := range rows {
+		reasons[strings.TrimSpace(row.Rig+" "+row.Safeguard)] = row.Reasons
+	}
+	orphan := strings.Join(reasons["demo "+clientservices.OrphanHandoffs], "\n")
+	if !strings.Contains(orphan, "qitem-20261009-aaaa") || !strings.Contains(orphan, "demo-writer@demo") {
+		t.Errorf("the orphan row's JSON reasons do not name the stranded handoff: %q", orphan)
+	}
+	if got := reasons[strings.TrimSpace("demo "+clientservices.Compact)]; len(got) != 0 {
+		t.Errorf("a healthy row carries reasons %q", got)
+	}
+}

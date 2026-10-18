@@ -121,6 +121,36 @@ func reportedRigs(rigs []string, rig string) []string {
 // runDoctor prints the rows and decides the exit code. `--json` prints the rows instead of the lines, and
 // the tail of alerts.log is a reading surface for the human output only: the JSON is the rows 7.5 says it
 // is.
+// doctorJSONRow is one row of `doctor --json`: 7.2's row, plus the reasons the human report prints beside
+// it when it has any. The reasons ride IN the row because --json is the surface a monitor reads, and a row
+// that says `orphan_handoffs` without naming the qitems is a row a reader cannot act on. The fields are
+// 7.2's exactly: a row with no reasons prints byte for byte what it printed before, the key omitted.
+type doctorJSONRow struct {
+	clientservices.Health
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// doctorJSONRows pairs every row with the lines the human report prints beside it, from the wrapper that
+// carries them: ONE rule for the JSON and the lines, so the two surfaces cannot disagree about a row.
+func doctorJSONRows(rows []clientservices.Health, orphanRows []orphanRow) []doctorJSONRow {
+	out := make([]doctorJSONRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, doctorJSONRow{Health: row, Reasons: rowReasons(row, orphanRows)})
+	}
+	return out
+}
+
+// rowReasons finds one row's reasons: the wrapper is matched on (safeguard, rig), the pair the report
+// itself matches a row by.
+func rowReasons(row clientservices.Health, orphanRows []orphanRow) []string {
+	for _, orphan := range orphanRows {
+		if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Rig == row.Rig {
+			return orphanLines(orphan)
+		}
+	}
+	return nil
+}
+
 func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	rows := rowsFor(rig, root)
 	orphanRows := orphanRowsFor(rig)
@@ -131,7 +161,7 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		}
 	}
 	if asJSON {
-		body, err := json.MarshalIndent(rows, "", "  ")
+		body, err := json.MarshalIndent(doctorJSONRows(rows, orphanRows), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam doctor: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
