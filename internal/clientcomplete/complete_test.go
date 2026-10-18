@@ -464,6 +464,13 @@ type serverLog struct {
 	mu    sync.Mutex
 	calls []string
 	query string
+	// Faults the consequence tests inject; a zero status means the normal answer. They are set on the
+	// returned record before run starts, and the handler reads them under mu.
+	evidenceStatus int
+	completeStatus int
+	taskStatus     string // the task read's status; empty answers in_progress
+	readBackFails  bool   // the GET after the complete POST answers 500: the state cannot be read
+	completeAsked  bool
 }
 
 func taskServer(t *testing.T, criteria string) *serverLog {
@@ -482,11 +489,31 @@ func taskServer(t *testing.T, criteria string) *serverLog {
 		}
 		switch {
 		case r.Method == http.MethodGet:
-			_, _ = io.WriteString(w, `{"success":true,"task":{"acceptance_criteria":`+criteria+`}}`)
+			if rec.completeAsked && rec.readBackFails {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, `{"detail":"state unavailable"}`)
+				return
+			}
+			status := rec.taskStatus
+			if status == "" {
+				status = "in_progress"
+			}
+			_, _ = io.WriteString(w, `{"success":true,"task":{"status":"`+status+`","acceptance_criteria":`+criteria+`}}`)
 		case strings.HasSuffix(r.URL.Path, "/evidence"):
+			if rec.evidenceStatus != 0 {
+				w.WriteHeader(rec.evidenceStatus)
+				_, _ = io.WriteString(w, `{"detail":"injected evidence fault"}`)
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{"event":"stored"}`)
 		default:
+			rec.completeAsked = true
+			if rec.completeStatus != 0 {
+				w.WriteHeader(rec.completeStatus)
+				_, _ = io.WriteString(w, `{"detail":"injected completion fault"}`)
+				return
+			}
 			_, _ = io.WriteString(w, `{"success":true,"completed":true}`)
 		}
 	}))
@@ -727,5 +754,107 @@ func TestAPathPlusCountCriterionIsNotWarned(t *testing.T) {
 		[]string{"the file internal/seatpark/park.go changed and files_changed is 4"}, measured())
 	if got.Verdict != clientjev.Accept || *hits != 1 || len(got.Warnings) != 0 {
 		t.Errorf("a path plus this bundle's count is readable, so no warning: got %+v, %d calls", got, *hits)
+	}
+}
+
+// TestEvidenceNotStoredNamesTheTaskUnchanged is the consequence line for a refused submission: the
+// gate verdict is already on stderr, and the seat must be told the task is still open WITHOUT any
+// completion call. The status and the hub body stay on the `4genteam evidence:` lines only.
+func TestEvidenceNotStoredNamesTheTaskUnchanged(t *testing.T) {
+	base := repo(t)
+	rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
+	rec.evidenceStatus = http.StatusInternalServerError
+	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	t.Setenv(enforcementEnv, "true")
+	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
+	if code != clientcmd.ExitRemote {
+		t.Fatalf("exit %d, want %d; stderr %q", code, clientcmd.ExitRemote, errs)
+	}
+	if !strings.Contains(errs, "the task was not completed: the evidence was not stored; task t1 is unchanged") {
+		t.Fatalf("the seat is not told the consequence: %q", errs)
+	}
+	for _, call := range rec.calls {
+		if strings.HasSuffix(call, "/complete") {
+			t.Fatalf("a completion was asked after the evidence was refused: calls %v", rec.calls)
+		}
+	}
+	if !strings.Contains(errs, "HTTP 500") {
+		t.Fatalf("the evidence status must stay on its own line: %q", errs)
+	}
+}
+
+// TestStoredEvidenceContinuesPast409 is the retry path: the hub already holds this run's evidence, so
+// the verb completes on the stored submission instead of making a post-failure retry impossible.
+func TestStoredEvidenceContinuesPast409(t *testing.T) {
+	base := repo(t)
+	rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
+	rec.evidenceStatus = http.StatusConflict
+	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	t.Setenv(enforcementEnv, "true")
+	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want 0; stderr %q", code, errs)
+	}
+	if !strings.Contains(errs, "already has evidence; completing on the stored submission") {
+		t.Fatalf("the continuation is not named: %q", errs)
+	}
+	completes := 0
+	for _, call := range rec.calls {
+		if strings.HasSuffix(call, "/complete") {
+			completes++
+		}
+	}
+	if completes != 1 {
+		t.Fatalf("completion calls = %d, want exactly 1: %v", completes, rec.calls)
+	}
+}
+
+// TestCompletionFailureReadsTheStateBack names the case a seat cannot resolve from the exit code: the
+// POST may or may not have written, so the verb reads the task once and says what it reads.
+func TestCompletionFailureReadsTheStateBack(t *testing.T) {
+	cases := map[string]struct {
+		taskStatus string
+		want       string
+	}{
+		"still open":  {"in_progress", "the task was not completed: the completion request failed and task t1 reads in_progress"},
+		"already done": {"done", "the completion request failed, but task t1 reads done: it completed"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			base := repo(t)
+			rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
+			rec.completeStatus = http.StatusInternalServerError
+			rec.taskStatus = c.taskStatus
+			jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+			t.Setenv(enforcementEnv, "true")
+			code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
+			if code != clientcmd.ExitRemote {
+				t.Fatalf("exit %d, want %d; stderr %q", code, clientcmd.ExitRemote, errs)
+			}
+			if !strings.Contains(errs, c.want) {
+				t.Fatalf("stderr %q does not carry %q", errs, c.want)
+			}
+			if last := rec.calls[len(rec.calls)-1]; last != "GET /api/v2/tasks/t1" {
+				t.Fatalf("last call = %q, want the read-back GET after the failed completion: %v", last, rec.calls)
+			}
+		})
+	}
+}
+
+// TestCompletionFailureWithAnUnreadableStateNamesTheError: the read-back's own failure is reported as
+// such, so "the state could not be read" is never mistaken for "the task is open".
+func TestCompletionFailureWithAnUnreadableStateNamesTheError(t *testing.T) {
+	base := repo(t)
+	rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
+	rec.completeStatus = http.StatusInternalServerError
+	rec.readBackFails = true
+	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	t.Setenv(enforcementEnv, "true")
+	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
+	if code != clientcmd.ExitRemote {
+		t.Fatalf("exit %d, want %d; stderr %q", code, clientcmd.ExitRemote, errs)
+	}
+	if !strings.Contains(errs, "the task was not completed: the completion request failed and the state could not be read: reading the task: the server answered HTTP 500") {
+		t.Fatalf("stderr %q does not name the unreadable state", errs)
 	}
 }

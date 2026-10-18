@@ -201,7 +201,7 @@ func (evidenceCommand) Run(ctx context.Context, args []string, stdout, stderr io
 		fmt.Fprintf(stderr, "4genteam evidence: %s\n", failure.Message)
 		return clientcmd.ExitRemote
 	}
-	return postEvidence(ctx, baseURL, token, opts.task, body, stdout, stderr)
+	return postEvidence(ctx, baseURL, token, opts.task, body, stdout, stderr).Exit
 }
 
 // Body is the evidence payload: the diff's numstat, the two SHAs and the test block.
@@ -261,9 +261,18 @@ func Collect(ctx context.Context, base, test string) (Body, *CollectFailure) {
 	return Body{BaseSHA: baseSHA, HeadSHA: headSHA, Numstat: numstat, Test: result}, nil
 }
 
+// PostResult is what one submission answered: the exit code `4genteam evidence` uses for the same
+// outcome, and the HTTP status when a response arrived (0 when the request never got one). `complete`
+// needs both facts: the status separates "evidence not stored" from "already stored" (409), and only a
+// stored submission may be completed.
+type PostResult struct {
+	Exit       int
+	HTTPStatus int
+}
+
 // Post stores the evidence on the task with the same answers and exit codes as `4genteam evidence`:
 // 0 stored, 5 stored with a failing test run, ExitRemote refused or failed.
-func Post(ctx context.Context, baseURL, token, taskID string, body Body, stdout, stderr io.Writer) int {
+func Post(ctx context.Context, baseURL, token, taskID string, body Body, stdout, stderr io.Writer) PostResult {
 	return postEvidence(ctx, baseURL, token, taskID, body, stdout, stderr)
 }
 
@@ -443,17 +452,17 @@ func extractFailedTests(output string) []string {
 // postEvidence sends the submission and relays the answer honestly. A 2xx relays the created event to
 // stdout; a 409 reads as a REFUSAL naming the head_sha that already has evidence, never as a success;
 // any other non-2xx is a failure with the status named. The token is in the header and nowhere else.
-func postEvidence(ctx context.Context, baseURL, token, taskID string, body evidenceBody, stdout, stderr io.Writer) int {
+func postEvidence(ctx context.Context, baseURL, token, taskID string, body evidenceBody, stdout, stderr io.Writer) PostResult {
 	route := strings.TrimRight(baseURL, "/") + fmt.Sprintf(evidencePath, url.PathEscape(taskID))
 	payload, err := json.Marshal(body)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam evidence: cannot encode the submission: %v\n", err)
-		return clientcmd.ExitRemote
+		return PostResult{Exit: clientcmd.ExitRemote}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, route, bytes.NewReader(payload))
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam evidence: the request to %s failed: %v\n", route, err)
-		return clientcmd.ExitRemote
+		return PostResult{Exit: clientcmd.ExitRemote}
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
@@ -463,7 +472,7 @@ func postEvidence(ctx context.Context, baseURL, token, taskID string, body evide
 		// The REASON is named, as `4genteam feedback` names it: the text carries the URL and the
 		// transport's round trip, and the credential is in the header, so it cannot be in it.
 		fmt.Fprintf(stderr, "4genteam evidence: the request to %s failed: %v\n", route, err)
-		return clientcmd.ExitRemote
+		return PostResult{Exit: clientcmd.ExitRemote}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -478,18 +487,18 @@ func postEvidence(ctx context.Context, baseURL, token, taskID string, body evide
 		if body.Test.ExitCode != 0 {
 			fmt.Fprintf(stderr, "4genteam evidence: stored, but the test command exited %d%s\n",
 				body.Test.ExitCode, failingSuffix(body.Test.Failed))
-			return exitTestFailed
+			return PostResult{Exit: exitTestFailed, HTTPStatus: resp.StatusCode}
 		}
-		return clientcmd.ExitOK
+		return PostResult{Exit: clientcmd.ExitOK, HTTPStatus: resp.StatusCode}
 	case resp.StatusCode == http.StatusConflict:
 		fmt.Fprintf(stderr, "4genteam evidence: refused (HTTP 409): head_sha %s already has evidence on this "+
 			"task, so nothing was stored; the earlier submission stands\n", body.HeadSHA)
 		relayRefusal(stderr, answer)
-		return clientcmd.ExitRemote
+		return PostResult{Exit: clientcmd.ExitRemote, HTTPStatus: resp.StatusCode}
 	default:
 		fmt.Fprintf(stderr, "4genteam evidence: the server answered HTTP %d\n", resp.StatusCode)
 		relayRefusal(stderr, answer)
-		return clientcmd.ExitRemote
+		return PostResult{Exit: clientcmd.ExitRemote, HTTPStatus: resp.StatusCode}
 	}
 }
 

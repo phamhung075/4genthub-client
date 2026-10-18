@@ -144,13 +144,13 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 		fmt.Fprintf(stderr, "4genteam complete: %s\n", failure.Message)
 		return clientcmd.ExitRemote
 	}
-	criteria, err := fetchCriteria(ctx, baseURL, token, opts.task)
+	state, err := readTask(ctx, baseURL, token, opts.task)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam complete: %v\n", err)
 		return clientcmd.ExitRemote
 	}
 
-	verdict := evaluate(ctx, cfg, criteria, body)
+	verdict := evaluate(ctx, cfg, state.Criteria, body)
 	for _, warning := range verdict.Warnings {
 		fmt.Fprintf(stderr, "4genteam complete: warning: %s\n", warning)
 	}
@@ -173,41 +173,72 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 	fmt.Fprintf(stderr, "4genteam complete: gate (%s) %s: %s\n", mode, verdict.Verdict, verdict.Reasons)
 
 	stored := clientevidence.Post(ctx, baseURL, token, opts.task, body, io.Discard, stderr)
-	if stored != clientcmd.ExitOK && stored != 5 {
-		return stored
+	switch {
+	case stored.Exit == clientcmd.ExitOK || stored.Exit == 5:
+		// stored, with or without a failing test run: the completion may proceed.
+	case stored.HTTPStatus == http.StatusConflict:
+		// The evidence for this run's own bundle is ALREADY on the hub (a retry after a failed
+		// completion). Refusing here would make the retry impossible, and the completion gate above
+		// judged this run's local bundle, of which the stored submission is the hub's record.
+		fmt.Fprintf(stderr, "4genteam complete: warning: head_sha %s already has evidence; completing on the stored submission\n", body.HeadSHA)
+		stored.Exit = clientcmd.ExitOK
+	default:
+		fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the evidence was not stored; task %s is unchanged\n", opts.task)
+		return stored.Exit
 	}
 	if code := postComplete(ctx, baseURL, token, opts, stdout, stderr); code != clientcmd.ExitOK {
+		// The completion POST's own failure (status and hub body) is printed by postComplete. What it
+		// cannot know is the task's state: the POST is not idempotent from here, so read it back once
+		// and name it - "the task was not completed" is the enforced gate's own vocabulary.
+		after, rerr := readTask(ctx, baseURL, token, opts.task)
+		switch {
+		case rerr != nil:
+			fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the completion request failed and the state could not be read: %v\n", rerr)
+		case after.Status == "done":
+			fmt.Fprintf(stderr, "4genteam complete: the completion request failed, but task %s reads done: it completed\n", opts.task)
+		default:
+			fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the completion request failed and task %s reads %s\n", opts.task, after.Status)
+		}
 		return code
 	}
-	return stored
+	return stored.Exit
 }
 
-// fetchCriteria reads the task's acceptance criteria from the server.
-func fetchCriteria(ctx context.Context, baseURL, token, taskID string) ([]string, error) {
+// taskState is what ONE read of the task answers, because the verb needs two facts from the same
+// row: the criteria the gate judges, and - only when the completion request failed - the status it
+// left behind. One reader, so the two cannot disagree about the envelope.
+type taskState struct {
+	Status   string
+	Criteria []string
+}
+
+// readTask reads the task's status and acceptance criteria from the server.
+func readTask(ctx context.Context, baseURL, token, taskID string) (taskState, error) {
 	route := strings.TrimRight(baseURL, "/") + fmt.Sprintf(taskPath, url.PathEscape(taskID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, route, nil)
 	if err != nil {
-		return nil, fmt.Errorf("the request to %s failed: %v", route, err)
+		return taskState{}, fmt.Errorf("the request to %s failed: %v", route, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := completeClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("the request to %s failed: %v", route, err)
+		return taskState{}, fmt.Errorf("the request to %s failed: %v", route, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	answer, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("reading the task: the server answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(answer)))
+		return taskState{}, fmt.Errorf("reading the task: the server answered HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(answer)))
 	}
 	var parsed struct {
 		Task struct {
+			Status             string   `json:"status"`
 			AcceptanceCriteria []string `json:"acceptance_criteria"`
 		} `json:"task"`
 	}
 	if err := json.Unmarshal(answer, &parsed); err != nil {
-		return nil, fmt.Errorf("the task answer is not JSON: %v", err)
+		return taskState{}, fmt.Errorf("the task answer is not JSON: %v", err)
 	}
-	return parsed.Task.AcceptanceCriteria, nil
+	return taskState{Status: parsed.Task.Status, Criteria: parsed.Task.AcceptanceCriteria}, nil
 }
 
 // postComplete asks the server to complete the task; its answer goes to stdout.
