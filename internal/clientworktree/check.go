@@ -74,9 +74,15 @@ func Check(mainRoot, roomDir, rig string, seats []clientservices.SeatType) (Chec
 }
 
 // clientLinkPresent is the second half of the ruling's registered test: the seat's client submodule
-// must be a linked worktree under the derived path. A `.git` that is missing is the shape a worktree
-// has when the link was never placed, which is exactly the seat that cannot build.
+// must be a linked worktree under the derived path, and a LINK WHOSE METADATA IS GONE is not one. A
+// `.git` that is missing is the shape a worktree has when the link was never placed, which is exactly
+// the seat that cannot build; a `.git` that names a gitdir the client repository no longer holds is the
+// same seat after the repository was cloned afresh, and it answers `fatal: not a git repository` to
+// every verb there, so it is Wrong for the same reason and `up`'s heal (linkSubmodule) is the fix.
 func clientLinkPresent(path string) bool {
-	_, err := os.Lstat(filepath.Join(path, clientSubmodule, ".git"))
-	return err == nil
+	target := filepath.Join(path, clientSubmodule)
+	if _, err := os.Lstat(filepath.Join(target, ".git")); err != nil {
+		return false
+	}
+	return !linkIsDangling(target)
 }

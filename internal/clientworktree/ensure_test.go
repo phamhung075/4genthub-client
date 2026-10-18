@@ -677,6 +677,84 @@ func TestEnsureCreatesTheKeptPathsLinkAtTheParentGitlink(t *testing.T) {
 	}
 }
 
+// A DANGLING link is the shape every seat's client link took on this machine when the canonical clone
+// was made afresh: a `.git` file naming a gitdir the client repository no longer has, and a seat that
+// answers `fatal: not a git repository` to every git verb. The link is re-placed, and the stale working
+// tree is RETIRED beside it rather than removed, so nothing the old checkout held is lost.
+func TestEnsureHealsADanglingClientLink(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
+	stubLinkProviderKey(t)
+	seat := fixture.derived()[0]
+	clientRepository := filepath.Join(fixture.main, clientSubmodule)
+	link := filepath.Join(seat.Path, clientSubmodule)
+	gitIn(t, fixture.main, "worktree", "add", "-b", seat.Branch, seat.Path, "main")
+	mkdirAll(t, link)
+	writeFile(t, filepath.Join(link, ".git"),
+		"gitdir: "+filepath.Join(clientRepository, ".git", "worktrees", "agenthub_client2")+"\n")
+	writeFile(t, filepath.Join(link, "stale.txt"), "the seat's stale checkout\n")
+
+	var out strings.Builder
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("a dangling link must be healed, not refused: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), link+": the link's metadata is gone") {
+		t.Errorf("the run did not name the dangling link it healed:\n%s", out.String())
+	}
+	if got := gitIn(t, link, "rev-parse", "HEAD"); got != fixture.pins[clientSubmodule] {
+		t.Errorf("the healed link at %s is at %s, want the parent's gitlink %s",
+			link, got, fixture.pins[clientSubmodule])
+	}
+	if entry, registered := clientEntry(t, clientRepository, link); !registered || entry.Branch != seat.Branch {
+		t.Errorf("the healed link at %s is %+v (registered=%v); want it on %s",
+			link, entry, registered, seat.Branch)
+	}
+	if stale, err := os.ReadFile(filepath.Join(link+staleLinkSuffix, "stale.txt")); err != nil ||
+		string(stale) != "the seat's stale checkout\n" {
+		t.Errorf("the stale checkout was not retired beside the link: %v, %q", err, stale)
+	}
+
+	// A second run is a no-op: the healed link is live, so nothing is moved again.
+	var again strings.Builder
+	if err := fixture.ensure(&again); err != nil {
+		t.Fatalf("the healed room must be startable again: %v\n%s", err, again.String())
+	}
+	if strings.Contains(again.String(), "metadata is gone") {
+		t.Errorf("the healed link was moved a second time:\n%s", again.String())
+	}
+}
+
+// A retirement that is already on disk is refused, never overwritten: the first retirement is the only
+// copy of whatever the stale checkout held. On a KEPT path that refusal is the NOTE this package's rule
+// already gives an unplaceable link - the run continues, nothing is moved, and Check keeps naming the
+// path until its link exists.
+func TestEnsureRefusesToOverwriteARetiredDanglingLink(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
+	stubLinkProviderKey(t)
+	seat := fixture.derived()[0]
+	clientRepository := filepath.Join(fixture.main, clientSubmodule)
+	link := filepath.Join(seat.Path, clientSubmodule)
+	gitIn(t, fixture.main, "worktree", "add", "-b", seat.Branch, seat.Path, "main")
+	mkdirAll(t, link)
+	writeFile(t, filepath.Join(link, ".git"),
+		"gitdir: "+filepath.Join(clientRepository, ".git", "worktrees", "agenthub_client2")+"\n")
+	writeFile(t, filepath.Join(link+staleLinkSuffix, "earlier.txt"), "the first retirement\n")
+
+	var out strings.Builder
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("an unplaceable link is a note, not a failure of the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), link+staleLinkSuffix+" already exists, so nothing was moved") {
+		t.Errorf("the run did not refuse the second retirement:\n%s", out.String())
+	}
+	if earlier, err := os.ReadFile(filepath.Join(link+staleLinkSuffix, "earlier.txt")); err != nil ||
+		string(earlier) != "the first retirement\n" {
+		t.Errorf("the first retirement was overwritten or moved: %v, %q", err, earlier)
+	}
+	if _, registered := clientEntry(t, clientRepository, link); registered {
+		t.Errorf("a link was placed at %s although its retirement could not be made", link)
+	}
+}
+
 // A link that cannot be placed - here, because the branch is held at a path this run does not own - is a
 // NOTE and not a failure: the path stays kept, the run continues, and Check names the path until its
 // link exists.

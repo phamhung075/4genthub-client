@@ -466,7 +466,7 @@ func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map
 	if !legacy.blocked {
 		// A legacy the migration could not clear keeps the seat's client code, so nothing is placed:
 		// a link here would be the second client location the ruling forbids.
-		if err := linkSubmodule(mainRoot, worktree, branch); err != nil {
+		if err := linkSubmodule(mainRoot, worktree, branch, out); err != nil {
 			return "", err
 		}
 	}
@@ -583,17 +583,28 @@ func refuseClientBranch(mainRoot string, worktree clientservices.Worktree, branc
 
 // linkSubmodule places the client worktree inside a seat's worktree, at the parent's own gitlink, on the
 // branch it is given: the derived branch for a path this run creates, and the branch the seat's legacy
-// worktree held for a path the migration freed. A path that is already a worktree (its `.git` is there)
-// is left alone, which is what makes a second Ensure a no-op.
+// worktree held for a path the migration freed. A path whose link is LIVE (its `.git` names metadata the
+// client repository still has) is left alone, which is what makes a second Ensure a no-op.
+//
+// A DANGLING link is not a link: its `.git` file names a gitdir that is gone - the shape every seat's
+// link took on this machine when the canonical client clone was made afresh, and the shape that answers
+// `fatal: not a git repository` to every git verb run in the seat. Its working tree is retired beside
+// the path (retireDanglingLink) and the link is placed again, so `up` is the heal after a re-clone too
+// and not a run that reads a link's `.git` and walks past it.
 //
 // The client submodule carries a branch, and it has two forms: a branch that already exists is ATTACHED
 // to, and a branch that does not is created at the parent's gitlink. An empty branch is a reviewer's,
 // whose link is detached at the pin. `.claude` is not linked at all: it is not a submodule of this hub
 // and has no gitlink to place.
-func linkSubmodule(mainRoot string, worktree clientservices.Worktree, branch string) error {
+func linkSubmodule(mainRoot string, worktree clientservices.Worktree, branch string, out io.Writer) error {
 	target := filepath.Join(worktree.Path, clientSubmodule)
 	if _, err := os.Lstat(filepath.Join(target, ".git")); err == nil {
-		return nil
+		if !linkIsDangling(target) {
+			return nil
+		}
+		if err := retireDanglingLink(target, out); err != nil {
+			return err
+		}
 	}
 	repository := filepath.Join(mainRoot, clientSubmodule)
 	if info, err := os.Stat(repository); err != nil || !info.IsDir() {
@@ -632,6 +643,60 @@ func linkSubmodule(mainRoot string, worktree clientservices.Worktree, branch str
 	return nil
 }
 
+// staleLinkSuffix names where a dangling link's working tree is retired: beside its own path, so a
+// reader who finds the link missing finds the checkout it replaced at the same place.
+const staleLinkSuffix = ".obsolete"
+
+// linkIsDangling answers whether the client link at dir is a linked worktree whose metadata the client
+// repository no longer holds: a `.git` FILE naming a gitdir that is not on disk. Measured on this
+// machine (2026-10-18): the canonical client clone was made afresh, so links recorded as
+// `.git/worktrees/agenthub_client2` named a directory that no longer exists, and every git verb in the
+// seat answered `fatal: not a git repository: ...`. A `.git` DIRECTORY is a repository of its own, not
+// a link, and is never dangling; a missing `.git` is a link this run has not placed at all.
+func linkIsDangling(dir string) bool {
+	raw, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return false
+	}
+	target := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(raw)), "gitdir:"))
+	if target == "" {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		// git writes a relative gitdir for a submodule worktree; it is relative to the worktree's own
+		// directory, never to the process's working directory.
+		target = filepath.Join(dir, target)
+	}
+	_, err = os.Stat(target)
+	// ANY failure to resolve the gitdir is a link git cannot follow. It is not only ENOENT: when the
+	// client repository's own `.git` is a FILE (a submodule), the metadata path below it answers ENOTDIR,
+	// which IsNotExist does not match - the shape this machine's fixture reproduces.
+	return err != nil
+}
+
+// retireDanglingLink moves a dangling link's working tree aside and names it on out. It is a RENAME and
+// never a removal: whatever the stale checkout held - a build, a local edit, an untracked file - is
+// still there beside the path, and the one thing that changes is which directory the link lives at.
+//
+// A retirement already on disk is a REFUSAL: this client never overwrites one, and a second run over a
+// link it could not place reads the same refusal rather than losing the first retirement.
+func retireDanglingLink(target string, out io.Writer) error {
+	aside := target + staleLinkSuffix
+	switch _, err := os.Lstat(aside); {
+	case err == nil:
+		return fmt.Errorf("%s is a dangling link and %s already exists, so nothing was moved",
+			target, aside)
+	case !os.IsNotExist(err):
+		return fmt.Errorf("cannot read %s: %v", aside, err)
+	}
+	if err := os.Rename(target, aside); err != nil {
+		return fmt.Errorf("cannot move the dangling link at %s aside: %v", target, err)
+	}
+	fmt.Fprintf(out, "%s: the link's metadata is gone, so its working tree was moved to %s and the link "+
+		"is placed again\n", target, aside)
+	return nil
+}
+
 // placeClientLink is the one write a KEPT path receives besides its `.env` link: the client link the
 // ruling says stays at `<roomDir>/wt/<seat>/agenthub_client`. It attaches to the branch the seat's
 // legacy `<seat>-client` held when the migration removed it, else to the branch the derivation names,
@@ -641,15 +706,11 @@ func linkSubmodule(mainRoot string, worktree clientservices.Worktree, branch str
 // does not own, and failing here would leave the rest of the room unattempted. Check reports the path
 // as Wrong until its link exists, which is the truthful state.
 func placeClientLink(mainRoot string, worktree clientservices.Worktree, legacyBranch string, out io.Writer) {
-	target := filepath.Join(worktree.Path, clientSubmodule)
-	if _, err := os.Lstat(filepath.Join(target, ".git")); err == nil {
-		return
-	}
 	branch := legacyBranch
 	if branch == "" {
 		branch = worktree.Branch
 	}
-	if err := linkSubmodule(mainRoot, worktree, branch); err != nil {
+	if err := linkSubmodule(mainRoot, worktree, branch, out); err != nil {
 		fmt.Fprintf(out, "%s: NOTE the client link was not placed: %v\n", worktree.Path, err)
 	}
 }

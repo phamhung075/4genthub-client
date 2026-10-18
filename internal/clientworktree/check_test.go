@@ -91,6 +91,29 @@ func TestCheckCallsAPathThatIsNotAWorktreeWrong(t *testing.T) {
 	}
 }
 
+// A link whose metadata is gone reads as a link on disk and is not one: git answers `fatal: not a git
+// repository` there, so the path is Wrong, exactly as a path with no link at all is.
+func TestCheckCallsADanglingClientLinkWrong(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
+	seat := fixture.derived()[0]
+	link := filepath.Join(seat.Path, clientSubmodule)
+	gitIn(t, fixture.main, "worktree", "add", "-b", seat.Branch, seat.Path, "main")
+	mkdirAll(t, link)
+	writeFile(t, filepath.Join(link, ".git"),
+		"gitdir: "+filepath.Join(fixture.main, clientSubmodule, ".git", "worktrees", "gone")+"\n")
+
+	verdict, err := Check(fixture.main, fixture.room, fixture.rig, fixture.seats)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !equalStrings(verdict.Wrong, []string{seat.Path}) {
+		t.Errorf("Wrong = %v, want %v", verdict.Wrong, []string{seat.Path})
+	}
+	if len(verdict.Registered) != 0 || len(verdict.Missing) != 0 {
+		t.Errorf("Registered = %v and Missing = %v, want both empty", verdict.Registered, verdict.Missing)
+	}
+}
+
 // A room whose worktrees were never started is Missing, not an error: "not started yet" is the state
 // `up` exists to change.
 func TestCheckReportsARoomThatWasNeverStarted(t *testing.T) {
