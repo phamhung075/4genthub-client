@@ -88,7 +88,7 @@ func (r *seatRepo) try(dir string, env []string, args ...string) (string, error)
 func envWithoutSession() []string {
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, SessionEnv+"=") {
+		if strings.HasPrefix(entry, SessionEnv+"=") || strings.HasPrefix(entry, CanonicalSessionEnv+"=") {
 			continue
 		}
 		env = append(env, entry)
@@ -115,7 +115,7 @@ func TestASeatsPushIsRefusedWithNoSessionSetAtAll(t *testing.T) {
 	if err == nil {
 		t.Fatalf("the seat's push succeeded; the guard did not refuse it:\n%s", out)
 	}
-	if !strings.Contains(out, "git guard") || !strings.Contains(out, "seats do not push") {
+	if !strings.Contains(out, "git guard") || !strings.Contains(out, "only the lead pushes") {
 		t.Errorf("push refused for the wrong reason:\n%s", out)
 	}
 	// Nothing reached the remote.
@@ -137,6 +137,42 @@ func TestTheOwnersPushFromTheCheckoutGoesThrough(t *testing.T) {
 
 	if out, err := r.try(r.checkout, nil, "push", "origin", "main"); err != nil {
 		t.Fatalf("the owner's push was refused: %v\n%s", err, out)
+	}
+}
+
+// The owner's ruling (2026-10-18) gives the push to the lead: the lead's push goes through from the checkout
+// and from its own linked worktree, under either session spelling, and its commit in the checkout lands.
+func TestTheLeadsPushAndCommitGoThrough(t *testing.T) {
+	r := newSeatRepo(t)
+	if _, err := Install(r.checkout, r.bin, &strings.Builder{}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(r.worktree, "file.txt"), []byte("lead work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.git(r.worktree, "commit", "-am", "lead work")
+
+	leadEnvs := map[string][]string{
+		SessionEnv:          withSession(envWithoutSession(), "room-lead@room"),
+		CanonicalSessionEnv: append(envWithoutSession(), CanonicalSessionEnv+"=agenthub--room--lead"),
+	}
+	// A push from the lead's worktree, under the OpenRig spelling.
+	if out, err := r.try(r.worktree, leadEnvs[SessionEnv], "push", "origin", "seat-work"); err != nil {
+		t.Fatalf("the lead's push from its worktree was refused: %v\n%s", err, out)
+	}
+	// A commit and a push in the checkout, under the canonical spelling the 4genthub runtime sets.
+	if err := os.WriteFile(filepath.Join(r.checkout, "file.txt"), []byte("lead main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := r.try(r.checkout, leadEnvs[CanonicalSessionEnv], "commit", "-am", "lead main"); err != nil {
+		t.Fatalf("the lead's commit in the checkout was refused: %v\n%s", err, out)
+	}
+	if out, err := r.try(r.checkout, leadEnvs[CanonicalSessionEnv], "push", "origin", "main"); err != nil {
+		t.Fatalf("the lead's push from the checkout was refused: %v\n%s", err, out)
+	}
+	head := strings.TrimSpace(r.git(r.checkout, "rev-parse", "HEAD"))
+	if got := strings.TrimSpace(r.git(r.remote, "rev-parse", "main")); got != head {
+		t.Errorf("the remote main is %s, not the lead's commit %s", got, head)
 	}
 }
 

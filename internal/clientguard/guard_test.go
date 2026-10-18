@@ -38,9 +38,87 @@ func TestAPushFromASessionIsRefusedAndNamesTheRouteOut(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("refusals = %v, want one", lines)
 	}
-	for _, want := range []string{"room-writer@room", "seats do not push", "the lead", "the owner"} {
+	for _, want := range []string{"room-writer@room", "only the lead pushes", "Hand the commit hash to the lead", "the reviewer gate"} {
 		if !strings.Contains(lines[0], want) {
 			t.Errorf("refusal = %q, want it to name %q", lines[0], want)
+		}
+	}
+}
+
+// The owner's ruling (2026-10-18) gives the push to the lead: a session naming the lead seat pushes from the
+// checkout, and from a linked worktree too, because the lead's own tree may be one.
+func TestTheLeadsPushIsNotRefusedInTheCheckoutOrAWorktree(t *testing.T) {
+	lead := ownerFacts(HookPrePush)
+	lead.HasSession, lead.Session = true, Session{Room: "room", Seat: PushAuthoritySeat}
+	if verdict := Decide(lead); verdict.Refused() {
+		t.Fatalf("refusals = %v, want none for the lead's push", verdict.Refusals)
+	}
+
+	linked := lead
+	linked.Linked, linked.Worktree = true, "/checkout/wt/lead"
+	if verdict := Decide(linked); verdict.Refused() {
+		t.Fatalf("refusals = %v, want none for the lead's push from a worktree", verdict.Refusals)
+	}
+}
+
+// Every other seat keeps the rule: the exception is the seat KEY, not a name that merely starts with it.
+func TestAnotherSeatIsStillRefusedWhenTheLeadIsExempt(t *testing.T) {
+	for _, name := range []string{"writer", "lead-dev", "lead2", ""} {
+		f := ownerFacts(HookPrePush)
+		f.HasSession, f.Session = true, Session{Room: "room", Seat: name}
+		if verdict := Decide(f); !verdict.Refused() {
+			t.Errorf("seat %q: refusals = none, want the push refused", name)
+		}
+	}
+}
+
+// The lead commits in the shared checkout it merges into; another seat's commit there is still refused.
+func TestTheLeadsCommitInTheSharedCheckoutIsNotRefused(t *testing.T) {
+	lead := seatFacts(HookPreCommit)
+	lead.Linked, lead.Worktree = false, "/checkout"
+	lead.Session.Seat = PushAuthoritySeat
+
+	if verdict := Decide(lead); verdict.Refused() {
+		t.Fatalf("refusals = %v, want none for the lead's commit in the checkout", verdict.Refusals)
+	}
+
+	writer := seatFacts(HookPreCommit)
+	writer.Linked, writer.Worktree = false, "/checkout"
+	if verdict := Decide(writer); len(verdict.Refusals) != 1 {
+		t.Fatalf("refusals = %v, want the shared-checkout refusal for another seat", verdict.Refusals)
+	}
+}
+
+// The canonical session name the 4genthub runtime sets names the same room and seat as the OpenRig one.
+func TestTheCanonicalSessionNameIsRead(t *testing.T) {
+	for name, want := range map[string]Session{
+		"agenthub--4genthub-min--lead": {Room: "4genthub-min", Seat: "lead"},
+		"4genthub-min-lead@4genthub-min": {Room: "4genthub-min", Seat: "lead"},
+	} {
+		session, ok := SessionFromEnv(func(key string) string {
+			if key == CanonicalSessionEnv || key == SessionEnv {
+				return name
+			}
+			return ""
+		})
+		if !ok || session != want {
+			t.Errorf("%q reads as %+v (found %v), want %+v", name, session, ok, want)
+		}
+	}
+	// The canonical env alone is enough: the OpenRig variable is absent on this host.
+	session, ok := SessionFromEnv(func(key string) string {
+		if key == CanonicalSessionEnv {
+			return "agenthub--room--writer"
+		}
+		return ""
+	})
+	if !ok || session.Seat != "writer" {
+		t.Errorf("canonical-only session reads as %+v (found %v)", session, ok)
+	}
+	// A name in neither spelling names no seat, so a push from it is not exempted.
+	for _, name := range []string{"agenthub--room", "agenthub----lead", "room@room", "agenthub--room--"} {
+		if _, ok := SessionFromEnv(func(string) string { return name }); ok {
+			t.Errorf("%q was read as a session", name)
 		}
 	}
 }

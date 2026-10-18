@@ -60,12 +60,26 @@ fn refusal_as(
     name: &str,
     args: serde_json::Value,
 ) -> Option<String> {
+    refusal_for_seat(dir, worktrees, session, "dev", name, args)
+}
+
+/// The same, with the seat KEY the launcher exported (`AGENTHUB_SEAT`) spelled out: the owner's push
+/// authority is decided from it when the session name is a stale one.
+fn refusal_for_seat(
+    dir: &Path,
+    worktrees: &str,
+    session: &str,
+    seat: &str,
+    name: &str,
+    args: serde_json::Value,
+) -> Option<String> {
     std::fs::create_dir_all(dir).unwrap();
     let mut child = Command::new("node")
         .arg(guard())
         .args(["--agy-hook", "pre"])
-        .env("AGENTHUB_SEAT", "dev")
+        .env("AGENTHUB_SEAT", seat)
         .env("AGENTHUB_SESSION_NAME", session)
+        .env_remove("OPENRIG_SESSION_NAME")
         .env("AGENTHUB_WORKTREES", worktrees)
         .env("PI_CODING_AGENT_DIR", dir)
         .stdin(Stdio::piped())
@@ -145,6 +159,41 @@ fn the_existing_rules_still_judge_commands_not_quoted_words() {
         "4genteam room queue create --body \"run git push --dry-run, pkill, git reset --hard\"",
         "git commit -m x --body-file - <<'EOF'\nOWNER_DOCS_COMMIT=1 git reset --hard\nEOF",
     ]);
+}
+
+/// The owner's 2026-10-18 ruling: the lead pushes after the reviewer gate and a green test run, and every
+/// other seat is still blocked. The exception is the seat KEY, read from either session spelling or from
+/// the key the launcher exported; a name that merely starts with it is another seat.
+#[test]
+fn the_lead_pushes_and_no_other_seat_does() {
+    let dir = fresh_dir("lead");
+    let push = || serde_json::json!({ "CommandLine": "git push origin main" });
+
+    for session in ["agenthub--room--lead", "room-lead@room"] {
+        assert_eq!(refusal_as(&dir, WORKTREES, session, "run_command", push()), None, "{session}");
+    }
+    assert_eq!(
+        refusal_for_seat(&dir, WORKTREES, "agenthub--room--dev", "lead", "run_command", push()),
+        None,
+        "the exported seat key alone admits the lead"
+    );
+
+    for session in ["", "agenthub--room--dev", "agenthub--room--lead-dev", "room-lead2@room"] {
+        let verdict = refusal_as(&dir, WORKTREES, session, "run_command", push());
+        assert!(
+            verdict.as_deref().is_some_and(|reason| reason.contains("(push)")),
+            "{session}: want the push rule, got {verdict:?}"
+        );
+    }
+
+    // The rest of the lead's guards stand: a force push is destructive git for every seat.
+    for session in ["agenthub--room--lead", "agenthub--room--dev"] {
+        let verdict = refusal_as(&dir, WORKTREES, session, "run_command", serde_json::json!({ "CommandLine": "git push --force origin main" }));
+        assert!(
+            verdict.as_deref().is_some_and(|reason| reason.contains("(git-destructive)")),
+            "{session}: want the destructive-git rule, got {verdict:?}"
+        );
+    }
 }
 
 #[test]
