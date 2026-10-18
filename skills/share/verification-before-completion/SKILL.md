@@ -136,6 +136,45 @@ Running a verification is necessary but not sufficient: a check can exit clean a
 - **A failure whose shape is a HANG reports nothing.** A bare `await` against a stated deadline that never re-checks cannot fail loudly. Race it against a timer so failure has a shape you can see.
 - **A completeness inventory read through a truncating display is worthless.** When deciding *which occurrences to change*, count with `grep -c` / `grep -o` / full-line output — never `cut`, `head`, or a pager, which can hide a match *past* the cut. Distinguish *"I found N"* (a count) from *"I saw N"* (a display). Audit multiline prose **by paragraph, not by line** — a line filter both misses long-line matches and false-flags paragraphs whose companion text is on the next line. Then re-audit with a **different method** than the one that built the inventory — same-method re-checking reproduces the blind spot. (Empty/short output is a claim about your COMMAND until re-proven a second way.)
 
+## What a completion gate can settle
+
+`4genteam complete` sends the acceptance criteria to a counts-only judge, so a criterion must name something
+the judge is SHOWN. Paths are redacted to `<path>` and test names to `<test>` at the transport, and exactly
+seven keys travel: test_command_ran, test_exit_code, tests_failed, files_changed, lines_changed, base_sha,
+head_sha. A criterion is admitted only when it names the test command, the run's exit code, a path this run's
+numstat lists, or a base/head sha prefix of at least 7 (`clientcomplete/gate.go`, `register.carries`); there is
+no line-count branch, so a count alone is refused before the judge is called.
+
+- **Admissible and informative:** the sha prefix plus the totals - "between 2c34515 and 216a89d, files_changed
+  is 3 and lines_changed is 21". Measured bands: a path-only criterion is admitted then judged blind
+  (0.16-0.34); a count alone is refused (exit 6); sha plus totals settles at 0.93-0.97.
+- **The base is the commit the change LEFT the line at:** the second parent of a merge tip, otherwise the
+  merge-base. The merge-base shortcut reports main-only commits reversed - measured: 3 files/72 lines where
+  the true change is 3 files/21 lines.
+- **A claim no fact can carry** - a screenshot, a rendered page, "reachable by tap" - has no admissible
+  wording: the command must produce the proof, or the claim goes in the details.
+- **A gitlink-only diff has no prose.** Name its path and the two counts; if the judge still cannot settle it,
+  the closure goes to the lead (numstat plus `git ls-tree`), never a criterion reworded to pass.
+- **An item with no criteria cannot close at all** - the gate answers `uncertain`. Add criteria first.
+
+## Done is committed, not said
+
+A change is done when it is in the versioned source on the line the room reads - a commit whose sha you can
+name. Not when a file sits in a seat dir, a row says so, or a message was relayed. Three shapes, three
+verdicts:
+
+- **Committed**: the sha names the change, `git show --numstat <sha> -- <path>` lists it. Done.
+- **Prepared, not committed** (a patch in a seat dir, a worktree edit, a design note): NOT done. Say
+  "prepared, not committed", name the path, and keep the item open.
+- **Owner-gated** (a docs-only path set, a push, a deploy): not yours to call done. The item stays in
+  progress naming the sha the owner must produce; closing it on the strength of the patch is the false claim
+  this skill exists to stop.
+
+The same rule for a skill: a skill that exists only in a worktree has reached no seat. It is delivered when
+the commit lands AND the reading seat was reseated - a running seat does not re-read its skills tree.
+Measured 2026-10-18: the lead's installed tree held 22 entries where the other seats held 25-27, and nothing
+reported it.
+
 ## Why This Matters
 
 From 24 failure memories:
