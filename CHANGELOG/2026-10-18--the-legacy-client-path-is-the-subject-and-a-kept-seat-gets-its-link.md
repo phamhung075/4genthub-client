@@ -29,11 +29,12 @@ working seats wrong and the row could never go green.
 ## Tests
 
 `internal/clientworktree/ensure_test.go`: the legacy path is cleared whatever branch it holds (branch
-and its commit survive); a dirty legacy is named and kept with no link placed while the rest of the room
-is still created; a kept path's link attaches to the legacy's lane branch and its commit; a kept path
-with no legacy and no branch gets the link created at the parent's gitlink; an unplaceable link is a
-note, and the run succeeds. The pre-existing clearance case still passes: the branch survives and the
-link attaches to it.
+and its commit survive); a dirty legacy on a LANE branch - the live architect/fe-dev shape, derived
+branch free - is named and kept with no link placed, while the rest of the room is still created; the
+created path's link attaches to the legacy's lane branch and its commit; a kept path's link attaches to
+the legacy's lane branch and its commit; a kept path with no legacy and no branch gets the link created
+at the parent's gitlink; an unplaceable link is a note, and the run succeeds. The two cases above are
+red on the previous commit and green here.
 
 `go vet ./...` clean; `go test -count=1 ./...` green in `agenthub_client`.
 

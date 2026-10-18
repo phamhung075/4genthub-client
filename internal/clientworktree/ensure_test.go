@@ -446,7 +446,10 @@ func TestEnsureClearsAPreDerivationClientWorktree(t *testing.T) {
 	legacy := seat.Path + "-client"
 	link := filepath.Join(seat.Path, clientSubmodule)
 
-	gitIn(t, clientRepository, "worktree", "add", "-b", seat.Branch, legacy, fixture.pins[clientSubmodule])
+	// A LANE branch, the shape a seat that moved off the old layout has: the branch is what carries the
+	// seat's client commits, so the created path's link must attach to it, not to the derived name.
+	const laneBranch = "fixture-room/go-dev-edit-yield"
+	gitIn(t, clientRepository, "worktree", "add", "-b", laneBranch, legacy, fixture.pins[clientSubmodule])
 	// A commit the seat made in the old layout, so the assertions below can tell an ATTACHED link - on the
 	// seat's own client work - from a branch created fresh at the parent's gitlink.
 	seatCommit := commitIn(t, legacy, "the seat's own client commit")
@@ -455,9 +458,8 @@ func TestEnsureClearsAPreDerivationClientWorktree(t *testing.T) {
 	// refused by git itself - the obstruction this step exists to clear. git answers the branch before it
 	// makes a directory, so the attempt leaves nothing behind but the parent it needed.
 	mkdirAll(t, filepath.Dir(link))
-	if out, err := gitTry(t, clientRepository, "worktree", "add", "-b", seat.Branch, link,
-		fixture.pins[clientSubmodule]); err == nil {
-		t.Fatalf("git made a second worktree on %s while %s held it: %s", seat.Branch, legacy, out)
+	if out, err := gitTry(t, clientRepository, "worktree", "add", laneBranch, link); err == nil {
+		t.Fatalf("git made a second worktree on %s while %s held it: %s", laneBranch, legacy, out)
 	}
 	if err := os.Remove(seat.Path); err != nil {
 		t.Fatalf("remove the empty directory the red-first attempt's parent made: %v", err)
@@ -473,13 +475,14 @@ func TestEnsureClearsAPreDerivationClientWorktree(t *testing.T) {
 	if entry, registered := clientEntry(t, clientRepository, legacy); registered {
 		t.Errorf("%s is still a registered worktree of the client repository: %+v", legacy, entry)
 	}
-	if got := gitIn(t, clientRepository, "rev-parse", "refs/heads/"+seat.Branch); got != seatCommit {
+	if got := gitIn(t, clientRepository, "rev-parse", "refs/heads/"+laneBranch); got != seatCommit {
 		t.Errorf("the branch %s is at %s, want the seat's own commit %s to survive the removal",
-			seat.Branch, got, seatCommit)
+			laneBranch, got, seatCommit)
 	}
 	entry, registered := clientEntry(t, clientRepository, link)
-	if !registered || entry.Branch != seat.Branch {
-		t.Errorf("the client link at %s is %+v, registered=%v; want it on %s", link, entry, registered, seat.Branch)
+	if !registered || entry.Branch != laneBranch {
+		t.Errorf("the client link at %s is %+v, registered=%v; want it on the legacy's branch %s, not the "+
+			"derived name %s", link, entry, registered, laneBranch, seat.Branch)
 	}
 	if got := gitIn(t, link, "rev-parse", "HEAD"); got != seatCommit {
 		t.Errorf("the client link at %s is at %s, want the seat's own commit %s: the link ATTACHES to the "+
@@ -502,7 +505,10 @@ func TestEnsureNamesAndKeepsADirtyPreDerivationClientWorktree(t *testing.T) {
 	clientRepository := filepath.Join(fixture.main, clientSubmodule)
 	legacy := seat.Path + "-client"
 	link := filepath.Join(seat.Path, clientSubmodule)
-	gitIn(t, clientRepository, "worktree", "add", "-b", seat.Branch, legacy, fixture.pins[clientSubmodule])
+	// A LANE branch, so the derived branch is free: without the blocked-legacy rule the link would be
+	// created at the pin and the seat would hold two client locations - the live architect/fe-dev shape.
+	const laneBranch = "fixture-room/go-dev-edit-yield"
+	gitIn(t, clientRepository, "worktree", "add", "-b", laneBranch, legacy, fixture.pins[clientSubmodule])
 	uncommitted := filepath.Join(legacy, "UNCOMMITTED.md")
 	writeFile(t, uncommitted, "work the operator has not committed\n")
 
@@ -518,14 +524,14 @@ func TestEnsureNamesAndKeepsADirtyPreDerivationClientWorktree(t *testing.T) {
 	if !strings.Contains(out.String(), legacy+": NOT cleared") || !strings.Contains(out.String(), seat.SeatKey+" keeps its client code there") {
 		t.Errorf("the note did not name %s and its seat:\n%s", legacy, out.String())
 	}
-	if entry, registered := clientEntry(t, clientRepository, legacy); !registered || entry.Branch != seat.Branch {
+	if entry, registered := clientEntry(t, clientRepository, legacy); !registered || entry.Branch != laneBranch {
 		t.Errorf("the dirty holder at %s was moved or removed: %+v (registered=%v)", legacy, entry, registered)
 	}
 	if _, err := os.Stat(uncommitted); err != nil {
 		t.Errorf("the uncommitted file was taken away: %v", err)
 	}
 	if _, registered := clientEntry(t, clientRepository, link); registered {
-		t.Errorf("a client link was placed at %s while the dirty legacy still holds %s", link, seat.Branch)
+		t.Errorf("a client link was placed at %s while the dirty legacy still holds %s", link, laneBranch)
 	}
 	// The rest of the room is still attempted: the reviewer's own worktree and link exist.
 	reviewer := derived[1]

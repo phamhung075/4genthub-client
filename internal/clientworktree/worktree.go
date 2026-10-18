@@ -303,13 +303,13 @@ func Ensure(mainRoot, roomDir, rig string, seats []clientservices.SeatType, out 
 		registered[canonicalPath(entry.Path)] = entry
 	}
 	derived := clientservices.DerivedWorktrees(roomDir, rig, seats)
-	legacyBranch, err := clearStaleClientWorktrees(mainRoot, roomDir, derived, out)
+	legacy, err := clearStaleClientWorktrees(mainRoot, roomDir, derived, out)
 	if err != nil {
 		return err
 	}
 	var refused []string
 	for _, worktree := range derived {
-		state, err := ensureOne(mainRoot, worktree, registered, legacyBranch[worktree.SeatKey], out)
+		state, err := ensureOne(mainRoot, worktree, registered, legacy[worktree.SeatKey], out)
 		if err != nil {
 			refused = append(refused, fmt.Sprintf("%s (%v)", worktree.Path, err))
 			fmt.Fprintf(out, "%s: refused: %v\n", worktree.Path, err)
@@ -333,6 +333,16 @@ func Ensure(mainRoot, roomDir, rig string, seats []clientservices.SeatType, out 
 // this constant are deleted together once no room carries one.
 const legacyClientSuffix = "-client"
 
+// legacyClient is what the migration found at one seat's pre-derivation client path, and it is what the
+// link placement needs: the branch the cleared worktree held, so the link attaches to the seat's own
+// client commits, and whether the path is still there because git refused to remove work it holds - in
+// which case nothing is placed for that seat, because a second client location is exactly what the
+// ruling forbids.
+type legacyClient struct {
+	branch  string
+	blocked bool
+}
+
 // clearStaleClientWorktrees is the migration, and it is deliberately narrow: for one derived writing
 // seat it removes the CLIENT repository's worktree when - and only when - that worktree sits at exactly
 // `<roomDir>/wt/<seat>-client`. The PATH is the subject, not the branch it holds: a seat's legacy
@@ -347,13 +357,13 @@ const legacyClientSuffix = "-client"
 // The removal is `git worktree remove` WITHOUT `--force`, so a legacy worktree holding uncommitted or
 // untracked work is refused by git. That is a NOTE and not an error: the path is named, the seat keeps
 // working there until it commits, the run continues, and Check names the path until its link exists.
-func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservices.Worktree, out io.Writer) (map[string]string, error) {
-	branchHeld := make(map[string]string, len(derived))
+func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservices.Worktree, out io.Writer) (map[string]legacyClient, error) {
+	found := make(map[string]legacyClient, len(derived))
 	repository := filepath.Join(mainRoot, clientSubmodule)
 	if info, err := os.Stat(repository); err != nil || !info.IsDir() {
 		// linkSubmodules owns this diagnosis and words it as the missing submodule it is; there is no
 		// worktree list to read until that is answered.
-		return branchHeld, nil
+		return found, nil
 	}
 	entries, err := Read(repository)
 	if err != nil {
@@ -376,10 +386,11 @@ func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservice
 			fmt.Fprintf(out, "%s: NOT cleared, the pre-derivation client worktree still holds work: %v\n"+
 				"%s keeps its client code there until it commits; its link at %s waits for that\n",
 				entry.Path, err, worktree.SeatKey, filepath.Join(worktree.Path, clientSubmodule))
+			found[worktree.SeatKey] = legacyClient{blocked: true}
 			continue
 		}
 		if entry.Branch != "" {
-			branchHeld[worktree.SeatKey] = entry.Branch
+			found[worktree.SeatKey] = legacyClient{branch: entry.Branch}
 			fmt.Fprintf(out, "%s: cleared (the pre-derivation client worktree; %s survives)\n",
 				entry.Path, entry.Branch)
 		} else {
@@ -387,13 +398,13 @@ func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservice
 				entry.Path)
 		}
 	}
-	return branchHeld, nil
+	return found, nil
 }
 
 // ensureOne is one derived worktree's three steps, and the ONE place the create/reuse/refuse decision
 // is made. Every refusal is answered BEFORE anything is created, so a refusal never leaves a
 // half-started path behind; it answers the word Ensure prints for that path.
-func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map[string]Entry, legacyBranch string, out io.Writer) (string, error) {
+func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map[string]Entry, legacy legacyClient, out io.Writer) (string, error) {
 	entry, isRegistered := registered[canonicalPath(worktree.Path)]
 	if isRegistered {
 		if entry.Prunable {
@@ -405,8 +416,12 @@ func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map
 		}
 		// KEPT, not re-derived: the room has a worktree here and `up` reads it. Whatever branch it is on
 		// is the branch the seat works on now, so it is neither refused nor moved. The two writes are the
-		// ones the ruling still places: the missing client link, and this client's own `.env` link.
-		placeClientLink(mainRoot, worktree, legacyBranch, out)
+		// ones the ruling still places: the missing client link, and this client's own `.env` link. A
+		// legacy the migration could not clear keeps the seat's client code: no link is placed, so there
+		// is never a second location, and Check names the path until the seat commits.
+		if !legacy.blocked {
+			placeClientLink(mainRoot, worktree, legacy.branch, out)
+		}
 		if err := linkKey(worktree); err != nil {
 			return "", err
 		}
@@ -419,13 +434,19 @@ func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map
 	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("cannot read %s: %v", worktree.Path, err)
 	}
-	if err := refuseClientBranch(mainRoot, worktree); err != nil {
+	// A seat the migration moved commits its client code on the branch its legacy held, so a path this
+	// run creates is linked on that branch too - not on the derived name, which may carry nothing.
+	branch := legacy.branch
+	if branch == "" {
+		branch = worktree.Branch
+	}
+	if err := refuseClientBranch(mainRoot, worktree, branch); err != nil {
 		return "", err
 	}
 	if err := createWorktree(mainRoot, worktree); err != nil {
 		return "", err
 	}
-	if err := linkSubmodule(mainRoot, worktree, worktree.Branch); err != nil {
+	if err := linkSubmodule(mainRoot, worktree, branch); err != nil {
 		return "", err
 	}
 	if err := linkKey(worktree); err != nil {
@@ -531,11 +552,11 @@ func createWorktree(mainRoot string, worktree clientservices.Worktree) error {
 // created. linkSubmodule asks the same question, but it runs after createWorktree, so its refusal left
 // the seat's worktree created without its client worktree - a half-started path nobody can use, and an
 // `up` transcript that reads `created` for it. Asking first means a refusal leaves nothing behind.
-func refuseClientBranch(mainRoot string, worktree clientservices.Worktree) error {
-	if worktree.Branch == "" {
+func refuseClientBranch(mainRoot string, worktree clientservices.Worktree, branch string) error {
+	if branch == "" {
 		return nil
 	}
-	return branchRefusal(filepath.Join(mainRoot, clientSubmodule), worktree.Branch,
+	return branchRefusal(filepath.Join(mainRoot, clientSubmodule), branch,
 		filepath.Join(worktree.Path, clientSubmodule))
 }
 
