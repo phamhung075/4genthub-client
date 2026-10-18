@@ -203,7 +203,10 @@ func seatArgumentHint(seat string) string {
 
 func (sendCommand) Summary() string { return "send one signed message to one seat" }
 
-const defaultSender = "owner session"
+// unknownSender is the label OpenRig itself puts on a message sent with no sender in the environment
+// (`cli/src/sender-identity.ts`, SENDER_FALLBACK). It is named here only so the help can say what a seat sees
+// when the signature is missing: nothing in this package writes a sender name anywhere.
+const unknownSender = "<unknown sender>"
 
 // sendFlagSpecs is the `send` option surface, spelled out so that SplitFlags can take an option from either
 // side of the message. Two groups, and the difference matters:
@@ -212,7 +215,10 @@ const defaultSender = "owner session"
 //   - refused explicitly (see sendRefused): a documented flag must stop the send, never silently become
 //     message text.
 var sendFlagSpecs = []clientruntime.FlagSpec{
-	{Name: "from", Value: true},
+	// --via-owner is the OWNER's route (ruling 4.6, method C): the message is left in a private file and one
+	// short command carrying only its path is typed into the room's owner node, so the signature a seat sees is
+	// the one the node's own terminal carries rather than a name this client wrote.
+	{Name: "via-owner"},
 	// --intent is OPTIONAL AND DEFAULTED TO `notice`, and the usage line below names that default: the intent
 	// picks the link kind that can authorize the send, so it is recorded on the decision line the send writes
 	// (which intent was used, not which the sender had in mind) and a default nobody was told about would be
@@ -264,6 +270,9 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		fmt.Fprintln(stdout, "           delegates_to, escalation/report -> escalates_to, question/notice -> collaborates_with), the")
 		fmt.Fprintln(stdout, "           room's declared links are what decide, and the intent actually used is recorded on the")
 		fmt.Fprintln(stdout, "           decision line. DEFAULT: "+string(commpolicy.IntentNotice)+".")
+		fmt.Fprintln(stdout, "  --via-owner  send from the room's owner node: the message goes to a private file and one command")
+		fmt.Fprintln(stdout, "  carrying only its path is typed into that node, so the signature is the node's own - attribution, NOT")
+		fmt.Fprintln(stdout, "  authentication")
 		fmt.Fprintln(stdout, "  --raw    send the text exactly, with no From/To/Sent envelope")
 		fmt.Fprintln(stdout, "  --json   print the runtime's answer as JSON")
 		fmt.Fprintln(stdout, "  --socket PATH  the runtime daemon's Unix socket: the flag, else $"+clientruntime.RuntimeSocketEnv+", else")
@@ -271,10 +280,12 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		fmt.Fprintln(stdout, "  with it, and the seat's name is read from THAT daemon's record.")
 		fmt.Fprintln(stdout, "  --verify/--force/--wait-for-idle/--dangerously-interact/--reason and --to/--pod/--rig/--host/--context")
 		fmt.Fprintln(stdout, "  are REFUSED: nothing is sent when one is present")
-		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape sends MESSAGE to that seat, starting it with \"From NAME:\" so the seat")
-		fmt.Fprintln(stdout, "knows who wrote it; --raw drops that prefix. SEAT is the rig's own seat key, as the rig declares it")
+		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape sends MESSAGE to that seat AS TYPED, with no sender written into the text:")
+		fmt.Fprintln(stdout, "the sender a seat reads comes from the environment of the shell that ran the send, and a message with")
+		fmt.Fprintln(stdout, "none shows as \""+unknownSender+"\"; --raw drops the runtime's own envelope. SEAT is the rig's")
+		fmt.Fprintln(stdout, "own seat key, as the rig declares it")
 		fmt.Fprintln(stdout, "(e.g. \"reviewer\"); a canonical session name handed to that argument is refused BY NAME. The seat's")
-		fmt.Fprintln(stdout, "session name is READ from the room's runtime record, never composed. NAME defaults to \""+defaultSender+"\".")
+		fmt.Fprintln(stdout, "session name is READ from the room's runtime record, never composed.")
 		return clientcmd.ExitOK
 	}
 
@@ -323,11 +334,13 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		return sendToSession(positional[0], positional[1], opts, socket, intent, stdout, stderr)
 	}
 	rig, seat := positional[0], positional[1]
-	from := opts["from"]
-	if from == "" {
-		from = defaultSender
+	// THE TEXT GOES VERBATIM, with no "From NAME:" written into it: that prefix is a CLAIM inside the message,
+	// and the sender a seat sees must come from the environment of the shell that ran the send (the runtime's
+	// own envelope here, or the owner node's terminal on the --via-owner route).
+	text := strings.Join(positional[2:], " ")
+	if opts["via-owner"] == "true" {
+		return sendViaOwnerNode(ownerSendDepsFor(), rig, seat, text, stdout, stderr)
 	}
-	text := fmt.Sprintf("From %s: %s", from, strings.Join(positional[2:], " "))
 
 	// THE SEAT'S SESSION NAME IS READ, NEVER COMPOSED, from the room's runtime record: a name invented from
 	// a convention cannot be split back into halves for a room whose name carries a dash.
