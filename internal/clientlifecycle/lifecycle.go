@@ -870,7 +870,11 @@ func (stopCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		printHelp(stdout, stopUsage,
 			"Stop agent. Its children - the compaction supervisors, the watchdogs and the bridge - stop with it,\n"+
 				"because agent is the single restart authority and a killed agent must not leave orphans behind.\n"+
-				"The stop is MACHINE-WIDE: it is not room intent, and the room stays in agent.json's list.")
+				"The stop is MACHINE-WIDE: it is not room intent, and the room stays in agent.json's list.\n\n"+
+				"This stops the SUPERVISION and nothing else. The seat sessions are left standing (their turns\n"+
+				"are not cut), and the runtime daemon is not a child of agent: no verb stops it, so it keeps the\n"+
+				"rooms and serves the seats across a stop. `up` starts the supervision again, and `continue`\n"+
+				"reports a rig whose seats are up while a safeguard is down as NOT restored.")
 		return clientcmd.ExitOK
 	}
 	name, ok := requireRig("stop", args, stderr)

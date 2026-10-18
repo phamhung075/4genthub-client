@@ -83,6 +83,10 @@ func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 // verb's decision without producing processes or heartbeat files.
 var rowsFor = safeguardRows
 
+// SafeguardRows is the same computation for a caller outside this package - `continue` reports the rows a
+// restore did not bring up - so the second reader cannot drift from `doctor` and `status`.
+func SafeguardRows(rig, root string) []clientservices.Health { return rowsFor(rig, root) }
+
 // safeguardRows is the ONE computation doctor, `status --json`, `compact`, `agent status` and `up`'s check
 // share.
 //

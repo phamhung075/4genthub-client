@@ -12,6 +12,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/seatpark"
 )
 
@@ -36,6 +37,10 @@ type restorer struct {
 	// they are struct fields so a test drives a whole restore with no seat, no terminal and no wall.
 	send func(ctx context.Context, session, text string) error
 	wall func(rig string) (opened bool, why string)
+	// safeguards is the rig's safeguards report - the rows `doctor` and `status` print, through the one
+	// computation in clientlifecycle. It is what lets a restore say whether the room it reports is
+	// supervised: `stop` leaves the seat sessions up, so the seats alone cannot answer that.
+	safeguards func(rig string) []clientservices.Health
 }
 
 // restoreSteps, when a test has set it, is handed the restorer newRestorer just wired, so the brief and
@@ -69,6 +74,9 @@ func newRestorer(log *teeLog, root string) *restorer {
 			return nil
 		},
 		wall: func(rig string) (bool, string) { return watchWall(rig, root) },
+		safeguards: func(rig string) []clientservices.Health {
+			return clientlifecycle.SafeguardRows(rig, root)
+		},
 	}
 	if restoreSteps != nil {
 		restoreSteps(r)
@@ -86,7 +94,10 @@ func newRestorer(log *teeLog, root string) *restorer {
 //  2. seats are counted from tmux AFTER the restore, because that reading - not the command's status - is
 //     what says whether the restore worked;
 //  3. no seats means the brief would go to nobody, so this aborts for that rig instead of reporting a
-//     success it did not get.
+//     success it did not get;
+//  4. seats are not the room: the safeguards are read after the seats, and a rig whose seats are up
+//     while a safeguard is down answers false - `stop` leaves the sessions standing, so this is the
+//     ordinary state of a room stopped and then "continued".
 func (r *restorer) restore(rigName, brief string) bool {
 	if len(rigSessions(rigName, sessionNames(r.root))) > 0 {
 		r.log.printf("%s: already live, skipping restore", rigName)
@@ -121,6 +132,20 @@ func (r *restorer) restore(rigName, brief string) bool {
 			r.log.printf("%s: brief did not reach %s", rigName, strings.Join(undelivered, ", "))
 			return false
 		}
+	}
+	// SEATS ARE NOT THE ROOM. `stop` stops agent and its children and leaves the seat sessions up, so a
+	// `continue` right after it found "already live", counted the seats and ended with "done" over a room
+	// whose seven safeguards were all down (measured 2026-10-18: agent, compact, watchdog, messages,
+	// roomguard, budget and bridge missing until `heal`). A restore that did not restore supervision is
+	// not a success, so the rows are named here and the rig answers false.
+	if down := clientservices.NotRunning(r.safeguards(rigName)); len(down) > 0 {
+		names := make([]string, 0, len(down))
+		for _, row := range down {
+			names = append(names, row.Safeguard)
+		}
+		r.log.printf("%s: seats live but supervision is down (%s) - not restored; run `4genteam up %s` (or `4genteam heal %s --fix`)",
+			rigName, strings.Join(names, ", "), rigName, rigName)
+		return false
 	}
 	r.openWatch(rigName)
 	// The pointer names the CLIENT's own read - `4genteam ps <RIG> --nodes`, which reads the node table through

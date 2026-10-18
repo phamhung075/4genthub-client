@@ -18,6 +18,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 // These tests need no network, no rig, no seat, no tmux and no real home: every one of those is a seam
@@ -127,6 +128,9 @@ type world struct {
 	sends []string
 	walls []string
 	tmux  func() []string
+	// safeguards is the rig's row report the restorer reads; every row is up unless a test says otherwise,
+	// because the report is not what most tests are about.
+	safeguards func(rig string) []clientservices.Health
 	// listFails makes the runtime refuse the room list: the read that failed.
 	listFails bool
 }
@@ -135,7 +139,7 @@ type world struct {
 // function rather than a slice so a test can have the seats appear only once the restore has run.
 func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 	t.Helper()
-	w := &world{t: t, tmux: tmux}
+	w := &world{t: t, tmux: tmux, safeguards: allRunningRows}
 	w.home = t.TempDir()
 	for _, dir := range []string{"briefs", "logs", "state"} {
 		if err := os.MkdirAll(filepath.Join(w.home, ".config", "4genthub", dir), 0o755); err != nil {
@@ -186,9 +190,24 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 			w.walls = append(w.walls, rig)
 			return true, ""
 		}
+		r.safeguards = func(rig string) []clientservices.Health { return w.safeguards(rig) }
 	}
 	t.Cleanup(func() { restoreSteps = previousSteps })
 	return w
+}
+
+// allRunningRows is the room's seven safeguards, every row up: the state a healthy rig is in, so a test
+// that is not about the report never has to build one.
+func allRunningRows(rig string) []clientservices.Health {
+	rows := make([]clientservices.Health, 0, len(clientservices.Safeguards()))
+	for _, safeguard := range clientservices.Safeguards() {
+		rowRig := ""
+		if clientservices.RigScoped(safeguard) {
+			rowRig = rig
+		}
+		rows = append(rows, clientservices.Health{Rig: rowRig, Safeguard: safeguard, State: clientservices.Running})
+	}
+	return rows
 }
 
 // record notes one runtime step the restorer took, in order.
@@ -288,6 +307,45 @@ func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
 		if !strings.Contains(w.log(), line) {
 			t.Errorf("the log is missing %q:\n%s", line, w.log())
 		}
+	}
+}
+
+// TestALiveRigWhoseSupervisionIsDownIsNotRestored: the room `stop` leaves behind - the seat sessions
+// standing, agent and its children gone. `continue` used to print "already live", count the seats and end
+// with "done" over it, so the owner read a restored room that had no supervision at all. The seams are up,
+// the seats are up, two safeguards are not: the log must name them and the verb that starts them, must not
+// say done, and must still deliver the brief to the seats that are alive.
+func TestALiveRigWhoseSupervisionIsDownIsNotRestored(t *testing.T) {
+	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
+	w.safeguards = func(rig string) []clientservices.Health {
+		rows := allRunningRows(rig)
+		for i := range rows {
+			if rows[i].Safeguard == clientservices.Compact || rows[i].Safeguard == clientservices.Agent {
+				rows[i].State = clientservices.Stopped
+			}
+		}
+		return rows
+	}
+	brief := w.brief("rig-a.txt", "Take the next board row.\n")
+
+	code, _, _ := w.run("continue", "rig-a", brief)
+	if code != ExitRestoreFailed {
+		t.Fatalf("exit = %d, want %d — a room with no supervision is not restored", code, ExitRestoreFailed)
+	}
+	for _, line := range []string{
+		"rig-a: already live, skipping restore",
+		"rig-a: seats live: 1",
+		"rig-a: seats live but supervision is down (compact, agent) - not restored; run `4genteam up rig-a`",
+	} {
+		if !strings.Contains(w.log(), line) {
+			t.Errorf("the log is missing %q:\n%s", line, w.log())
+		}
+	}
+	if strings.Contains(w.log(), "done — verify") {
+		t.Errorf("the log reads as a restored room:\n%s", w.log())
+	}
+	if len(w.sends) != 1 || !strings.Contains(w.sends[0], "alpha") {
+		t.Errorf("the live seat was not briefed: %q", w.sends)
 	}
 }
 

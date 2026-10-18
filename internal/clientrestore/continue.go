@@ -14,9 +14,11 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
-// ExitRestoreFailed is `continue`'s own failure - the restore left no seats up, or a brief the caller
-// asked for does not exist. It coincides with clientcmd.ExitRemote's number while answering a different
-// question, so it is named here rather than borrowed, the same rule ExitStartFailed and ExitPeak follow.
+// ExitRestoreFailed is `continue`'s own failure - the restore left no seats up, a brief the caller asked
+// for does not exist, or the seats are up while a safeguard is down (a room `stop`ped and then
+// "continued": stop leaves the sessions standing). It coincides with clientcmd.ExitRemote's number while
+// answering a different question, so it is named here rather than borrowed, the same rule ExitStartFailed
+// and ExitPeak follow.
 const ExitRestoreFailed = 1
 
 const continueUsage = "usage: 4genteam continue [--state-root DIR] [RIG [BRIEF|--no-brief] | --all] " + clientoffpeak.ModeFlagUsage
@@ -37,8 +39,11 @@ func (continueCommand) Summary() string {
 func (continueCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, continueUsage,
-			"Restores a rig from its latest snapshot (every seat resumes its own session) and sends each\n"+
+			"Restores a stopped rig from its latest snapshot (every seat resumes its own session) and sends each\n"+
 				"seat its brief. The rig is the parameter: its seats are discovered from tmux at run time.\n\n"+
+				"  The SEATS are what this verb restores. Supervision (agent and its children) is `up`'s: a rig\n"+
+				"  whose seats are up while a safeguard is down is reported NOT restored and exits 1, with the\n"+
+				"  safeguards named - `stop` stops agent and its children and leaves the sessions standing.\n\n"+
 				"  BRIEF  a file whose text every seat gets; default <home>/.config/4genthub/briefs/<rig>.txt\n"+
 				"         <home>/.config/4genthub/briefs/<rig>/<seat>.txt replaces it for that seat\n"+
 				"  --all  every stopped rig that has a brief; the run exits non-zero when a rig it visited is\n"+
