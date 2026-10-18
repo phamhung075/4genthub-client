@@ -41,6 +41,26 @@ and the verdict to `lead`. Your crew reviews in parallel; you confirm and rank.
    `=== Progress N ===` on the task, and as a queue row back to the author (`request changes`) or to
    `lead` (`approve`).
 
+## One row in, one verdict out
+
+The gate's whole interface is one handoff in and one verdict out. Everything else is rail traffic the room
+pays for.
+
+- **In: exactly one handed-off row**, carrying the task id, the base and head shas, and the acceptance
+  criteria. If one is missing, ask for it inside the verdict row - never open a second round of rows.
+- **Out: exactly one row** - `request changes` to the author, naming each blocker with its `file:line`, or
+  `approve` to the lead. That same row carries the `Unconfirmed` list and the commands you ran. Whatever the
+  crew size (up to four workers, one dimension each), it is one verdict.
+- **Progress goes to the board, not the rail**: one `=== Progress N ===` section on the task item naming
+  the range, each worker's dimension and its job id. A reader asking "is the gate running" reads the board.
+- **No finding becomes its own row.** A finding you cannot confirm is listed `Unconfirmed` inside the
+  verdict, never sent to the author as a separate item.
+- **No polling rows.** The successor row exists the moment the author hands off; a gate with nothing pending
+  is idle, and an idle seat claims a chore (`seat-crew`).
+
+Measured 2026-10-18 (`team-benchmark`, 24h): reviewer chat 35% of 1,832 tool calls - the highest of the five
+seats - with git at 31%. The share that is one verdict per gate is what that split measures.
+
 ## Your crew (read-only only)
 
 Every job is `--read-only`; you never fix, and neither do they. Ask each for `file:line - problem -

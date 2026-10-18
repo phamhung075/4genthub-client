@@ -11,7 +11,10 @@
 //   - THE PAIR IS RESOLVED ONCE, BY ITS SIBLINGS' FUNCTION. Every run prints `<room>@<state-dir>` and the
 //     socket it used, and those two are resolved by room.go's own parseInvocation - this group re-emits the
 //     two pair flags it reads and hands the positionals over, so the state dir's environment fallback and
-//     the refusal that names it cannot become a second answer written here.
+//     the refusal that names it cannot become a second answer written here. ROOM is the first positional and
+//     the ONE that defaults: a sub-verb one positional short takes that room from $AGENTHUB_ROOM (the one
+//     reader of it is queueDefaultRoom), and the default is applied here so parseInvocation still sees the
+//     room it documents.
 //   - THE ACTOR IS THE SEAT'S OWN SESSION, OR THERE IS NO ACTOR. create, update, claim and close act as
 //     $AGENTHUB_SESSION_NAME. When it is unset the verb REFUSES naming the variable: it never guesses and
 //     never takes an actor from a flag, because a rail that records an actor nobody named is a rail nobody
@@ -45,22 +48,27 @@ import (
 // would let a sub-verb write an actor the seat never named.
 const sessionEnv = "AGENTHUB_SESSION_NAME"
 
+// roomEnv is the variable ROOM defaults to. The runtime launches every seat with it, so a seat asking about
+// its own room - the overwhelmingly common call: `queue show <qitem>` - need not name it, and the 147 failed
+// calls measured on 2026-10-18 (every one an id typed where the room belonged) become the working form.
+const roomEnv = "AGENTHUB_ROOM"
+
 // queueGroupUsage is the group's grammar. It is nine characters longer than one line because a sub-verb's
 // own flags are the difference between two of them, and a caller reading help should not have to diff six
 // lines to find the verb they typed.
-const queueGroupUsage = `usage: 4genteam room queue (list ROOM | show ROOM QITEM_ID | create ROOM --to SESSION --summary TEXT |
-                             update ROOM QITEM_ID | claim ROOM QITEM_ID | close ROOM QITEM_ID --reason R)
+const queueGroupUsage = `usage: 4genteam room queue (list [ROOM] | show [ROOM] QITEM_ID | create [ROOM] --to SESSION --summary TEXT |
+                             update [ROOM] QITEM_ID | claim [ROOM] QITEM_ID | close [ROOM] QITEM_ID --reason R)
                              [--state-root DIR] [--socket PATH]`
 
 // queueSubUsages is one line per sub-verb, so a usage error prints the shape of the verb the caller
 // actually typed instead of the whole group's grammar - room.go's own rule for the four verbs above it.
 var queueSubUsages = map[string]string{
-	"list":   "usage: 4genteam room queue list ROOM [--destination SESSION] [--source SESSION] [--state S[,S]] [--active-only] [--limit N] [--state-root DIR] [--socket PATH]",
-	"show":   "usage: 4genteam room queue show ROOM QITEM_ID [--state-root DIR] [--socket PATH]",
-	"create": "usage: 4genteam room queue create ROOM --to SESSION --summary TEXT<=120 [--body TEXT<=600] [--priority low|normal|high] [--reply-to QITEM_ID] [--tag T] [--state-root DIR] [--socket PATH]",
-	"update": "usage: 4genteam room queue update ROOM QITEM_ID [--state S] [--note TEXT] [--summary TEXT] [--closure-reason R] [--closure-target SESSION] [--blocked-on QITEM_ID] [--wake-after SECONDS] [--state-root DIR] [--socket PATH]",
-	"claim":  "usage: 4genteam room queue claim ROOM QITEM_ID [--state-root DIR] [--socket PATH]",
-	"close":  "usage: 4genteam room queue close ROOM QITEM_ID --reason R [--target SESSION] [--note TEXT] [--state-root DIR] [--socket PATH]",
+	"list":   "usage: 4genteam room queue list [ROOM] [--destination SESSION] [--source SESSION] [--state S[,S]] [--active-only] [--limit N] [--state-root DIR] [--socket PATH]",
+	"show":   "usage: 4genteam room queue show [ROOM] QITEM_ID [--state-root DIR] [--socket PATH]",
+	"create": "usage: 4genteam room queue create [ROOM] --to SESSION --summary TEXT<=120 [--body TEXT<=600] [--priority low|normal|high] [--reply-to QITEM_ID] [--tag T] [--state-root DIR] [--socket PATH]",
+	"update": "usage: 4genteam room queue update [ROOM] QITEM_ID [--state S] [--note TEXT] [--summary TEXT] [--closure-reason R] [--closure-target SESSION] [--blocked-on QITEM_ID] [--wake-after SECONDS] [--state-root DIR] [--socket PATH]",
+	"claim":  "usage: 4genteam room queue claim [ROOM] QITEM_ID [--state-root DIR] [--socket PATH]",
+	"close":  "usage: 4genteam room queue close [ROOM] QITEM_ID --reason R [--target SESSION] [--note TEXT] [--state-root DIR] [--socket PATH]",
 }
 
 func queueSubUsage(sub string) string {
@@ -105,9 +113,10 @@ func runQueue(args []string, stdout, stderr io.Writer) int {
 // shell" are only honest when the reader is told what fills the gap.
 func printQueueUsage(out io.Writer, sub string) {
 	fmt.Fprintln(out, queueSubUsage(sub))
-	fmt.Fprintln(out, "\nThe pair is printed by every sub-verb - `room: <room>@<state-dir> socket: <socket>` - because neither half")
-	fmt.Fprintln(out, "is resolved implicitly. --state-root is the flag, else ~/.config/4genthub;")
-	fmt.Fprintln(out, "--socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this machine's own.")
+	fmt.Fprintln(out, "\nThe pair is printed by every sub-verb - `room: <room>@<state-dir> socket: <socket>`. ROOM is the first")
+	fmt.Fprintln(out, "positional and the only one that defaults: leave it out and it is $"+roomEnv+", the room the runtime")
+	fmt.Fprintln(out, "launched this seat into, so `queue show <qitem>` reads this seat's own rail. --state-root is the flag,")
+	fmt.Fprintln(out, "else ~/.config/4genthub; --socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this machine's own.")
 	fmt.Fprintln(out, "\nThe daemon owns the room's rail and is its only writer: every verb renders the rows the daemon")
 	fmt.Fprintln(out, "re-read from its store, so the state printed is the state the next read shows. list prints")
 	fmt.Fprintln(out, "<qitem_id> <state> <priority|-> <summary>, one row per line; show prints a row's own fields and then")
@@ -178,6 +187,18 @@ func parseQueue(sub string, args []string, own []clientruntime.FlagSpec, positio
 		fmt.Fprintf(stderr, "4genteam room queue %s: %v. %s\n", sub, err, queueSubUsage(sub))
 		return queueArgs{}, clientcmd.ExitRoomRefused, false
 	}
+	// ROOM DEFAULTS, AND THE COUNT IS WHAT DECIDES: one positional short of the sub-verb's own list means the
+	// caller left ROOM out, so it is $AGENTHUB_ROOM. Counting rather than inspecting the words keeps this
+	// checkable - `queue show <qitem>` and `queue show <room> <qitem>` cannot be confused, because the number
+	// of positionals names which form was typed - and a room left out with no variable to fill it is refused
+	// HERE, before anything is asked of the daemon.
+	if len(rest) == len(positionals)-1 {
+		room := queueDefaultRoom(sub, stderr)
+		if room == "" {
+			return queueArgs{}, clientcmd.ExitRoomRefused, false
+		}
+		rest = append([]string{room}, rest...)
+	}
 	if len(rest) != len(positionals) {
 		fmt.Fprintf(stderr, "4genteam room queue %s: %s. %s\n", sub, queueArgumentRefusal(rest, positionals), queueSubUsage(sub))
 		return queueArgs{}, clientcmd.ExitRoomRefused, false
@@ -191,21 +212,27 @@ func parseQueue(sub string, args []string, own []clientruntime.FlagSpec, positio
 	return queueArgs{invocation: inv, opts: opts, positional: rest}, clientcmd.ExitOK, true
 }
 
+// queueDefaultRoom is the room a sub-verb one positional short uses, or a refusal naming the variable that
+// would have supplied it. It never guesses a room from a word already on the line: an id typed where the
+// ROOM belongs is not a room, and treating it as one would ask the daemon about a room that does not exist.
+func queueDefaultRoom(sub string, stderr io.Writer) string {
+	if room := strings.TrimSpace(os.Getenv(roomEnv)); room != "" {
+		return room
+	}
+	fmt.Fprintf(stderr, "4genteam room queue %s: ROOM was left out and $%s is unset, so there is no room to default to; name the room, or run this from a seat the runtime launched. %s\n", sub, roomEnv, queueSubUsage(sub))
+	return ""
+}
+
 // queueArgumentRefusal names the argument a queue sub-verb was not handed, or the ones it was handed too
-// many of. It is room.go's argumentRefusal for this group's vocabulary: a queue sub-verb's second
-// positional is a QITEM_ID, and telling a caller they are missing a SEAT would send them to a usage line for
-// a verb that has no seat at all.
+// many of. ROOM is the first positional and the only one with a default, so a count that is short by one or
+// more is a MISSING TAIL - the id, then the flag - rather than a missing room: telling a caller who typed
+// `queue close <room>` that a ROOM is required would send them to the form they already used.
 func queueArgumentRefusal(rest []string, wanted []string) string {
 	switch {
 	case len(rest) > len(wanted):
 		return fmt.Sprintf("unexpected argument %q", strings.Join(rest[len(wanted):], " "))
-	case len(rest) > 0 && strings.HasPrefix(rest[0], "qitem-"):
-		// The old `rig queue show <id>` habit: the id came first, but the ROOM is the first argument.
-		return fmt.Sprintf("%q is a queue item id, and the %s comes first (your room is $AGENTHUB_ROOM)", rest[0], wanted[0])
-	case len(rest) == 0:
-		return fmt.Sprintf("a %s is required", wanted[0])
 	case len(rest) < len(wanted):
-		return fmt.Sprintf("a %s is required", wanted[len(rest)])
+		return fmt.Sprintf("a %s is required", wanted[len(wanted)-1])
 	default:
 		return ""
 	}

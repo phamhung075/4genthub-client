@@ -2025,6 +2025,15 @@ fn send(to_child: &Sender<String>, frame: &serde_json::Value) -> Result<(), Stri
         .map_err(|_| "the agent's channel is closed".to_string())
 }
 
+/// Append one line to a seat's own log from OUTSIDE the runner: the start path's failures happen before any
+/// runner exists, and a start that writes no line leaves the seat's log unable to tell "the pane died" from
+/// "nobody asked". Measured 2026-10-18 (feedback 3ac8b369): three reseats stranded the seat with no log line
+/// and no state file at all. The pane stays the operator's surface; a log that cannot be written is said on
+/// stderr rather than returned, exactly as `append_mirrored` does for the runner's own lines.
+pub fn append_seat_log(state_dir: &Path, room: &str, seat: &str, text: &str) {
+    append_mirrored(&seat_log_path(state_dir, room, seat), text);
+}
+
 /// The seat's own log: `<state dir>/rooms/<room>/logs/<seat>.jsonl`.
 ///
 /// `logs/` is the third directory of the room's layout (`seats/`, `logs/`, `run/`), and this is what fills

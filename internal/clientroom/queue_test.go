@@ -341,13 +341,71 @@ func TestRoomQueueRefusalsCarryTheRoomContractsCodes(t *testing.T) {
 	assertRequests(t, unknown, `{"action":"QueueList","payload":{"filter":{"requester_session":"`+testSeat+`"},"room":"nope"}}`)
 }
 
-func TestAQueueItemIdInTheRoomPlaceNamesTheRoomFirstRule(t *testing.T) {
-	got := queueArgumentRefusal([]string{"qitem-20261015190439-d1c2c80b2fb2"}, []string{"ROOM", "QITEM_ID"})
-	if !strings.Contains(got, "queue item id") || !strings.Contains(got, "ROOM comes first") {
-		t.Fatalf("a qitem id where the ROOM belongs must say the room comes first, got %q", got)
+// THE 147 FAILED CALLS (measured 2026-10-18): a seat typed `queue show <qitem>` and the verb asked for a
+// ROOM. ROOM now defaults to $AGENTHUB_ROOM, and these three cases are the whole contract of that default:
+// the short form reaches the daemon as the seat's own room, an explicit room still wins, and a short form
+// with no variable is refused HERE naming the variable - not by asking the daemon about a room named after
+// the id, and not by a round trip that cannot answer.
+func TestRoomQueueShowDefaultsTheRoomFromTheSeatEnv(t *testing.T) {
+	t.Setenv(roomEnv, testRoom)
+	daemon := newFakeDaemon(t, map[string]string{
+		"QueueShow": okData(queueRowFrame("qitem-x", "in-progress", "high", "hand me the build log")),
+	})
+
+	code, stdout, stderr := runRoom(t, daemon.args("queue", "show", "qitem-x")...)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
 	}
-	if got := queueArgumentRefusal(nil, []string{"ROOM", "QITEM_ID"}); got != "a ROOM is required" {
-		t.Fatalf("no arguments keeps the plain refusal, got %q", got)
+	if !strings.Contains(stdout, "room: "+testRoom+"@"+daemon.stateDir) {
+		t.Errorf("stdout = %q, want the defaulted room printed as the pair", stdout)
+	}
+	assertRequests(t, daemon, `{"action":"QueueShow","payload":{"qitem_id":"qitem-x","room":"room-a"}}`)
+}
+
+func TestRoomQueueListDefaultsTheRoomAndAnExplicitRoomStillWins(t *testing.T) {
+	t.Setenv(roomEnv, testRoom)
+	t.Setenv(sessionEnv, "")
+	daemon := newFakeDaemon(t, map[string]string{"QueueList": okData("[]")})
+
+	if code, _, stderr := runRoom(t, daemon.args("queue", "list")...); code != clientcmd.ExitOK {
+		t.Fatalf("the defaulted form: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	if code, stdout, stderr := runRoom(t, daemon.args("queue", "list", "another-room")...); code != clientcmd.ExitOK {
+		t.Fatalf("the explicit form: exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	} else if !strings.Contains(stdout, "room: another-room@") {
+		t.Errorf("stdout = %q, want the room the caller named, not the default", stdout)
+	}
+	assertRequests(t, daemon,
+		`{"action":"QueueList","payload":{"filter":{},"room":"room-a"}}`,
+		`{"action":"QueueList","payload":{"filter":{},"room":"another-room"}}`)
+}
+
+func TestRoomQueueWithNoRoomAndNoEnvRefusesNamingTheVariable(t *testing.T) {
+	t.Setenv(roomEnv, "")
+	daemon := newFakeDaemon(t, map[string]string{"QueueShow": okData(queueRowFrame("qitem-x", "pending", "", "x"))})
+
+	code, stdout, stderr := runRoom(t, daemon.args("queue", "show", "qitem-x")...)
+	if code != clientcmd.ExitRoomRefused {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, stderr)
+	}
+	if !strings.Contains(stderr, "$"+roomEnv+" is unset") {
+		t.Errorf("stderr = %q, want the variable named", stderr)
+	}
+	if strings.Contains(stderr, "qitem-x is required") || strings.Contains(stderr, "ROOM is required") {
+		t.Errorf("stderr = %q, want the default's refusal, not a missing-positional one", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing rendered for a call that reached no daemon", stdout)
+	}
+	assertRequests(t, daemon)
+}
+
+func TestQueueArgumentRefusalNamesTheMissingTail(t *testing.T) {
+	if got := queueArgumentRefusal(nil, []string{"ROOM", "QITEM_ID"}); got != "a QITEM_ID is required" {
+		t.Fatalf("ROOM defaults, so an empty argument list is missing the id, got %q", got)
+	}
+	if got := queueArgumentRefusal([]string{testRoom, "qitem-x", "extra"}, []string{"ROOM", "QITEM_ID"}); got != `unexpected argument "extra"` {
+		t.Fatalf("a third positional is an extra, got %q", got)
 	}
 }
 

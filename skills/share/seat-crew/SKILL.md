@@ -22,6 +22,24 @@ scanning, drafting and parallel legwork. Your seat's `<seat>-workflow` says what
 
 Rule of thumb: if the work makes more intermediate text than final text, a worker does it.
 
+## Two rules the rail and the changelog enforce (2026-10-18)
+
+- **The queue verbs default the room.** Every `4genteam room queue` sub-verb takes `[ROOM]` as its first
+  positional and fills it from `$AGENTHUB_ROOM` when it is left out, so a seat's own rail needs no room:
+
+  ```sh
+  4genteam room queue show <qitem>
+  4genteam room queue claim <qitem>
+  4genteam room queue close <qitem> --reason handed_off_to --target reviewer --note "..."
+  ```
+
+  Name a room only when it is not your own. Measured 2026-10-18: 147 calls failed by typing the id where
+  the room belonged, and the verb then answered `the ROOM comes first`.
+- **One changelog file per merged task, not per commit.** A task's fix, its test and its correction share
+  the one `CHANGELOG/<date>--<title>.md`, written with the task's first commit and finished before the
+  merge; a change after the merge is a new task and gets its own file. Test-suite changes go to
+  `TEST-CHANGELOG.md`. Measured 2026-10-18: 56 of 71 commits carried a changelog file restating one task.
+
 ## How to start them
 
 **The tool paths.** Path A, `xd://mcp__deepseek_agent` with `{"prompt": "...", "cwd": "<worktree>"}`,
@@ -72,6 +90,38 @@ A worker is a fresh agent that knows nothing of this room. The file holds:
 - Run `4genteam offpeak` first. At peak, start only work that cannot wait, and add
   `--defer-to-off-peak` to batch work.
 - A failed worker is retried once with a sharper order; after that, do the part yourself or report it.
+
+## No work for your seat: claim one chore
+
+Idle is a fact you read, not a feeling: no pending or in-progress rail row addressed to you, no board
+item assigned to you in progress, and `4genteam room status` showing your seat at `quiet_seconds >= 900`.
+An idle seat takes ONE chore - a board item labelled `chore` - and works it for at most 30 minutes. The
+owner approved this standing list; no seat asks permission first.
+
+- **Claim** with `manage_task` `update`: `assignee=@<seat>`, `status=in_progress`, `details` =
+  `claim <date -u>`. The assignee IS the lock - re-read the item before starting, and if it already names
+  another seat, take a different chore.
+- **Never create a chore and never start code under one.** The lead seeds and replenishes, at most six
+  live. A chore that needs a fix or a decision returns to the lead as a `finding` rail row.
+- **Release**: `assignee` cleared, `status=todo`, and a Details line naming why (blocked, needs a
+  decision, past 30 minutes).
+- **Close** only with the output pasted into Details - the list and its counts; a chore with no diff
+  closes by the board route, and the close says so.
+- The rail is not the claim surface: a row is ONE action to ONE destination, and a chore has no
+  destination until it is claimed.
+
+The catalogue the lead seeds, and what "done" produces:
+
+| Chore | The output |
+| :--- | :--- |
+| skills install drift | per seat, the dirs `seats/<seat>/skills` lacks against the client tree |
+| rail hygiene | `handed-off` rows whose successor is missing or itself handed off |
+| board hygiene | items `in_progress` with no Progress update in 2h, and items with no acceptance criteria |
+| report triage prep | today's feedback rows that no board item names, grouped by `layer` |
+| doc citation rot | `ai_docs/` and skill citations whose path no longer exists |
+| obsolete markers | each `*.obsolete`: is a live doc referencing it, is its content superseded in git |
+
+Live state is the board, not this file: the catalogue is permanent, the instances change every day.
 
 ## Owning the result
 

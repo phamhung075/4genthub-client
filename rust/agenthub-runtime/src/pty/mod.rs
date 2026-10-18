@@ -856,6 +856,10 @@ mod pane_pid_tests {
     /// reports instead of a manufactured 0.
     #[test]
     fn a_live_session_answers_a_pid_and_the_record_describes_it() {
+        // A LIVE pane for the whole read, so this case holds the process's tmux root for a scratch server of its
+        // own the way every other pane-opening case does: `TMUX_TMPDIR` is process-wide, and a guarded test that
+        // drops its root runs `kill-server` against it - which ended this case's session.
+        let _server = test_servers::own("pane-pid-live");
         let dir = std::env::temp_dir().join(format!("pty-pane-pid-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let session = format!("pane-pid-live-{}", std::process::id());
