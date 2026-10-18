@@ -24,12 +24,14 @@ type checks struct {
 	D5Numstat bool `json:"d5_numstat_sanity"`
 }
 
-// result is the gate's whole answer.
+// result is the gate's whole answer. Warnings are advisory: they name criteria whose wording the judge
+// cannot read, and they never change the verdict.
 type result struct {
 	Verdict   clientjev.Verdict `json:"verdict"`
 	Reasons   string            `json:"reasons"`
 	Checks    checks            `json:"deterministic_checks"`
 	Evaluator string            `json:"evaluator"`
+	Warnings  []string          `json:"warnings,omitempty"`
 }
 
 // register is what the evidence bundle carries, and the only set of facts a criterion may be about: the
@@ -54,24 +56,50 @@ const shaPrefix = 7
 // fact is THIS run's own value, so a criterion claiming a different code does not resolve to it (it is still
 // judged if it names the command, which is a fact in its own right).
 func (r register) carries(criterion string) bool {
+	command, exitCode, path, sha := r.names(criterion)
+	return command || exitCode || path || sha
+}
+
+// names says which of the register's facts a criterion names. carries is the OR of them; the criteria
+// warning needs the parts, because a path is a fact this gate reads and the wire drops.
+func (r register) names(criterion string) (command, exitCode, path, sha bool) {
 	c := normaliseSpace(criterion)
-	if r.command != "" && strings.Contains(c, r.command) {
-		return true
-	}
-	if strings.Contains(c, "exit") && containsInteger(c, strconv.Itoa(r.exitCode)) {
-		return true
-	}
-	for _, path := range r.paths {
-		if path != "" && strings.Contains(c, path) {
-			return true
+	command = r.command != "" && strings.Contains(c, r.command)
+	exitCode = strings.Contains(c, "exit") && containsInteger(c, strconv.Itoa(r.exitCode))
+	for _, p := range r.paths {
+		if p != "" && strings.Contains(c, p) {
+			path = true
+			break
 		}
 	}
-	for _, sha := range r.shas {
-		if len(sha) >= shaPrefix && strings.Contains(strings.ToLower(c), strings.ToLower(sha[:shaPrefix])) {
-			return true
+	for _, s := range r.shas {
+		if len(s) >= shaPrefix && strings.Contains(strings.ToLower(c), strings.ToLower(s[:shaPrefix])) {
+			sha = true
+			break
 		}
 	}
-	return false
+	return command, exitCode, path, sha
+}
+
+// pathOnlyWarnings names the criteria the judge will read blind. A criterion that carries a numstat path and
+// none of the command, the exit code or a sha is ADMITTED by the register, and then the count-only wire
+// (clientjev.RedactForWire, owner ruling O9a) replaces its path with "<path>" before Jev sees it: the judge
+// is asked whether "<path> is fixed", a claim whose only fact was removed. These are warnings, not refusals -
+// the criterion stays in the judge's set and the verdict is unchanged - and each names the form the wire
+// carries: the test command with its exit code, a base/head sha prefix, and the counts.
+func (r register) pathOnlyWarnings(criteria []string) []string {
+	var warnings []string
+	for i, criterion := range criteria {
+		command, exitCode, path, sha := r.names(criterion)
+		if !path || command || exitCode || sha {
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf("criterion_%d %q names only a carried path, and the wire "+
+			"redacts a path to <path> before Jev sees it, so the criterion is judged blind; name a fact the "+
+			"judge can read: the test command with its exit code, a base/head sha prefix, and the counts "+
+			"(how many files changed, how many lines moved)", i+1, criterion))
+	}
+	return warnings
 }
 
 // refusal is the unjudgeable verdict's own words: the criteria it refused, the ones that were judgeable, and
@@ -153,6 +181,7 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 	}
 	r := register{command: normaliseSpace(body.Test.Command), exitCode: body.Test.ExitCode, paths: paths,
 		shas: []string{body.BaseSHA, body.HeadSHA}}
+	warnings := r.pathOnlyWarnings(criteria)
 	var refused, judgeable []int
 	for i, criterion := range criteria {
 		if r.carries(criterion) {
@@ -163,10 +192,10 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 	}
 	if len(refused) > 0 {
 		return result{Verdict: clientjev.Unjudgeable, Reasons: r.refusal(refused, judgeable, criteria),
-			Checks: c, Evaluator: "deterministic"}
+			Checks: c, Evaluator: "deterministic", Warnings: warnings}
 	}
 	verdict, reasons, _ := cfg.EvaluateCriteria(ctx, criteria, body)
-	return result{Verdict: verdict, Reasons: reasons, Checks: c, Evaluator: "jev"}
+	return result{Verdict: verdict, Reasons: reasons, Checks: c, Evaluator: "jev", Warnings: warnings}
 }
 
 // parseNumstat reads `git diff --numstat` lines: added, deleted, path. A binary file counts "-" lines.
