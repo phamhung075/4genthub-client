@@ -48,6 +48,14 @@ const (
 	// verbs never have to use a name that means something else to say what happened.
 	ExitPartialStart = 2
 	ExitRoomRefused  = 3
+	// ExitRefused is a policy refusal this client makes itself, distinct from a caller error (2) and from a
+	// machine that cannot do the thing (3): the verb was asked for something the rules do not allow the
+	// caller to do. The first user is `4genteam send --via-owner` from a shell that is not the room's owner
+	// node - it signs with that node's terminal, so only the node may ask for it (ruling 2026-10-18) - and
+	// the number is its own rather than borrowed for the reason the two above are named: a caller reading a
+	// code must be able to tell "not allowed" from "wrong arguments" and "not available here". 5 is the
+	// first value the block leaves free.
+	ExitRefused = 5
 )
 
 // CodedError is the Python client scripts' SyncError: a message plus the exit code the process should

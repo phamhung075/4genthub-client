@@ -52,12 +52,13 @@ func supervisorFor(path, runtime string, working bool, sent *[]string, interrupt
 	supervisor.Seats = func(string) []string { return []string{"lead"} }
 	supervisor.SeatLog = func(string, string) (string, string) { return path, runtime }
 	supervisor.Idle = func(string, string) bool { return !working }
-	supervisor.Say = func(_, _, text string, raw bool) {
+	supervisor.Say = func(_, _, text string, raw bool) error {
 		if raw {
 			*sent = append(*sent, "/compact RAW")
-			return
+			return nil
 		}
 		*sent = append(*sent, text)
+		return nil
 	}
 	supervisor.RPCCompact = func(string, string) string { *sent = append(*sent, "RPC"); return "sent" }
 	supervisor.Abort = func(string, string) { *sent = append(*sent, "ABORT") }
@@ -502,5 +503,182 @@ func TestRigSayNeverShellsOutToTheRigTool(t *testing.T) {
 	rigSay("room1", "alpha", "hello", false)
 	if !called {
 		t.Fatal("rigSay did not reach the runtime with no `rig` on PATH: it shelled out to the rig tool instead")
+	}
+}
+
+// getenvSeam is the off-peak gate's two inputs as one seam: what OFFPEAK_ONLY answers and what OFFEPEAK_UTC
+// answers. The holiday file stays empty, so the machine's own cannot change what a case asserts.
+func getenvSeam(mode, pin string) func(string) string {
+	return func(key string) string {
+		switch key {
+		case clientoffpeak.ModeEnv:
+			return mode
+		case clientoffpeak.PinEnv:
+			return pin
+		}
+		return ""
+	}
+}
+
+// TestAPeakHeldResumeIsSentWhenTheWindowOpens: a refusal DEFERS the resume, it does not drop it (7.9: the
+// message is held, and it is sent at the first open minute). The witness the compaction left in place is the
+// only thing that can ask again, so a refusal that cleared it would leave the seat silent for good. The step
+// between the two passes pins the other half: a hold is logged once, not once per pass.
+func TestAPeakHeldResumeIsSentWhenTheWindowOpens(t *testing.T) {
+	supervisor, sent, logged := gatedSupervisor(t, "", "2026-10-09 02:00", deepSeekRoomNode())
+	supervisor.Step()
+	if len(*sent) != 0 {
+		t.Fatalf("the resume was sent at peak: %v", *sent)
+	}
+	held := strings.Join(*logged, "|")
+	if !strings.Contains(held, "resume held") {
+		t.Fatalf("the hold was not logged: %v", *logged)
+	}
+
+	supervisor.Step()
+	if len(*sent) != 0 {
+		t.Fatalf("the resume was sent at peak: %v", *sent)
+	}
+	if again := strings.Join(*logged, "|"); again != held {
+		t.Errorf("the hold was re-logged while it was still held:\nfirst %q\nthen  %q", held, again)
+	}
+
+	supervisor.Getenv = getenvSeam("", "2026-10-09 05:00")
+	supervisor.Step()
+	if len(*sent) != 1 || (*sent)[0] != resumeText {
+		t.Fatalf("the held resume was not sent when the window opened: sent %v, logged %v", *sent, *logged)
+	}
+	if !strings.Contains(strings.Join(*logged, "|"), "told to resume") {
+		t.Errorf("the released resume was not logged: %v", *logged)
+	}
+}
+
+// TestASecondCompactionDuringAHeldResumeIsReported: the witness line is NEWS, not a heartbeat. A hold
+// suppresses writing the SAME witness again, and must not suppress a new one - a compaction that lands while
+// the resume is held is a second event, and an operator reading the log over the window must see it.
+func TestASecondCompactionDuringAHeldResumeIsReported(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	record := `{"type":"compaction","tokensAfter":40000}` + "\n"
+	if err := os.WriteFile(path, []byte(record), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var sent, interrupted, logged []string
+	supervisor := supervisorFor(path, "omp", false, &sent, &interrupted)
+	supervisor.Log = func(text string) { logged = append(logged, text) }
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	supervisor.Getenv = getenvSeam("", "2026-10-09 02:00")
+	supervisor.State["lead"] = &seatState{before: 300_000, hasBefore: true, count: 0, sent: supervisor.Now() - 200}
+
+	supervisor.Step() // held, first witness written
+	first := strings.Join(logged, "|")
+	if !strings.Contains(first, "WITNESSED") || !strings.Contains(first, "resume held") {
+		t.Fatalf("the first pass did not witness and hold: %v", logged)
+	}
+
+	// A SECOND compaction record lands while the resume is still held: it is a new event and must be seen.
+	if err := os.WriteFile(path, []byte(record+`{"type":"compaction","tokensAfter":20000}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logged = nil
+	supervisor.Step()
+	if len(sent) != 0 {
+		t.Fatalf("the resume was sent at peak: %v", sent)
+	}
+	if !strings.Contains(strings.Join(logged, "|"), "WITNESSED") {
+		t.Errorf("the second compaction during the hold was not reported: %v", logged)
+	}
+}
+
+// TestAResumeTheTransportRefusedKeepsItsWitness: the witness is cleared when the transport ACCEPTS the resume
+// and not when the send is attempted. A refused send means the seat never saw it, so clearing the witness
+// would make that loss final - and the next pass must ask the gate again and retry.
+func TestAResumeTheTransportRefusedKeepsItsWitness(t *testing.T) {
+	supervisor, sentPtr, logged := gatedSupervisor(t, clientoffpeak.ValueOff, "", nil)
+	sent := *sentPtr
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	supervisor.Say = func(_, _, text string, raw bool) error {
+		if raw {
+			return nil
+		}
+		sent = append(sent, text)
+		*sentPtr = sent
+		return errors.New("the seat's pane did not take the text")
+	}
+
+	supervisor.Step()
+	if len(sent) != 1 {
+		t.Fatalf("the resume was not attempted: %v", sent)
+	}
+	if !strings.Contains(strings.Join(*logged, "|"), "resume not delivered") {
+		t.Errorf("a refused resume was not reported: %v", *logged)
+	}
+	if state := supervisor.State["lead"]; state == nil || !state.hasBefore {
+		t.Fatalf("a refused resume cleared its witness: %+v", supervisor.State["lead"])
+	}
+
+	// The transport accepts on the next pass: the witness is cleared then, and only then.
+	supervisor.Say = func(_, _, text string, raw bool) error {
+		if !raw {
+			sent = append(sent, text)
+			*sentPtr = sent
+		}
+		return nil
+	}
+	supervisor.Step()
+	if state := supervisor.State["lead"]; state == nil || state.hasBefore {
+		t.Fatalf("an accepted resume left its witness in place: %+v", supervisor.State["lead"])
+	}
+}
+
+// TestAHoldArmedByTheDropClauseKeepsItsWitness: a resume witnessed by the DROP clause (the context fell, not
+// the count) is the case where `done` can regress - the seat works again and the reading rises. When the
+// window expires during a hold the witness must NOT be dropped, and the gate must be re-asked even with done
+// false; without a hold the old expiry behaviour stands (TestAnUnwitnessedCompactionIsReportedAndRetried).
+func TestAHoldArmedByTheDropClauseKeepsItsWitness(t *testing.T) {
+	path := seatLogFile(t, 40_000, 5)
+	var sent, interrupted, logged []string
+	supervisor := supervisorFor(path, "omp", false, &sent, &interrupted)
+	supervisor.Log = func(text string) { logged = append(logged, text) }
+	supervisor.Nodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	supervisor.Getenv = getenvSeam("", "2026-10-09 02:00")
+	// Witnessed by the DROP clause only: no compaction record in the log.
+	supervisor.State["lead"] = &seatState{before: 300_000, hasBefore: true, count: 0, sent: supervisor.Now() - 200}
+	supervisor.Step() // done (300k -> 40k), gate refuses: held
+	if len(sent) != 0 || !supervisor.State["lead"].held {
+		t.Fatalf("the drop-clause resume was not held: sent %v, state %+v", sent, supervisor.State["lead"])
+	}
+
+	// The seat works again and the reading rises: done is false from here on, and the window expires.
+	if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"message":{"usage":{"totalTokens":200000}}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	supervisor.Now = func() float64 { return supervisor.State["lead"].sent + witnessWindow + 1 }
+	logged = nil
+	supervisor.Step()
+	for _, text := range sent {
+		if text == resumeText {
+			t.Fatalf("the resume was sent at peak: %v", sent)
+		}
+	}
+	state := supervisor.State["lead"]
+	if !state.hasBefore || !state.held {
+		t.Fatalf("the expired window dropped a held witness: %+v", state)
+	}
+	// The window expiring must not end the deferral: with done still false, the pass past the window asks
+	// the gate again, and the resume goes out at the first open minute.
+	supervisor.Getenv = getenvSeam("", "2026-10-09 05:00")
+	supervisor.Step()
+	found := false
+	for _, text := range sent {
+		found = found || text == resumeText
+	}
+	if !found {
+		t.Fatalf("the drop-clause hold was not released when the window opened: sent %v", sent)
+	}
+	if state := supervisor.State["lead"]; state.hasBefore || state.held {
+		t.Errorf("the released resume kept its witness: %+v", state)
 	}
 }

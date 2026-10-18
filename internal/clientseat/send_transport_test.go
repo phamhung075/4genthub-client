@@ -226,10 +226,11 @@ func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
 	}
 
 	// FOUR questions, in this order: the seat's record (the name to write to), the room's declared links (the
-	// decision's source), and the send itself. The identity question is NOT one of them - see below.
+	// decision's source), the room's seat states (7.11's live set), and the send itself. The identity question
+	// is NOT one of them - see below.
 	var actions []string
 	timeout := time.After(5 * time.Second)
-	for len(actions) < 3 {
+	for len(actions) < 4 {
 		select {
 		case line := <-aimedSeen:
 			var frame struct {
@@ -243,7 +244,7 @@ func TestSendSocketAimsTheVerbAtThatDaemon(t *testing.T) {
 			t.Fatalf("the aimed socket saw %v, want the record, the links and then the send", actions)
 		}
 	}
-	want := "GetRoomStatus,GetRoomLinks,SendText"
+	want := "GetRoomStatus,GetRoomLinks,GetRoomStatus,SendText"
 	if strings.Join(actions, ",") != want {
 		t.Errorf("the aimed daemon was asked for %v, want %s: the decision and the delivery travel the SAME socket", actions, want)
 	}
@@ -278,6 +279,10 @@ func TestSendJsonPrintsTheRuntimesOwnAnswer(t *testing.T) {
 		}
 		if strings.Contains(line, `"ListSessions"`) {
 			return `{"ok":true,"data":[{"rigName":"r","logicalId":"r.peer","sessionName":"peer@r"}]}` + "\n"
+		}
+		if strings.Contains(line, `"GetRoomStatus"`) {
+			return `{"ok":true,"data":[{"room":"r","seat":"peer","session_name":"peer@r",` +
+				`"runtime":"omp","state":"Running"}]}` + "\n"
 		}
 		return `{"ok":true,"data":{"delivered":"peer@r","outcome":"submitted"}}` + "\n"
 	})
@@ -422,8 +427,9 @@ func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *te
 		if code != 0 {
 			t.Fatalf("send leg-solo-solo@leg-solo exit = %d, stderr = %q", code, errOut)
 		}
-		if got := countContaining(lines, `"GetRoomStatus"`); got != 1 {
-			t.Errorf("GetRoomStatus asked %d times, want 1: the record is where the name comes from", got)
+		// TWO reads: the seat's record (where the name comes from) and the live set 7.11 decides against.
+		if got := countContaining(lines, `"GetRoomStatus"`); got != 2 {
+			t.Errorf("GetRoomStatus asked %d times, want 2: the record names the seat, then the live set decides", got)
 		}
 		send := firstContaining(lines, `"SendText"`)
 		if send == "" {
@@ -445,8 +451,10 @@ func TestSendTranslatesTheCanonicalSessionNameAndPassesTheNativeOneThrough(t *te
 		if code != 0 {
 			t.Fatalf("send %s exit = %d, stderr = %q", native, code, errOut)
 		}
-		if got := countContaining(lines, `"GetRoomStatus"`); got != 0 {
-			t.Errorf("GetRoomStatus asked %d times, want 0: the native name is not the canonical form", got)
+		// ONE read, and it is NOT the name: the native string is passed through untouched, so the only
+		// question is the live set.
+		if got := countContaining(lines, `"GetRoomStatus"`); got != 1 {
+			t.Errorf("GetRoomStatus asked %d times, want 1 (the live set): the native name is not the canonical form", got)
 		}
 		if send := firstContaining(lines, `"SendText"`); !strings.Contains(send, native) {
 			t.Errorf("SendText = %s, want the native name untouched", send)

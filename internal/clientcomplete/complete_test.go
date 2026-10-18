@@ -357,7 +357,9 @@ func TestAcceptedGateStoresEvidenceThenCompletes(t *testing.T) {
 	if code != clientcmd.ExitOK || !strings.Contains(out, `"completed":true`) {
 		t.Fatalf("exit %d out %q err %q", code, out, errs)
 	}
-	want := []string{"GET /api/v2/tasks/t1", "POST /api/v2/tasks/t1/evidence", "POST /api/v2/tasks/t1/complete"}
+	// FOUR calls, and the third is the done report's row read: a STORED submission prints the row it closes,
+	// so the evidence step reads it back before complete is asked.
+	want := []string{"GET /api/v2/tasks/t1", "POST /api/v2/tasks/t1/evidence", "GET /api/v2/tasks/t1", "POST /api/v2/tasks/t1/complete"}
 	if strings.Join(rec.calls, "|") != strings.Join(want, "|") {
 		t.Errorf("calls = %v", rec.calls)
 	}
@@ -390,7 +392,8 @@ func TestShadowGateRecordsTheVerdictAndStillCompletes(t *testing.T) {
 	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.1}}}`)
 	t.Setenv(enforcementEnv, "")
 	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
-	if code != clientcmd.ExitOK || !strings.Contains(errs, "gate (shadow) reject") || len(rec.calls) != 3 {
+	// FOUR calls: the task read, the evidence, the done report's row read, and complete.
+	if code != clientcmd.ExitOK || !strings.Contains(errs, "gate (shadow) reject") || len(rec.calls) != 4 {
 		t.Errorf("exit %d err %q calls %v", code, errs, rec.calls)
 	}
 }

@@ -49,6 +49,18 @@ const (
 	// OrphanHandoffs is 7.11's row about WORK rather than about a child: the pending handoffs whose
 	// destination seat is not running. It carries no process, so its rows have no pid and no heartbeat.
 	OrphanHandoffs = "orphan_handoffs"
+	// Identity is `doctor`'s row about ATTRIBUTION rather than about a process: the nodes of a room whose
+	// messages carry a sender identity, and the ones whose do not. Like OrphanHandoffs it carries no pid and
+	// no heartbeat.
+	Identity = "identity"
+)
+
+// The state the identity row adds to 7.2's. It is not a safeguard and never appears in Obligatory; it is the
+// row's own verdict about a fact it read. `GuardAbsent`, the hooks row's state, sits beside `CloneDirty`
+// below because the two machine rows are one family.
+const (
+	// IdentityUnset is a node the daemon cannot name, so every message it sends arrives as `<unknown sender>`.
+	IdentityUnset = "identity_unset"
 )
 
 // The four states of 7.2. There is no fifth, and `running` is the ONLY state doctor accepts.
@@ -101,6 +113,65 @@ func Safeguards() []string {
 func RigScoped(safeguard string) bool {
 	return safeguard == Compact || safeguard == Watchdog || safeguard == Messages || safeguard == RoomGuard ||
 		safeguard == Budget
+}
+
+// Scope is WHERE a service runs: once per MACHINE, or once per RIG. It is 7.8's second column, and
+// RigScoped answers the same question for the safeguard rows: the table below carries the answer as DATA,
+// and a test holds the table and that predicate together so the heartbeat file's name cannot come from one
+// answer while the row's rig comes from the other.
+type Scope string
+
+const (
+	// Machine is one service for the whole machine: one bridge, one agent.
+	Machine Scope = "machine"
+	// Rig is one service per rig: the compaction supervisor, the watchdog, the seat deliverer, the idle-room
+	// guard and the budget guard.
+	Rig Scope = "rig"
+)
+
+// Service is one row of 7.8: a thing that must run, where it runs, how it starts, how it is checked, and
+// what restarts it. Check returns the EXISTING Health row, so AllRunning, NotRunning and StateLine keep
+// working untouched.
+//
+// Start is nil for a row whose start lives outside this package. The import direction is measured in the
+// ruling: clientservices imports no lifecycle or restore package, so a start body can only be a
+// package-level seam var that the command layer assigns, and a row with no seam yet carries nil.
+//
+// Check is the row's report. A scope-Rig row's Check is handed an Env whose Rigs holds exactly the one rig
+// it is for (Env.forRig); a scope-Machine row is handed the caller's env as it is and reads no rig.
+type Service struct {
+	Name      string
+	Scope     Scope
+	Start     func(ctx context.Context, env Env) error
+	Check     func(ctx context.Context, env Env) Health
+	RestartBy string
+}
+
+// Obligatory is 7.8's table, in the report's own order: the rig-scoped rows per rig first, then the two
+// machine-scoped rows. The order is data rather than a comment because Verify walks it: a table whose
+// literal order drifts from the report's prints a report nobody asked for, so a test asserts the order.
+var Obligatory = []Service{
+	{Name: Compact, Scope: Rig, Check: safeguardCheck(Compact), RestartBy: Agent},
+	{Name: Watchdog, Scope: Rig, Check: safeguardCheck(Watchdog), RestartBy: Agent},
+	{Name: Messages, Scope: Rig, Check: safeguardCheck(Messages), RestartBy: Agent},
+	{Name: RoomGuard, Scope: Rig, Check: safeguardCheck(RoomGuard), RestartBy: Agent},
+	{Name: Budget, Scope: Rig, Check: safeguardCheck(Budget), RestartBy: Agent},
+	{Name: Bridge, Scope: Machine, Check: safeguardCheck(Bridge), RestartBy: Agent},
+	// Nothing LOCAL restarts agent: `up` starts it, and its own death is reported rather than repaired.
+	{Name: Agent, Scope: Machine, Check: safeguardCheck(Agent), RestartBy: ""},
+}
+
+// safeguardCheck binds one row's name to the precedence of 7.2, which is verifyRow: the table holds the
+// check as a function, and the function is exactly the computation every reader already had. The rig comes
+// from the env the walk hands it (Env.forRig), and a machine-scoped name reads none.
+func safeguardCheck(name string) func(context.Context, Env) Health {
+	return func(_ context.Context, env Env) Health {
+		rig := ""
+		if RigScoped(name) && len(env.Rigs) > 0 {
+			rig = env.Rigs[0]
+		}
+		return verifyRow(env, name, rig)
+	}
 }
 
 // SilentAfter is 7.4's rule in one line: silent means a heartbeat age past three times the child's
@@ -338,18 +409,45 @@ func (e Env) recorded(safeguard, rig string) (Health, bool) {
 // Verify computes every row of the report. It is read-only in the strict sense 7.5 gives `doctor`: it
 // starts nothing, restarts nothing and signals nothing. The context is accepted for the callers that
 // will grow a bounded read; the computation itself touches only local files and pgrep.
+// It walks Obligatory - the ONE list of what a report covers and in what order - so a service added to the
+// table is reported without a second edit here. The states, the lines and the decisions are untouched; only
+// which of the two lists the walk reads has changed.
 func Verify(ctx context.Context, env Env) []Health {
 	_ = ctx
-	rows := make([]Health, 0, len(env.Rigs)*5+2)
-	for _, rig := range env.Rigs {
-		rows = append(rows, verifyRow(env, Compact, rig))
-		rows = append(rows, verifyRow(env, Watchdog, rig))
-		rows = append(rows, verifyRow(env, Messages, rig))
-		rows = append(rows, verifyRow(env, RoomGuard, rig))
-		rows = append(rows, verifyRow(env, Budget, rig))
+	size := 0
+	for _, service := range Obligatory {
+		if service.Scope == Rig {
+			size += len(env.Rigs)
+			continue
+		}
+		size++
 	}
-	rows = append(rows, verifyRow(env, Bridge, ""), verifyRow(env, Agent, ""))
+	rows := make([]Health, 0, size)
+	// RIG-MAJOR, not service-major: a reader comparing two rooms wants each room's rows together, so the
+	// outer walk is the rigs and the inner walk is the table. The table's own order still decides where each
+	// row sits inside a rig, and where the two machine rows sit after every rig's.
+	for _, rig := range env.Rigs {
+		for _, service := range Obligatory {
+			if service.Scope == Rig {
+				rows = append(rows, service.Check(ctx, env.forRig(rig)))
+			}
+		}
+	}
+	for _, service := range Obligatory {
+		if service.Scope == Machine {
+			rows = append(rows, service.Check(ctx, env))
+		}
+	}
 	return rows
+}
+
+// forRig is the env Verify hands a rig-scoped row: the same env, carrying the one rig that row is for. The
+// slice is replaced on a COPY of the struct, so the caller's own env is untouched. This is the only channel
+// by which a table row learns which rig it is reporting on, because Service.Check takes the env and nothing
+// else.
+func (e Env) forRig(rig string) Env {
+	e.Rigs = []string{rig}
+	return e
 }
 
 // verifyRow is the precedence of 7.2, once, for one safeguard.

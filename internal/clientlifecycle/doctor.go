@@ -121,6 +121,59 @@ func reportedRigs(rigs []string, rig string) []string {
 // runDoctor prints the rows and decides the exit code. `--json` prints the rows instead of the lines, and
 // the tail of alerts.log is a reading surface for the human output only: the JSON is the rows 7.5 says it
 // is.
+// doctorJSONRow is one row of `doctor --json`: 7.2's row, plus the reasons the human report prints beside
+// it when it has any. The reasons ride IN the row because --json is the surface a monitor reads, and a row
+// that says `orphan_handoffs` without naming the qitems is a row a reader cannot act on. The fields are
+// 7.2's exactly: a row with no reasons prints byte for byte what it printed before, the key omitted.
+type doctorJSONRow struct {
+	clientservices.Health
+	Reasons []string `json:"reasons,omitempty"`
+}
+
+// doctorJSONRows pairs every row with the lines the human report prints beside it, from the wrapper that
+// carries them: ONE rule for the JSON and the lines, so the two surfaces cannot disagree about a row.
+func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
+	orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
+	out := make([]doctorJSONRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, doctorJSONRow{Health: row,
+			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, orphanRows, identityRows)})
+	}
+	return out
+}
+
+// rowReasons finds one row's reasons: the wrapper is matched on (safeguard, rig), the pair the report
+// itself matches a row by.
+func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
+	orphanRows []orphanRow, identityRows []identityRow) []string {
+	for _, worktree := range worktreeRows {
+		if worktree.Row.Safeguard == row.Safeguard && worktree.Row.Rig == row.Rig {
+			return worktreeLines(worktree)
+		}
+	}
+	for _, clone := range cloneRows {
+		if clone.Row.Safeguard == row.Safeguard && clone.Row.Rig == row.Rig {
+			return cloneLines(clone)
+		}
+	}
+	for _, hooks := range hooksRows {
+		if hooks.Row.Safeguard == row.Safeguard && hooks.Row.Rig == row.Rig {
+			return hooksLines(hooks)
+		}
+	}
+	for _, orphan := range orphanRows {
+		if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Rig == row.Rig {
+			return orphanLines(orphan)
+		}
+	}
+	for _, identity := range identityRows {
+		if identity.Row.Safeguard == row.Safeguard && identity.Row.Rig == row.Rig {
+			return identityLines(identity)
+		}
+	}
+	return nil
+}
+
 func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	rows := rowsFor(rig, root)
 	// The worktrees row (the ruling's Check): where each seat's own worktree is, and whether it is the
@@ -157,8 +210,14 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "4genteam doctor: %s could not be read: %v\n", clientservices.OrphanHandoffs, orphan.Err)
 		}
 	}
+	// The identity row (ruling e2948011, 4.6): the rooms whose senders the daemon can name, and the nodes it
+	// cannot, whose messages arrive as <unknown sender> with nothing in the text to say so.
+	identityRows := identityRowFor(rig)
+	for _, identity := range identityRows {
+		rows = append(rows, identity.Row)
+	}
 	if asJSON {
-		body, err := json.MarshalIndent(rows, "", "  ")
+		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, orphanRows, identityRows), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam doctor: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
@@ -188,6 +247,11 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		}
 		for _, hooks := range hooksRows {
 			for _, line := range hooksLines(hooks) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
+		for _, identity := range identityRows {
+			for _, line := range identityLines(identity) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
@@ -233,6 +297,14 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		for _, hooks := range hooksRows {
 			if hooks.Row.Safeguard == row.Safeguard {
 				for _, line := range hooksReasonLines(hooks) {
+					fmt.Fprintln(stderr, line)
+				}
+			}
+		}
+		// An identity row that is down is only actionable with the node that cannot be named.
+		for _, identity := range identityRows {
+			if identity.Row.Safeguard == row.Safeguard && identity.Row.Rig == row.Rig {
+				for _, line := range identityReasonLines(identity) {
 					fmt.Fprintln(stderr, line)
 				}
 			}

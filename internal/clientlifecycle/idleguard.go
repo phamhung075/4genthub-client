@@ -84,7 +84,9 @@ func NewIdleGuard(rig, lead string, quiet, stall int, stateRoot string, out io.W
 	g.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	g.Modified = modTime
 	g.Idle = rigIdle
-	g.Say = rigSay
+	// The idle guard's nudges are latched and retried by its own clock, so a transport refusal is not this
+	// guard's signal: the supervisor's resume is the one send whose loss must keep its witness.
+	g.Say = func(rig, seat, text string, raw bool) { _ = rigSay(rig, seat, text, raw) }
 	g.Interrupt = func(rig, seat string) { tmuxInterrupt(stateRoot, rig, seat) }
 	g.Active = func(rig string) ([]clientruntime.QueueRow, error) {
 		return clientruntime.NewClient("").QueueList(rig, clientruntime.QueueListFilter{ActiveOnly: true})

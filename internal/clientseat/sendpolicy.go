@@ -90,6 +90,21 @@ func senderSeat() (string, string, error) {
 	return room, seat, nil
 }
 
+// sendRoomLive is the set of seat keys the target room is RUNNING now, which is what 7.11 makes a send's
+// liveness. It is a seam for the same reason sendSessions is: a case decides a non-live destination without
+// a daemon.
+var sendRoomLive = func(socket, room string) (commpolicy.LiveSet, error) {
+	seats, err := clientruntime.NewClient(socket).GetRoomStatus(room)
+	if err != nil {
+		return nil, err
+	}
+	live := make(commpolicy.LiveSet, len(seats))
+	for _, seat := range seats {
+		live[seat.Seat] = strings.EqualFold(strings.TrimSpace(seat.State), "running")
+	}
+	return live, nil
+}
+
 // recipientSeat maps the session name a caller typed to the seat key the policy speaks in, by reading the
 // SAME daemon the delivery goes to. A session no record lists answers false, and nothing is guessed in its
 // place: the room's links name seat keys, so a session that cannot be read back to one cannot be authorized.
@@ -144,7 +159,20 @@ func authorizeSend(socket, targetRoom, senderRoom, from, to string, intent commp
 			From: link.From, To: link.To, Kind: commpolicy.LinkKind(link.Kind), Allow: true,
 		})
 	}
-	decision := commpolicy.Decide(policy, to, intent)
+	// 7.11: the destination must be LIVE as well as allowed. A seat the room no longer runs can hold a link
+	// in the team definition, and words addressed to it reach no reader while the sender waits for a closure
+	// that cannot come. The liveness is the runtime's own room status - the same reading `reseat` and the
+	// peak gate use - and a read that FAILS refuses: a send decided on a guessed live set is a send decided
+	// on nothing.
+	live, err := sendRoomLive(socket, targetRoom)
+	if err != nil {
+		return sendHandle{}, &clientcmd.CodedError{
+			Code: clientcmd.ExitUnavailable,
+			Message: fmt.Sprintf("room %s's seats could not be read from the runtime at %s: %v - a send is "+
+				"delivered to a seat that is running, so nothing was sent", targetRoom, socket, err),
+		}
+	}
+	decision := commpolicy.DecideLive(policy, to, intent, live)
 	hash := commpolicy.PolicyHash(policy)
 
 	store, err := sendStore()

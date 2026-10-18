@@ -401,3 +401,31 @@ func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 		t.Errorf("NotRunning = %d rows, want all %d", len(NotRunning(rows)), len(rows))
 	}
 }
+
+// TestTheObligatoryTableAgreesWithTheScopeRule holds 7.8's table against the predicate the heartbeat file's
+// name and the row's rig are both decided by. Two answers to "does this run once per rig" is exactly how a
+// per-rig service ends up writing a machine-wide heartbeat, and then `doctor` reads one seat's beat for
+// every room.
+func TestTheObligatoryTableAgreesWithTheScopeRule(t *testing.T) {
+	seen := map[string]bool{}
+	for _, service := range Obligatory {
+		if seen[service.Name] {
+			t.Errorf("%s is in the table twice", service.Name)
+		}
+		seen[service.Name] = true
+		if service.Check == nil {
+			t.Errorf("%s has no Check: a row the report cannot compute is not a row", service.Name)
+		}
+		if wantRig := service.Scope == Rig; wantRig != RigScoped(service.Name) {
+			t.Errorf("%s: table says scope %q, RigScoped says %v", service.Name, service.Scope, RigScoped(service.Name))
+		}
+	}
+	for _, name := range Safeguards() {
+		if !seen[name] {
+			t.Errorf("%s is a safeguard the report lists and the table does not carry", name)
+		}
+	}
+	if len(Obligatory) != len(Safeguards()) {
+		t.Errorf("table carries %d rows, the report lists %d safeguards", len(Obligatory), len(Safeguards()))
+	}
+}
