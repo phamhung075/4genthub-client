@@ -30,9 +30,8 @@ type guardCommand struct{}
 
 func (guardCommand) Name() string    { return "guard" }
 func (guardCommand) Summary() string { return "the git guard: install its hooks, or run one" }
-func (guardCommand) NeedsRig() bool  { return false }
 
-func (guardCommand) Run(_ context.Context, _ *clientcmd.Rig, args []string, stdout, stderr io.Writer) int {
+func (guardCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, guardUsage)
 		fmt.Fprintln(stdout, "\nThe git guard refuses a push from a seat, a commit made in the shared checkout and a commit whose")

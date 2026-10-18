@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -164,7 +165,7 @@ func TestDoctorReportsOrphanHandoffsAndNamesEachQitem(t *testing.T) {
 		orphanHandoff{Qitem: "qitem-20261009-aaaa", Destination: "demo-writer@demo"},
 		orphanHandoff{Qitem: "qitem-20261009-bbbb", Destination: "demo-web-dev@demo"})
 
-	code, out, errOut := doctor(t)
+	code, out, errOut := doctor(t, f)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit = %d, want %d", code, clientcmd.ExitUnavailable)
 	}
@@ -192,7 +193,7 @@ func TestAnOrphanFreeReportIsExitOKAndARunningRow(t *testing.T) {
 	f.everythingRunning()
 	orphanRowFor(t, "demo", clientservices.Running)
 
-	code, out, errOut := doctor(t)
+	code, out, errOut := doctor(t, f)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut)
 	}
@@ -216,7 +217,7 @@ func TestAnUnreadableOrphanReadIsNotACleanReport(t *testing.T) {
 		}}
 	}
 
-	code, _, errOut := doctor(t)
+	code, _, errOut := doctor(t, f)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit = %d, want %d", code, clientcmd.ExitUnavailable)
 	}
@@ -228,31 +229,31 @@ func TestAnUnreadableOrphanReadIsNotACleanReport(t *testing.T) {
 	}
 }
 
-// The reader over the two rig reads it makes: a pending qitem to a RUNNING seat is not an orphan, the
-// owner's `human@` rows are not handoffs to a seat at all, and a dead seat's row is. With no rig named, a
-// handoff into another room is reported too; with one named, it is not.
+// The reader over the two runtime reads it makes: a pending qitem to a RUNNING seat is not an orphan, the
+// owner's `human@` rows are not handoffs to a seat at all, a dead seat's row is, and a row addressed into
+// another room is not this room's orphan.
 func TestOrphanHandoffsReadsTheQueueAndTheLiveNodes(t *testing.T) {
-	previous := rigToolOutput
-	t.Cleanup(func() { rigToolOutput = previous })
-	rigToolOutput = func(args ...string) ([]byte, error) {
-		switch args[0] {
-		case "queue":
-			if strings.Join(args[1:], " ") != "list --all-rigs --state pending --limit 1000 --json" {
-				t.Errorf("queue read = %v, want the pending listing of every rig", args)
-			}
-			return []byte(`[{"qitemId":"q-live","destinationSession":"demo-lead@demo"},` +
-				`{"qitemId":"q-human","destinationSession":"human@demo"},` +
-				`{"qitemId":"q-dead","destinationSession":"demo-writer@demo"},` +
-				`{"qitemId":"q-other","destinationSession":"other-go-dev@other"}]`), nil
-		case "ps":
-			if strings.Join(args[1:], " ") != "--nodes --all-rigs --json" {
-				t.Errorf("node read = %v, want every rig's nodes", args)
-			}
-			return []byte(`[{"canonicalSessionName":"demo-lead@demo","sessionStatus":"running"},` +
-				`{"canonicalSessionName":"demo-writer@demo","sessionStatus":"stopped"},` +
-				`{"canonicalSessionName":"other-go-dev@other","sessionStatus":"exited"}]`), nil
+	previousQueue, previousLive := queuePending, roomLive
+	t.Cleanup(func() { queuePending, roomLive = previousQueue, previousLive })
+	queuePending = func(room string) ([]clientruntime.QueueRow, error) {
+		if room != "demo" {
+			t.Errorf("queue read for %q, want the named room only", room)
 		}
-		return nil, errors.New("unexpected rig call: " + strings.Join(args, " "))
+		return []clientruntime.QueueRow{
+			{QitemID: "q-live", DestinationSession: "demo-lead@demo"},
+			{QitemID: "q-human", DestinationSession: "human@demo"},
+			{QitemID: "q-dead", DestinationSession: "demo-writer@demo"},
+			{QitemID: "q-other", DestinationSession: "other-go-dev@other"},
+		}, nil
+	}
+	roomLive = func(room string) (map[string]bool, error) {
+		if room != "demo" {
+			t.Errorf("node read for %q, want the named room only", room)
+		}
+		return map[string]bool{
+			"demo-lead@demo":     true,
+			"other-go-dev@other": true,
+		}, nil
 	}
 
 	orphans, err := orphanHandoffs("demo")
@@ -262,21 +263,15 @@ func TestOrphanHandoffsReadsTheQueueAndTheLiveNodes(t *testing.T) {
 	if len(orphans) != 1 || orphans[0].Qitem != "q-dead" || orphans[0].Destination != "demo-writer@demo" {
 		t.Fatalf("orphans for demo = %+v, want only q-dead to demo-writer@demo", orphans)
 	}
-	all, err := orphanHandoffs("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	named := map[string]bool{}
-	for _, orphan := range all {
-		named[orphan.Qitem] = true
-	}
-	if !named["q-dead"] || !named["q-other"] || named["q-live"] || named["q-human"] {
-		t.Fatalf("orphans with no rig named = %+v, want q-dead and q-other only", all)
-	}
 
-	rigToolOutput = func(...string) ([]byte, error) { return nil, errors.New("no daemon") }
+	queuePending = func(string) ([]clientruntime.QueueRow, error) { return nil, errors.New("no daemon") }
 	if _, err := orphanHandoffs("demo"); err == nil {
 		t.Fatal("an unreadable queue must be an error, not a machine with no orphans")
+	}
+	queuePending = func(string) ([]clientruntime.QueueRow, error) { return nil, nil }
+	roomLive = func(string) (map[string]bool, error) { return nil, errors.New("no runtime") }
+	if _, err := orphanHandoffs("demo"); err == nil {
+		t.Fatal("an unreadable seat listing must be an error, not a machine with no orphans")
 	}
 }
 

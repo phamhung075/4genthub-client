@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 // gitRepo is a real checkout with one commit, so the installer writes into a hooks folder git itself names.
@@ -84,7 +82,7 @@ func TestInstallWritesBothHooksIntoGitsOwnFolder(t *testing.T) {
 	}
 	for _, name := range []string{HookPreCommit, HookPrePush} {
 		body := r.read(name)
-		if !strings.Contains(body, clientservices.GuardMarker) {
+		if !strings.Contains(body, GuardMarker) {
 			t.Errorf("%s does not carry the guard's marker, so `doctor` would call the guard absent:\n%s", name, body)
 		}
 		if !strings.Contains(body, "/opt/4genteam") {

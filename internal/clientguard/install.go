@@ -16,8 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 //go:embed hooks/pre-commit hooks/pre-push
@@ -25,6 +23,11 @@ var hookTemplates embed.FS
 
 // BackupSuffix is what an existing hook is moved to before the guard takes its name.
 const BackupSuffix = ".pre-4genteam"
+
+// GuardMarker is the line every hook script of the client's git guard carries (the installer writes it, the
+// `hooks` row of `doctor` reads it). ONE constant, so the installer and the reader cannot disagree about what
+// the guard looks like: a hook file holding this text IS the guard, whatever else the file does.
+const GuardMarker = "4genteam git guard"
 
 const (
 	guardBinPlaceholder = "__GUARD_BIN__"
@@ -116,7 +119,7 @@ func Uninstall(dir string, out io.Writer) ([]UninstalledHook, error) {
 		case os.IsNotExist(err):
 			fmt.Fprintf(out, "%s is not there: the guard was not installed for it\n", path)
 			continue
-		case !strings.Contains(string(body), clientservices.GuardMarker):
+		case !strings.Contains(string(body), GuardMarker):
 			fmt.Fprintf(out, "%s is not the guard's hook: left alone\n", path)
 			continue
 		}
@@ -160,7 +163,7 @@ func previousHook(path string) (string, error) {
 	switch {
 	case err != nil && !os.IsNotExist(err):
 		return "", fmt.Errorf("cannot read the hook %s: %v", path, err)
-	case err == nil && !strings.Contains(string(body), clientservices.GuardMarker):
+	case err == nil && !strings.Contains(string(body), GuardMarker):
 		if _, err := os.Stat(backup); err == nil {
 			return "", fmt.Errorf("the hook %s already has a backup at %s, so installing would overwrite one "+
 				"of two hooks: move the backup away first", path, backup)

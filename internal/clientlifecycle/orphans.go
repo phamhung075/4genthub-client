@@ -3,7 +3,8 @@
 // THE ROW IS THE REPORT'S ONE ROW ABOUT WORK RATHER THAN ABOUT A CHILD. A handoff can outlive its
 // destination: a qitem addressed to a seat the room no longer runs waits for a reader that will never
 // come, and no other row in the report would say so. The predicate is 7.11's own - a destination that is
-// not in the live set is an orphan, and the live set is `rig ps --nodes` with `sessionStatus: running`.
+// not in the live set is an orphan, and the live set is the room's node records with
+// `sessionStatus: running`, read from the local runtime.
 //
 // WHAT IS NOT AN ORPHAN. A destination that is not a seat session - `human@<rig>`, the form the bridge
 // addresses the owner with - is not a handoff to a seat at all, and such rows are the COMMON case rather
@@ -12,12 +13,11 @@
 package clientlifecycle
 
 import (
-	"encoding/json"
 	"fmt"
-	"os/exec"
 	"sort"
 	"strings"
 
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -37,15 +37,36 @@ type orphanRow struct {
 	Err     error
 }
 
-// rigToolOutput is the ONE call into the rig tool here, as a seam: a test answers from memory instead of
-// running a daemon. `doctor` stays read-only in the sense 7.5 gives it - it reads the queue and the node
-// list, and it starts, restarts and signals nothing.
-var rigToolOutput = func(args ...string) ([]byte, error) {
-	return exec.Command("rig", args...).Output()
-}
+// queuePending and roomLive are the two readings this row is computed from, each a seam: a test answers
+// from memory instead of starting a daemon. `doctor` stays read-only in the sense 7.5 gives it - it reads
+// the room's rail and its node records, and it starts, restarts and signals nothing.
+var (
+	queuePending = func(room string) ([]clientruntime.QueueRow, error) {
+		limit := int64(1000)
+		return clientruntime.NewClient("").QueueList(room, clientruntime.QueueListFilter{
+			State: []string{"pending"},
+			Limit: &limit,
+		})
+	}
+	roomLive = func(room string) (map[string]bool, error) {
+		nodes, _, err := clientruntime.RoomNodes(room)
+		if err != nil {
+			return nil, err
+		}
+		live := make(map[string]bool, len(nodes))
+		for _, node := range nodes {
+			name, _ := node["canonicalSessionName"].(string)
+			status, _ := node["sessionStatus"].(string)
+			if name != "" && status == clientservices.Running {
+				live[name] = true
+			}
+		}
+		return live, nil
+	}
+)
 
 // orphanRowsFor is the orphan computation as a seam, beside rowsFor: doctor's wiring is driven without a
-// daemon, and the reader's own filtering is driven by replacing rigToolOutput.
+// daemon, and the reader's own filtering is driven by replacing queuePending and roomLive.
 var orphanRowsFor = orphanRows
 
 // orphanRows computes the row for every rig the report covers.
@@ -68,6 +89,12 @@ func orphanRows(rig string) []orphanRow {
 			State:     clientservices.Running,
 			AgeS:      clientservices.UnknownAge,
 		}}
+		if name == "" {
+			// No room is meant to run, so there is no rail to read: the row is still printed, like the two
+			// machine-scoped rows, rather than dropped as a machine with nothing to say.
+			rows = append(rows, row)
+			continue
+		}
 		found, err := orphanHandoffs(name)
 		switch {
 		case err != nil:
@@ -87,58 +114,31 @@ func orphanLine(orphan orphanHandoff) string {
 	return fmt.Sprintf("  %s -> %s: not live", orphan.Qitem, orphan.Destination)
 }
 
-// pendingQitem is the part of a queue row this computation needs.
-type pendingQitem struct {
-	QitemID     string `json:"qitemId"`
-	Destination string `json:"destinationSession"`
-}
-
-// nodeRecord is the part of a `rig ps --nodes` entry this computation needs: the name a queue destination
-// is written in, and whether that session is running.
-type nodeRecord struct {
-	CanonicalSessionName string `json:"canonicalSessionName"`
-	SessionStatus        string `json:"sessionStatus"`
-}
-
-// orphanHandoffs lists the pending qitems whose destination is a seat session that is not running, sorted
-// by qitem so the report is stable from one run to the next.
+// orphanHandoffs lists the room's pending qitems whose destination is a seat session that is not running,
+// sorted by qitem so the report is stable from one run to the next.
 //
 // BOTH READS ARE ERRORS WHEN THEY FAIL, and neither is ever read as an empty result: a handoff list built
 // from a broken reading would report a clean machine, which is the failure mode this row exists to remove.
-// `--all-rigs` on both, because a handoff can be addressed to another room; the rig filter below is what
-// keeps a named rig's report about that rig.
+// The rail and the node records are the runtime's own (QueueList, RoomNodes), so a room's row is read from
+// the one writer that owns it; a handoff addressed into another room appears in THAT room's row.
 func orphanHandoffs(rig string) ([]orphanHandoff, error) {
-	rawItems, err := rigToolOutput("queue", "list", "--all-rigs", "--state", "pending", "--limit", "1000", "--json")
+	items, err := queuePending(rig)
 	if err != nil {
-		return nil, fmt.Errorf("rig queue list: %w", err)
+		return nil, fmt.Errorf("room %s queue: %w", rig, err)
 	}
-	var items []pendingQitem
-	if err := json.Unmarshal(rawItems, &items); err != nil {
-		return nil, fmt.Errorf("rig queue list: %w", err)
-	}
-	rawNodes, err := rigToolOutput("ps", "--nodes", "--all-rigs", "--json")
+	live, err := roomLive(rig)
 	if err != nil {
-		return nil, fmt.Errorf("rig ps --nodes: %w", err)
-	}
-	var nodes []nodeRecord
-	if err := json.Unmarshal(rawNodes, &nodes); err != nil {
-		return nil, fmt.Errorf("rig ps --nodes: %w", err)
-	}
-	live := map[string]bool{}
-	for _, node := range nodes {
-		if node.CanonicalSessionName != "" && node.SessionStatus == clientservices.Running {
-			live[node.CanonicalSessionName] = true
-		}
+		return nil, fmt.Errorf("room %s seats: %w", rig, err)
 	}
 	orphans := []orphanHandoff{}
 	for _, item := range items {
-		if !seatSession(item.Destination) || live[item.Destination] {
+		if !seatSession(item.DestinationSession) || live[item.DestinationSession] {
 			continue
 		}
-		if rig != "" && rigOfSession(item.Destination) != rig {
+		if rigOfSession(item.DestinationSession) != rig {
 			continue
 		}
-		orphans = append(orphans, orphanHandoff{Qitem: item.QitemID, Destination: item.Destination})
+		orphans = append(orphans, orphanHandoff{Qitem: item.QitemID, Destination: item.DestinationSession})
 	}
 	sort.Slice(orphans, func(i, j int) bool { return orphans[i].Qitem < orphans[j].Qitem })
 	return orphans, nil
