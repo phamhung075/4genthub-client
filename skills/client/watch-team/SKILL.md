@@ -6,7 +6,7 @@ description: Open or reopen the live view of a room — a herdr grid with one pa
 # Watch a room
 
 The live view of a running room: every seat's tool calls, results, reasoning and incoming
-messages, read-only. **NEVER use raw terminal tiles or `tmux attach` when asked for the grid/watch view** — always run `4genteam watch --room <RIG>`. It reads the seats' session logs, displays compaction token gauges (`used/150k to compact`), colors reasoning and tool calls, and provides a proper input pane. It needs `herdr` (the terminal provider the panes live in) and the room's
+messages, read-only. **NEVER use raw terminal tiles or `tmux attach` when asked for the grid/watch view** — always run `4genteam watch --room <RIG>`. It reads the seats' session logs, displays compaction token gauges (`used/<limit> to compact`, the limit being `COMPACT_LIMIT_TOKENS`), colors reasoning and tool calls, and provides a proper input pane. It needs `herdr` (the terminal provider the panes live in) and the room's
 seats running in tmux.
 
 Full reference: `docs/WATCH.md` in the `4genthub-client` repository.
@@ -24,14 +24,18 @@ this view, then the UI.
 
 That opens both workspaces:
 
-- `<RIG> grid`: 2 columns, one pane per live seat, sorted by name and filled top to bottom then left
-  to right, each pane running `feed --back 40 --width 0 --lines 60 --detail`. Every pane header
-  names the seat and its model and carries a token bar, `used/150k to compact`.
+- `<RIG> grid`: one pane per live seat, in the wall's reading order — lead, architect, go-dev,
+  fe-dev, reviewer, then any other seat by name. The default layout is the owner's: the lead in one
+  tall pane on the left, the next two stacked in the column to its right, every remaining seat side
+  by side along the bottom, and no pane left empty at any seat count. Each pane runs
+  `feed --back 40 --width 0 --lines 60 --detail`. Every pane header names the seat and its model and
+  carries a token bar, `used/<limit> to compact` (the limit is `COMPACT_LIMIT_TOKENS`).
 - `<RIG> lead`: the lead's detailed feed on top, a `lead > input` pane below it (ratio 0.8) — a line
   typed there is sent to the lead.
 
 `4genteam grid --room <RIG>` opens the grid alone, and `4genteam feed --room <RIG> [--seat <SEAT> ...]`
-gives one merged stream in the terminal you are already in.
+gives one merged stream in the terminal you are already in. `--cols N` for any N other than the
+default 2 keeps the older equal-columns grid.
 
 Expected output: `grid: <n> seats in <cols> columns`. Only a seat whose runtime the client can read
 session logs for shows events; a runtime it has no log reader for keeps its pane and header and
@@ -66,7 +70,7 @@ pane and header with no events, and a stopped seat has no pane at all.
 | `--room <RIG>` | the room to watch |
 | `--state-root DIR` | the omp state root the session logs are read from: the flag, else `~/.config/4genthub` |
 | `--seat SEAT` | which seat: for `feed` and `inputs`, limit the view to this seat, repeatable; for `input`, the seat to send to, required |
-| `--cols N` | grid columns (default 2); `grid` and `watch` only |
+| `--cols N` | grid columns (default 2, the owner's layout); any other N draws the older equal-columns grid; `grid` and `watch` only |
 | `--back N` | events replayed per seat at startup (default 40; 3 for `feed`) |
 | `--width N` | characters kept per line (default 200; 170 for `feed`) |
 | `--lines N` | lines shown of each call, result or message (default 60) |
@@ -86,21 +90,31 @@ A line typed there is sent with `4genteam send`, so it takes the same route as a
 ## Context limits and the supervisor
 
 These are **settings, not recovery**. The client reads `COMPACT_LIMIT_TOKENS` (default 150_000),
-`COMPACT_WARN_TOKENS` (250_000), `COMPACT_HARD_TOKENS` (300_000) and `COMPACT_QUIET_SECONDS` from
-the environment, with a variable already in the environment winning over its one env file
+`COMPACT_WARN_TOKENS` (250_000), `COMPACT_HARD_TOKENS` (300_000) and `COMPACT_QUIET_SECONDS` (15)
+from the environment, with a variable already in the environment winning over its one env file
 (`~/.config/4genthub/.env`); a blank value means the default, and they are changed there, not by
-editing code.
+editing code. The owner's `.env` held 75_000 / 125_000 / 200_000 on 2026-10-18, which is why those
+panes read `used/75k to compact`.
 
-**The live ladder:** 150k — the seat is told to finish the job and stop; 250k — it is warned once and
-told to write down what it would need after compaction; 300k — the supervisor stops waiting for the
-seat to go idle: if it is working it ends the turn for it (`tmux send-keys Escape`, at most one
-interrupt per 60s) and sends `/compact` as soon as the log is silent, and a seat already idle is
-compacted straight away. An older supervisor waited for idleness and said as much — "a `/compact`
-sent to a working seat is read as text" — which is how a busy seat could sit over the limit
-indefinitely. Text that still quotes a 200k ceiling or a 400k hard limit is stale.
+**The live ladder, by those three limits:** past `COMPACT_LIMIT_TOKENS` the seat is told to finish the
+job and stop; past `COMPACT_WARN_TOKENS` it is warned once, told to write down what it would need
+after compaction, and compacted without waiting for quiet; past `COMPACT_HARD_TOKENS` the supervisor
+stops waiting for the seat to go idle: if it is working it ends the turn for it (`tmux send-keys
+Escape`, at most one interrupt per 60s) and sends `/compact` as soon as the log is silent, and a seat
+already idle is compacted straight away. An older supervisor waited for idleness and said as much —
+"a `/compact` sent to a working seat is read as text" — which is how a busy seat could sit over the
+limit indefinitely.
 
-Restart the supervisor with `4genteam compact <RIG>` (it stops the running one first), read it back
-with `4genteam status <RIG>`, and its log is `logs/compact-supervisor-<RIG>.log`.
+**The supervisor inherits its environment from the `4genteam agent` daemon, which reads `.env` once at
+its start.** After editing a `COMPACT_*` value, restarting only the supervisor keeps the old value:
+stop the daemon with `4genteam stop <RIG>` (machine-wide: agent and every child stop) and start it
+again with `4genteam up <RIG>`, which is a fresh process that reads `.env` — or let `4genteam heal
+<RIG>` run `up` for a supervision that is down. Confirm `supervising <RIG>: limit <N>k` in the log.
+No rebuild is needed; the limits are not compiled in.
+
+`4genteam compact <RIG>` spawns nothing: it records the room and reports the supervisor's row, because
+agent is the single restart authority. Read the state with `4genteam status <RIG>`, and the log is
+`logs/compact-supervisor-<RIG>.log`.
 
 ## Restoring: the zero-size-file trap
 
