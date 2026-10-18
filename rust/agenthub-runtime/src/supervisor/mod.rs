@@ -31,6 +31,32 @@ const SEAT_READY_WINDOW_SECS: u64 = 60;
 /// a grace period, not a handshake. Short, because it proves nothing about the agent inside the pane.
 const NON_OMP_READY_GRACE_MS: u64 = 1500;
 
+/// How many launches one start is allowed: the first, and the ONE retry. A third is a loop, which is the
+/// shape the reseat report (feedback 3ac8b369) was filed against; the report asked for a retry, not a ladder.
+const START_ATTEMPTS: u8 = 2;
+
+/// Why one start attempt failed, split by whether anything was launched.
+///
+/// The split decides the retry, so it is a type and not a string a later reader has to pattern-match: a
+/// `Preparation` refusal (a parked seat, a spec that cannot be read, a directory that cannot be written)
+/// answers the caller on the first attempt, because a second one would repeat it verbatim; a `Launch`
+/// failure is the one a retry can fix, and it carries the STAGE so the seat's log line and the final refusal
+/// name the same fact.
+enum StartFailure {
+    /// Nothing was launched. Final on the first attempt.
+    Preparation(String),
+    /// A pane was launched and died, or never reported readiness, at the stage named.
+    Launch { stage: &'static str, reason: String },
+}
+
+/// The preparation sites above keep returning strings; `?` turns one into a `Preparation` refusal without
+/// every call site being rewritten to name the variant.
+impl From<String> for StartFailure {
+    fn from(reason: String) -> Self {
+        StartFailure::Preparation(reason)
+    }
+}
+
 /// What `Capture` takes when the caller names no line count: the same 200 the client's own agent uses for a
 /// session whose transcript is empty (`clientsync.captureLines`). Named here rather than defaulted at the
 /// call site so the two sides cannot disagree about how much of a pane a fallback read returns.
@@ -875,8 +901,69 @@ impl RoomSupervisor {
         }
     }
 
-    /// Start a single seat.
+    /// Start a single seat, with the ONE retry the runtime promises when its pane dies.
+    ///
+    /// Measured 2026-10-18 (feedback 3ac8b369, three reproductions): a reseat killed the seat's pane, the
+    /// start failed, and nothing in the seat's own log or state said what had happened - the runner never
+    /// got far enough to write either. Reseat is the only route a landed skill takes to a running seat, so
+    /// the failure left the seat stranded with a reason nobody could read.
+    ///
+    /// Two things are fixed here and they are separate: the failure is WRITTEN into the seat's log
+    /// (`logs/<seat>.jsonl`) with the stage that failed, and a launch-stage failure is retried exactly
+    /// once. A preparation refusal - a park, a spec that cannot be read, a directory that cannot be
+    /// written - is NOT retried: a second attempt would repeat the same refusal and dress it up as a
+    /// transient fault.
     pub fn start_seat(&self, room: &str, seat: &SeatSpec, spec: &RoomSpec) -> Result<SeatStatus, String> {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match self.start_seat_once(room, seat, spec) {
+                Ok(status) => return Ok(status),
+                // Nothing was launched, so there is no pane for a retry to fix.
+                Err(StartFailure::Preparation(reason)) => return Err(reason),
+                Err(StartFailure::Launch { stage, reason }) => {
+                    crate::runner::append_seat_log(
+                        &self.base_state_dir,
+                        room,
+                        &seat.seat_key,
+                        &format!("start attempt {attempt}/{START_ATTEMPTS} failed at {stage}: {reason}"),
+                    );
+                    if attempt >= START_ATTEMPTS {
+                        // FINAL, and it says so: the retry is the last one, and a reader must not have to
+                        // count attempts to learn that. No third attempt, no loop.
+                        crate::runner::append_seat_log(
+                            &self.base_state_dir,
+                            room,
+                            &seat.seat_key,
+                            &format!("start final: {attempt} attempts failed, the last at {stage}: {reason}"),
+                        );
+                        return Err(format!(
+                            "seat {room}/{} did not start after {attempt} attempts (final): the {stage} stage \
+                             failed and was retried once - {reason}",
+                            seat.seat_key
+                        ));
+                    }
+                    // The retry clears whatever the first attempt left behind, so the second launch is not a
+                    // collision with a half-started session. A stop that finds no session is not a failure.
+                    let _ = self.stop_seat(room, &seat.seat_key);
+                }
+            }
+        }
+    }
+
+    /// Start a single seat: preparation, one launch, and the verdict, all in ONE attempt.
+    ///
+    /// The retry lives in `start_seat`, which calls this at most twice and writes the seat's own log line
+    /// for each failed launch. Split because the two halves answer different questions: a preparation
+    /// refusal (a park, a spec that cannot be read, a directory that cannot be written) is final on the
+    /// first attempt - retrying it would repeat the same refusal - while a pane that died is the one
+    /// failure a second attempt can fix.
+    fn start_seat_once(
+        &self,
+        room: &str,
+        seat: &SeatSpec,
+        spec: &RoomSpec,
+    ) -> Result<SeatStatus, StartFailure> {
         // A PARKED SEAT IS NOT STARTED, and it is refused BEFORE anything is prepared for it: no seat dir
         // written, no mcp.json, no pane. Both routes that start a seat - `RestartSeat` and a room start -
         // funnel here, so a room start obeys the park through the room's own existing rule for a seat that did
@@ -924,7 +1011,8 @@ impl RoomSupervisor {
             .map_err(|e| format!("cannot write the seat's tool hook: {e}"))?;
         install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
         if matches!(AgentRuntime::from_str_loose(&seat.runtime), AgentRuntime::Agy) {
-            let home = std::env::var_os("HOME").ok_or("HOME is not set, so agy's own config cannot be found")?;
+            let home = std::env::var_os("HOME")
+                .ok_or_else(|| "HOME is not set, so agy's own config cannot be found".to_string())?;
             install_agy_start_files(Path::new(&home), env.contains_key(DEEPSEEK_MCP_SERVER_ENV))?;
         }
 
@@ -976,7 +1064,8 @@ impl RoomSupervisor {
         let launched = std::time::Instant::now();
 
         // Launch tmux session
-        let pane = TerminalManager::launch_session(&session_name, &cwd, &cmd, &env)?;
+        let pane = TerminalManager::launch_session(&session_name, &cwd, &cmd, &env)
+            .map_err(|e| StartFailure::Launch { stage: "tmux launch", reason: e })?;
 
         // A launch is not liveness. What tmux just handed back - a pid, or the read's OWN failure, and never a
         // bare 0 manufactured from a parse failure - is a **record** of the session it created,
@@ -1027,19 +1116,22 @@ impl RoomSupervisor {
                         pane.describe()
                     );
                 } else {
-                    return Err(format!(
-                        "seat {room}/{} died before it reported readiness: two reads of the session agree its \
-                         pane is gone, {} after the launch, and no ready frame ever arrived (the readiness \
-                         window was {}; {})",
-                        seat.seat_key,
-                        launched.elapsed().as_millis(),
-                        if signal.is_some() {
-                            format!("{SEAT_READY_WINDOW_SECS}s")
-                        } else {
-                            format!("{NON_OMP_READY_GRACE_MS}ms")
-                        },
-                        pane.describe()
-                    ));
+                    return Err(StartFailure::Launch {
+                        stage: "pane exit before readiness",
+                        reason: format!(
+                            "seat {room}/{} died before it reported readiness: two reads of the session agree its \
+                             pane is gone, {} after the launch, and no ready frame ever arrived (the readiness \
+                             window was {}; {})",
+                            seat.seat_key,
+                            launched.elapsed().as_millis(),
+                            if signal.is_some() {
+                                format!("{SEAT_READY_WINDOW_SECS}s")
+                            } else {
+                                format!("{NON_OMP_READY_GRACE_MS}ms")
+                            },
+                            pane.describe()
+                        ),
+                    });
                 }
             }
             // A DEATH THE SEAT ITSELF RECORDED ENDS THE WAIT NOW, not at the deadline. The runner publishes
@@ -1049,17 +1141,23 @@ impl RoomSupervisor {
             // reason `SEAT_READY_WINDOW_SECS` can cover a cold first launch.
             if let Some(path) = signal.as_ref() {
                 if let Some(state) = fresh_death_state(path, launched_at) {
-                    return Err(format!(
-                        "seat {room}/{} died before it reported readiness: its own record says `{state}`, written \
-                         after this launch; not reporting it as running",
-                        seat.seat_key
-                    ));
+                    return Err(StartFailure::Launch {
+                        stage: "runner death record",
+                        reason: format!(
+                            "seat {room}/{} died before it reported readiness: its own record says `{state}`, \
+                             written after this launch; not reporting it as running",
+                            seat.seat_key
+                        ),
+                    });
                 }
             }
             if std::time::Instant::now() >= deadline {
                 match signal {
                     Some(path) => {
-                        return Err(readiness_refusal(room, &seat.seat_key, &path, launched_at))
+                        return Err(StartFailure::Launch {
+                            stage: "readiness window",
+                            reason: readiness_refusal(room, &seat.seat_key, &path, launched_at),
+                        })
                     }
                     // The other runtimes have no runner that could hand a readiness word back, so the proof they
                     // can give is the one taken above: the session is STILL ALIVE after the grace period. Reaching
@@ -2980,6 +3078,59 @@ mod tests {
             !err.contains("waited up to"),
             "the message must report the wait PERFORMED, not the window it was given: the measured defect read \
              `waited up to 60s` 2.09ms after the launch, got: {err}"
+        );
+
+        let _ = supervisor.stop_seat(&room, &key);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE RESEAT REPORT (feedback 3ac8b369): a reseat killed the seat's pane, the start failed, and the seat's
+    /// own log and state said nothing at all - three reproductions, no reason anywhere. Reseat is the only route
+    /// a landed skill has to a running seat, so the silence stranded the seat.
+    ///
+    /// Two facts are asserted, and they are the two the report asked for: the failure NAMES THE STAGE in the
+    /// seat's own log, and the retry is EXACTLY ONE - two attempt lines, one final line, and a refusal that says
+    /// it is final. A third attempt would be the loop the report ruled out.
+    #[tokio::test]
+    async fn a_dying_start_names_the_stage_in_the_seat_log_and_retries_exactly_once() {
+        // Two launches of a pane, so this case takes the process's tmux root for its own scratch server the way
+        // every other pane-opening case here does: `TMUX_TMPDIR` is process-wide, and without the guard this
+        // case's second launch can land in a parallel test's root.
+        let _server = crate::pty::test_servers::own("start-retry");
+        let dir = scratch("start-retry");
+        let room = format!("start-retry-{}", std::process::id());
+        let key = seat_key("start-retry");
+        seat_worktree(&dir, &room, &key);
+        let spec = startable_spec(&room, &key, "no-such-program-agenthub-probe");
+        let supervisor = supervisor_at(&dir);
+
+        let err = supervisor
+            .start_seat(&room, &spec.seats[0], &spec)
+            .expect_err("a pane that is gone must not be reported as running");
+        assert!(
+            err.contains("(final)") && err.contains("retried once"),
+            "the refusal must say the retry was spent and this is final, got: {err}"
+        );
+        assert!(
+            err.contains("did not start after 2 attempts"),
+            "the refusal must count the attempts it made, got: {err}"
+        );
+
+        let log_path = crate::runner::seat_log_path(&dir, &room, &key);
+        let log = fs::read_to_string(&log_path)
+            .unwrap_or_else(|e| panic!("the seat's own log {}: {e}", log_path.display()));
+        let attempts = log.lines().filter(|line| line.contains("start attempt ")).count();
+        assert_eq!(
+            attempts, 2,
+            "the start must retry exactly once - two attempt lines, never a loop; log: {log}"
+        );
+        assert!(
+            log.contains("pane exit before readiness"),
+            "the log line must name the stage that failed, got: {log}"
+        );
+        assert!(
+            log.lines().any(|line| line.contains("start final: 2 attempts failed")),
+            "the second failure must be recorded as final, not as another attempt, got: {log}"
         );
 
         let _ = supervisor.stop_seat(&room, &key);
