@@ -31,6 +31,9 @@ rebuilt in 6,600+ commands and the rail in 5,316 - each a turn spent on a fact t
 - A source that could not be read prints `"state":"unavailable"` with a one-line `reason`. That is a missing
   measurement, never a zero: carry the reason into `facts:`, do not reason around it.
 - `--task ID` adds the task's acceptance record; `--base REF` moves the compared base (default `main`).
+- A secret's presence is a fact with one command: `test -n "$AGENTHUB_TOKEN"` and echo the result, never
+  `cat ~/.config/4genthub/.env` - the seat guard refuses that read as `env-secret`, so the turn is spent on a
+  refusal and a retry. Measured on this room (2026-10-18): 73 such refusals, 30 of them go-dev's.
 
 ## The other three lines
 
