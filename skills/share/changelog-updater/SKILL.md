@@ -8,8 +8,7 @@ description: Write this repo's changelog entry - ONE new file CHANGELOG/<date>--
 (This file's `CHANGELOG.md` model is retired; it describes the rule this repo runs: one dated file per merged task.)
 
 This repo's changelog is not a file. Every merged task is **one new file**:
-`CHANGELOG/<YYYY-MM-DD>--<kebab-title>.md` (740 such files at `ls CHANGELOG | wc -l` on 2026-10-18; there
-is no `CHANGELOG.md`). A
+`CHANGELOG/<YYYY-MM-DD>--<kebab-title>.md` — hundreds of dated files, and there is no `CHANGELOG.md`. A
 change to the test suite additionally gets its line in `TEST-CHANGELOG.md`.
 
 ## Rules
