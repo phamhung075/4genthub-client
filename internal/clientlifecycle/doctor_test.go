@@ -516,8 +516,11 @@ func TestDoctorIsReadOnly(t *testing.T) {
 		did = append(did, "signal "+pattern)
 		return true
 	}
+	// A NODE READ IS NOT AN ACTION, and the identity row makes one: the recorder names it so the assertion
+	// below can tell the two apart, rather than forbidding the read the report has to make.
+	reads := 0
 	rigNodes = func(string) ([]map[string]any, bool, error) {
-		did = append(did, "read nodes")
+		reads++
 		return nil, false, nil
 	}
 
@@ -526,6 +529,9 @@ func TestDoctorIsReadOnly(t *testing.T) {
 	}
 	if len(did) != 0 {
 		t.Errorf("doctor acted: %v", did)
+	}
+	if reads == 0 {
+		t.Error("doctor never read a room's nodes, so the identity row was not wired")
 	}
 }
 

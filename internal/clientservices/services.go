@@ -49,6 +49,20 @@ const (
 	// OrphanHandoffs is 7.11's row about WORK rather than about a child: the pending handoffs whose
 	// destination seat is not running. It carries no process, so its rows have no pid and no heartbeat.
 	OrphanHandoffs = "orphan_handoffs"
+	// Identity is `doctor`'s row about ATTRIBUTION rather than about a process: the nodes of a room whose
+	// messages carry a sender identity, and the ones whose do not. Like OrphanHandoffs it carries no pid and
+	// no heartbeat.
+	Identity = "identity"
+)
+
+// The two states the identity row adds to 7.2's. They are not safeguards and never appear in Obligatory;
+// they are the row's own verdict about a fact it read.
+const (
+	// IdentityUnset is a node the daemon cannot name, so every message it sends arrives as `<unknown sender>`.
+	IdentityUnset = "identity_unset"
+	// GuardAbsent is a checkout whose `core.hooksPath` names a folder with no git guard in it: a guard that was
+	// installed and is now switched off.
+	GuardAbsent = "guard_absent"
 )
 
 // The four states of 7.2. There is no fifth, and `running` is the ONLY state doctor accepts.

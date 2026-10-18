@@ -132,20 +132,25 @@ type doctorJSONRow struct {
 
 // doctorJSONRows pairs every row with the lines the human report prints beside it, from the wrapper that
 // carries them: ONE rule for the JSON and the lines, so the two surfaces cannot disagree about a row.
-func doctorJSONRows(rows []clientservices.Health, orphanRows []orphanRow) []doctorJSONRow {
+func doctorJSONRows(rows []clientservices.Health, orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
 	out := make([]doctorJSONRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, doctorJSONRow{Health: row, Reasons: rowReasons(row, orphanRows)})
+		out = append(out, doctorJSONRow{Health: row, Reasons: rowReasons(row, orphanRows, identityRows)})
 	}
 	return out
 }
 
 // rowReasons finds one row's reasons: the wrapper is matched on (safeguard, rig), the pair the report
 // itself matches a row by.
-func rowReasons(row clientservices.Health, orphanRows []orphanRow) []string {
+func rowReasons(row clientservices.Health, orphanRows []orphanRow, identityRows []identityRow) []string {
 	for _, orphan := range orphanRows {
 		if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Rig == row.Rig {
 			return orphanLines(orphan)
+		}
+	}
+	for _, identity := range identityRows {
+		if identity.Row.Safeguard == row.Safeguard && identity.Row.Rig == row.Rig {
+			return identityLines(identity)
 		}
 	}
 	return nil
@@ -160,8 +165,14 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "4genteam doctor: %s could not be read: %v\n", clientservices.OrphanHandoffs, orphan.Err)
 		}
 	}
+	// The identity row (ruling e2948011, 4.6): the rooms whose senders the daemon can name, and the nodes it
+	// cannot, whose messages arrive as <unknown sender> with nothing in the text to say so.
+	identityRows := identityRowFor(rig)
+	for _, identity := range identityRows {
+		rows = append(rows, identity.Row)
+	}
 	if asJSON {
-		body, err := json.MarshalIndent(doctorJSONRows(rows, orphanRows), "", "  ")
+		body, err := json.MarshalIndent(doctorJSONRows(rows, orphanRows, identityRows), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam doctor: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
@@ -173,6 +184,11 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		}
 		for _, orphan := range orphanRows {
 			for _, line := range orphanLines(orphan) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
+		for _, identity := range identityRows {
+			for _, line := range identityLines(identity) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
@@ -192,6 +208,14 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		for _, orphan := range orphanRows {
 			if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Rig == row.Rig {
 				for _, line := range orphanLines(orphan) {
+					fmt.Fprintln(stderr, line)
+				}
+			}
+		}
+		// An identity row that is down is only actionable with the node that cannot be named.
+		for _, identity := range identityRows {
+			if identity.Row.Safeguard == row.Safeguard && identity.Row.Rig == row.Rig {
+				for _, line := range identityReasonLines(identity) {
 					fmt.Fprintln(stderr, line)
 				}
 			}
