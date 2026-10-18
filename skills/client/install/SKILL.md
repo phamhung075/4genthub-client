@@ -150,3 +150,19 @@ echo "=== 4. Running Safeguards Doctor ==="
 | `Cannot determine identity. Run inside an managed seat session` | Running `4genteam whoami` from host shell instead of inside a seat pane | Use `4genteam whoami --session <session-name> --json` or run from inside a tmux seat pane |
 | `bridge: silent, age unknown` | Client background bridge is stopped or unauthenticated | Start client bridge with `4genteam bridge` or check `AGENTHUB_TOKEN` in `~/.config/4genthub/.env` |
 | `Exit 3: at PEAK` | Attempted to start DeepSeek seats during peak pricing | Run `4genteam offpeak` to check window, or use `4genteam up <rig> --allow-peak` if authorized |
+
+---
+
+## Link the client skills into Claude Code
+
+A Claude Code session lists only what is under `~/.claude/skills/`; it does not scan this repository.
+Link every `skills/client/*` and `skills/share/*` skill once, and again after adding one (idempotent,
+never replaces an existing entry):
+
+```bash
+for d in <hub-root>/agenthub_client/skills/client/*/ <hub-root>/agenthub_client/skills/share/*/; do
+  n=$(basename "$d"); [ -e "$HOME_REAL/.claude/skills/$n" ] || ln -s "${d%/}" "$HOME_REAL/.claude/skills/$n"
+done
+```
+
+Seats do not use these links: the runtime installs their skills at each seat start.
