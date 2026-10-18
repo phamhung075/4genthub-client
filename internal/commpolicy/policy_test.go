@@ -18,8 +18,9 @@ func TestDecide(t *testing.T) {
 		wantAllowed bool
 		wantReason  string
 		// wantLicense is what the refusal must name as the kind that would have licensed this intent.
-		// Only the no-link refusals carry it: the other causes are not a missing link, and naming a kind
-		// there would send the sender to a declaration that is not the obstacle.
+		// Only the link-caused refusals carry it - none declared, or declared but licensing another
+		// intent: the other causes are not a link, and naming a kind there would send the sender to a
+		// declaration that is not the obstacle.
 		wantLicense []LinkKind
 	}{
 		{
@@ -64,8 +65,18 @@ func TestDecide(t *testing.T) {
 			policy:      Policy{Seat: "a", Links: []Link{{From: "a", To: "b", Kind: KindCollaboratesWith, Allow: true}}},
 			to:          "b",
 			intent:      IntentTask,
-			wantReason:  reasonNoLink,
+			wantReason:  reasonIntentNotLicensed,
 			wantLicense: []LinkKind{KindDelegatesTo},
+		},
+		{
+			// The measured case (review 3 line 5, 2026-10-18): a notice sent along a declared
+			// escalates_to edge. The pair declares a link, so the refusal must not say `no link`.
+			name:        "declared escalates_to does not license a notice",
+			policy:      Policy{Seat: "a", Links: []Link{{From: "a", To: "b", Kind: KindEscalatesTo, Allow: true}}},
+			to:          "b",
+			intent:      IntentNotice,
+			wantReason:  reasonIntentNotLicensed,
+			wantLicense: []LinkKind{KindCollaboratesWith},
 		},
 		{
 			name:        "other seat's links ignored",
@@ -157,8 +168,8 @@ func TestDecideIntentKindMapping(t *testing.T) {
 				}
 				continue
 			}
-			if got.Allowed || got.Reason != reasonNoLink {
-				t.Errorf("intent %q with kind %q = %+v, want no link", intent, kind, got)
+			if got.Allowed || got.Reason != reasonIntentNotLicensed {
+				t.Errorf("intent %q with kind %q = %+v, want the declaration refused as not licensing this intent", intent, kind, got)
 			}
 		}
 	}

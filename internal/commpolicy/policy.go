@@ -59,10 +59,11 @@ type Decision struct {
 	Reason  string
 	Link    *Link
 	// WouldLicense names the link kinds that authorize the Intent this decision was asked about, and is
-	// set on the no-link refusal only: that is the one refusal whose cause is a link that is not there,
-	// and it is also the only one where naming the missing kind is the right instruction. It is set
-	// here rather than looked up by a caller because "which kinds would have licensed this intent" is
-	// this package's own table, and a caller keeping its own copy is a second rule to drift.
+	// set on the two refusals whose cause is a link: none declared at all, or declared but licensing
+	// another intent. It is also the only refusals where naming the missing kind is the right
+	// instruction. It is set here rather than looked up by a caller because "which kinds would have
+	// licensed this intent" is this package's own table, and a caller keeping its own copy is a second
+	// rule to drift.
 	//
 	// WHY IT EXISTS, measured 2026-10-15: the refusal read `no link` for a pair that DID declare one,
 	// when only the intent was unlicensed, and the room took the instruction the words gave it - it
@@ -76,8 +77,14 @@ const (
 	reasonSelfMessage   = "self message"
 	reasonUnknownIntent = "unknown intent"
 	reasonNoLink        = "no link"
-	reasonExplicitDeny  = "explicit deny"
-	reasonAllowed       = "allowed"
+	// reasonIntentNotLicensed is the refusal for a pair that DOES declare a link, none of whose kinds
+	// authorizes the intent that was sent. It is kept apart from reasonNoLink because the two statements
+	// were measured to be read as one: `4genteam send` defaults to a notice, so a report sent along a
+	// declared `escalates_to` edge (which licenses escalation and report only) refused as `no link`, and
+	// the architect's review read that as "the edge is not admitted" (2026-10-18, review 3 line 5).
+	reasonIntentNotLicensed = "intent not licensed"
+	reasonExplicitDeny      = "explicit deny"
+	reasonAllowed           = "allowed"
 )
 
 type AuditRecord struct {
@@ -185,7 +192,20 @@ func Decide(policy Policy, to string, intent Intent) Decision {
 	if allow == nil {
 		// The kinds are copied, not shared: they are allowedKinds' own slice and a Decision outlives
 		// the call, so a caller appending to it would edit the table for every later decision.
-		return Decision{Reason: reasonNoLink, WouldLicense: append([]LinkKind(nil), kinds...)}
+		wouldLicense := append([]LinkKind(nil), kinds...)
+		// A PAIR THAT DECLARES A LINK IS NOT A PAIR WITH NO LINK. The reason word is what a reader acts
+		// on, and the two states need different actions: an absent link is a declaration to add, a
+		// present one is an intent to send differently. Measured 2026-10-18: a report sent along the
+		// declared `escalates_to` edge refused as `no link`, and the reader concluded the edge was not
+		// admitted (review 3 line 5). The declaration is read here, across every kind, because "does
+		// this pair declare anything" is not a question about the intent's licensing kinds.
+		for i := range policy.Links {
+			link := &policy.Links[i]
+			if link.From == policy.Seat && link.To == to {
+				return Decision{Reason: reasonIntentNotLicensed, WouldLicense: wouldLicense}
+			}
+		}
+		return Decision{Reason: reasonNoLink, WouldLicense: wouldLicense}
 	}
 	return Decision{Allowed: true, Reason: reasonAllowed, Link: allow}
 }

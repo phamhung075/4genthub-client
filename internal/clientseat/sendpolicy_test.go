@@ -305,10 +305,15 @@ func TestASendWithNoIntentIsRefusedByADelegatesToLink(t *testing.T) {
 	if code == clientcmd.ExitOK {
 		t.Fatalf("a default-intent send over a delegates_to link exited 0; stdout %q", out.String())
 	}
-	for _, want := range []string{"no link", "collaborates_with", "task (delegates_to)"} {
+	for _, want := range []string{"intent not licensed", "collaborates_with", "task (delegates_to)"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("stderr = %q, want it to name %q", errOut.String(), want)
 		}
+	}
+	// THE PAIR DECLARES A LINK, so the refusal must not say there is none - the words that made the
+	// room change a declaration that licensed the traffic it was refusing.
+	if strings.Contains(errOut.String(), "no link") {
+		t.Errorf("stderr = %q, want the declared link acknowledged, not `no link`", errOut.String())
 	}
 	if harness.sent() {
 		t.Fatalf("the message was delivered anyway; frames %v", harness.frames)
@@ -317,8 +322,51 @@ func TestASendWithNoIntentIsRefusedByADelegatesToLink(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("audit lines = %+v, want the decision line alone", lines)
 	}
-	if lines[0].Allowed || lines[0].Intent != commpolicy.IntentNotice {
-		t.Errorf("decision = %+v, want a denied line whose intent is the default notice", lines[0])
+	if lines[0].Allowed || lines[0].Intent != commpolicy.IntentNotice || lines[0].Reason != "intent not licensed" {
+		t.Errorf("decision = %+v, want a denied line naming the intent, not a missing link", lines[0])
+	}
+}
+
+// A DECLARED escalates_to EDGE, BOTH WAYS. fe-dev -> lead was measured refused as `no link` (review 3 line 5,
+// 2026-10-18) while the edge was declared and listed by `whoami`; the cause was the send's default notice
+// against a kind that licenses escalation and report. The edge is a send path for the intent it licenses, so
+// this case pins the allowed half (the report DELIVERS) and the refused half (the notice names the intent
+// mismatch, never a missing link) on the same declaration.
+func TestAnEscalatesToEdgeDeliversItsReportAndNamesTheNoticeMismatch(t *testing.T) {
+	harness := newAuditHarness(t, linkDoc(auditSender, auditPeer, "escalates_to"))
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(),
+		[]string{"4genthub-min", auditPeer, "the report the edge exists for", "--intent", "report"}, &out, &errOut)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("a report along a declared escalates_to edge exited %d (stderr %q)", code, errOut.String())
+	}
+	if !harness.sent() {
+		t.Fatalf("the report never reached the runtime; frames %v", harness.frames)
+	}
+	lines := harness.lines(t)
+	if len(lines) != 2 || !lines[0].Allowed || lines[0].Intent != commpolicy.IntentReport ||
+		lines[1].Outcome != commpolicy.OutcomeDelivered {
+		t.Fatalf("audit lines = %+v, want an allowed report and a delivered outcome", lines)
+	}
+
+	refusal := newAuditHarness(t, linkDoc(auditSender, auditPeer, "escalates_to"))
+	out.Reset()
+	errOut.Reset()
+	code = sendCommand{}.Run(context.Background(),
+		[]string{"4genthub-min", auditPeer, "a notice down an escalation edge"}, &out, &errOut)
+	if code == clientcmd.ExitOK {
+		t.Fatalf("a default-notice send along escalates_to exited 0; stdout %q", out.String())
+	}
+	for _, want := range []string{"intent not licensed", "collaborates_with", "escalation or report (escalates_to)"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr = %q, want it to name %q", errOut.String(), want)
+		}
+	}
+	if strings.Contains(errOut.String(), "no link") {
+		t.Errorf("stderr = %q, want the declared edge acknowledged, not `no link`", errOut.String())
+	}
+	if refusal.sent() {
+		t.Fatalf("the notice was delivered anyway; frames %v", refusal.frames)
 	}
 }
 
