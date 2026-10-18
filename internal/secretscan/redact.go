@@ -39,7 +39,7 @@ var redactionPatterns = []labelledPattern{
 	{"pem", regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\z)`)},
 	{"jwt", regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)},
 	{"bearer", regexp.MustCompile(`(?i)Bearer[\t\n\f\r ]+[A-Za-z0-9._~+/=-]{20,}`)},
-	{"sk", regexp.MustCompile(`sk-[A-Za-z0-9_-]{20,}`)},
+	{"sk", regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}`)},
 	{"aws", regexp.MustCompile(`AKIA[0-9A-Z]{16}`)},
 	{"github", regexp.MustCompile(`gh[pousr]_[A-Za-z0-9]{30,}`)},
 	{"url-credentials", regexp.MustCompile(`://[^\t\n\f\r /:@]*:[^\t\n\f\r /]+@`)},

@@ -180,6 +180,26 @@ func TestAnUnansweredQuestionEscalatesTheWholeAsk(t *testing.T) {
 	}
 }
 
+// The refusal decide.go:109 makes is `secretscan.Contains(summary|detail)`, and the sk- pattern's `\b` plus its
+// alphanumeric tail is what keeps a brief that names a hyphenated doc from being refused as a credential. This
+// is the shape the row was filed for: the same summary and detail as a real ask about task-workflow-and-reporting.md,
+// answered confidently so the run completes and the only thing under test is the entry check.
+func TestABriefThatNamesAHyphenatedDocIsNotACredential(t *testing.T) {
+	rec, logPath := jev(t, 200, `{"answers":{"q1":{"choice":"pg","confidence":0.93}}}`)
+	code, _, errs := run("--tier", "seat", "--summary", "the register line for task-workflow-and-reporting.md",
+		"--detail", "changed ai_docs/agent-system/task-workflow-and-reporting.md and ai_docs/agent-system/seat-model-and-mcp-surface.md",
+		"--questions", questions)
+	if code != 0 || rec.hits != 1 {
+		t.Fatalf("a doc name is not a credential: exit %d, %d Jev calls, stderr %q", code, rec.hits, errs)
+	}
+	if strings.Contains(errs, "credential") {
+		t.Errorf("the entry check named a credential: %q", errs)
+	}
+	if entries := readLog(t, logPath); len(entries) != 1 {
+		t.Errorf("the decided ask logged %d entries, want one", len(entries))
+	}
+}
+
 func TestUsageRefusalsCallNothingAndLogNothing(t *testing.T) {
 	rec, logPath := jev(t, 200, `{}`)
 	for _, args := range [][]string{
