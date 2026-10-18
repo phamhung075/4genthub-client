@@ -423,6 +423,25 @@ fn map_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     })
 }
 
+/// One row by id, read over whatever connection the caller holds. `close` reads through its own write
+/// transaction so the row it guards is the row it writes; every other path reads the store's connection.
+fn read_row(conn: &rusqlite::Connection, qitem_id: &str) -> Result<Row, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {} FROM queue_rows WHERE qitem_id = ?1",
+            ROW_COLUMNS
+        ))
+        .map_err(|e| format!("cannot prepare queue read: {}", e))?;
+    let mut rows = stmt
+        .query_map(rusqlite::params![qitem_id], map_row)
+        .map_err(|e| format!("cannot read queue row '{}': {}", qitem_id, e))?;
+    match rows.next() {
+        Some(Ok(row)) => Ok(row),
+        Some(Err(e)) => Err(format!("cannot read queue row '{}': {}", qitem_id, e)),
+        None => Err(format!("unknown qitem_id '{}'", qitem_id)),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn append_transition(
     tx: &rusqlite::Transaction<'_>,
@@ -874,25 +893,30 @@ impl QueueStore {
             return Err("closure_reason 'handed_off_to' requires a non-empty closure_target".into());
         }
 
-        let current = self.row_by_id(&input.qitem_id)?;
+        let note = if input.transition_note.trim().is_empty() {
+            "closed".to_string()
+        } else {
+            input.transition_note.clone()
+        };
+
+        let ts = now_ts();
+        // The write lock is taken BEFORE the row is read. The terminal guard is what stops a second
+        // emission, and a handoff emits its successor inside this transaction: read outside one, two closes
+        // of the same row both pass the guard and both emit a successor - two pending rows for one handoff.
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .map_err(|e| format!("cannot begin close transaction: {}", e))?;
+        let current = read_row(&tx, &input.qitem_id)?;
         if TERMINAL_STATES.contains(&current.state.as_str()) {
             return Err(format!(
                 "queue row '{}' is already in terminal state '{}'",
                 input.qitem_id, current.state
             ));
         }
-        let note = if input.transition_note.trim().is_empty() {
-            "closed".to_string()
-        } else {
-            input.transition_note.clone()
-        };
         let closure_target = target.or_else(|| current.closure_target.clone());
 
-        let ts = now_ts();
-        let tx = self
-            .conn
-            .unchecked_transaction()
-            .map_err(|e| format!("cannot begin close transaction: {}", e))?;
         if reason == "handed_off_to" {
             // A handoff is terminal for THIS row and lives on in the successor the same transaction
             // creates: the source rests at `handed-off` with the target recorded, and the target gets its
@@ -925,6 +949,24 @@ impl QueueStore {
             chain.push(current.qitem_id.clone());
             let chain_json = serde_json::to_string(&chain)
                 .map_err(|e| format!("cannot encode chain_of_record: {}", e))?;
+            // ONE SOURCE ROW, ONE SUCCESSOR. The chain is the emission mark: a row whose chain is exactly
+            // this source's chain plus the source IS the successor this source already emitted, so a second
+            // one - a retried close after an unknown outcome, or a second writer - is refused rather than
+            // written. The room then holds one pending row per handoff, which is what a rail row is.
+            let emitted: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM queue_rows WHERE chain_of_record = ?1",
+                    rusqlite::params![&chain_json],
+                    |r| r.get(0),
+                )
+                .map_err(|e| format!("cannot count the successors of '{}': {}", input.qitem_id, e))?;
+            if emitted > 0 {
+                return Err(format!(
+                    "queue row '{}' already emitted its handoff successor: one handoff is one row, and \
+                     the existing successor carries the work",
+                    input.qitem_id
+                ));
+            }
             let tags_json = serde_json::to_string(&current.tags)
                 .map_err(|e| format!("cannot encode tags: {}", e))?;
             tx.execute(
@@ -932,7 +974,7 @@ impl QueueStore {
                  (qitem_id, state, summary, body, source_session, destination_session, chain_of_record, \
                   reply_to, blocked_on, wake_after_seconds, closure_reason, closure_target, priority, tags, \
                   tier, ts_created, ts_updated) \
-                 VALUES (?1, 'pending', ?2, ?3, ?4, ?5, ?6, NULL, NULL, NULL, NULL, NULL, ?7, ?8, ?9, ?10, ?10)",
+                 VALUES (?1, 'pending', ?2, ?3, ?4, ?5, ?6, ?11, NULL, NULL, NULL, NULL, ?7, ?8, ?9, ?10, ?10)",
                 rusqlite::params![
                     successor,
                     current.summary,
@@ -943,7 +985,8 @@ impl QueueStore {
                     current.priority,
                     tags_json,
                     current.tier,
-                    ts
+                    ts,
+                    input.qitem_id
                 ],
             )
             .map_err(|e| format!("cannot create handoff successor '{}': {}", successor, e))?;
@@ -984,21 +1027,7 @@ impl QueueStore {
     }
 
     fn row_by_id(&self, qitem_id: &str) -> Result<Row, String> {
-        let mut stmt = self
-            .conn
-            .prepare(&format!(
-                "SELECT {} FROM queue_rows WHERE qitem_id = ?1",
-                ROW_COLUMNS
-            ))
-            .map_err(|e| format!("cannot prepare queue read: {}", e))?;
-        let mut rows = stmt
-            .query_map(rusqlite::params![qitem_id], map_row)
-            .map_err(|e| format!("cannot read queue row '{}': {}", qitem_id, e))?;
-        match rows.next() {
-            Some(Ok(row)) => Ok(row),
-            Some(Err(e)) => Err(format!("cannot read queue row '{}': {}", qitem_id, e)),
-            None => Err(format!("unknown qitem_id '{}'", qitem_id)),
-        }
+        read_row(&self.conn, qitem_id)
     }
 
     fn transitions_for(&self, qitem_id: &str) -> Result<Vec<Transition>, String> {
@@ -1189,6 +1218,64 @@ mod tests {
             (done.transitions[1].from_state.as_deref(), done.transitions[1].state.as_str()),
             (Some("pending"), "done")
         );
+    }
+
+    /// One source row emits ONE successor, even when two closes race. The daemon opens the room's store per
+    /// request, so two connections are the real shape: with the terminal guard read outside the write
+    /// transaction both closes pass it and the room gets two pending rows for one handoff - the double-emit
+    /// (measured: qitem-…202513-2319a0d2abfb was a second row for one handoff).
+    #[test]
+    fn a_double_close_emits_one_successor() {
+        let (dir, store) = temp_store();
+        let row = new_row(&store, "seat-a", "seat-b", "hand me the build log");
+        store.claim(&row.qitem_id, "seat-b").expect("claim");
+
+        let start = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let outcomes: Vec<Result<Row, String>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..2)
+                .map(|_| {
+                    let start = start.clone();
+                    let dir = dir.clone();
+                    let qitem_id = row.qitem_id.clone();
+                    scope.spawn(move || {
+                        let store = QueueStore::open(&dir).expect("the room's store, as a request opens it");
+                        start.wait();
+                        store.close(CloseInput {
+                            qitem_id,
+                            actor_session: "seat-c".into(),
+                            closure_reason: "handed_off_to".into(),
+                            closure_target: Some("seat-d".into()),
+                            transition_note: "over to seat-d".into(),
+                        })
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("the close thread"))
+                .collect()
+        });
+
+        assert_eq!(
+            outcomes.iter().filter(|o| o.is_ok()).count(),
+            1,
+            "exactly one close wins: {outcomes:?}"
+        );
+        let successors = store
+            .list(&ListFilter {
+                destination_session: Some("seat-d".into()),
+                ..Default::default()
+            })
+            .expect("list for the target");
+        assert_eq!(
+            successors.len(),
+            1,
+            "one source row emits one successor, not two: {successors:?}"
+        );
+        assert_eq!(successors[0].reply_to.as_deref(), Some(row.qitem_id.as_str()));
+        let source = store.show(&row.qitem_id).expect("show the source");
+        assert_eq!(source.state, "handed-off");
+        assert_eq!(source.transitions.len(), 3, "the loser wrote no transition");
     }
 
     #[test]
