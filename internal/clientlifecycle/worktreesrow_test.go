@@ -6,6 +6,7 @@ package clientlifecycle
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,13 +35,18 @@ func writeDemoRoom(t *testing.T, seats string) string {
 
 func stubWorktreeRowSeams(t *testing.T, verdict clientworktree.CheckVerdict, err error) {
 	t.Helper()
-	mainRoot, check, room := worktreeMainRoot, worktreeCheck, worktreeRoomDir
+	mainRoot, check, room, seatRoot := worktreeMainRoot, worktreeCheck, worktreeRoomDir, worktreeSeatRoot
 	worktreeMainRoot = func(string) (string, error) { return "/main", nil }
 	worktreeCheck = func(string, string, string, []clientservices.SeatType) (clientworktree.CheckVerdict, error) {
 		return verdict, err
 	}
 	worktreeRoomDir = func(string) (string, error) { return "/room", nil }
-	t.Cleanup(func() { worktreeMainRoot, worktreeCheck, worktreeRoomDir = mainRoot, check, room })
+	// No derived path answers for a repository unless a case says so, which is the state of a room whose
+	// seats are not started yet: the working directory's root is what the row falls back to.
+	worktreeSeatRoot = func([]string) (string, bool, error) { return "", false, nil }
+	t.Cleanup(func() {
+		worktreeMainRoot, worktreeCheck, worktreeRoomDir, worktreeSeatRoot = mainRoot, check, room, seatRoot
+	})
 }
 
 // A derived path that exists and is not the derived worktree is the row's ONE failure: it is the state
@@ -158,5 +164,73 @@ func TestDoctorPrintsTheWorktreesRowAndItsReasons(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("--json rows do not carry the worktrees row:\n%s", stdout.String())
+	}
+}
+
+// THE MEASURED DEFECT IN THE DIAGNOSTIC SURFACE: the row judged the room's paths against the repository
+// the command was run in, so `doctor` from a client worktree called the room's own six worktrees Wrong.
+// A derived path that exists names the repository it belongs to, so the row judges against that one.
+func TestWorktreesRowJudgesAgainstTheRepositoryItsPathsBelongTo(t *testing.T) {
+	root := writeDemoRoom(t, `{"seat_key":"lead","seat_type":"lead"}`)
+	stubWorktreeRowSeams(t, clientworktree.CheckVerdict{}, nil)
+	var gotRoot, gotPaths string
+	worktreeSeatRoot = func(paths []string) (string, bool, error) {
+		gotPaths = strings.Join(paths, ",")
+		return "/room-repo", true, nil
+	}
+	worktreeCheck = func(mainRoot, _, _ string, _ []clientservices.SeatType) (clientworktree.CheckVerdict, error) {
+		gotRoot = mainRoot
+		return clientworktree.CheckVerdict{}, nil
+	}
+
+	worktreesRowOf("demo", root)
+	if gotRoot != "/room-repo" {
+		t.Errorf("the row checked against %q, want the paths' own repository %q", gotRoot, "/room-repo")
+	}
+	if want := filepath.Join(root, "rooms", "demo", "wt", "lead"); !strings.Contains(gotPaths, want) {
+		t.Errorf("the resolver was handed %q, want the derived path of the room's lead (%q)", gotPaths, want)
+	}
+}
+
+// Paths that answer nothing - a room never started - keep the working directory's root, as before: the
+// fix must not invent a root for a room with nothing derived yet.
+func TestWorktreesRowKeepsTheWorkingDirectorysRootWhenNoPathAnswers(t *testing.T) {
+	root := writeDemoRoom(t, `{"seat_key":"lead","seat_type":"lead"}`)
+	stubWorktreeRowSeams(t, clientworktree.CheckVerdict{}, nil)
+	var gotRoot string
+	worktreeCheck = func(mainRoot, _, _ string, _ []clientservices.SeatType) (clientworktree.CheckVerdict, error) {
+		gotRoot = mainRoot
+		return clientworktree.CheckVerdict{}, nil
+	}
+
+	worktreesRowOf("demo", root)
+	if gotRoot != "/main" {
+		t.Errorf("the row checked against %q, want the working directory's %q", gotRoot, "/main")
+	}
+}
+
+// The room's own worktrees spanning two repositories is a state the row cannot judge from one root, and
+// it is the state the row exists to make visible: the note carries both roots rather than a verdict.
+func TestWorktreesRowSaysItCouldNotResolveWhenThePathsSpanTwoRepositories(t *testing.T) {
+	root := writeDemoRoom(t, `{"seat_key":"lead","seat_type":"lead"}`)
+	stubWorktreeRowSeams(t, clientworktree.CheckVerdict{}, nil)
+	worktreeSeatRoot = func([]string) (string, bool, error) {
+		return "", false, errors.New("the seat directories belong to /one and /two")
+	}
+	checked := false
+	worktreeCheck = func(string, string, string, []clientservices.SeatType) (clientworktree.CheckVerdict, error) {
+		checked = true
+		return clientworktree.CheckVerdict{}, nil
+	}
+
+	row := worktreesRowOf("demo", root)
+	if checked {
+		t.Error("the row judged the paths from a root it could not resolve")
+	}
+	if !strings.Contains(row.Note, "/one and /two") {
+		t.Errorf("the note does not name the two repositories: %q", row.Note)
+	}
+	if row.Row.State != clientservices.Running {
+		t.Errorf("state = %q; a row that could not look reports no verdict", row.Row.State)
 	}
 }

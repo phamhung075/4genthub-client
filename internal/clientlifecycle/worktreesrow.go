@@ -117,6 +117,23 @@ func worktreesRowOf(name, root string) worktreesRow {
 		row.Note = clientservices.Worktrees + ": not observed: " + err.Error()
 		return row
 	}
+	// THE ROOM'S OWN PATHS ANSWER FOR THE ROOT FIRST. A derived path that exists names the repository it
+	// belongs to, and that is the repository this row is about; MainRoot's answer is where the command
+	// happened to run, and judging by it called correct paths Wrong (measured 2026-10-18: `up` fixed in
+	// 4fd6c67 held the same defect in its diagnostic surface - doctor from a client worktree reported the
+	// room's six real worktrees as wrong). A path that does not exist yet says nothing, which is every
+	// derived path of a room never started: MainRoot's answer stands there, as before.
+	derived := clientservices.DerivedWorktrees(roomDir, name, seats)
+	if paths := derivedPaths(derived); len(paths) > 0 {
+		if pathRoot, ok, rootErr := worktreeSeatRoot(paths); rootErr != nil {
+			// Two repositories among the room's own worktrees is a state doctor cannot judge from one
+			// root, and it is exactly what this row exists to name: the note carries both.
+			row.Note = clientservices.Worktrees + ": not observed: " + rootErr.Error()
+			return row
+		} else if ok {
+			mainRoot = pathRoot
+		}
+	}
 	verdict, err := worktreeCheck(mainRoot, roomDir, name, seats)
 	if err != nil {
 		row.Note = clientservices.Worktrees + ": not observed: " + err.Error()
@@ -127,6 +144,16 @@ func worktreesRowOf(name, root string) worktreesRow {
 		row.Row.State = clientservices.WorktreesWrong
 	}
 	return row
+}
+
+// derivedPaths is the paths of a room's derived worktrees, in the derivation's own order, as the root
+// resolver reads them: each one that exists names its repository.
+func derivedPaths(worktrees []clientservices.Worktree) []string {
+	paths := make([]string, 0, len(worktrees))
+	for _, worktree := range worktrees {
+		paths = append(paths, worktree.Path)
+	}
+	return paths
 }
 
 // worktreeRoomDir is a room's own directory, the one `rigLaunchSpec` calls roomDir, and it is
