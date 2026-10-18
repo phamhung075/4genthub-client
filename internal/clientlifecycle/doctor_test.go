@@ -55,11 +55,13 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 	previousNow, previousLive := clientservices.Now, clientservices.Live
 	previousOrphans := orphanRowsFor
 	previousClone, previousHooks := cloneRowFor, hooksRowFor
+	previousSeats := seatsRowFor
 	t.Cleanup(func() {
 		clientservices.AgentStatePath = previousStatePath
 		clientservices.Now, clientservices.Live = previousNow, previousLive
 		orphanRowsFor = previousOrphans
 		cloneRowFor, hooksRowFor = previousClone, previousHooks
+		seatsRowFor = previousSeats
 	})
 	// The clone and hooks rows read the checkout this binary was built in: a case about the safeguard rows
 	// must not go red because the operator's shared checkout has a file open, or because this machine has not
@@ -70,6 +72,9 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 	// a daemon: the default here is a report with NO orphan row at all, so every case below sees exactly
 	// the safeguard rows it was written for. A case that wants the row replaces this.
 	orphanRowsFor = func(string) []orphanRow { return nil }
+	// The seats row runs the skills check, which needs a runtime and a room record: no test in this file has
+	// either, so the default is a report with no seats row. A case that wants the row replaces this.
+	seatsRowFor = func(string, string) []seatSkillsRow { return nil }
 
 	clientservices.AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
 

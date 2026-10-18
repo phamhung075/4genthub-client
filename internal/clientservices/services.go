@@ -53,6 +53,9 @@ const (
 	// messages carry a sender identity, and the ones whose do not. Like OrphanHandoffs it carries no pid and
 	// no heartbeat.
 	Identity = "identity"
+	// Seats is `doctor`'s row about the skills the seats of a room actually loaded. Like OrphanHandoffs it
+	// is about WORK rather than about a child: there is no single process to pgrep and no heartbeat to age.
+	Seats = "seats"
 )
 
 // The state the identity row adds to 7.2's. It is not a safeguard and never appears in Obligatory; it is the
@@ -61,6 +64,10 @@ const (
 const (
 	// IdentityUnset is a node the daemon cannot name, so every message it sends arrives as `<unknown sender>`.
 	IdentityUnset = "identity_unset"
+	// SkillsStale is the seats row's one failing state: a seat's loaded skills differ from the set the
+	// runtime installed for it. It is deliberately NOT one of the four states below - it names a different
+	// question - and NotRunning counts it, so a stale seat fails `doctor` the way a dead safeguard does.
+	SkillsStale = "skills_stale"
 )
 
 // The four states of 7.2. There is no fifth, and `running` is the ONLY state doctor accepts.

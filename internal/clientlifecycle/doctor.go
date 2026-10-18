@@ -133,11 +133,11 @@ type doctorJSONRow struct {
 // doctorJSONRows pairs every row with the lines the human report prints beside it, from the wrapper that
 // carries them: ONE rule for the JSON and the lines, so the two surfaces cannot disagree about a row.
 func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
-	orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
+	seatRows []seatSkillsRow, orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
 	out := make([]doctorJSONRow, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, doctorJSONRow{Health: row,
-			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, orphanRows, identityRows)})
+			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, seatRows, orphanRows, identityRows)})
 	}
 	return out
 }
@@ -145,7 +145,7 @@ func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, c
 // rowReasons finds one row's reasons: the wrapper is matched on (safeguard, rig), the pair the report
 // itself matches a row by.
 func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
-	orphanRows []orphanRow, identityRows []identityRow) []string {
+	seatRows []seatSkillsRow, orphanRows []orphanRow, identityRows []identityRow) []string {
 	for _, worktree := range worktreeRows {
 		if worktree.Row.Safeguard == row.Safeguard && worktree.Row.Rig == row.Rig {
 			return worktreeLines(worktree)
@@ -159,6 +159,11 @@ func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRow
 	for _, hooks := range hooksRows {
 		if hooks.Row.Safeguard == row.Safeguard && hooks.Row.Rig == row.Rig {
 			return hooksLines(hooks)
+		}
+	}
+	for _, seat := range seatRows {
+		if seat.Row.Safeguard == row.Safeguard && seat.Row.Rig == row.Rig {
+			return seatLines(seat)
 		}
 	}
 	for _, orphan := range orphanRows {
@@ -203,6 +208,13 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	// The seats row (the ruling's one check): `running`, or `skills_stale` when a seat loaded something
+	// other than the set the runtime installed for it. It is the SAME function `up` runs, so the two cannot
+	// disagree about a seat.
+	seatRows := seatsRowFor(rig, root)
+	for _, seatRow := range seatRows {
+		rows = append(rows, seatRow.Row)
+	}
 	orphanRows := orphanRowsFor(rig)
 	for _, orphan := range orphanRows {
 		rows = append(rows, orphan.Row)
@@ -217,7 +229,7 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		rows = append(rows, identity.Row)
 	}
 	if asJSON {
-		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, orphanRows, identityRows), "", "  ")
+		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, seatRows, orphanRows, identityRows), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam doctor: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
@@ -250,6 +262,11 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 				fmt.Fprintln(stdout, line)
 			}
 		}
+		for _, seatRow := range seatRows {
+			for _, line := range seatLines(seatRow) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
 		for _, identity := range identityRows {
 			for _, line := range identityLines(identity) {
 				fmt.Fprintln(stdout, line)
@@ -258,6 +275,10 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		for _, line := range clientservices.TailAlerts(root) {
 			fmt.Fprintln(stdout, line)
 		}
+	}
+	// The inputs the check could not read, on stderr, whether or not any row is down.
+	for _, line := range seatNoteLines(seatRows) {
+		fmt.Fprintln(stderr, line)
 	}
 	down := clientservices.NotRunning(rows)
 	if len(down) == 0 {
@@ -299,6 +320,18 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 				for _, line := range hooksReasonLines(hooks) {
 					fmt.Fprintln(stderr, line)
 				}
+			}
+		}
+		// The seats row's reasons, on stderr: the differences WHEN THE ROW IS DOWN (they are why it is down,
+		// and a refusal that does not name the seat and the code is not actionable), and the inputs the check
+		// could not read whether or not it is - a reader must be able to tell "the seats are right" from "the
+		// seats could not be looked at".
+		for _, seatRow := range seatRows {
+			if seatRow.Row.Rig != row.Rig || seatRow.Row.Safeguard != row.Safeguard {
+				continue
+			}
+			for _, line := range seatReasonLines(seatRow) {
+				fmt.Fprintln(stderr, line)
 			}
 		}
 		// An identity row that is down is only actionable with the node that cannot be named.

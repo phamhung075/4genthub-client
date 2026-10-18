@@ -39,6 +39,7 @@ func reseatFixture(waitOK bool) (*reseatDeps, *[]string) {
 		},
 		waitQuiet: func(rig, seat string) bool { log = append(log, "wait "+seat); return waitOK },
 		relaunch:  func(rig, seat string) error { log = append(log, "relaunch "+seat); return nil },
+		checkSeat: func(rig, seat string) []string { log = append(log, "check "+seat); return nil },
 		getenv:    func(k string) string { return map[string]string{"OFFPEAK_ONLY": "off"}[k] },
 		logf:      func(string, ...any) {},
 	}, &log
@@ -50,7 +51,9 @@ func TestReseatRestartsEachSeatInOrderAfterItIsQuiet(t *testing.T) {
 	if err != nil || code != clientcmd.ExitOK {
 		t.Fatalf("code %d err %v", code, err)
 	}
-	want := []string{"wait lead", "relaunch lead", "wait go-dev", "relaunch go-dev"}
+	// Each seat is waited for, restarted, and then CHECKED - the checks report what the new process loaded, so
+	// they come after its restart and before the next seat's wait.
+	want := []string{"wait lead", "relaunch lead", "check lead", "wait go-dev", "relaunch go-dev", "check go-dev"}
 	if len(*log) != len(want) {
 		t.Fatalf("log %v", *log)
 	}
