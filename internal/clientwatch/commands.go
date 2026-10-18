@@ -109,7 +109,8 @@ options:
   --lines N       lines shown of each call, result or message (default 60)
   --detail        also show the reasoning, what the agent says and what it is told
                   (on for grid and watch, off for feed)
-  --cols N        grid columns (grid and watch only; default 2)
+  --cols N        grid columns (grid and watch only; default 2 is the owner's layout,
+                  any other N builds equal columns)
   --state-root DIR  the omp state root the session logs are read from
                     (--state-root, else ` + stateRootInHelp + `)
 `

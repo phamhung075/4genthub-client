@@ -323,6 +323,9 @@ type fakeExec struct {
 	failures   map[string]error
 	working    map[string]bool
 	splitCount int
+	// splitIDs makes each pane split answer with its own pane id, in order, which is what the tests
+	// that check WHICH pane a seat lands in need; newPane answers every split with one id instead.
+	splitIDs []string
 	// tmuxRoots is the TMUX_TMPDIR every unwrapped tmux call carried: the client reaches tmux only through
 	// `env -u TMUX TMUX_TMPDIR=<root> tmux ...`, and the fake answers it as the plain `tmux ...` call it stands for.
 	tmuxRoots []string
@@ -345,6 +348,10 @@ func newFakeExec(t *testing.T) *fakeExec {
 		fake.calls = append(fake.calls, append([]string{name}, args...))
 		failure := fake.failures[key]
 		response := fake.responses[key]
+		if response == "" && failure == nil && strings.HasPrefix(key, "herdr pane split") && fake.splitCount < len(fake.splitIDs) {
+			response = fmt.Sprintf(`{"result": {"pane": {"pane_id": %q}}}`, fake.splitIDs[fake.splitCount])
+			fake.splitCount++
+		}
 		if response == "" && failure == nil {
 			for _, prefix := range fake.prefixes {
 				if strings.HasPrefix(key, prefix[0]) {

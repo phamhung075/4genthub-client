@@ -25,10 +25,11 @@ layout lives in the client, not in saved terminal state, so it cannot drift.
 
 | Workspace | Holds |
 |---|---|
-| `<RIG> grid` | one pane per live seat, 2 columns by default, seats sorted by name and filled top to bottom then left to right; each pane runs that seat's own feed |
+| `<RIG> grid` | one pane per live seat, in the owner's layout by default: the lead in one tall pane on the left, the next two seats stacked in the column to its right, every remaining seat side by side along the bottom - no pane left empty. Seats are read in the wall's order (lead, architect, go-dev, fe-dev, reviewer, then any other seat by name). `--cols N` keeps the older equal-columns grid instead. Each pane runs that seat's own feed |
 | `<RIG> lead` | the lead's detailed feed on top, with a `lead > input` pane under it: a line typed there is sent to the lead |
 
-`4genteam watch` and `4genteam grid` print `grid: <n> seats in <cols> columns`.
+`4genteam watch` and `4genteam grid` print `grid: <n> seats in <cols> columns`; the default layout
+prints the 2 of its two columns, with the bottom row spanning both.
 
 A pane exists for every seat the room is running (they come from the rig's live tmux sessions).
 The feed reads a seat's newest session log — the omp state directory under

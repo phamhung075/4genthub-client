@@ -136,7 +136,116 @@ func textOf(object map[string]any, key string) string {
 	return text
 }
 
-// runGrid opens one pane per seat. Columns are split first, then each column into equal rows.
+// gridSeatOrder is the wall's reading order: the lead first, then the seats that build (architect,
+// go-dev), then the frontend and the reviewer. A seat this list does not name follows in name order,
+// so a room with different seats still gets every pane exactly once.
+var gridSeatOrder = []string{"lead", "architect", "go-dev", "fe-dev", "reviewer"}
+
+// orderSeats sorts the live seats into the wall's reading order. The reading order is a constant
+// rather than the alphabetical order the tmux sessions arrive in, because the owner reads the wall as
+// "lead, then the builders, then the rest" and a name sort puts the lead fourth.
+func orderSeats(seats []string) []string {
+	rank := make(map[string]int, len(gridSeatOrder))
+	for index, name := range gridSeatOrder {
+		rank[name] = index
+	}
+	ordered := append([]string(nil), seats...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left, leftRanked := rank[ordered[i]]
+		right, rightRanked := rank[ordered[j]]
+		switch {
+		case leftRanked && rightRanked:
+			return left < right
+		case leftRanked:
+			return true
+		case rightRanked:
+			return false
+		}
+		return ordered[i] < ordered[j]
+	})
+	return ordered
+}
+
+// gridSplit is one cut of an existing pane. Parent indexes the pane being split in creation order,
+// where 0 is the workspace's root pane; Direction is herdr's "right" or "down"; Ratio is the share of
+// the parent the existing pane keeps, which is what `pane split --ratio` means. A pane created by a
+// split takes the next index, so the plan is executed linearly.
+type gridSplit struct {
+	Parent    int
+	Direction string
+	Ratio     float64
+}
+
+// gridLayout is the wall's geometry: the cuts, then the pane each seat is placed in. Slots is filled
+// in seat order, so Slots[i] is the pane for the i-th seat of orderSeats.
+type gridLayout struct {
+	Splits []gridSplit
+	Slots  []int
+}
+
+// The share of the wall the top band keeps. The left pane and the right stack sit above the bottom
+// row, which is why the root is cut once at two thirds rather than into equal halves.
+const gridTopRatio = 2.0 / 3.0
+
+// gridPlan carves one pane per seat with none left empty: the tall left pane (seat 0), then the top
+// band's right column holding the next two seats stacked, then the bottom row holding every remaining
+// seat side by side. One seat is the root alone; two are side by side. The owner's five-seat wall is
+// therefore lead tall on the left, architect over go-dev on the right, fe-dev beside reviewer along
+// the bottom.
+//
+// The plan is pure: it computes indices and ratios only, and the caller performs the splits in order.
+func gridPlan(seats int) gridLayout {
+	var layout gridLayout
+	if seats <= 0 {
+		return layout
+	}
+	layout.Slots = make([]int, 0, seats)
+	layout.Slots = append(layout.Slots, 0)
+	if seats == 1 {
+		return layout
+	}
+	created := 1
+
+	// The bottom row: a full-width band under both columns, holding the last seats side by side.
+	bottom := 0
+	if seats >= 3 {
+		bottom = seats - 3
+	}
+	last := 0
+	for row := range bottom {
+		if row == 0 {
+			layout.Splits = append(layout.Splits, gridSplit{Parent: 0, Direction: "down", Ratio: gridTopRatio})
+		} else {
+			layout.Splits = append(layout.Splits, gridSplit{Parent: last, Direction: "right", Ratio: 1 / float64(bottom-row+1)})
+		}
+		last = created
+		created++
+	}
+	bottomFirst := 1
+	if bottom == 0 {
+		bottomFirst = 0
+	}
+
+	// The top band's right column: the next seat, then the one after it stacked underneath.
+	topRight := created
+	layout.Splits = append(layout.Splits, gridSplit{Parent: 0, Direction: "right", Ratio: 0.5})
+	created++
+	layout.Slots = append(layout.Slots, topRight)
+	if seats >= 3 {
+		midRight := created
+		layout.Splits = append(layout.Splits, gridSplit{Parent: topRight, Direction: "down", Ratio: 0.5})
+		created++
+		layout.Slots = append(layout.Slots, midRight)
+	}
+	for index := range bottom {
+		layout.Slots = append(layout.Slots, bottomFirst+index)
+	}
+	return layout
+}
+
+// runGrid opens one pane per seat. With the default two columns it builds the owner's layout from
+// gridPlan; an explicitly requested column count keeps the equal-columns grid, columns first and then
+// equal rows.
 func runGrid(ctx context.Context, s shared, out io.Writer) error {
 	seats, err := rigSeats(ctx, s.stateRoot, s.rig)
 	if err != nil {
@@ -167,26 +276,47 @@ func runGrid(ctx context.Context, s shared, out io.Writer) error {
 		return id, nil
 	}
 
-	heads := []string{root}
-	for left := s.cols - 1; left > 0; left-- {
-		created, err := split(heads[len(heads)-1], "right", 1/float64(left+1))
-		if err != nil {
-			return err
-		}
-		heads = append(heads, created)
-	}
-	perColumn := (len(seats) + s.cols - 1) / s.cols
-	panes := []string{}
-	for _, head := range heads {
-		current := head
-		panes = append(panes, current)
-		for left := perColumn - 1; left > 0; left-- {
-			created, err := split(current, "down", 1/float64(left+1))
+	panes := []string{root}
+	if s.cols == 2 {
+		// The default wall is the owner's layout: one tall pane on the left, two stacked on the
+		// right, the rest side by side along the bottom. It is exact for any seat count, so no
+		// pane is left empty.
+		seats = orderSeats(seats)
+		layout := gridPlan(len(seats))
+		for _, step := range layout.Splits {
+			created, err := split(panes[step.Parent], step.Direction, step.Ratio)
 			if err != nil {
 				return err
 			}
-			current = created
+			panes = append(panes, created)
+		}
+		placed := make([]string, len(seats))
+		for index, slot := range layout.Slots {
+			placed[index] = panes[slot]
+		}
+		panes = placed
+	} else {
+		// An explicitly requested column count keeps the equal-columns grid.
+		heads := []string{root}
+		for left := s.cols - 1; left > 0; left-- {
+			created, err := split(heads[len(heads)-1], "right", 1/float64(left+1))
+			if err != nil {
+				return err
+			}
+			heads = append(heads, created)
+		}
+		perColumn := (len(seats) + s.cols - 1) / s.cols
+		for _, head := range heads {
+			current := head
 			panes = append(panes, current)
+			for left := perColumn - 1; left > 0; left-- {
+				created, err := split(current, "down", 1/float64(left+1))
+				if err != nil {
+					return err
+				}
+				current = created
+				panes = append(panes, current)
+			}
 		}
 	}
 	for index, pane := range panes {
