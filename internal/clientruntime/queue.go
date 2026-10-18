@@ -32,7 +32,8 @@ var QueueTags = []string{"prod-break", "gate", "ruling", "owner-decision", "find
 // (acceptance pending), done is terminal.
 var QueueStates = []string{"pending", "in-progress", "blocked", "handed-off", "done"}
 
-// QueueClosureReasons is the exact set - and the only set - a closure reason may come from.
+// QueueClosureReasons is the exact set - and the only set - a closure reason may come from. `gate` is the
+// reviewer's verdict close: its transition note carries PASS/FAIL and the commands that were run.
 var QueueClosureReasons = []string{
 	"handed_off_to",
 	"blocked_on",
@@ -41,6 +42,7 @@ var QueueClosureReasons = []string{
 	"no-follow-on",
 	"escalation",
 	"superseded",
+	"gate",
 }
 
 // QueueTerminalStates are the states a row rests in for good: a handoff's SOURCE rests at handed-off while the

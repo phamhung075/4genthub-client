@@ -39,7 +39,9 @@ over the variable.
   them: without a tag the daemon answers `a create carries at least one allowed tag`, and a `--body` that
   is not the four lines below is refused field by field.
 - `close --reason` is an ENUM, never prose: `handed_off_to` (requires `--target SESSION`), `blocked_on`,
-  `denied`, `canceled`, `no-follow-on`, `escalation`, `superseded`. The sentence goes in `--note`.
+  `denied`, `canceled`, `no-follow-on`, `escalation`, `superseded`, `gate` (the reviewer's verdict close:
+  `--note` must carry PASS/FAIL and the commands run, and the client refuses one without it). Any other
+  close's sentence goes in `--note`.
 - There is no global flag and none before the sub-verb: `--state-root DIR` and `--socket PATH` follow the
   positionals of the verb you called, and each verb has its own flag set.
 

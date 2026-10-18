@@ -609,6 +609,13 @@ func runQueueUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam room queue update: nothing to change: this verb needs a --state, a --note, or a field change (--summary, --closure-reason, --closure-target, --blocked-on, --wake-after). A transition that moves nothing is worse than a refusal, so nothing was asked of the daemon. %s\n", queueSubUsage("update"))
 		return clientcmd.ExitRoomRefused
 	}
+	// THE SAME CLOSE BY ANOTHER VERB. `--state done --closure-reason gate` is the close path this verb
+	// offers, so the verdict rule holds here too; otherwise the one requirement of a gate close could be
+	// stepped around by choosing update.
+	if hasState && strings.TrimSpace(state) == "done" && hasClosureReason && gateCloseNeedsVerdict(closureReason, note) {
+		fmt.Fprintf(stderr, "4genteam room queue update: --state done with --closure-reason gate is the reviewer's verdict close, and %s\n", gateCloseRefusal)
+		return clientcmd.ExitRoomRefused
+	}
 	actor, ok := queueSession("update", stderr)
 	if !ok {
 		return clientcmd.ExitRoomRefused
@@ -670,6 +677,18 @@ func runQueueClaim(args []string, stdout, stderr io.Writer) int {
 	return clientcmd.ExitOK
 }
 
+// gateCloseNeedsVerdict reports the one closure whose NOTE is required rather than optional: a reviewer's
+// gate close. The rail is the loop's proof surface, and the measured defect is a gate row closed with a bare
+// `closed` transition - body still holding the request, no PASS/FAIL anywhere, five rows 21:14-21:33 on
+// 2026-10-18 (review 3 line 2). The tests ran; the record did not carry them.
+func gateCloseNeedsVerdict(reason, note string) bool {
+	return strings.TrimSpace(reason) == "gate" && strings.TrimSpace(note) == ""
+}
+
+// gateCloseRefusal is the sentence both verbs print when that note is missing; it names the verdict, because
+// that is the field the caller has to fill.
+const gateCloseRefusal = "the row is the loop's proof surface: --note must carry the verdict (PASS or FAIL) and the command you ran. Nothing was asked of the daemon."
+
 // runQueueClose closes a row with a reason from the daemon's own set.
 //
 // THE REASON IS CHECKED HERE, BEFORE THE REQUEST, and the allowed set is printed with the refusal: a typo
@@ -698,6 +717,12 @@ func runQueueClose(args []string, stdout, stderr io.Writer) int {
 			reason, strings.Join(clientruntime.QueueClosureReasons, ", "))
 		return clientcmd.ExitRoomRefused
 	}
+	note, hasNote := run.option("note")
+	if gateCloseNeedsVerdict(reason, note) {
+		fmt.Fprintf(stderr, "4genteam room queue close: --reason gate is the reviewer's verdict close, and %s\n",
+			gateCloseRefusal)
+		return clientcmd.ExitRoomRefused
+	}
 	target, hasTarget := run.option("target")
 	if reason == "handed_off_to" && (!hasTarget || strings.TrimSpace(target) == "") {
 		fmt.Fprintf(stderr, "4genteam room queue close: --reason handed_off_to requires --target SESSION: the row rests at handed-off while the work continues in the successor row the store creates FOR that session, and the store refuses the closure without one\n")
@@ -715,7 +740,7 @@ func runQueueClose(args []string, stdout, stderr io.Writer) int {
 	if hasTarget {
 		input.ClosureTarget = &target
 	}
-	if note, present := run.option("note"); present {
+	if hasNote {
 		input.TransitionNote = note
 	}
 	run.printPair(stdout)

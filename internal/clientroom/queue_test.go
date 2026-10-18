@@ -217,6 +217,71 @@ func TestRoomQueueCloseRefusesAnUnknownReasonWithoutARoundTrip(t *testing.T) {
 	assertRequests(t, daemon)
 }
 
+// A GATE CLOSE WITH NO VERDICT IS REFUSED BEFORE THE ROUND TRIP. Measured 2026-10-18 (review 3 line 2): gate
+// rows were claimed and closed with the bare word `closed`, the body still holding the request, and no
+// PASS/FAIL anywhere - the tests ran, the record did not carry them. The refusal names the field to fill.
+func TestRoomQueueCloseRefusesAGateCloseWithoutAVerdict(t *testing.T) {
+	t.Setenv(sessionEnv, testSeat)
+	daemon := newFakeDaemon(t, map[string]string{})
+
+	code, stdout, stderr := runRoom(t, daemon.args("queue", "close", testRoom, "qitem-gate", "--reason", "gate")...)
+	if code != clientcmd.ExitRoomRefused {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, stderr)
+	}
+	for _, want := range []string{"verdict", "PASS", "Nothing was asked of the daemon"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want it to name %q", stderr, want)
+		}
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing: nothing was asked of the daemon", stdout)
+	}
+	assertRequests(t, daemon)
+}
+
+// THE SAME CLOSE WITH ITS VERDICT RIDES THE NOTE, and the note is what the rail then shows: the reason names
+// the kind of close and the note carries the verdict and the command that produced it.
+func TestRoomQueueCloseCarriesTheGateVerdictInTheNote(t *testing.T) {
+	t.Setenv(sessionEnv, testSeat)
+	verdict := "PASS 272dda3; go test ./internal/clientroom/... ok"
+	daemon := newFakeDaemon(t, map[string]string{
+		"QueueClose": okData(queueRowFrame("qitem-gate", "done", "normal", "Gate: a client change",
+			queueTransitionFrame(2, "2026-10-18T23:50:00Z", "in-progress", "done", testSeat, verdict))),
+	})
+
+	code, stdout, stderr := runRoom(t, daemon.args("queue", "close", testRoom, "qitem-gate",
+		"--reason", "gate", "--note", verdict)...)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	if !strings.Contains(stdout, verdict) {
+		t.Errorf("stdout = %q, want the verdict the transition carries", stdout)
+	}
+	assertRequests(t, daemon, `{"action":"QueueClose","payload":{"input":{"qitem_id":"qitem-gate",`+
+		`"actor_session":"`+testSeat+`","closure_reason":"gate","transition_note":"`+verdict+`"},`+
+		`"room":"`+testRoom+`"}}`)
+}
+
+// THE UPDATE PATH IS THE SAME CLOSE: `--state done --closure-reason gate` with no note is refused there too,
+// or the one requirement of a gate close could be stepped around by choosing another verb.
+func TestRoomQueueUpdateRefusesAGateCloseWithoutAVerdict(t *testing.T) {
+	t.Setenv(sessionEnv, testSeat)
+	daemon := newFakeDaemon(t, map[string]string{})
+
+	code, stdout, stderr := runRoom(t, daemon.args("queue", "update", testRoom, "qitem-gate",
+		"--state", "done", "--closure-reason", "gate")...)
+	if code != clientcmd.ExitRoomRefused {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, stderr)
+	}
+	if !strings.Contains(stderr, "verdict") {
+		t.Errorf("stderr = %q, want it to name the missing verdict", stderr)
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want nothing: nothing was asked of the daemon", stdout)
+	}
+	assertRequests(t, daemon)
+}
+
 // TestRoomQueueUpdateWithANoteSendsAStatePreservingTransition pins the append: `--note` with no `--state`
 // writes a transition whose frame has NO `state` key - the note is the point, not the move - and the note is
 // rendered from the transition the daemon answered with, because it rides no field of the row.

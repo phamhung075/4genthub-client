@@ -51,6 +51,10 @@ pays for.
 - **Out: exactly one row** - `request changes` to the author, naming each blocker with its `file:line`, or
   `approve` to the lead. That same row carries the `Unconfirmed` list and the commands you ran. Whatever the
   crew size (up to four workers, one dimension each), it is one verdict.
+- **Closing the gate row is the record, not a formality**: `4genteam room queue close <gameroom> <qitem> --reason
+  gate --note "PASS|FAIL <head sha>; <the commands you ran and their results>"`. The client refuses a gate
+  close with no note, because a bare `closed` transition leaves the row's body holding the request and no
+  PASS/FAIL anywhere (measured 2026-10-18, review 3 line 2) - the tests ran, and the rail could not show it.
 - **Progress goes to the board, not the rail**: one `=== Progress N ===` section on the task item naming
   the range, each worker's dimension and its job id. A reader asking "is the gate running" reads the board.
 - **No finding becomes its own row.** A finding you cannot confirm is listed `Unconfirmed` inside the
