@@ -317,8 +317,12 @@ func sameTree(left, right string) bool {
 // treeHash is the content hash of one directory: every entry's path relative to the root, and every
 // regular file's bytes, fed to one sha256 in WalkDir's lexical order.
 func treeHash(root string) (string, error) {
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
 	hash := sha256.New()
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

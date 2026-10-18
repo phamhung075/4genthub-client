@@ -178,6 +178,9 @@ func Scan(root string) ([]Finding, error) {
 			return relErr
 		}
 		rel = filepath.ToSlash(rel)
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil // a linked skill is a vendored submodule's text, not this repository's
+		}
 		if d.IsDir() {
 			switch d.Name() {
 			case ".git", "node_modules", "target", "CHANGELOG":

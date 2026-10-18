@@ -190,8 +190,9 @@ func (t Tree) Resolve(room, seat string) ([]Skill, error) {
 	return skills, nil
 }
 
-// subdirs returns the names of dir's subdirectories, sorted. A plain file is ignored: the layout's rule
-// is about directories, so a README beside the skills is not a fault.
+// subdirs returns the names of dir's subdirectories, sorted. A symlink to a directory counts: a skill kept in
+// a vendored submodule is linked into the tree, not copied. A plain file is ignored: the layout's rule is
+// about directories, so a README beside the skills is not a fault.
 func subdirs(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -199,7 +200,7 @@ func subdirs(dir string) ([]string, error) {
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if info, err := os.Stat(filepath.Join(dir, entry.Name())); err == nil && info.IsDir() {
 			names = append(names, entry.Name())
 		}
 	}

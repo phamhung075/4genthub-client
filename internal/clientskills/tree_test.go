@@ -291,3 +291,19 @@ func TestRequireRefusesARootThatIsNotTheTree(t *testing.T) {
 
 // The tree is found by flag, then by environment, then beside the executable - the client directory a
 // user who has only the binary is told to put it in.
+
+func TestASymlinkedSkillDirectoryIsASkill(t *testing.T) {
+	tree := skillTree(t, map[string]string{
+		"vendored/deepseek-offload/SKILL.md": "---\nname: deepseek-offload\n---\n",
+		"share/plain/SKILL.md":               "---\nname: plain\n---\n",
+	})
+	link := filepath.Join(tree.Root, "share", "deepseek-offload")
+	if err := os.Symlink(filepath.Join("..", "vendored", "deepseek-offload"), link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	skills, err := tree.Resolve("room", "seat")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	requireNames(t, skills, "deepseek-offload", "plain")
+}
