@@ -98,16 +98,7 @@ func Redact(text string, known map[string]string) (clean string, redacted bool) 
 	}()
 
 	clean = text
-	for _, name := range namesLongestValueFirst(known) {
-		value := known[name]
-		if len(value) < MinSecretLen {
-			continue
-		}
-		marker := markerIntro + name + "]"
-		for _, form := range formsLongestFirst(value) {
-			clean = strings.ReplaceAll(clean, form, marker)
-		}
-	}
+	clean, _ = RedactKnownValues(clean, known)
 	for _, labelled := range redactionPatterns {
 		clean = labelled.pattern.ReplaceAllString(clean, markerIntro+labelled.label+"]")
 	}
@@ -122,6 +113,28 @@ func Redact(text string, known map[string]string) (clean string, redacted bool) 
 	// treated it as one would report a change that never happened.
 	redacted = clean != text
 	return truncate(clean, RedactedMaxLen), redacted
+}
+
+// RedactKnownValues replaces the known secret values in text with their markers and reports whether anything
+// changed. It is the known-values half of Redact, exported because a caller with its own pattern set and its own
+// marker discipline needs THIS half alone: the clientsync gate's `[redacted]` marker is part of its contract, and
+// composing the whole Redact would rewrite what its own patterns already cover, in this package's marker style.
+//
+// The order is the Python scrubber's: longest value first, and within a value its longest form first, so a
+// shorter form cannot eat a longer one.
+func RedactKnownValues(text string, known map[string]string) (clean string, changed bool) {
+	clean = text
+	for _, name := range namesLongestValueFirst(known) {
+		value := known[name]
+		if len(value) < MinSecretLen {
+			continue
+		}
+		marker := markerIntro + name + "]"
+		for _, form := range formsLongestFirst(value) {
+			clean = strings.ReplaceAll(clean, form, marker)
+		}
+	}
+	return clean, clean != text
 }
 
 // namesLongestValueFirst orders the known values by descending length, ties by name. The Python

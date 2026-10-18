@@ -236,6 +236,56 @@ func TestEventWithholdsWhenTheRedactorPanics(t *testing.T) {
 	}
 }
 
+// TestASentinelInTheTokenEnvironmentNeverReachesTheEvent is the ruling's sentinel clause on the EVENT surface -
+// rigd-boundaries.md 7.10: a sentinel value in the token environment variable, and a fake `claude` that echoes
+// its environment and argv, must appear in NEITHER the log NOR the event. THE SURFACE THIS COVERS IS THE UPLOAD
+// GATE: every transcript line goes through Event before the frame is on the wire, and the auto-fix's own log and
+// its `auto_fix` event ride with the 7.10 packet, which is not built.
+//
+// The lines are what such an echo looks like when no pattern can see it: the value BARE (a child that prints
+// just the value: no variable name, no separator, no provider prefix), and the value inside a JSON object, where
+// the name is followed by `":"` rather than by `=` or `:`, which the name-shaped rule does not match either.
+func TestASentinelInTheTokenEnvironmentNeverReachesTheEvent(t *testing.T) {
+	const sentinel = "sentinel-token-value-abc"
+	t.Setenv("AGENTHUB_TOKEN", sentinel)
+	lines := []string{
+		"the fake child printed " + sentinel + " with no name around it",
+		`{"AGENTHUB_TOKEN":"` + sentinel + `"}`,
+		`{"argv":["claude","-p"],"env":{"AGENTHUB_TOKEN":"` + sentinel + `"}}`,
+	}
+	redactor := NewEventRedactor()
+	for _, line := range lines {
+		event, reason := redactor.Event(line)
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			t.Fatalf("marshalling the event for %q: %v", line, err)
+		}
+		if strings.Contains(string(encoded), sentinel) {
+			t.Errorf("the sentinel reached the event for %q: %s (reason %q)", line, encoded, reason)
+		}
+	}
+}
+
+// TestAClientLineRedactedByNameIsWrittenBackAroundIt drives the same rule through the seam, so the mechanism is
+// proven without the real environment and the marker's shape is pinned: the value goes and the text around it
+// stays.
+func TestAClientLineRedactedByNameIsWrittenBackAroundIt(t *testing.T) {
+	const sentinel = "sentinel-token-value-abc"
+	original := redactionKnownValues
+	redactionKnownValues = func() map[string]string { return map[string]string{"AGENTHUB_TOKEN": sentinel} }
+	t.Cleanup(func() { redactionKnownValues = original })
+
+	got := Redact("before " + sentinel + " after")
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("Redact left the sentinel in place: %q", got)
+	}
+	for _, want := range []string{"before", "after", "[REDACTED:AGENTHUB_TOKEN]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Redact(%q) = %q, want it to keep %q", "before <sentinel> after", got, want)
+		}
+	}
+}
+
 // assertWithheld checks the one placeholder shape 4.4 rules, for the reason and byte count given.
 func assertWithheld(t *testing.T, event map[string]any, reason, wantReason string, wantBytes int) {
 	t.Helper()

@@ -12,9 +12,12 @@ package clientsync
 import (
 	"encoding/json"
 	"math"
+	"os"
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
 
 // The numbers and words of the contract, named once so the tests and the daemon read the same ones.
@@ -102,15 +105,30 @@ func (r *EventRedactor) Event(line string) (event map[string]any, reason string)
 // C1 requirement "redact secrets locally" and it runs here, in the client, because after the frame is
 // on the wire the secret is already in the cloud.
 //
-// Each pattern CAPTURES the prefix it must keep - the header word, the variable name and its
-// separator, the scheme, the flag name - so the replacement cannot eat a character of real content.
-// The provider-token patterns carry NO capture group, because ${1} expands to the empty string when
-// there is no group and those tokens are entirely secret.
+// It removes the KNOWN ENVIRONMENT VALUES first, and the pattern list below second, because the list can only
+// see SHAPES: a child process that echoes its environment - the ruling's fake `claude`, and any command that
+// prints its own environment or argv - emits the value bare, with no variable name, no separator and no
+// provider prefix, which no shape rule can recognise. It uses secretscan's known-values half and NOT its whole
+// Redact, because the whole one carries its own pattern set and its own marker: this gate's `[redacted]` marker
+// is part of its contract, and a second pattern set here would rewrite what the list below already covers.
+//
+// Each pattern in the list CAPTURES the prefix it must keep - the header word, the variable name and its
+// separator, the scheme, the flag name - so the replacement cannot eat a character of real content. The
+// provider-token patterns carry NO capture group, because ${1} expands to the empty string when there is no
+// group and those tokens are entirely secret.
 func Redact(text string) string {
+	text, _ = secretscan.RedactKnownValues(text, redactionKnownValues())
 	for _, rule := range redactionPatterns {
 		text = rule.pattern.ReplaceAllString(text, rule.replacement)
 	}
 	return text
+}
+
+// redactionKnownValues is a seam for the same reason redactLine is: the environment is the one input a test
+// cannot set behind a function that captured it already. It is read per line rather than cached, so a rotated
+// credential takes effect without restarting the upload loop - the same call the bridge makes per notification.
+var redactionKnownValues = func() map[string]string {
+	return secretscan.KnownValuesFromEnv(os.Environ())
 }
 
 // redactionRule is one pattern and the replacement that preserves whatever the pattern captured.
