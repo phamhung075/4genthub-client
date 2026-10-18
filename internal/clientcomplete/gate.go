@@ -3,6 +3,7 @@ package clientcomplete
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -35,69 +36,159 @@ type result struct {
 }
 
 // register is what the evidence bundle carries, and the only set of facts a criterion may be about: the
-// command that was run, the exit code it returned, the paths the numstat lists, and the base/head shas. A
-// criterion that resolves to none of them is not weak evidence about the work - it is a claim this gate
-// cannot see, and a judge asked about it answers with an opinion and a number on it, which is the confusion
-// R1 of seats/architect/RULING-closing-gate-register-and-unjudgeable.md removes.
+// command that was run, the exit code it returned, the counted change the numstat describes (its paths, its
+// file and line counts), and the base/head shas. A criterion that resolves to none of them is not weak
+// evidence about the work - it is a claim this gate cannot see, and a judge asked about it answers with an
+// opinion and a number on it, which is the confusion R1 of
+// seats/architect/RULING-closing-gate-register-and-unjudgeable.md removes.
 type register struct {
 	command  string
 	exitCode int
-	paths    []string
+	counts   clientevidence.NumstatStats
 	shas     []string
+}
+
+// pathList is the numstat's paths, which is what the refusal quotes as the carried change.
+func (r register) pathList() []string {
+	paths := make([]string, 0, len(r.counts.Rows))
+	for _, row := range r.counts.Rows {
+		paths = append(paths, row.Path)
+	}
+	return paths
 }
 
 // shaPrefix is the shortest sha a criterion may name (the ruling's floor): a shorter run is not a fact about
 // a commit, and it is what an ordinary word or number would collide with.
 const shaPrefix = 7
 
+// facts is which register facts a criterion names. carries is the OR of them; the criteria warning needs the
+// parts, because a path is a fact this gate reads and the wire drops.
+type facts struct {
+	command, exitCode, path, sha, count bool
+}
+
+// any is carries' own rule: each fact stands on its own.
+func (f facts) any() bool { return f.command || f.exitCode || f.path || f.sha || f.count }
+
 // carries reports whether the criterion is about a fact the bundle carries. Each fact stands on its own -
 // that is the ruling's "a criterion resolving to NONE of these is refused" - so a criterion naming the run's
 // exit code or a carried path is judged even when it names neither command nor sha. The bundle's exit-code
 // fact is THIS run's own value, so a criterion claiming a different code does not resolve to it (it is still
 // judged if it names the command, which is a fact in its own right).
-func (r register) carries(criterion string) bool {
-	command, exitCode, path, sha := r.names(criterion)
-	return command || exitCode || path || sha
-}
+func (r register) carries(criterion string) bool { return r.names(criterion).any() }
 
-// names says which of the register's facts a criterion names. carries is the OR of them; the criteria
-// warning needs the parts, because a path is a fact this gate reads and the wire drops.
-func (r register) names(criterion string) (command, exitCode, path, sha bool) {
+// names says which of the register's facts a criterion names.
+func (r register) names(criterion string) facts {
 	c := normaliseSpace(criterion)
-	command = r.command != "" && strings.Contains(c, r.command)
-	exitCode = strings.Contains(c, "exit") && containsInteger(c, strconv.Itoa(r.exitCode))
-	for _, p := range r.paths {
+	var f facts
+	f.command = r.command != "" && strings.Contains(c, r.command)
+	f.exitCode = strings.Contains(c, "exit") && containsInteger(c, strconv.Itoa(r.exitCode))
+	for _, p := range r.pathList() {
 		if p != "" && strings.Contains(c, p) {
-			path = true
+			f.path = true
 			break
 		}
 	}
 	for _, s := range r.shas {
 		if len(s) >= shaPrefix && strings.Contains(strings.ToLower(c), strings.ToLower(s[:shaPrefix])) {
-			sha = true
+			f.sha = true
 			break
 		}
 	}
-	return command, exitCode, path, sha
+	f.count = r.namesACount(c)
+	return f
+}
+
+// countKeys is the wire's count vocabulary and the value each key states. A key is a fact only when the
+// criterion spells it and the number in the same clause is THIS bundle's number: a count the bundle does
+// not carry is refused exactly as an unlisted path or an absent sha is.
+var countKeys = []struct {
+	key   string
+	value func(clientevidence.NumstatStats) int
+}{
+	{clientevidence.KeyFilesChanged, func(s clientevidence.NumstatStats) int { return s.Files() }},
+	{clientevidence.KeyLinesChanged, func(s clientevidence.NumstatStats) int { return s.Total() }},
+	{clientevidence.KeyLinesAdded, func(s clientevidence.NumstatStats) int { return s.Added }},
+	{clientevidence.KeyLinesDeleted, func(s clientevidence.NumstatStats) int { return s.Deleted }},
+}
+
+// namesACount reports whether the criterion names a wire count key and THAT key's value: the key occurrence
+// and the value must share a clause - the window runs from the end of the key to the next count-key
+// occurrence (either spelling) or the end of the criterion, and the FIRST integer in it must equal the
+// bundle's number for that key. A match anywhere in the text is REJECTED: the sha tokenizer splits
+// "2c34515" into the tokens 2 and 34515, so a global match would admit "files_changed is 2" on a
+// three-file change whose sha carries a 2. No fixed radius either: "files_changed across the whole change
+// is 7" is still the key's own clause.
+func (r register) namesACount(c string) bool {
+	c = strings.ToLower(c)
+	type occurrence struct {
+		start, end, value int
+	}
+	var keys []occurrence
+	for _, k := range countKeys {
+		value := k.value(r.counts)
+		for _, form := range []string{k.key, strings.ReplaceAll(k.key, "_", " ")} {
+			for from := 0; from < len(c); {
+				i := strings.Index(c[from:], form)
+				if i < 0 {
+					break
+				}
+				keys = append(keys, occurrence{start: from + i, end: from + i + len(form), value: value})
+				from += i + len(form)
+			}
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i].start < keys[j].start })
+	for i, key := range keys {
+		windowEnd := len(c)
+		for _, next := range keys[i+1:] {
+			if next.start >= key.end {
+				windowEnd = next.start
+				break
+			}
+		}
+		if n, ok := firstInteger(c[key.end:windowEnd]); ok && n == key.value {
+			return true
+		}
+	}
+	return false
+}
+
+// firstInteger is the first whole number in the text, tokenised exactly as containsInteger does (split on
+// non-[0-9.], trim dots): "is 4" is 4, "is 0.5" carries no integer, and "" carries none.
+func firstInteger(text string) (int, bool) {
+	isNumberRune := func(r rune) bool { return (r >= '0' && r <= '9') || r == '.' }
+	for _, run := range strings.FieldsFunc(text, func(r rune) bool { return !isNumberRune(r) }) {
+		token := strings.Trim(run, ".")
+		if token == "" || strings.Contains(token, ".") {
+			continue
+		}
+		n, err := strconv.Atoi(token)
+		if err != nil {
+			continue
+		}
+		return n, true
+	}
+	return 0, false
 }
 
 // pathOnlyWarnings names the criteria the judge will read blind. A criterion that carries a numstat path and
-// none of the command, the exit code or a sha is ADMITTED by the register, and then the count-only wire
-// (clientjev.RedactForWire, owner ruling O9a) replaces its path with "<path>" before Jev sees it: the judge
-// is asked whether "<path> is fixed", a claim whose only fact was removed. These are warnings, not refusals -
-// the criterion stays in the judge's set and the verdict is unchanged - and each names the form the wire
-// carries: the test command with its exit code, a base/head sha prefix, and the counts.
+// none of the command, the exit code, a sha or a count is ADMITTED by the register, and then the count-only
+// wire (clientjev.RedactForWire, owner ruling O9a) replaces its path with "<path>" before Jev sees it: the
+// judge is asked whether "<path> is fixed", a claim whose only fact was removed. These are warnings, not
+// refusals - the criterion stays in the judge's set and the verdict is unchanged - and each names the form
+// the wire carries: the test command with its exit code, a base/head sha prefix, and the counts.
 func (r register) pathOnlyWarnings(criteria []string) []string {
 	var warnings []string
 	for i, criterion := range criteria {
-		command, exitCode, path, sha := r.names(criterion)
-		if !path || command || exitCode || sha {
+		f := r.names(criterion)
+		if !f.path || f.command || f.exitCode || f.sha || f.count {
 			continue
 		}
 		warnings = append(warnings, fmt.Sprintf("criterion_%d %q names only a carried path, and the wire "+
 			"redacts a path to <path> before Jev sees it, so the criterion is judged blind; name a fact the "+
-			"judge can read: the test command with its exit code, a base/head sha prefix, and the counts "+
-			"(how many files changed, how many lines moved)", i+1, criterion))
+			"judge can read: the test command with its exit code, a base/head sha prefix, or the counts "+
+			"(files_changed, lines_changed, lines_added, lines_deleted) with this bundle's value", i+1, criterion))
 	}
 	return warnings
 }
@@ -120,8 +211,10 @@ func (r register) refusal(refused, judgeable []int, criteria []string) string {
 	}
 	return fmt.Sprintf("unjudgeable: %s name no fact this bundle carries, so the task cannot close and Jev was "+
 		"not asked; judgeable: %s. The register carries the test command %q with exit code %d, the numstat paths "+
-		"(%s) and the base/head shas (%s)", strings.Join(named, ", "), carries, r.command, r.exitCode,
-		strings.Join(r.paths, ", "), strings.Join(r.shas, ", "))
+		"(%s) and its counts (files_changed %d, lines_changed %d, lines_added %d, lines_deleted %d), and the "+
+		"base/head shas (%s)", strings.Join(named, ", "), carries, r.command, r.exitCode,
+		strings.Join(r.pathList(), ", "), r.counts.Files(), r.counts.Total(), r.counts.Added, r.counts.Deleted,
+		strings.Join(r.shas, ", "))
 }
 
 // normaliseSpace folds every run of whitespace into one space, which is the form the ruling defines the
@@ -154,22 +247,22 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 		c.D3Tests = false
 		failures = append(failures, "D3: the test run failed")
 	}
-	paths, lines, err := parseNumstat(body.Numstat)
+	stats, err := clientevidence.ParseNumstat(body.Numstat)
 	switch {
 	case err != nil:
 		c.D5Numstat = false
 		failures = append(failures, "D5: "+err.Error())
-	case len(paths) == 0:
+	case stats.Files() == 0:
 		c.D5Numstat = false
 		failures = append(failures, "D5: the change touches no file")
-	case lines > maxDiffLines:
+	case stats.Total() > maxDiffLines:
 		c.D5Numstat = false
-		failures = append(failures, fmt.Sprintf("D5: the change is %d lines, over %d", lines, maxDiffLines))
+		failures = append(failures, fmt.Sprintf("D5: the change is %d lines, over %d", stats.Total(), maxDiffLines))
 	}
-	for _, path := range paths {
-		if pattern, hit := keptOut(path); hit {
+	for _, row := range stats.Rows {
+		if pattern, hit := keptOut(row.Path); hit {
 			c.D4Clean = false
-			failures = append(failures, fmt.Sprintf("D4: %s is a keep-out path (%s)", path, pattern))
+			failures = append(failures, fmt.Sprintf("D4: %s is a keep-out path (%s)", row.Path, pattern))
 			break
 		}
 	}
@@ -179,7 +272,7 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 	if len(criteria) == 0 {
 		return result{Verdict: clientjev.Uncertain, Reasons: "the task has no acceptance criteria, so Jev has nothing to judge: add criteria to the task, then complete it", Checks: c, Evaluator: "deterministic"}
 	}
-	r := register{command: normaliseSpace(body.Test.Command), exitCode: body.Test.ExitCode, paths: paths,
+	r := register{command: normaliseSpace(body.Test.Command), exitCode: body.Test.ExitCode, counts: stats,
 		shas: []string{body.BaseSHA, body.HeadSHA}}
 	warnings := r.pathOnlyWarnings(criteria)
 	var refused, judgeable []int
@@ -196,31 +289,6 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 	}
 	verdict, reasons, _ := cfg.EvaluateCriteria(ctx, criteria, body)
 	return result{Verdict: verdict, Reasons: reasons, Checks: c, Evaluator: "jev", Warnings: warnings}
-}
-
-// parseNumstat reads `git diff --numstat` lines: added, deleted, path. A binary file counts "-" lines.
-func parseNumstat(raw string) (paths []string, lines int, err error) {
-	for _, line := range strings.Split(raw, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.Split(line, "\t")
-		if len(parts) != 3 {
-			return nil, 0, fmt.Errorf("numstat line %q is not added, deleted, path", line)
-		}
-		for _, count := range parts[:2] {
-			if count == "-" {
-				continue
-			}
-			n, convErr := strconv.Atoi(count)
-			if convErr != nil {
-				return nil, 0, fmt.Errorf("numstat line %q has a non-numeric count", line)
-			}
-			lines += n
-		}
-		paths = append(paths, parts[2])
-	}
-	return paths, lines, nil
 }
 
 func keptOut(path string) (string, bool) {

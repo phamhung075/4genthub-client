@@ -161,7 +161,11 @@ func TestTheCriteriaRequestCarriesTheEvidenceAndNothingElse(t *testing.T) {
 	}
 	wantState := map[string]any{
 		"test_command_ran": true, "test_exit_code": 0, "tests_failed": 0,
-		"files_changed": 2, "lines_changed": 4, "base_sha": "99cdc0ef", "head_sha": "0c53c313",
+		"files_changed": 2, "lines_changed": 4, "lines_added": 3, "lines_deleted": 1,
+		// The per-path counts, in WireRows order (largest total first, binary last): a missing row or a
+		// missing total fails here, which is the board's acceptance criterion 1.
+		"changes":  []any{map[string]any{"added": 3, "deleted": 1}, map[string]any{"binary": true}},
+		"base_sha": "99cdc0ef", "head_sha": "0c53c313",
 	}
 	if got := fmt.Sprint(state); got != fmt.Sprint(wantState) {
 		t.Errorf("state = %v, want the counts %v", state, wantState)
@@ -248,5 +252,29 @@ func TestTheCriterionWordingDecidesAndTheRefusalNamesIt(t *testing.T) {
 	}
 	if !strings.Contains(shaped, "The acceptance command") || !strings.Contains(shaped, "<path>") {
 		t.Errorf("criterion_1 lost its shape: %q", shaped)
+	}
+}
+
+// A numstat the state cannot read is an error, never a zero summary: a judge told files_changed 0 for a
+// five-file change would answer about a bundle that was never measured. The gate refuses this body at D5
+// first; this is the decide path's guard, and the request must not leave at all.
+func TestAnUnreadableNumstatIsNeverSentAsZeros(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_, _ = w.Write([]byte(`{"answers":{"criterion_1":{"noul":0.99}}}`))
+	}))
+	defer server.Close()
+	cfg := Config{APIKey: "k", Model: "m", BaseURL: server.URL, Threshold: 0.8}
+	body := clientevidence.Body{BaseSHA: "99cdc0ef", HeadSHA: "0c53c313", Numstat: "garbage\n"}
+	verdict, reason, err := cfg.EvaluateCriteria(context.Background(), []string{"it works"}, body)
+	if err == nil || verdict != Uncertain {
+		t.Fatalf("verdict %q, reason %q, err %v: want uncertain and an error", verdict, reason, err)
+	}
+	if !strings.Contains(reason, `numstat line "garbage" is not added, deleted, path`) {
+		t.Errorf("the reason must quote the parser's own words: %q", reason)
+	}
+	if hits != 0 {
+		t.Errorf("Jev was called %d times for a body whose counts do not parse", hits)
 	}
 }
