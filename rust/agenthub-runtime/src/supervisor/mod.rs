@@ -811,6 +811,13 @@ impl RoomSupervisor {
     pub fn start_room(&self, spec: RoomSpec) -> Result<Vec<SeatStatus>, String> {
         let room_name = spec.room.clone();
         info!("starting room {} with {} seats", room_name, spec.seats.len());
+        // THE ROOM'S SEAT KEYS MUST BE TELLABLE APART BY NAME, and that is checked BEFORE the room's directory is
+        // made: the guard admits a lane by the seat's own key prefix (`<seat>` or `<seat>-*` under the room's
+        // `wt/`), so a room holding `go` and `go-dev` would let `go` write `go-dev`'s directory. A spec that
+        // cannot satisfy the invariant is refused by both names rather than started with a hole in its guard.
+        if let Some(refusal) = seat_key_collision(&spec) {
+            return Err(refusal);
+        }
 
         let room_dir = self.room_dir(&room_name);
         fs::create_dir_all(&room_dir).map_err(|e| format!("cannot create room dir: {e}"))?;
@@ -1051,6 +1058,15 @@ impl RoomSupervisor {
                 .map(|dir| dir.to_string_lossy().to_string())
                 .collect::<Vec<_>>()
                 .join(":"),
+        );
+        // A LANE THE SEAT OPENS LATER HAS A NAME THE GUARD CAN TEST, instead of a list it would have to re-read:
+        // the room's own `wt/`, handed beside the list, so a worktree created mid-session at
+        // `<wt>/<seat>-<name>` is inside the scope without a directory scan on every write. The naming rule is
+        // the one `own_worktrees` already applies at launch, and a launch that carries no value (an older
+        // runtime) refuses exactly as before.
+        env.insert(
+            "AGENTHUB_LANES_ROOT".into(),
+            room_dir.join("wt").to_string_lossy().to_string(),
         );
 
         // WHEN THIS GENERATION'S PANE WAS CREATED. The readiness proof below is a file the previous
@@ -2144,6 +2160,35 @@ pub fn seat_scope(seat: &SeatSpec, spec: &RoomSpec, room_dir: &Path) -> Result<V
         ));
     }
     Ok(scope)
+}
+
+/// A room's seat keys, checked for the one thing the lane rule cannot tolerate: a key that EQUALS another or is
+/// its `-`-prefix (`go` and `go-dev`). The guard admits `<wt>/<seat>` and `<wt>/<seat>-*` by name, so a prefix
+/// pair would give one seat the other's directory; the refusal is the only place both names are known.
+fn seat_key_collision(spec: &RoomSpec) -> Option<String> {
+    for (i, a) in spec.seats.iter().enumerate() {
+        for b in spec.seats.iter().skip(i + 1) {
+            if a.seat_key == b.seat_key {
+                return Some(format!(
+                    "the room names seat '{}' twice: one seat key, one directory, one guard scope - rename one",
+                    a.seat_key
+                ));
+            }
+            let (short, long) = if a.seat_key.len() <= b.seat_key.len() {
+                (&a.seat_key, &b.seat_key)
+            } else {
+                (&b.seat_key, &a.seat_key)
+            };
+            if long.starts_with(&format!("{short}-")) {
+                return Some(format!(
+                    "seat key '{short}' is a prefix of '{long}', and a lane is admitted by that prefix under the \
+                     room's wt/: '<wt>/{short}-<name>' and '<wt>/{long}' would name one directory. Rename one of \
+                     the two seats"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// A seat's own worktrees under the room's `wt/`: `<seat>` and `<seat>-<repo>`, the exact name first, then the
@@ -3271,6 +3316,73 @@ mod tests {
         assert!(err.contains("is not absolute"), "the refusal says why, got: {err}");
     }
 
+    /// The lane rule admits `<wt>/<seat>` and `<wt>/<seat>-*` by name, so two seat keys where one equals the other
+    /// or is its `-`-prefix would name one directory for two seats. The room refuses that spec, naming both keys;
+    /// `go-dev` beside `fe-dev` stays legal because neither prefix belongs to the other.
+    #[test]
+    fn seat_keys_that_share_a_lane_prefix_are_refused_at_room_start() {
+        let spec = |keys: &[&str]| {
+            let seats: Vec<serde_json::Value> = keys
+                .iter()
+                .map(|k| serde_json::json!({"seat_key": k, "seat_type": "developer", "runtime": "omp"}))
+                .collect();
+            serde_json::from_value::<RoomSpec>(serde_json::json!({
+                "room": "lanes-room",
+                "seats": seats,
+                "links": []
+            }))
+            .expect("room spec")
+        };
+
+        for (keys, short, long) in [
+            (["go", "go-dev"], "go", "go-dev"),
+            (["go-dev", "go"], "go", "go-dev"),
+        ] {
+            let refusal = seat_key_collision(&spec(&keys)).expect("a prefix pair is refused");
+            assert!(
+                refusal.contains(&format!("'{short}'")) && refusal.contains(&format!("'{long}'")),
+                "the refusal names both seat keys, got: {refusal}"
+            );
+        }
+        let twice = seat_key_collision(&spec(&["dev", "dev"])).expect("a duplicate key is refused");
+        assert!(twice.contains("names seat 'dev' twice"), "got: {twice}");
+        assert!(
+            seat_key_collision(&spec(&["go-dev", "go-fs"])).is_none(),
+            "sibling keys that are not each other's prefix stay legal"
+        );
+    }
+
+    /// `up` reaches the check through `start_room`, so the refusal is proven at that entry: a spec holding `go` and
+    /// `go-dev` is refused with both keys named, and the room's directory is not made - nothing half-started is
+    /// left behind for the next attempt to inherit.
+    #[tokio::test]
+    async fn a_room_whose_seat_keys_share_a_lane_prefix_does_not_start() {
+        let dir = scratch("lane-prefix");
+        let room = format!("lane-prefix-{}", std::process::id());
+        let spec: RoomSpec = serde_json::from_value(serde_json::json!({
+            "room": room,
+            "seats": [
+                {"seat_key": "go", "seat_type": "developer", "runtime": "omp"},
+                {"seat_key": "go-dev", "seat_type": "developer", "runtime": "omp"}
+            ],
+            "links": []
+        }))
+        .expect("room spec");
+        let supervisor = supervisor_at(&dir);
+
+        let err = supervisor
+            .start_room(spec)
+            .expect_err("two seat keys that meet at a lane prefix must not start");
+        assert!(
+            err.contains("'go'") && err.contains("'go-dev'"),
+            "the refusal names both keys, got: {err}"
+        );
+        assert!(
+            !room_dir_of(&dir, &room).exists(),
+            "the room directory is not created for a spec that is refused"
+        );
+    }
+
     /// A seat the room names no directory for, in a room that holds no worktree for it, does not start - and the
     /// refusal names the seat and the two ways to give it one. RED on the resolution this replaces: the seat
     /// started in `.`, the daemon's own directory, which is the checkout every seat on this host shares.
@@ -3347,6 +3459,18 @@ mod tests {
                 client.canonicalize().unwrap().display()
             ),
             "the named directory first, then the seat's other worktree - and nothing else"
+        );
+
+        // THE LANE ROOT IS THE ROOM'S OWN wt/, beside that list: the guard admits `<wt>/<seat>-<lane>` by name
+        // from it, so a lane opened mid-session needs no reseat and no second read of the list.
+        let lanes = environ
+            .split('\0')
+            .find_map(|pair| pair.strip_prefix("AGENTHUB_LANES_ROOT="))
+            .expect("the room's wt/ reaches the pane");
+        assert_eq!(
+            lanes,
+            room_dir_of(&dir, &room).join("wt").display().to_string(),
+            "the lane root is the room's wt/, where the seat's lanes are created"
         );
 
         let _ = supervisor.stop_seat(&room, &key);
