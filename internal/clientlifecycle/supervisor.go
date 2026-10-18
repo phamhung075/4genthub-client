@@ -45,6 +45,15 @@ type seatState struct {
 	before      int
 	hasBefore   bool
 	count       int
+	// held records a resume the off-peak gate refused: the witness stays in place, so the resume is OWED
+	// rather than lost, and this flag keeps the refusal (and the witness line beside it) from being logged
+	// on every pass between the refusal and the window opening.
+	held bool
+	// reported is the compaction count the witness line has already been written for. The line is NEWS,
+	// not a heartbeat: a hold suppresses writing the SAME witness again, and must not suppress a new one -
+	// a compaction that lands while the resume is held is a second event, and an operator reading the log
+	// over the window cannot otherwise see it.
+	reported int
 }
 
 // Supervisor is one `compact-run`: what it watches, its limits, and the seams the suite replaces.
@@ -56,11 +65,15 @@ type Supervisor struct {
 	StateRoot string
 	Out       io.Writer
 
-	Now        func() float64
-	Seats      func(rig string) []string
-	SeatLog    func(rig, seat string) (string, string)
-	Idle       func(rig, seat string) bool
-	Say        func(rig, seat, text string, raw bool)
+	Now     func() float64
+	Seats   func(rig string) []string
+	SeatLog func(rig, seat string) (string, string)
+	Idle    func(rig, seat string) bool
+	// Say sends one message to a seat and returns the transport's own outcome - nil when it accepted it, the
+	// failure otherwise. The send is SYNCHRONOUS and refuses a mid-turn seat rather than waiting for it:
+	// waiting was the `rig send --wait-for-idle` dance, and the runtime's own SendText has no such wait to
+	// escape, so each caller's latch (or its compaction witness) is what makes a late arrival harmless.
+	Say        func(rig, seat, text string, raw bool) error
 	RPCCompact func(rig, seat string) string
 	Abort      func(rig, seat string)
 	Interrupt  func(rig, seat string)
@@ -119,6 +132,34 @@ func New(rig string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 	return supervisor
 }
 
+// holdResume records a resume the off-peak gate refused. The witness stays where it is (the caller does not
+// clear it), so the resume is owed and the next pass asks again; this only makes the refusal, and the
+// witness line beside it, once-per-hold instead of once-per-pass.
+func (s *Supervisor) holdResume(seat string, state *seatState, reason string) {
+	if state.held {
+		return
+	}
+	state.held = true
+	s.Log(fmt.Sprintf("%s: resume held, %s", seat, reason))
+}
+
+// releaseResume sends the resume when the gate is open, and clears the witness ONLY when the transport
+// accepted it: a refusal means the seat never saw the resume, and clearing the witness then would make
+// that loss final - the next pass could never re-ask. The runtime's SendText carries its own deadline
+// (clientruntime.CallDeadline, applied to the socket), so this call cannot hang a pass the way a `rig
+// send` subprocess could, and no second timer is invented here.
+func (s *Supervisor) releaseResume(seat string, state *seatState) {
+	if state.held {
+		s.Log(seat + ": resume released, the off-peak gate is open")
+	}
+	if err := s.Say(s.Rig, seat, resumeText, false); err != nil {
+		s.Log(fmt.Sprintf("%s: resume not delivered (%v), the witness stays and the gate is asked again", seat, err))
+		return
+	}
+	state.hasBefore, state.held = false, false
+	s.Log(seat + ": told to resume")
+}
+
 // Step is one pass over the rig's live seats. The order is compact.py's step(), and the three states it
 // remembers per seat are what keep a notice from being repeated and a compaction from being demanded
 // again inside the cooldown.
@@ -144,37 +185,60 @@ func (s *Supervisor) Step() {
 			s.State[seat] = state
 		}
 		if state.hasBefore {
-			done := compactions(path) > state.count || float64(usedValue) < float64(state.before)*0.6
+			count := compactions(path)
+			done := count > state.count || float64(usedValue) < float64(state.before)*0.6
 			if done || now-state.sent > witnessWindow {
-				s.Log(fmt.Sprintf("%s: /compact %s (%s -> %s)", seat, witnessed(done),
-					seatlog.Kilo(state.before), seatlog.Kilo(usedValue)))
-				state.hasBefore = false
-				if !done {
+				// The witness line is news, not a heartbeat, and the hold is what makes that matter: the
+				// same witness is written ONCE per hold instead of once per pass, and a witness that MOVED
+				// - a second compaction landing while the resume is held - is written again, so an
+				// operator reading the log over the window sees every compaction and not only the first.
+				if !state.held || count != state.reported {
+					s.Log(fmt.Sprintf("%s: /compact %s (%s -> %s)", seat, witnessed(done),
+						seatlog.Kilo(state.before), seatlog.Kilo(usedValue)))
+					state.reported = count
+				}
+				// A HELD WITNESS IS NEVER DROPPED. The window is what stops the supervisor waiting for a
+				// compaction that never came - but while a resume is OWED the refusal deferred it, and 7.9
+				// sends it at the first open minute, so expiring the window must not abandon the witness.
+				// Without a hold the old behaviour stands: an unwitnessed compaction is reported and the
+				// next one is demanded instead.
+				if !done && !state.held {
+					state.hasBefore = false
 					state.sent = 0
 				}
-				if done {
+				if done || state.held {
 					// The resume is an AUTOMATIC wake, so it passes the same gate every other automatic
 					// wake passes. --allow-peak is never automatic on this path: allowPeak is false, so
-					// the gate is ON unless the setting itself turns it off. A refusal, a schedule the
-					// gate cannot read, or a room whose records could not be read at all holds the resume
-					// back and says why in this log, so a held-back resume is observable rather than silent.
+					// the gate is ON unless the setting itself turns it off.
+					//
+					// A REFUSAL DEFERS THE RESUME, IT DOES NOT DROP IT. 7.9: at peak "the message is
+					// held, and it is sent at the first open minute". The witness stays in place, so the
+					// next pass asks the gate again and the resume goes out the moment the window opens.
+					// `done` cannot regress while it waits when the COUNT clause witnessed it - that
+					// record is in the log, which is read WHOLE, and the log is append-only. When the
+					// DROP clause witnessed it, `done` CAN regress if the seat works again, which is why
+					// `state.held` keeps such a witness and why the gate is re-asked even with done
+					// false. The hold itself is logged ONCE: this loop logs when it ACTS, and a held
+					// resume is one decision, not one per pass.
 					nodes, ok, err := s.Nodes(s.Rig)
 					if err != nil {
 						// FAILING OPEN WOULD BE THE BUG HERE: an unreadable reading is not an empty room, and a
 						// resume that proceeded on one would be the gate deciding over no seats at all.
-						s.Log(fmt.Sprintf("%s: resume held, the room's node records could not be read: %v", seat, err))
-					} else if !ok {
-						// NO RECORDS is not a failure: there are no seats here to bill, so the gate has nothing
-						// to hold back and the resume proceeds - said plainly rather than implied by silence.
-						s.Say(s.Rig, seat, resumeText, false)
-						s.Log(seat + ": told to resume (the room's records list no seats)")
-					} else if proceed, message, err := clientoffpeak.Check(false, nodes, s.Getenv); err != nil {
-						s.Log(fmt.Sprintf("%s: resume held, off-peak gate: %v", seat, err))
-					} else if !proceed {
-						s.Log(fmt.Sprintf("%s: resume held, %s", seat, message))
+						s.holdResume(seat, state, "the room's node records could not be read: "+err.Error())
+					} else if ok {
+						if proceed, message, checkErr := clientoffpeak.Check(false, nodes, s.Getenv); checkErr != nil {
+							s.holdResume(seat, state, "off-peak gate: "+checkErr.Error())
+						} else if !proceed {
+							s.holdResume(seat, state, message)
+						} else {
+							s.releaseResume(seat, state)
+						}
 					} else {
-						s.Say(s.Rig, seat, resumeText, false)
-						s.Log(seat + ": told to resume")
+						// NO RECORDS is not a failure: there are no seats here to bill, so the gate has
+						// nothing to hold back and the resume proceeds - said plainly rather than implied
+						// by silence.
+						s.releaseResume(seat, state)
+						s.Log(seat + ": told to resume (the room's records list no seats)")
 					}
 				}
 			}
@@ -421,13 +485,12 @@ const saySender = "owner session"
 //     boundary is the next prompt, which is the resume's purpose. The notice and the warning are each latched once by
 //     state.told/state.warned and read whenever the seat next looks at its pane, so arriving later changes nothing
 //     except that they are no longer held behind a busy seat.
-func rigSay(rig, seat, text string, raw bool) {
+func rigSay(rig, seat, text string, raw bool) error {
 	session := clientruntime.SeatSessionName(rig, seat)
 	if raw {
-		_ = runtimeSendText(session, text, "say")
-		return
+		return runtimeSendText(session, text, "say")
 	}
-	_ = runtimeSendText(session, "From "+saySender+": "+text, "say")
+	return runtimeSendText(session, "From "+saySender+": "+text, "say")
 }
 
 // runtimeSendText is the ONE place this package types text into a seat's pane. It is a package-level variable rather
