@@ -161,14 +161,15 @@ func requireRig(verb string, args []string, stderr io.Writer) (string, bool) {
 // room's verdict as this verb's exit code. Their signatures carry the state dir and the definition for one
 // reason beyond the work: the acceptance run has to be able to say WHICH of the two answered.
 var (
-	ensureDaemon   = ensureDaemonImpl
-	ensureRig      = ensureRigImpl
-	recordRigFor   = recordRig
-	startAuthority = startAgent
-	waitSafeguards = waitForSafeguards
-	openUI         = openUIImpl
-	runWatchView   = runWatchViewImpl
-	runHerdr       = runHerdrImpl
+	ensureDaemon    = ensureDaemonImpl
+	ensureWorktrees = ensureWorktreesImpl
+	ensureRig       = ensureRigImpl
+	recordRigFor    = recordRig
+	startAuthority  = startAgent
+	waitSafeguards  = waitForSafeguards
+	openUI          = openUIImpl
+	runWatchView    = runWatchViewImpl
+	runHerdr        = runHerdrImpl
 )
 
 type upCommand struct{}
@@ -323,6 +324,13 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 	if code := peakGate(name, "up", allowPeak, declaredNodes(spec), stderr); code != clientcmd.ExitOK {
 		return code
 	}
+	// THE WORKTREES STEP RUNS BEFORE THE SEATS, and after the gate, which is the order the ruling gives
+	// (daemon, gate, worktrees, seats): a seat's own worktree must exist before it launches, and each
+	// seat's cwd is now that worktree rather than the room. A refusal here starts the daemon and
+	// nothing else, exactly as a gate refusal does.
+	if code := ensureWorktrees(name, spec, stdout, stderr); code != clientcmd.ExitOK {
+		return code
+	}
 	if code := ensureRig(name, spec, daemonLog, stdout, stderr); code != clientcmd.ExitOK {
 		return code
 	}
@@ -441,6 +449,37 @@ func runtimeBinary() (string, error) {
 // It returns the verb's verdict (design §2.5): ExitOK when every seat runs, ExitPartialStart (2) - naming
 // the seats that are not running AND the daemon's log path - when the daemon started but a seat did not,
 // and ExitRoomRefused (3) when the daemon will not take the definition it was handed.
+// ensureWorktreesImpl is the ruling's worktrees step: every seat works in its own worktree, so each
+// seat's cwd must exist before it launches. The derivation, the creation, the two submodule worktrees
+// and the reuse/refuse rules all live behind clientworktree.Ensure and clientservices.DerivedWorktrees,
+// so `up`, the `worktree` verbs and `doctor`'s row answer from ONE implementation.
+//
+// The seats are the ones this start is about - the spec `up` already resolved - never a second reading
+// of the definition: a room must not be started with one team and have its worktrees derived from
+// another. A refusal is an `up` refusal; the alternative is a seat launching in the room and editing
+// the shared checkout, which is the defect the ruling removes.
+func ensureWorktreesImpl(name string, spec clientruntime.RoomSpec, stdout, stderr io.Writer) int {
+	roomDir, err := worktreeRoomDir(name)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: cannot derive the room's seat worktrees: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
+	mainRoot, err := worktreeMainRoot("")
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: cannot derive the room's seat worktrees: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
+	seats := make([]clientservices.SeatType, 0, len(spec.Seats))
+	for _, seat := range spec.Seats {
+		seats = append(seats, clientservices.SeatType{Key: seat.SeatKey, Type: seat.SeatType})
+	}
+	if err := worktreeEnsure(mainRoot, roomDir, name, seats, stdout); err != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
+	return clientcmd.ExitOK
+}
+
 func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, stdout, stderr io.Writer) int {
 	client := clientruntime.NewClient("")
 	reported, statusErr := client.GetRoomStatus(name)

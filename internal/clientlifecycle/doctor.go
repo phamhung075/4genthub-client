@@ -123,6 +123,13 @@ func reportedRigs(rigs []string, rig string) []string {
 // is.
 func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	rows := rowsFor(rig, root)
+	// The worktrees row (the ruling's Check): where each seat's own worktree is, and whether it is the
+	// one this client derives. It reads the same derivation `up`'s worktrees step creates, so the two
+	// cannot disagree about a path.
+	worktreeRows := worktreesRowFor(rig, root)
+	for _, worktreeRow := range worktreeRows {
+		rows = append(rows, worktreeRow.Row)
+	}
 	orphanRows := orphanRowsFor(rig)
 	for _, orphan := range orphanRows {
 		rows = append(rows, orphan.Row)
@@ -146,6 +153,12 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 				fmt.Fprintln(stdout, line)
 			}
 		}
+		// The worktrees row's reasons and details ride beside its row the same way.
+		for _, worktreeRow := range worktreeRows {
+			for _, line := range worktreeLines(worktreeRow) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
 		for _, line := range clientservices.TailAlerts(root) {
 			fmt.Fprintln(stdout, line)
 		}
@@ -164,6 +177,16 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 				for _, line := range orphanLines(orphan) {
 					fmt.Fprintln(stderr, line)
 				}
+			}
+		}
+		// The worktrees row's own reasons, the same way: the paths that are wrong are why the row is
+		// down, and an input this client could not read is reported whether or not it is.
+		for _, worktreeRow := range worktreeRows {
+			if worktreeRow.Row.Rig != row.Rig {
+				continue
+			}
+			for _, line := range worktreeReasonLines(worktreeRow) {
+				fmt.Fprintln(stderr, line)
 			}
 		}
 	}

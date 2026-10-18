@@ -1,0 +1,154 @@
+// The derived seat worktree model (ai_docs/core-architecture/seat-worktrees.md): one worktree per
+// seat, DERIVED from the room's seats rather than written down anywhere, plus the one resolution of
+// the room directory and of the team definition the seats come from.
+//
+// The work is done by internal/clientworktree; this file is the data the three readers share - `up`
+// creates the list, `doctor` reports it, and the two `worktree` verbs read it - so no reader can
+// disagree about a path.
+package clientservices
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientteam"
+)
+
+const (
+	// Worktrees is `doctor`'s row about the seat worktrees this client derives and `up` creates: a
+	// room's seats must launch in their own worktrees, so where those worktrees are is a fact about
+	// the room rather than about a process. Like OrphanHandoffs it has no pid and no heartbeat to age.
+	Worktrees = "worktrees"
+	// WorktreesWrong is the worktrees row's one failing state: a DERIVED path exists and is not the
+	// worktree the ruling derives - on another branch, not a worktree at all, or missing a submodule.
+	// A worktree that is not created YET and a FOREIGN entry are deliberately not failures: `up` creates
+	// the first before it launches a seat, and `worktree prune` owns the second.
+	WorktreesWrong = "worktrees_wrong"
+	// Integration is the room's own worktree: the place a room's seats meet through a merge of their
+	// tips, and only the lead writes there.
+	Integration = "integration"
+)
+
+// SkillsRootEnv names the OpenRig checkout: the SAME variable `team publish-skills` reads as its
+// library root, so one variable points at the repository whose `scripts/team/<rig>/team.json` this
+// client uses.
+const SkillsRootEnv = "OPENRIG_SKILLS_ROOT"
+
+// SeatType is one seat of a room's definition: the key it is addressed by, and the type that decides
+// whether it writes.
+type SeatType struct {
+	Key  string
+	Type string
+}
+
+// Worktree is one derived worktree: the seat key it belongs to (`integration` for the room's own),
+// where it goes, and the branch it is on. An empty Branch is a detached HEAD.
+type Worktree struct {
+	SeatKey string
+	Path    string
+	Branch  string
+}
+
+// seatWorktree is the ONE path/branch rule, and DerivedWorktrees is its only caller.
+func seatWorktree(roomDir, rig, key, seatType string) Worktree {
+	worktree := Worktree{SeatKey: key, Path: filepath.Join(roomDir, "wt", key), Branch: rig + "/" + key}
+	if seatType == "reviewer" {
+		// Detached: a reviewer never commits, so it has no branch to be on.
+		worktree.Branch = ""
+	}
+	return worktree
+}
+
+// DerivedWorktrees is the ONE list, in the order a report and a start step read it: the seats of the
+// room in their own order, then the room's integration worktree when the room has a lead. A seat whose
+// key is empty is skipped: it has no address, so it has no path.
+func DerivedWorktrees(roomDir, rig string, seats []SeatType) []Worktree {
+	out := make([]Worktree, 0, len(seats)+1)
+	hasLead := false
+	for _, seat := range seats {
+		if seat.Key == "" {
+			continue
+		}
+		if seat.Type == "lead" {
+			hasLead = true
+		}
+		out = append(out, seatWorktree(roomDir, rig, seat.Key, seat.Type))
+	}
+	if hasLead {
+		out = append(out, seatWorktree(roomDir, rig, Integration, ""))
+	}
+	return out
+}
+
+// RoomDir is the room's OWN directory, and the ONE resolution `up`, the `worktrees` row and both
+// worktree verbs use: the seat store (a machine-level location) plus the room name. It is a variable
+// so a test drives the verbs over its own store, in the repo's style of a package-level seam rather
+// than an interface added for testing.
+var RoomDir = func(rig string) (string, error) {
+	root := clientenv.DefaultStateRoot()
+	if root == "" {
+		return "", &clientcmd.CodedError{
+			Message: "cannot resolve the state root the room's worktrees live under",
+			Code:    clientcmd.ExitUsage,
+		}
+	}
+	return filepath.Join(root, "rooms", rig), nil
+}
+
+// LiveSeats reads the room's OWN record - spec.json, the file the runtime wrote from the definition and
+// every start reads - and returns its seats in the room's order. It is the source a verb reads once the
+// room exists, so a reading of the room is never a reading of a definition that may since have changed.
+func LiveSeats(root, room string) ([]SeatType, error) {
+	spec, err := clientteam.LoadLiveRoomSpec(root, room)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SeatType, 0, len(spec.Seats))
+	for _, seat := range spec.Seats {
+		out = append(out, SeatType{Key: seat.SeatKey, Type: seat.SeatType})
+	}
+	return out, nil
+}
+
+// TeamDir resolves the directory that holds the room's `team.json`: the --team value when the caller
+// passed one, else $OPENRIG_SKILLS_ROOT - the OpenRig checkout a room's `scripts/team/<rig>/team.json`
+// lives in. A room whose definition is neither is refused by name, with both ways to point at it,
+// never derived from nothing.
+func TeamDir(flagValue, rig string) (string, error) {
+	if flagValue != "" {
+		return flagValue, nil
+	}
+	if root := os.Getenv(SkillsRootEnv); root != "" {
+		return filepath.Join(root, "scripts", "team", rig), nil
+	}
+	return "", &clientcmd.CodedError{
+		Message: fmt.Sprintf(
+			"cannot find the room's team file for rig %q: pass --team DIR or set %s",
+			rig, SkillsRootEnv),
+		Code: clientcmd.ExitUsage,
+	}
+}
+
+// TeamSeats reads the room's team file and returns its seats in the file's own order, which is the
+// order DerivedWorktrees keeps. A team file that names no seat is refused by name: an empty list
+// derives nothing, and a start step that creates nothing looks exactly like one that worked.
+func TeamSeats(teamDir string) ([]SeatType, error) {
+	spec, err := clientteam.LoadRoomSpec(teamDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(spec.Seats) == 0 {
+		return nil, &clientcmd.CodedError{
+			Message: fmt.Sprintf("the team file in %s names no seat, so the room has no worktree to derive", teamDir),
+			Code:    clientcmd.ExitUsage,
+		}
+	}
+	out := make([]SeatType, 0, len(spec.Seats))
+	for _, seat := range spec.Seats {
+		out = append(out, SeatType{Key: seat.SeatKey, Type: seat.SeatType})
+	}
+	return out, nil
+}

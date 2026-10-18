@@ -40,6 +40,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientteam"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
+	"github.com/phamhung075/4genthub-client/internal/clientworktree"
 )
 
 // pending registers a verb whose implementation package does not exist yet. It REFUSES rather than
@@ -125,6 +126,8 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientoutbox.Commands()...)
 	registry = append(registry, clientps.Commands()...)
 	registry = append(registry, clientfacts.Commands()...)
+	// The room's derived seat worktrees: the same derivation `up` creates and doctor's row reports.
+	registry = append(registry, clientworktree.Commands()...)
 	return append(registry,
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])"),
 	)
