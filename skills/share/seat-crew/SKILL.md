@@ -22,6 +22,24 @@ scanning, drafting and parallel legwork. Your seat's `<seat>-workflow` says what
 
 Rule of thumb: if the work makes more intermediate text than final text, a worker does it.
 
+## Two rules the rail and the changelog enforce (2026-10-18)
+
+- **The queue verbs default the room.** Every `4genteam room queue` sub-verb takes `[ROOM]` as its first
+  positional and fills it from `$AGENTHUB_ROOM` when it is left out, so a seat's own rail needs no room:
+
+  ```sh
+  4genteam room queue show <qitem>
+  4genteam room queue claim <qitem>
+  4genteam room queue close <qitem> --reason handed_off_to --target reviewer --note "..."
+  ```
+
+  Name a room only when it is not your own. Measured 2026-10-18: 147 calls failed by typing the id where
+  the room belonged, and the verb then answered `the ROOM comes first`.
+- **One changelog file per merged task, not per commit.** A task's fix, its test and its correction share
+  the one `CHANGELOG/<date>--<title>.md`, written with the task's first commit and finished before the
+  merge; a change after the merge is a new task and gets its own file. Test-suite changes go to
+  `TEST-CHANGELOG.md`. Measured 2026-10-18: 56 of 71 commits carried a changelog file restating one task.
+
 ## How to start them
 
 **The tool paths.** Path A, `xd://mcp__deepseek_agent` with `{"prompt": "...", "cwd": "<worktree>"}`,
