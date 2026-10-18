@@ -7,7 +7,9 @@
 //! * `state ∈ {pending, in-progress, blocked, handed-off, done}`; `handed-off` is intermediate
 //!   (acceptance pending), `done` is terminal.
 //! * closure takes a reason from exactly one set: `handed_off_to, blocked_on, denied, canceled,
-//!   no-follow-on, escalation, superseded`, and `handed_off_to` requires a target.
+//!   no-follow-on, escalation, superseded, gate`, and `handed_off_to` requires a target. A `gate` close
+//!   carries the verdict as its note: the reviewer closes the row with PASS/FAIL and the commands it ran,
+//!   because the row is the loop's proof surface and a bare `closed` transition records nothing.
 //! * `chain_of_record` (lineage) and `reply_to` (thread) — rows are only legible because of them.
 //! * an append-only transitions table (who, when, from-state, to-state, note) — the audit trail.
 //! * wake fields (`blocked_on`, `wake_after_seconds`) so the idle-seat alert has something to stand on.
@@ -30,8 +32,10 @@ use std::path::Path;
 /// The five states a row may occupy.
 pub const STATES: [&str; 5] = ["pending", "in-progress", "blocked", "handed-off", "done"];
 
-/// The closure reasons, exactly the set the rig daemon enforced.
-pub const CLOSURE_REASONS: [&str; 7] = [
+/// The closure reasons, exactly the set the rig daemon enforced, plus `gate`: a reviewer's verdict close.
+/// `gate` exists as a reason so the rail says what the close WAS - the reviewer's verdict, whose text the
+/// transition note carries - instead of recording a gate as `no-follow-on` with nothing to read.
+pub const CLOSURE_REASONS: [&str; 8] = [
     "handed_off_to",
     "blocked_on",
     "denied",
@@ -39,6 +43,7 @@ pub const CLOSURE_REASONS: [&str; 7] = [
     "no-follow-on",
     "escalation",
     "superseded",
+    "gate",
 ];
 
 /// The states a row rests in for good (`queue-repository.js:38`, `TERMINAL_QUEUE_STATES`). A handoff's
