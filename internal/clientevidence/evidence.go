@@ -35,11 +35,16 @@ import (
 	"unicode"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
 
 // evidencePath is the ONE route this verb writes to, `{id}` being the task the evidence belongs to. It
 // is the write sibling of the read path the client already knows (GET /api/v2/tasks/{id}/events).
 const evidencePath = "/api/v2/tasks/%s/evidence"
+
+// taskPath is the board row a stored submission closes, read back for the done report. The route answers
+// `{"success": true, "task": {...}}` (task_user_routes.go), which is the envelope readTaskRow checks.
+const taskPath = "/api/v2/tasks/%s"
 
 // httpTimeout is the client's HTTP convention (the same 60s internal/clientsync and
 // internal/clientfeedback use), named so a reader can see it is a constant rather than a guess.
@@ -452,6 +457,9 @@ func postEvidence(ctx context.Context, baseURL, token, taskID string, body evide
 	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
 		_, _ = stdout.Write(answer)
 		_, _ = io.WriteString(stdout, "\n")
+		// THE DONE REPORT BELONGS TO A STORED SUBMISSION AND TO NOTHING ELSE: a refusal must print nothing on
+		// stdout and must cost no second request, so the row is read only here, after the server accepted.
+		printDoneReport(ctx, baseURL, token, taskID, body, stdout)
 		if body.Test.ExitCode != 0 {
 			fmt.Fprintf(stderr, "4genteam evidence: stored, but the test command exited %d%s\n",
 				body.Test.ExitCode, failingSuffix(body.Test.Failed))
@@ -467,6 +475,118 @@ func postEvidence(ctx context.Context, baseURL, token, taskID string, body evide
 		fmt.Fprintf(stderr, "4genteam evidence: the server answered HTTP %d\n", resp.StatusCode)
 		relayRefusal(stderr, answer)
 		return clientcmd.ExitRemote
+	}
+}
+
+// printDoneReport is item 6's done report, assembled at item close: the row this run closes, read back from
+// the board; the size of the diff being submitted; the doc-drift line; and the tests the submission names. It
+// never refuses - this is a report, not a gate, and the reviewer still decides. A row it cannot read is NAMED
+// and the report goes on, so a reader can tell "the row says nothing" from "the row was not read".
+func printDoneReport(ctx context.Context, baseURL, token, taskID string, body evidenceBody, stdout io.Writer) {
+	fmt.Fprintf(stdout, "done report for task %s\n", taskID)
+	if row, err := readTaskRow(ctx, baseURL, token, taskID); err != nil {
+		fmt.Fprintf(stdout, "  row: not read: %v\n", err)
+	} else {
+		fmt.Fprintf(stdout, "  row: %s [%s]\n", rowField(row, "title"), rowField(row, "status"))
+	}
+	paths := numstatPaths(body.Numstat)
+	fmt.Fprintf(stdout, "  diff %s..%s: %d file(s) changed\n", shortSHA(body.BaseSHA), shortSHA(body.HeadSHA), len(paths))
+	fmt.Fprintf(stdout, "  doc drift: %s\n", docDrift(paths))
+	fmt.Fprintf(stdout, "  tests: %s\n", testLine(body.Test))
+}
+
+// readTaskRow is the row a done report closes: `GET /api/v2/tasks/{id}`, the route GetUserTask serves. It
+// answers `{"success": true, "task": {...}}` and this reads it the same way the other readers of this API do -
+// success checked first, then the payload key - so two readers cannot disagree about the envelope. This one
+// once read a `data` wrapper (the MCP shape) and printed `row: unknown [unknown]` against the live route.
+func readTaskRow(ctx context.Context, baseURL, token, taskID string) (map[string]any, error) {
+	path := fmt.Sprintf(taskPath, url.PathEscape(taskID))
+	answer, err := clientsync.RequestJSON(ctx, http.MethodGet, baseURL, token, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if success, isBool := answer["success"].(bool); !isBool || !success {
+		return nil, fmt.Errorf("GET %s returned an error response", path)
+	}
+	task, ok := answer["task"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("GET %s response has no task", path)
+	}
+	return task, nil
+}
+
+// rowField reads one field the report names out of the row. A field that is absent or empty reads as
+// "unknown" rather than as a blank a reader would take for a real value.
+func rowField(row map[string]any, key string) string {
+	if value, ok := row[key].(string); ok && value != "" {
+		return value
+	}
+	return "unknown"
+}
+
+// testLine is the test half of the report, from the block already in the submission. No test named is said
+// plainly rather than left blank, because a blank would read as "the tests passed".
+func testLine(tests evidenceTest) string {
+	if tests.Command == "" {
+		return "none named (the submission carries an empty test block)"
+	}
+	line := fmt.Sprintf("%s exit %d", tests.Command, tests.ExitCode)
+	switch len(tests.Failed) {
+	case 0:
+		return line
+	case 1:
+		return line + ", 1 failing: " + tests.Failed[0]
+	default:
+		return fmt.Sprintf("%s, %d failing: %s", line, len(tests.Failed), strings.Join(tests.Failed, ", "))
+	}
+}
+
+// shortSHA is the 7-character form every report here names a commit by.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
+}
+
+// numstatPaths is the file list of a `git diff --numstat` reading: one line per file,
+// `<added>\t<deleted>\t<path>`, so the PATH is the last tab-separated field - a rename prints `old => new`
+// inside that field and is named the way git spells it. The counts are deliberately not parsed: the path is the
+// only field this report uses, and the numstat bytes themselves are what went on the wire.
+func numstatPaths(numstat string) []string {
+	var paths []string
+	for _, line := range strings.Split(numstat, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		path := strings.TrimSpace(fields[len(fields)-1])
+		if path == "" {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+// docDrift answers the plan's doc-drift line: "code changed but no doc or changelog entry" when the range
+// moved files that are not documentation and moved no markdown at all, and "none" when markdown moved too, or
+// when no file moved. The rule is written down rather than guessed at each call site: a markdown file is
+// documentation, and every other file is code for this purpose.
+func docDrift(paths []string) string {
+	docs := 0
+	for _, path := range paths {
+		if strings.HasSuffix(path, ".md") {
+			docs++
+		}
+	}
+	switch {
+	case len(paths) == 0:
+		return "none (the range changed no file)"
+	case docs > 0:
+		return fmt.Sprintf("none (%d of %d file(s) are markdown)", docs, len(paths))
+	default:
+		return "code changed but no doc or changelog entry"
 	}
 }
 

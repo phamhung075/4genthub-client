@@ -33,8 +33,12 @@ func runEvidence(ctx context.Context, args []string, stdout, stderr io.Writer) i
 // assumed, and the RAW body is kept so a test can assert nothing outside the wire fields leaked into it.
 type evidenceServer struct {
 	*httptest.Server
-	mu       sync.Mutex
+	mu sync.Mutex
+	// requests counts the SUBMISSIONS. The done report's row read is a second request and is counted apart
+	// (reads), so a case can still say "the refusal dialed the route once" and "a stored submission also read
+	// the row it closed" without the two numbers standing for different things.
 	requests int
+	reads    int
 	method   string
 	path     string
 	auth     string
@@ -42,6 +46,7 @@ type evidenceServer struct {
 	raw      []byte
 	status   int
 	payload  string
+	lastRead string
 }
 
 func newEvidenceServer(t *testing.T) *evidenceServer {
@@ -52,6 +57,16 @@ func newEvidenceServer(t *testing.T) *evidenceServer {
 	}
 	es.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
+		if r.Method == http.MethodGet {
+			// The done report's row read: the board's own envelope, `{"success": true, "task": {...}}`.
+			es.mu.Lock()
+			es.reads++
+			es.lastRead = r.URL.Path
+			es.mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{"success":true,"task":{"id":"task-1","title":"a row the report names","status":"in_progress"}}`)
+			return
+		}
 		es.mu.Lock()
 		es.requests++
 		es.method = r.Method
@@ -763,5 +778,62 @@ func assertKeys(t *testing.T, what string, object map[string]any, want ...string
 		if _, ok := object[key]; !ok {
 			t.Errorf("%s is missing %q", what, key)
 		}
+	}
+}
+
+// A STORED submission prints the done report: the row it closes, read back from the board route, the size of
+// the diff, the doc-drift line and the tests named. It is a report, not a gate - the stored event is still what
+// the exit code answers for.
+func TestAStoredSubmissionPrintsTheDoneReport(t *testing.T) {
+	server := newEvidenceServer(t)
+	evidenceEnv(t, server.URL, "tok")
+	withGit(t, standardGit())
+
+	var stdout, stderr bytes.Buffer
+	code := runEvidence(context.Background(), []string{"--task", "task-1", "--base", "main"}, &stdout, &stderr)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"done report for task task-1",
+		"row: a row the report names [in_progress]",
+		"diff " + baseSHA[:7] + ".." + headSHA[:7] + ": 2 file(s) changed",
+		"doc drift: none (1 of 2 file(s) are markdown)",
+		"tests: none named (the submission carries an empty test block)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want it to contain %q", out, want)
+		}
+	}
+	server.mu.Lock()
+	read, path := server.reads, server.lastRead
+	server.mu.Unlock()
+	if read != 1 || path != "/api/v2/tasks/task-1" {
+		t.Errorf("the report read %d time(s) at %q, want the task route once", read, path)
+	}
+}
+
+// A REFUSED submission prints no report and reads no row: the refusal belongs on stderr, and a row read for a
+// submission the server refused would be a second request paid for a report about nothing.
+func TestARefusedSubmissionPrintsNoDoneReport(t *testing.T) {
+	server := newEvidenceServer(t)
+	server.reply(http.StatusConflict, `{"detail":"evidence for head_sha `+headSHA+` already exists"}`)
+	evidenceEnv(t, server.URL, "tok")
+	withGit(t, standardGit())
+
+	var stdout, stderr bytes.Buffer
+	code := runEvidence(context.Background(), []string{"--task", "task-1", "--base", "main"}, &stdout, &stderr)
+	if code == clientcmd.ExitOK {
+		t.Fatalf("a refused submission exited 0")
+	}
+	if strings.Contains(stdout.String(), "done report") {
+		t.Errorf("a refused submission printed a done report: %q", stdout.String())
+	}
+	server.mu.Lock()
+	read := server.reads
+	server.mu.Unlock()
+	if read != 0 {
+		t.Errorf("a refused submission read the board row %d time(s)", read)
 	}
 }
