@@ -222,7 +222,11 @@ func (c Config) EvaluateCriteria(ctx context.Context, criteria []string, evidenc
 	for i, criterion := range criteria {
 		questions[fmt.Sprintf("criterion_%d", i+1)] = map[string]any{"type": "noul", "instructions": criterion}
 	}
-	answers, err := c.call(ctx, questions, countsState(evidence))
+	state, err := countsState(evidence)
+	if err != nil {
+		return Uncertain, err.Error(), err
+	}
+	answers, err := c.call(ctx, questions, state)
 	if err != nil {
 		return Uncertain, err.Error(), err
 	}

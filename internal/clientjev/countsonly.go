@@ -3,8 +3,6 @@ package clientjev
 import (
 	"encoding/json"
 	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientevidence"
 )
@@ -81,37 +79,41 @@ func redactValue(v any) any {
 
 // countsState is the STATE the criteria request may carry: counts only. The evidence body names files
 // in its numstat lines and tests in its command line and failing names, so it is never the payload;
-// what the judge is shown is how many files changed, how many lines moved, whether the test command
-// ran and how it exited, plus the two commit hashes. Any other state is passed through unchanged -
-// redactValue still scrubs it - because the decide path's own questions are not evidence bundles.
-func countsState(evidence any) any {
+// what the judge is shown is how many files changed, how many lines moved and how they split, whether the
+// test command ran and how it exited, plus the two commit hashes. The per-path rows carry the counts and
+// NOT the path, in WireRows order (a rule, so the sequence names nothing). Any other state is passed
+// through unchanged - redactValue still scrubs it - because the decide path's own questions are not
+// evidence bundles.
+//
+// A numstat this cannot read is an ERROR, not zeros: a judge shown files_changed 0 for a change of five
+// files answers about a bundle that was never measured.
+func countsState(evidence any) (any, error) {
 	body, ok := evidence.(clientevidence.Body)
 	if !ok {
-		return evidence
+		return evidence, nil
 	}
-	files, lines := 0, 0
-	for _, line := range strings.Split(body.Numstat, "\n") {
-		if line == "" {
+	stats, err := clientevidence.ParseNumstat(body.Numstat)
+	if err != nil {
+		return nil, err
+	}
+	changes := make([]map[string]any, 0, len(stats.Rows))
+	for _, row := range stats.WireRows() {
+		if row.Binary {
+			changes = append(changes, map[string]any{"binary": true})
 			continue
 		}
-		parts := strings.Split(line, "\t")
-		if len(parts) != 3 {
-			continue
-		}
-		files++
-		for _, count := range parts[:2] {
-			if n, err := strconv.Atoi(count); err == nil {
-				lines += n
-			}
-		}
+		changes = append(changes, map[string]any{"added": row.Added, "deleted": row.Deleted})
 	}
 	return map[string]any{
-		"test_command_ran": body.Test.Command != "",
-		"test_exit_code":   body.Test.ExitCode,
-		"tests_failed":     len(body.Test.Failed),
-		"files_changed":    files,
-		"lines_changed":    lines,
-		"base_sha":         body.BaseSHA,
-		"head_sha":         body.HeadSHA,
-	}
+		"test_command_ran":             body.Test.Command != "",
+		"test_exit_code":               body.Test.ExitCode,
+		"tests_failed":                 len(body.Test.Failed),
+		clientevidence.KeyFilesChanged: stats.Files(),
+		clientevidence.KeyLinesChanged: stats.Total(),
+		clientevidence.KeyLinesAdded:   stats.Added,
+		clientevidence.KeyLinesDeleted: stats.Deleted,
+		"changes":                      changes,
+		"base_sha":                     body.BaseSHA,
+		"head_sha":                     body.HeadSHA,
+	}, nil
 }

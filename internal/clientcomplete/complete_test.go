@@ -631,3 +631,100 @@ func TestTheRegisterFindsAWholeNumberAndNotASubstring(t *testing.T) {
 		}
 	}
 }
+
+// measured() carries 4 files, 45 added and 6 deleted. A count is a fact only when the criterion spells one
+// of the four wire keys AND the number in that key's own clause is the bundle's number for it; anything else
+// is still a claim the register cannot see.
+func TestACountKeyWithTheBundlesNumberIsAFact(t *testing.T) {
+	for _, tc := range []struct {
+		criterion string
+		admitted  bool
+	}{
+		{"files_changed is 4", true},
+		{"files changed is 4", true},
+		{"files_changed across the whole change is 4", true},
+		{"lines_changed is 51", true},
+		{"lines_added is 45 and lines_deleted is 6", true},
+		{"between base b32369c and the tip, files_changed is 4", true},
+		{"files_changed is 3", false},
+		{"lines added is 46", false},
+		{"files_changed is 51", false},
+		{"the numstat names 2 files", false},
+		{"the diff is fewer than 80 lines", false},
+	} {
+		t.Run(tc.criterion, func(t *testing.T) {
+			cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+			got := evaluate(context.Background(), cfg, []string{tc.criterion}, measured())
+			if tc.admitted {
+				if got.Verdict != clientjev.Accept || got.Evaluator != "jev" || *hits != 1 {
+					t.Fatalf("a count key with this bundle's value is a fact: got %+v, %d calls", got, *hits)
+				}
+				return
+			}
+			if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" || *hits != 0 {
+				t.Fatalf("a count this bundle does not carry is refused, not judged: got %+v, %d calls", got, *hits)
+			}
+			if !strings.Contains(got.Reasons, "files_changed") {
+				t.Errorf("the refusal must name the count keys the bundle carries:\n%s", got.Reasons)
+			}
+		})
+	}
+}
+
+// The measured collision (board Progress 5): the sha tokenizer splits "2c34515" into 2 and 34515, so a match
+// anywhere in the text would settle "files_changed is 2" on a three-file change. The key's own clause must
+// bind its own number. The fragment must NOT be one of the bundle's shas - a criterion citing a real sha is
+// admitted by that fact, as it always was, and the wrong count is then the judge's to read.
+func TestAShaTokenCannotSettleACount(t *testing.T) {
+	body := clientevidence.Body{
+		BaseSHA: "b32369c1f4a2b3c4d5e6f708192a3b4c5d6e7f80",
+		HeadSHA: "d5c9b5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8",
+		Numstat: "1\t0\ta.go\n1\t0\tb.go\n1\t0\tc.go\n",
+	}
+	body.Test.Command = "go test ./..."
+	for criterion, admitted := range map[string]bool{
+		"between 2c34515 and 216a89d, files_changed is 2": false,
+		"between 2c34515 and 216a89d, files_changed is 3": true,
+	} {
+		cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+		got := evaluate(context.Background(), cfg, []string{criterion}, body)
+		if admitted != (got.Verdict == clientjev.Accept) || *hits != map[bool]int{true: 1, false: 0}[admitted] {
+			t.Errorf("%q: got %+v, %d judge calls; admitted=%v", criterion, got, *hits, admitted)
+		}
+	}
+	// The facts stand on their own: the same wrong count, with the bundle's real sha cited, is admitted by
+	// the sha (as it was before counts existed) and the judge is the one who reads the number.
+	realSha := body
+	realSha.BaseSHA = "2c34515a1b2c3d4e5f60718293a4b5c6d7e8f9a0"
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	if got := evaluate(context.Background(), cfg,
+		[]string{"between 2c34515 and the tip, files_changed is 2"}, realSha); got.Verdict != clientjev.Accept || *hits != 1 {
+		t.Errorf("a real sha is a fact on its own: got %+v, %d judge calls", got, *hits)
+	}
+}
+
+// Zero is a carried value, not an empty count: a binary-only change moves 0 lines, and the judge must be
+// able to read that.
+func TestAZeroCountIsACarriedValue(t *testing.T) {
+	body := clientevidence.Body{Numstat: "-\t-\tlogo.png\n"}
+	body.Test.Command = "go build ./..."
+	cfg, hits, states := stateServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	got := evaluate(context.Background(), cfg, []string{"lines_changed 0 and files_changed is 1"}, body)
+	if got.Verdict != clientjev.Accept || *hits != 1 {
+		t.Fatalf("zero is a carried count: got %+v", got)
+	}
+	if state := (*states)[0]; state["lines_changed"] != float64(0) || state["files_changed"] != float64(1) {
+		t.Errorf("state = %v, want lines_changed 0 and files_changed 1", state)
+	}
+}
+
+// The warning's premise is that a path is the criterion's ONLY readable fact. A criterion that also states a
+// count now has one, so it is not judged blind and must not be warned.
+func TestAPathPlusCountCriterionIsNotWarned(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	got := evaluate(context.Background(), cfg,
+		[]string{"the file internal/seatpark/park.go changed and files_changed is 4"}, measured())
+	if got.Verdict != clientjev.Accept || *hits != 1 || len(got.Warnings) != 0 {
+		t.Errorf("a path plus this bundle's count is readable, so no warning: got %+v, %d calls", got, *hits)
+	}
+}
