@@ -1,0 +1,625 @@
+// Package clientworktree owns the room's derived seat worktrees: the start step that creates them
+// (Ensure), the ruling's read-only check over them (Check), and the two operator verbs
+// (`worktree list`, `worktree prune`) that read and clean up `git worktree list`.
+//
+// THE LIST IS DERIVED, NEVER WRITTEN DOWN. The ONE derivation is clientservices.DerivedWorktrees,
+// ruled in ai_docs/core-architecture/seat-worktrees.md and compiled there for 7.8's reason; this
+// package only carries it out. Nothing here keeps a second list, so a seat's isolation cannot be
+// removed by editing a file and cannot be added by one either.
+//
+// WHY THE SUBMODULES ARE LINKED WORKTREES AND NEVER `git submodule update`. A seat's worktree carries
+// `agenthub_client` and `.claude`, and both are linked worktrees of the MAIN CHECKOUT's own submodule
+// repositories: `git -C <main>/<submodule> worktree add <wt>/<submodule> <gitlink>`. The reason is
+// measured, not stylistic. In a new worktree `git submodule update --init` clones from the submodule
+// URL, and every pin this room records is a commit that was never pushed, so the clone fails with
+// `fatal: git upload-pack: not our ref`. A worktree placed at the submodule path needs no clone: the
+// pin is already in the submodule repository's object store, and the parent accepts the path as the
+// submodule. `agenthub_client` goes on the seat's own branch of the client repository, so a seat's
+// client commits land where the lead can see them with no fetch; `.claude` stays detached at the
+// gitlink and so stays out of every commit.
+//
+// NOTHING IS OVERWRITTEN. A derived path already registered on its branch is reused; a path on another
+// branch, or a path that is not a registered worktree at all, is refused and named, and the refusal is
+// an error that names every refused path - never a half-started room that reads as one that worked.
+//
+// THE ONE REMOVAL, and it is the migration off a hand-made room. A room made before this derivation
+// existed kept the client repository's worktree at `<roomDir>/wt/<seat>-client`; git checks a branch out
+// in exactly ONE worktree per repository, and the client link the derivation wants is
+// `<roomDir>/wt/<seat>/agenthub_client` on that same branch, so that leftover obstructs every start of
+// that seat with git's `a branch named ... already exists`. clearStaleClientWorktrees removes exactly
+// that entry - the legacy path AND the seat's own branch, nothing else - before the derivation runs. The
+// branch survives, so no seat's commit is lost; a `-client` worktree on another branch, and the branch
+// held at any other path, are left for the operator exactly as before.
+//
+// The removal is only half of it: it leaves that seat's client branch unheld, and the link the derivation
+// wants is ON that branch. So the client link ATTACHES to a branch that already exists (`git worktree
+// add <path> <branch>`, which re-points nothing) and creates it at the parent's gitlink only when it does
+// not exist yet. The parent repository's rule is unchanged: a branch no worktree holds there is refused
+// and left to the operator (rejectBareBranch).
+//
+// PRUNE IS THE NARROW HALF. It removes only `/tmp/wt-*`, `/tmp/gate-*` and the entries git marks
+// prunable, and it removes them with `git worktree remove` and NOT `--force`, so a dirty worktree is
+// named and left standing. A worktree whose detached HEAD is on no branch and is not in `main` is
+// refused and named: removing it deletes its reflog, which is the only reference to that commit. Every
+// other foreign entry - `~/__projects__/4genthub-urgent-subtask-details` is the ruling's example - is
+// listed and never touched.
+package clientworktree
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
+)
+
+// clientSubmodule is the submodule a seat commits into. It carries a branch of the seat's own, unlike
+// .claude, which stays detached at the gitlink.
+const clientSubmodule = "agenthub_client"
+
+// submodules are the two submodules every derived worktree carries, in the order they are linked: the
+// client repository a seat commits into, and the Claude configuration that stays out of every commit.
+var submodules = []string{clientSubmodule, ".claude"}
+
+// Entry is one entry of `git worktree list`: where it is, the branch it is on (empty when its HEAD is
+// detached), and the two states git reports about it that prune must respect. Prunable means git has
+// already lost the entry's working tree; locked means git is holding the entry back from every
+// automatic cleanup, so prune names it and never removes it.
+type Entry struct {
+	Path     string
+	Branch   string // "" when detached
+	Detached bool
+	Prunable bool
+	Locked   bool
+}
+
+// gitWorktrees is the seam the tests replace - a package-level variable rather than an interface added
+// for testing, which is the repo's rule. It sits BEHIND Read, so a test that drives a verb's decision
+// drives the very reader the verb uses.
+var gitWorktrees = readGitWorktrees
+
+// Read is the ONE reader of `git worktree list --porcelain` in this package: Ensure, Check, `list` and
+// `prune` all go through it, so the four can never disagree about which worktrees exist.
+func Read(mainRoot string) ([]Entry, error) { return gitWorktrees(mainRoot) }
+
+// readGitWorktrees runs git and parses what it prints.
+func readGitWorktrees(mainRoot string) ([]Entry, error) {
+	out, err := runGit(mainRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, &clientcmd.CodedError{
+			Message: fmt.Sprintf("cannot read the worktrees of %s: %v", mainRoot, err),
+			Code:    clientcmd.ExitUnavailable,
+		}
+	}
+	return parseWorktreeList(out), nil
+}
+
+// parseWorktreeList is the porcelain format, read one record at a time. A `worktree` line opens a
+// record and every following known line fills it in; an unknown line (bare, for example) is skipped
+// rather than refused, because git adds lines to this format and a reader that refuses the unknown
+// would stop working the day one appeared.
+func parseWorktreeList(out string) []Entry {
+	var entries []Entry
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			entries = append(entries, Entry{Path: strings.TrimPrefix(line, "worktree ")})
+		case len(entries) == 0:
+			continue
+		case strings.HasPrefix(line, "branch "):
+			entries[len(entries)-1].Branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+		case line == "detached":
+			entries[len(entries)-1].Detached = true
+		case strings.HasPrefix(line, "prunable"):
+			entries[len(entries)-1].Prunable = true
+		case strings.HasPrefix(line, "locked"):
+			entries[len(entries)-1].Locked = true
+		}
+	}
+	return entries
+}
+
+// linkProviderKey links a directory's `.env` to the ONE env file. It is a seam, in the repo's style of
+// a package-level variable rather than an interface added for testing: it links a machine's own key
+// file, which a test cannot supply.
+var linkProviderKey = LinkProviderKey
+
+// LinkProviderKey is the ONE link: a directory's `.env` points at the client's env file, which is where
+// omp reads the key from its launch directory. A regular file at that path is not ours and is REFUSED
+// and named; a link of ours aimed at a key file that moved is retargeted.
+func LinkProviderKey(dir string) error {
+	source, err := clientenv.DefaultPath()
+	if err != nil {
+		return &clientcmd.CodedError{Message: err.Error(), Code: clientcmd.ExitUsage}
+	}
+	if info, statErr := os.Stat(source); statErr != nil || info.IsDir() {
+		return &clientcmd.CodedError{
+			Message: fmt.Sprintf(
+				"%s does not exist: omp reads the key from the launch directory's .env", source),
+			Code: clientcmd.ExitUsage,
+		}
+	}
+	link := filepath.Join(dir, ".env")
+	info, err := os.Lstat(link)
+	switch {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		if linked, statErr := os.Stat(link); statErr == nil {
+			if srcInfo, srcErr := os.Stat(source); srcErr == nil && os.SameFile(linked, srcInfo) {
+				return nil
+			}
+		}
+		// Our own link, aimed at a key file that moved: retargeting is what the link is for.
+		if err := os.Remove(link); err != nil {
+			return &clientcmd.CodedError{Message: err.Error(), Code: clientcmd.ExitUsage}
+		}
+	case err == nil:
+		return &clientcmd.CodedError{
+			Message: fmt.Sprintf(
+				"%s already exists and is not a symlink: refusing to replace a file this client did "+
+					"not create. Move it aside, or point it at %s, to use the one key.", link, source),
+			Code: clientcmd.ExitUsage,
+		}
+	}
+	if err := os.Symlink(source, link); err != nil {
+		return &clientcmd.CodedError{Message: err.Error(), Code: clientcmd.ExitUsage}
+	}
+	return nil
+}
+
+// MainRoot is the checkout whose worktrees these are: the --main flag when the caller passed one, else
+// $OPENRIG_SKILLS_ROOT, else the repository the client was run in, else a usage error that names the flag,
+// the variable and the command that failed. It is never guessed, because a worktree registered in the
+// wrong checkout is a worktree the seat cannot commit from - and the working directory is deliberately
+// the LAST of the three, for the reason inside.
+func MainRoot(flagValue string) (string, error) {
+	if flagValue != "" {
+		return filepath.Clean(flagValue), nil
+	}
+	// THE CHECKOUT VARIABLE COMES BEFORE THE WORKING DIRECTORY, and that order is the fix for a measured
+	// fault: a seat's own client worktree is a worktree of the CLIENT repository, so
+	// `git rev-parse --show-toplevel` run there names a different repository from the one the seats'
+	// worktrees belong to, and every derived path is then reported as existing-but-not-a-worktree. The
+	// variable is the same one clientservices.TeamDir reads first, so one variable points at the
+	// repository whose `skills/`, `scripts/team/` and worktrees this client uses.
+	if root := os.Getenv(clientservices.SkillsRootEnv); root != "" {
+		return filepath.Clean(root), nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", &clientcmd.CodedError{
+			Message: fmt.Sprintf("cannot find the checkout whose worktrees these are: the working "+
+				"directory is unreadable (%v); pass --main DIR or set %s", err, clientservices.SkillsRootEnv),
+			Code: clientcmd.ExitUsage,
+		}
+	}
+	out, err := runGit(cwd, "rev-parse", "--show-toplevel")
+	if err != nil || out == "" {
+		return "", &clientcmd.CodedError{
+			Message: fmt.Sprintf("cannot find the checkout whose worktrees these are: "+
+				"`git rev-parse --show-toplevel` in %s named no repository (%v); pass --main DIR or set %s",
+				cwd, err, clientservices.SkillsRootEnv),
+			Code: clientcmd.ExitUsage,
+		}
+	}
+	return filepath.Clean(out), nil
+}
+
+// canonicalPath is the ONE path identity this package compares with. A registered worktree's path
+// exists, so EvalSymlinks resolves it; a derived path that does not exist yet cannot be resolved and
+// keeps filepath.Clean. Comparing the raw strings (filepath.Clean alone) names the same directory twice
+// when the room is reached through a symlink - git records the RESOLVED path for a worktree, measured:
+// `git worktree add <symlinked>/wt/<seat>` lists the real one - so the derived path and the registered
+// one differ as strings while naming one directory, and a legitimate reuse was refused.
+func canonicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return filepath.Clean(path)
+}
+
+// Ensure is the ruling's Start, over clientservices.DerivedWorktrees(roomDir, rig, seats): the room's
+// seats in their own order, then the room's integration worktree when the room has a lead.
+//
+// For each derived worktree it creates the path when it is missing, adds the two submodule worktrees,
+// and links the provider key where a seat will be launched - and where a writing worktree is one whose
+// branch is not empty, which leaves the reviewer out: it is detached, so it is never launched to
+// commit, and nothing in a reviewer's worktree links a key this client did not put there.
+//
+// EVERY derived worktree is attempted, never just up to the first refusal: `up` must not be left with
+// half a room and a message about one path, so all refusals are collected, each is printed on out with
+// its reason, and the returned error names every refused path.
+//
+// Before any of that it clears the pre-derivation client worktree a hand-made room left behind - the
+// migration, and the only thing this step removes (clearStaleClientWorktrees).
+func Ensure(mainRoot, roomDir, rig string, seats []clientservices.SeatType, out io.Writer) error {
+	entries, err := Read(mainRoot)
+	if err != nil {
+		return err
+	}
+	registered := make(map[string]Entry, len(entries))
+	for _, entry := range entries {
+		registered[canonicalPath(entry.Path)] = entry
+	}
+	derived := clientservices.DerivedWorktrees(roomDir, rig, seats)
+	if err := clearStaleClientWorktrees(mainRoot, roomDir, derived, out); err != nil {
+		return err
+	}
+	var refused []string
+	for _, worktree := range derived {
+		state, err := ensureOne(mainRoot, worktree, registered)
+		if err != nil {
+			refused = append(refused, fmt.Sprintf("%s (%v)", worktree.Path, err))
+			fmt.Fprintf(out, "%s: refused: %v\n", worktree.Path, err)
+			continue
+		}
+		fmt.Fprintf(out, "%s: %s\n", worktree.Path, state)
+	}
+	if len(refused) > 0 {
+		return &clientcmd.CodedError{
+			Message: fmt.Sprintf("refused %d of %d derived worktree(s), naming every one: %s",
+				len(refused), len(derived), strings.Join(refused, "; ")),
+			Code: clientcmd.ExitUnavailable,
+		}
+	}
+	return nil
+}
+
+// legacyClientSuffix names the ONE path in this package that is not derived: the place a room made by
+// hand, before this derivation existed, put the client repository's worktree -
+// `<roomDir>/wt/<seat>-client`. It is the migration's whole subject, so clearStaleClientWorktrees and
+// this constant are deleted together once no room carries one.
+const legacyClientSuffix = "-client"
+
+// clearStaleClientWorktrees is the migration, and it is deliberately narrow: for one derived seat it
+// removes the CLIENT repository's worktree when - and only when - that worktree sits at exactly
+// `<roomDir>/wt/<seat>-client` and holds exactly the branch the derivation names for that seat. A
+// `-client` worktree on another branch is not the obstruction; neither is the seat's branch held at any
+// other path, which the refusing step names as before. Deleting an operator's worktree is not this
+// step's decision, and it never takes one.
+//
+// Why removal and not a refusal: git checks a branch out in exactly one worktree per repository, and the
+// client link the derivation wants - `<roomDir>/wt/<seat>/agenthub_client` - is on that same branch, so
+// the leftover makes `git worktree add` answer `fatal: a branch named ... already exists` at every start
+// of that seat. Measured on the live room: the client repository held `4genthub-min/go-dev` in
+// `<room>/wt/go-dev-client`.
+//
+// The removal is `git worktree remove` WITHOUT `--force`, so a legacy worktree holding uncommitted work
+// is refused by git and named in the error rather than deleted. The BRANCH survives a removal - only the
+// working tree goes - so a seat's own commits are never lost. It runs before the per-worktree step
+// because that step's client-link refusal would otherwise fire first.
+func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservices.Worktree, out io.Writer) error {
+	repository := filepath.Join(mainRoot, clientSubmodule)
+	if info, err := os.Stat(repository); err != nil || !info.IsDir() {
+		// linkSubmodules owns this diagnosis and words it as the missing submodule it is; there is no
+		// worktree list to read until that is answered.
+		return nil
+	}
+	entries, err := Read(repository)
+	if err != nil {
+		return err
+	}
+	holder := make(map[string]Entry, len(entries))
+	for _, entry := range entries {
+		if entry.Branch != "" {
+			holder[entry.Branch] = entry
+		}
+	}
+	for _, worktree := range derived {
+		if worktree.Branch == "" {
+			continue
+		}
+		entry, held := holder[worktree.Branch]
+		if !held {
+			continue
+		}
+		if canonicalPath(entry.Path) != canonicalPath(filepath.Join(roomDir, "wt", worktree.SeatKey+legacyClientSuffix)) {
+			continue
+		}
+		if _, err := runGit(repository, "worktree", "remove", entry.Path); err != nil {
+			return fmt.Errorf("cannot clear the pre-derivation client worktree at %s, which holds %s: %v",
+				entry.Path, worktree.Branch, err)
+		}
+		fmt.Fprintf(out, "%s: cleared (the pre-derivation client worktree; %s survives)\n",
+			entry.Path, worktree.Branch)
+	}
+	return nil
+}
+
+// ensureOne is one derived worktree's three steps, and the ONE place the create/reuse/refuse decision
+// is made. Every refusal is answered BEFORE anything is created, so a refusal never leaves a
+// half-started path behind; it answers the word Ensure prints for that path.
+func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map[string]Entry) (string, error) {
+	entry, isRegistered := registered[canonicalPath(worktree.Path)]
+	if isRegistered {
+		if entry.Prunable {
+			// It is in the listing and its working tree is gone: git will refuse both to reuse it and to
+			// add one at that path, so the path is named and nothing is invented to repair it.
+			return "", fmt.Errorf(
+				"%s is registered but git marks it prunable - its working tree is gone; run "+
+					"`git -C %s worktree prune` and start again", worktree.Path, mainRoot)
+		}
+		if err := sameWorktree(entry, worktree); err != nil {
+			return "", err
+		}
+		// Reused, and still completed: a worktree a previous start left without its submodules or its
+		// key link is exactly what this step exists to finish, and neither call overwrites anything.
+		if err := linkSubmodules(mainRoot, worktree); err != nil {
+			return "", err
+		}
+		if err := linkKey(worktree); err != nil {
+			return "", err
+		}
+		return "reused", nil
+	}
+	if _, err := os.Lstat(worktree.Path); err == nil {
+		return "", fmt.Errorf(
+			"%s exists and is not a worktree registered in `git worktree list` of %s; nothing is overwritten",
+			worktree.Path, mainRoot)
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("cannot read %s: %v", worktree.Path, err)
+	}
+	if err := refuseClientBranch(mainRoot, worktree); err != nil {
+		return "", err
+	}
+	if err := createWorktree(mainRoot, worktree); err != nil {
+		return "", err
+	}
+	if err := linkSubmodules(mainRoot, worktree); err != nil {
+		return "", err
+	}
+	if err := linkKey(worktree); err != nil {
+		return "", err
+	}
+	return "created", nil
+}
+
+// sameWorktree is the reuse rule: an existing worktree counts as this seat's ONLY when it is on the
+// very branch the derivation named, and a reviewer's - whose branch is empty - only when its HEAD is
+// detached. Anything else is refused with the branch it is actually on, because re-pointing it would
+// take whatever the operator put there away from them.
+func sameWorktree(entry Entry, worktree clientservices.Worktree) error {
+	if worktree.Branch == "" {
+		if !entry.Detached {
+			on := entry.Branch
+			if on == "" {
+				on = "a branch git did not name"
+			}
+			return fmt.Errorf("%s is on %s; %s never commits and must be detached",
+				worktree.Path, on, worktree.SeatKey)
+		}
+		return nil
+	}
+	if entry.Detached || entry.Branch != worktree.Branch {
+		on := entry.Branch
+		if entry.Detached || on == "" {
+			on = "a detached HEAD"
+		}
+		return fmt.Errorf("%s is on %s, not %s; nothing is overwritten",
+			worktree.Path, on, worktree.Branch)
+	}
+	return nil
+}
+
+// branchRefusal answers git's refusal about a branch that a WORKTREE HOLDS, before git is asked to
+// create anything, and in words a room's operator can act on. Measured, not assumed: for a branch that
+// already exists `git worktree add -b <branch>` prints `fatal: a branch named '<branch>' already
+// exists`, whether or not a worktree holds it, and names neither the repository nor - when a worktree
+// does hold it - that worktree.
+//
+// This client never re-points and never deletes a branch. `path` is the worktree that was not created,
+// named so the refusal is actionable on its own.
+//
+// A branch that exists with NO holder is NOT answered here, because the two callers do different things
+// with it: createWorktree refuses it in the parent repository (rejectBareBranch), and linkSubmodules
+// attaches to it in the client repository, whose link belongs on that branch.
+func branchRefusal(repository, branch, path string) error {
+	if branch == "" {
+		return nil
+	}
+	if entries, err := Read(repository); err == nil {
+		for _, entry := range entries {
+			if entry.Branch != branch {
+				continue
+			}
+			if canonicalPath(entry.Path) == canonicalPath(path) {
+				// This very path holds the branch: that is the reuse case, and not a refusal.
+				return nil
+			}
+			if entry.Prunable {
+				// git still names the branch, but the working tree is gone: the operator's fix is to
+				// clear the entry, not to hunt for a worktree that no longer exists.
+				return fmt.Errorf("the branch %s is registered to the worktree at %s in %s, and git marks "+
+					"that entry prunable - its working tree is gone; run `git -C %s worktree prune` and "+
+					"start again, so %s can be created", branch, entry.Path, repository, repository, path)
+			}
+			return fmt.Errorf("the branch %s is already checked out at %s in %s, and a branch is "+
+				"checked out in exactly one worktree, so %s was not created",
+				branch, entry.Path, repository, path)
+		}
+	}
+	return nil
+}
+
+// rejectBareBranch refuses a branch that exists in the PARENT repository with no worktree holding it.
+// It is the parent repository's rule and not the client's, and the reason is the lead's answer on the
+// live `4genthub-min/architect`: an existing branch carries a seat's own commits, adopting it silently
+// would be the wrong default, and the operator decides a bare branch's fate. createWorktree would
+// otherwise ask git for `-b` and get `fatal: a branch named '<branch>' already exists`.
+func rejectBareBranch(repository, branch, path string) error {
+	if branch == "" {
+		return nil
+	}
+	_, err := runGit(repository, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err == nil {
+		return fmt.Errorf("the branch %s already exists in %s and no worktree holds it; this client "+
+			"never re-points a branch, so %s was not created", branch, repository, path)
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return fmt.Errorf("cannot read the branches of %s: %v", repository, err)
+	}
+	return nil
+}
+
+// clientBranchExists answers whether the client repository already has the branch a seat's link wants,
+// which is the ONE thing that decides how the link is placed: a branch that exists is attached to, and a
+// branch that does not is created at the parent's gitlink. The two forms are not interchangeable -
+// `git worktree add -b <branch>` is what git answers `fatal: a branch named ... already exists` to.
+func clientBranchExists(repository, branch string) (bool, error) {
+	_, err := runGit(repository, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		return false, fmt.Errorf("cannot read the branches of %s: %v", repository, err)
+	}
+	return false, nil
+}
+
+// createWorktree adds the one worktree the derivation named: `git worktree add -b <branch> <path> main`,
+// or `--detach` for a worktree whose branch is empty. The branch is refused by name before git runs - by
+// branchRefusal when a worktree holds it, and by rejectBareBranch when it exists with no holder, which is
+// the parent repository's rule. The parent directory is made before git runs because a room's `wt/` is
+// this client's own directory and nothing else creates it.
+func createWorktree(mainRoot string, worktree clientservices.Worktree) error {
+	if err := branchRefusal(mainRoot, worktree.Branch, worktree.Path); err != nil {
+		return err
+	}
+	if err := rejectBareBranch(mainRoot, worktree.Branch, worktree.Path); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(worktree.Path), 0o755); err != nil {
+		return fmt.Errorf("cannot create %s: %v", filepath.Dir(worktree.Path), err)
+	}
+	var err error
+	if worktree.Branch == "" {
+		_, err = runGit(mainRoot, "worktree", "add", "--detach", worktree.Path, "main")
+	} else {
+		_, err = runGit(mainRoot, "worktree", "add", "-b", worktree.Branch, worktree.Path, "main")
+	}
+	if err != nil {
+		return fmt.Errorf("cannot create the worktree at %s: %v", worktree.Path, err)
+	}
+	return nil
+}
+
+// refuseClientBranch answers the CLIENT repository's branch refusal before the parent worktree is
+// created. linkSubmodules asks the same question, but it runs after createWorktree, so its refusal left
+// the seat's worktree created without its client worktree - a half-started path nobody can use, and an
+// `up` transcript that reads `created` for it. Asking first means a refusal leaves nothing behind.
+func refuseClientBranch(mainRoot string, worktree clientservices.Worktree) error {
+	if worktree.Branch == "" {
+		return nil
+	}
+	return branchRefusal(filepath.Join(mainRoot, clientSubmodule), worktree.Branch,
+		filepath.Join(worktree.Path, clientSubmodule))
+}
+
+// linkSubmodules places the two linked submodule worktrees inside a seat's worktree, at the parent's
+// own gitlink. A submodule path that is already a worktree (its `.git` is there) is left alone, which
+// is what makes a second Ensure a no-op.
+//
+// The client submodule is the one that carries a branch, and it has two forms: a branch that already
+// exists is ATTACHED to, and a branch that does not is created at the parent's gitlink. The first form
+// is what completes the migration off a hand-made room, whose client branch survives the removal of its
+// old holder.
+func linkSubmodules(mainRoot string, worktree clientservices.Worktree) error {
+	for _, submodule := range submodules {
+		target := filepath.Join(worktree.Path, submodule)
+		if _, err := os.Lstat(filepath.Join(target, ".git")); err == nil {
+			continue
+		}
+		repository := filepath.Join(mainRoot, submodule)
+		if info, err := os.Stat(repository); err != nil || !info.IsDir() {
+			return fmt.Errorf("%s is not a checked-out submodule repository of %s", repository, mainRoot)
+		}
+		pin, err := gitlink(mainRoot, submodule)
+		if err != nil {
+			return fmt.Errorf("cannot read the %s gitlink recorded in %s: %v", submodule, mainRoot, err)
+		}
+		args := []string{"worktree", "add"}
+		if submodule == clientSubmodule && worktree.Branch != "" {
+			// The client repository carries its own branch of the same name, and git refuses an existing
+			// one in the same unhelpful words - so a branch a worktree HOLDS is refused by name too. It
+			// was already asked before the parent worktree was created, so nothing is half-started by
+			// reaching here.
+			if err := branchRefusal(repository, worktree.Branch, target); err != nil {
+				return err
+			}
+			exists, err := clientBranchExists(repository, worktree.Branch)
+			if err != nil {
+				return err
+			}
+			if exists {
+				// The migration's second half. A room made by hand left this seat's client branch held
+				// by `<roomDir>/wt/<seat>-client`, and clearStaleClientWorktrees has just removed that
+				// holder, so the branch is unheld and carries the seat's own client commits - it is
+				// exactly the branch this link belongs on. `git worktree add <target> <branch>` places
+				// the link on it and re-points nothing, deletes nothing and adopts nothing by itself.
+				args = append(args, target, worktree.Branch)
+			} else {
+				args = append(args, "-b", worktree.Branch, target, pin)
+			}
+		} else {
+			args = append(args, "--detach", target, pin)
+		}
+		if _, err := runGit(repository, args...); err != nil {
+			return fmt.Errorf("cannot add the %s worktree at %s: %v", submodule, target, err)
+		}
+	}
+	return nil
+}
+
+// gitlink is the commit the parent records for one submodule, which is the pin every seat worktree and
+// every gate is started at.
+func gitlink(mainRoot, submodule string) (string, error) {
+	out, err := runGit(mainRoot, "rev-parse", "HEAD:"+submodule)
+	if err != nil {
+		return "", err
+	}
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return "", fmt.Errorf("%s records no commit for %s", mainRoot, submodule)
+	}
+	return fields[0], nil
+}
+
+// linkKey links the provider key into a WRITING worktree's own `.env`, through LinkProviderKey
+// implementation: omp reads the key from the launch directory, and a seat launched in its own worktree
+// is not launched in the room. A worktree with no branch is a reviewer's: it is detached and never
+// commits, so it is not a writing seat's and gets no link.
+func linkKey(worktree clientservices.Worktree) error {
+	if worktree.Branch == "" {
+		return nil
+	}
+	if err := linkProviderKey(worktree.Path); err != nil {
+		return fmt.Errorf("cannot link the provider key into %s: %v", worktree.Path, err)
+	}
+	return nil
+}
+
+// runGit runs git in dir and returns its output. Every git call in this package goes through it, so
+// there is ONE place that decides the working directory and one place that reports a failure with
+// git's own words.
+func runGit(dir string, args ...string) (string, error) {
+	command := exec.Command("git", args...)
+	command.Dir = dir
+	raw, err := command.CombinedOutput()
+	out := strings.TrimSpace(string(raw))
+	if err != nil {
+		said := ""
+		if out != "" {
+			said = ": " + out
+		}
+		return out, fmt.Errorf("git %s (in %s): %w%s", strings.Join(args, " "), dir, err, said)
+	}
+	return out, nil
+}

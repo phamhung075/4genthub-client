@@ -132,17 +132,22 @@ type doctorJSONRow struct {
 
 // doctorJSONRows pairs every row with the lines the human report prints beside it, from the wrapper that
 // carries them: ONE rule for the JSON and the lines, so the two surfaces cannot disagree about a row.
-func doctorJSONRows(rows []clientservices.Health, orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
+func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
 	out := make([]doctorJSONRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, doctorJSONRow{Health: row, Reasons: rowReasons(row, orphanRows, identityRows)})
+		out = append(out, doctorJSONRow{Health: row, Reasons: rowReasons(row, worktreeRows, orphanRows, identityRows)})
 	}
 	return out
 }
 
 // rowReasons finds one row's reasons: the wrapper is matched on (safeguard, rig), the pair the report
 // itself matches a row by.
-func rowReasons(row clientservices.Health, orphanRows []orphanRow, identityRows []identityRow) []string {
+func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, orphanRows []orphanRow, identityRows []identityRow) []string {
+	for _, worktree := range worktreeRows {
+		if worktree.Row.Safeguard == row.Safeguard && worktree.Row.Rig == row.Rig {
+			return worktreeLines(worktree)
+		}
+	}
 	for _, orphan := range orphanRows {
 		if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Rig == row.Rig {
 			return orphanLines(orphan)
@@ -158,6 +163,13 @@ func rowReasons(row clientservices.Health, orphanRows []orphanRow, identityRows 
 
 func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	rows := rowsFor(rig, root)
+	// The worktrees row (the ruling's Check): where each seat's own worktree is, and whether it is the
+	// one this client derives. It reads the same derivation `up`'s worktrees step creates, so the two
+	// cannot disagree about a path.
+	worktreeRows := worktreesRowFor(rig, root)
+	for _, worktreeRow := range worktreeRows {
+		rows = append(rows, worktreeRow.Row)
+	}
 	orphanRows := orphanRowsFor(rig)
 	for _, orphan := range orphanRows {
 		rows = append(rows, orphan.Row)
@@ -172,7 +184,7 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		rows = append(rows, identity.Row)
 	}
 	if asJSON {
-		body, err := json.MarshalIndent(doctorJSONRows(rows, orphanRows, identityRows), "", "  ")
+		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, orphanRows, identityRows), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam doctor: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
@@ -184,6 +196,12 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		}
 		for _, orphan := range orphanRows {
 			for _, line := range orphanLines(orphan) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
+		// The worktrees row's reasons and details ride beside its row the same way.
+		for _, worktreeRow := range worktreeRows {
+			for _, line := range worktreeLines(worktreeRow) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
@@ -210,6 +228,16 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 				for _, line := range orphanLines(orphan) {
 					fmt.Fprintln(stderr, line)
 				}
+			}
+		}
+		// The worktrees row's own reasons, the same way: the paths that are wrong are why the row is
+		// down, and an input this client could not read is reported whether or not it is.
+		for _, worktreeRow := range worktreeRows {
+			if worktreeRow.Row.Rig != row.Rig {
+				continue
+			}
+			for _, line := range worktreeReasonLines(worktreeRow) {
+				fmt.Fprintln(stderr, line)
 			}
 		}
 		// An identity row that is down is only actionable with the node that cannot be named.

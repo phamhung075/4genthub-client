@@ -71,7 +71,11 @@ func stubHeartbeat(t *testing.T) *[]string {
 func restoreAll(t *testing.T) {
 	t.Helper()
 	stubHeartbeat(t)
-	daemon, rigStep := ensureDaemon, ensureRig
+	// The worktrees step touches git and the machine's checkouts. Every case that is not ABOUT it starts
+	// from a stub, so a lifecycle assertion never depends on the repository the test binary was built
+	// in; the two cases that assert the step replace it with their own.
+	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int { return clientcmd.ExitOK }
+	daemon, worktrees, rigStep := ensureDaemon, ensureWorktrees, ensureRig
 	record := recordRigFor
 	authority, wait := startAuthority, waitSafeguards
 	ui, watch, herdr := openUI, runWatchView, runHerdr
@@ -79,7 +83,7 @@ func restoreAll(t *testing.T) {
 	stop, nodes := stopPattern, rigNodes
 	rows, authorityUp := rowsFor, agentRunning
 	t.Cleanup(func() {
-		ensureDaemon, ensureRig = daemon, rigStep
+		ensureDaemon, ensureWorktrees, ensureRig = daemon, worktrees, rigStep
 		recordRigFor = record
 		startAuthority, waitSafeguards = authority, wait
 		openUI, runWatchView, runHerdr = ui, watch, herdr
@@ -172,6 +176,10 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 		ran = append(ran, "ensureDaemon")
 		return "/tmp/daemon.log", nil
 	}
+	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
+		ran = append(ran, "ensureWorktrees")
+		return clientcmd.ExitOK
+	}
 	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
 		ran = append(ran, "ensureRig")
 		return clientcmd.ExitOK
@@ -191,7 +199,7 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	if code := (upCommand{}).Run(context.Background(), []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up returned %d (stderr: %q)", code, errOut.String())
 	}
-	want := []string{"ensureDaemon", "ensureRig", "recordRig", "startAgent", "waitSafeguards", "watch", "openUI", "herdr"}
+	want := []string{"ensureDaemon", "ensureWorktrees", "ensureRig", "recordRig", "startAgent", "waitSafeguards", "watch", "openUI", "herdr"}
 	if strings.Join(ran, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", ran, want)
 	}
