@@ -489,31 +489,53 @@ func TestEnsureClearsAPreDerivationClientWorktree(t *testing.T) {
 }
 
 // The other boundary of removing anything at all: a legacy worktree that holds work the operator has not
-// committed is REFUSED and named, and nothing is taken away - the removal is git's own `git worktree
-// remove` without `--force`.
-func TestEnsureRefusesToClearADirtyPreDerivationClientWorktree(t *testing.T) {
-	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
+// committed is NAMED and KEPT, no link is placed, and the run continues - the removal is git's own
+// `git worktree remove` without `--force`, and a refusal is not this step's failure to report.
+func TestEnsureNamesAndKeepsADirtyPreDerivationClientWorktree(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{
+		{Key: "go-dev", Type: "developer"},
+		{Key: "reviewer", Type: "reviewer"},
+	})
 	stubLinkProviderKey(t)
-	seat := fixture.derived()[0]
+	derived := fixture.derived()
+	seat := derived[0]
 	clientRepository := filepath.Join(fixture.main, clientSubmodule)
 	legacy := seat.Path + "-client"
+	link := filepath.Join(seat.Path, clientSubmodule)
 	gitIn(t, clientRepository, "worktree", "add", "-b", seat.Branch, legacy, fixture.pins[clientSubmodule])
 	uncommitted := filepath.Join(legacy, "UNCOMMITTED.md")
 	writeFile(t, uncommitted, "work the operator has not committed\n")
 
+	// The seat's own worktree exists - the room is up - so this is the kept path the ruling speaks of,
+	// not a path a refused link would leave uncreated.
+	gitIn(t, fixture.main, "worktree", "add", "-b", seat.Branch, seat.Path, "main")
+
 	var out strings.Builder
-	err := fixture.ensure(&out)
-	if err == nil {
-		t.Fatalf("a dirty pre-derivation client worktree must be refused, not deleted:\n%s", out.String())
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("a dirty pre-derivation client worktree is a note, not a failure of the run: %v\n%s",
+			err, out.String())
 	}
-	if !strings.Contains(err.Error(), legacy) {
-		t.Errorf("the refusal did not name %s: %v", legacy, err)
+	if !strings.Contains(out.String(), legacy+": NOT cleared") || !strings.Contains(out.String(), seat.SeatKey+" keeps its client code there") {
+		t.Errorf("the note did not name %s and its seat:\n%s", legacy, out.String())
 	}
 	if entry, registered := clientEntry(t, clientRepository, legacy); !registered || entry.Branch != seat.Branch {
 		t.Errorf("the dirty holder at %s was moved or removed: %+v (registered=%v)", legacy, entry, registered)
 	}
 	if _, err := os.Stat(uncommitted); err != nil {
 		t.Errorf("the uncommitted file was taken away: %v", err)
+	}
+	if _, registered := clientEntry(t, clientRepository, link); registered {
+		t.Errorf("a client link was placed at %s while the dirty legacy still holds %s", link, seat.Branch)
+	}
+	// The rest of the room is still attempted: the reviewer's own worktree and link exist.
+	reviewer := derived[1]
+	if _, registered := fixture.entry(t, reviewer.Path); !registered {
+		t.Errorf("the run stopped at the dirty legacy and did not create %s:\n%s", reviewer.Path, out.String())
+	}
+	reviewerLink := filepath.Join(reviewer.Path, clientSubmodule)
+	if entry, registered := clientEntry(t, clientRepository, reviewerLink); !registered || !entry.Detached {
+		t.Errorf("the reviewer's client link at %s is %+v (registered=%v); want it detached at the pin",
+			reviewerLink, entry, registered)
 	}
 }
 
@@ -527,25 +549,32 @@ func commitIn(t *testing.T, worktree, message string) string {
 	return gitIn(t, worktree, "rev-parse", "HEAD")
 }
 
-// The clearing is SCOPED, and this is the half that says so: a `-client` worktree on ANOTHER branch is
-// not the obstruction, so it is left exactly where it is. Only the seat's own branch at the legacy path
-// is cleared, nothing else in either repository is touched.
-func TestEnsureLeavesAForeignClientWorktreeAlone(t *testing.T) {
+// The ruling's scope, and it is the PATH that scopes it: a worktree at the legacy `<seat>-client` path
+// is the seat's legacy whatever branch it holds - a seat's legacy sits on the lane it worked - so it is
+// cleared, and the branch it held survives. The branch test is what never matched a lane branch.
+func TestEnsureClearsTheLegacyPathWhateverBranchItHolds(t *testing.T) {
 	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
 	stubLinkProviderKey(t)
 	seat := fixture.derived()[0]
 	clientRepository := filepath.Join(fixture.main, clientSubmodule)
-	foreign := seat.Path + "-client"
-	const foreignBranch = "somebody-elses-client-branch"
-	gitIn(t, clientRepository, "worktree", "add", "-b", foreignBranch, foreign, fixture.pins[clientSubmodule])
+	legacy := seat.Path + "-client"
+	const laneBranch = "somebody-elses-client-branch"
+	gitIn(t, clientRepository, "worktree", "add", "-b", laneBranch, legacy, fixture.pins[clientSubmodule])
+	laneCommit := commitIn(t, legacy, "the seat's own client commit on a lane")
 
 	var out strings.Builder
 	if err := fixture.ensure(&out); err != nil {
-		t.Fatalf("a foreign -client worktree blocked the start step: %v\n%s", err, out.String())
+		t.Fatalf("the legacy path blocked the start step: %v\n%s", err, out.String())
 	}
-	entry, registered := clientEntry(t, clientRepository, foreign)
-	if !registered || entry.Branch != foreignBranch {
-		t.Errorf("the foreign worktree at %s was moved or removed: %+v (registered=%v)", foreign, entry, registered)
+	if !strings.Contains(out.String(), legacy+": cleared") {
+		t.Errorf("the run did not report clearing %s:\n%s", legacy, out.String())
+	}
+	if entry, registered := clientEntry(t, clientRepository, legacy); registered {
+		t.Errorf("%s is still a registered worktree of the client repository: %+v", legacy, entry)
+	}
+	if got := gitIn(t, clientRepository, "rev-parse", "refs/heads/"+laneBranch); got != laneCommit {
+		t.Errorf("the branch %s is at %s, want the seat's own commit %s to survive the removal",
+			laneBranch, got, laneCommit)
 	}
 }
 
@@ -571,5 +600,101 @@ func TestEnsureStillRefusesTheBranchHeldAtANonLegacyPath(t *testing.T) {
 	entry, registered := clientEntry(t, clientRepository, elsewhere)
 	if !registered || entry.Branch != seat.Branch {
 		t.Errorf("the holder at %s was moved or removed: %+v (registered=%v)", elsewhere, entry, registered)
+	}
+}
+
+// A KEPT path is a seat worktree the room already has; the ruling still places one thing in it: the
+// client link, on the branch the seat's legacy `<seat>-client` held when the migration removed it. The
+// seat's client commits live on that lane branch, not on the derived name.
+func TestEnsurePlacesTheKeptPathsLinkOnTheLegacyBranch(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
+	stubLinkProviderKey(t)
+	seat := fixture.derived()[0]
+	clientRepository := filepath.Join(fixture.main, clientSubmodule)
+	link := filepath.Join(seat.Path, clientSubmodule)
+	legacy := seat.Path + "-client"
+	const laneBranch = "fixture-room/go-dev-edit-yield"
+
+	// The seat's own worktree is already there, on a lane of its own: kept, not re-derived.
+	gitIn(t, fixture.main, "worktree", "add", "-b", "fixture-room/go-dev-lane", seat.Path, "main")
+	// Its client code sits in the pre-derivation location, on the lane it worked.
+	gitIn(t, clientRepository, "worktree", "add", "-b", laneBranch, legacy, fixture.pins[clientSubmodule])
+	laneCommit := commitIn(t, legacy, "the seat's own client commit on the lane")
+
+	var out strings.Builder
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("the kept path's link was not placed: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), seat.Path+": kept") {
+		t.Errorf("the run did not keep %s:\n%s", seat.Path, out.String())
+	}
+	entry, registered := clientEntry(t, clientRepository, link)
+	if !registered || entry.Branch != laneBranch {
+		t.Errorf("the client link at %s is %+v (registered=%v); want it on %s", link, entry, registered, laneBranch)
+	}
+	if got := gitIn(t, link, "rev-parse", "HEAD"); got != laneCommit {
+		t.Errorf("the link at %s is at %s, want the lane's commit %s", link, got, laneCommit)
+	}
+	if entry, registered := clientEntry(t, clientRepository, legacy); registered {
+		t.Errorf("the legacy worktree at %s was left behind: %+v", legacy, entry)
+	}
+	// The migration is a one-time step: a second run places nothing and prints every path kept.
+	second := strings.Builder{}
+	if err := fixture.ensure(&second); err != nil {
+		t.Fatalf("the second start failed: %v\n%s", err, second.String())
+	}
+	if !strings.Contains(second.String(), seat.Path+": kept") || strings.Contains(second.String(), "cleared") {
+		t.Errorf("the second run changed something:\n%s", second.String())
+	}
+}
+
+// With no legacy and no branch, the link is created at the parent's gitlink on the derived branch - the
+// same branch the derivation names for the seat itself.
+func TestEnsureCreatesTheKeptPathsLinkAtTheParentGitlink(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
+	stubLinkProviderKey(t)
+	seat := fixture.derived()[0]
+	clientRepository := filepath.Join(fixture.main, clientSubmodule)
+	link := filepath.Join(seat.Path, clientSubmodule)
+	gitIn(t, fixture.main, "worktree", "add", "-b", seat.Branch, seat.Path, "main")
+
+	var out strings.Builder
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("the kept path's link was not placed: %v\n%s", err, out.String())
+	}
+	entry, registered := clientEntry(t, clientRepository, link)
+	if !registered || entry.Branch != seat.Branch {
+		t.Errorf("the client link at %s is %+v (registered=%v); want it on %s", link, entry, registered, seat.Branch)
+	}
+	if got := gitIn(t, link, "rev-parse", "HEAD"); got != fixture.pins[clientSubmodule] {
+		t.Errorf("the link at %s is at %s, want the parent's gitlink %s", link, got, fixture.pins[clientSubmodule])
+	}
+}
+
+// A link that cannot be placed - here, because the branch is held at a path this run does not own - is a
+// NOTE and not a failure: the path stays kept, the run continues, and Check names the path until its
+// link exists.
+func TestEnsureNotesAKeptPathsLinkThatCannotBePlaced(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
+	stubLinkProviderKey(t)
+	seat := fixture.derived()[0]
+	clientRepository := filepath.Join(fixture.main, clientSubmodule)
+	link := filepath.Join(seat.Path, clientSubmodule)
+	elsewhere := filepath.Join(t.TempDir(), "go-dev-elsewhere")
+	gitIn(t, fixture.main, "worktree", "add", "-b", seat.Branch, seat.Path, "main")
+	gitIn(t, clientRepository, "worktree", "add", "-b", seat.Branch, elsewhere, fixture.pins[clientSubmodule])
+
+	var out strings.Builder
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("an unplaceable link is a note, not a failure of the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), seat.Path+": NOTE the client link was not placed") {
+		t.Errorf("the run did not note the unplaced link:\n%s", out.String())
+	}
+	if _, registered := clientEntry(t, clientRepository, link); registered {
+		t.Errorf("a client link was placed at %s although %s holds %s", link, elsewhere, seat.Branch)
+	}
+	if _, registered := fixture.entry(t, seat.Path); !registered {
+		t.Errorf("the kept path %s is no longer registered", seat.Path)
 	}
 }

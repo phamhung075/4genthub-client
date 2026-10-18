@@ -303,12 +303,13 @@ func Ensure(mainRoot, roomDir, rig string, seats []clientservices.SeatType, out 
 		registered[canonicalPath(entry.Path)] = entry
 	}
 	derived := clientservices.DerivedWorktrees(roomDir, rig, seats)
-	if err := clearStaleClientWorktrees(mainRoot, roomDir, derived, out); err != nil {
+	legacyBranch, err := clearStaleClientWorktrees(mainRoot, roomDir, derived, out)
+	if err != nil {
 		return err
 	}
 	var refused []string
 	for _, worktree := range derived {
-		state, err := ensureOne(mainRoot, worktree, registered)
+		state, err := ensureOne(mainRoot, worktree, registered, legacyBranch[worktree.SeatKey], out)
 		if err != nil {
 			refused = append(refused, fmt.Sprintf("%s (%v)", worktree.Path, err))
 			fmt.Fprintf(out, "%s: refused: %v\n", worktree.Path, err)
@@ -332,65 +333,67 @@ func Ensure(mainRoot, roomDir, rig string, seats []clientservices.SeatType, out 
 // this constant are deleted together once no room carries one.
 const legacyClientSuffix = "-client"
 
-// clearStaleClientWorktrees is the migration, and it is deliberately narrow: for one derived seat it
-// removes the CLIENT repository's worktree when - and only when - that worktree sits at exactly
-// `<roomDir>/wt/<seat>-client` and holds exactly the branch the derivation names for that seat. A
-// `-client` worktree on another branch is not the obstruction; neither is the seat's branch held at any
-// other path, which the refusing step names as before. Deleting an operator's worktree is not this
-// step's decision, and it never takes one.
+// clearStaleClientWorktrees is the migration, and it is deliberately narrow: for one derived writing
+// seat it removes the CLIENT repository's worktree when - and only when - that worktree sits at exactly
+// `<roomDir>/wt/<seat>-client`. The PATH is the subject, not the branch it holds: a seat's legacy
+// worktree sits on the lane it worked, and a test for the derived branch name never matched one.
 //
 // Why removal and not a refusal: git checks a branch out in exactly one worktree per repository, and the
-// client link the derivation wants - `<roomDir>/wt/<seat>/agenthub_client` - is on that same branch, so
-// the leftover makes `git worktree add` answer `fatal: a branch named ... already exists` at every start
-// of that seat. Measured on the live room: the client repository held `4genthub-min/go-dev` in
-// `<room>/wt/go-dev-client`.
+// client link the derivation wants - `<roomDir>/wt/<seat>/agenthub_client` - belongs on that same branch,
+// so the leftover makes the link impossible to place. The branch survives the removal - only the working
+// tree goes - so a seat's own commits are never lost, and the branch it held is answered per seat so the
+// link can be placed on it afterwards.
 //
-// The removal is `git worktree remove` WITHOUT `--force`, so a legacy worktree holding uncommitted work
-// is refused by git and named in the error rather than deleted. The BRANCH survives a removal - only the
-// working tree goes - so a seat's own commits are never lost. It runs before the per-worktree step
-// because that step's client-link refusal would otherwise fire first.
-func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservices.Worktree, out io.Writer) error {
+// The removal is `git worktree remove` WITHOUT `--force`, so a legacy worktree holding uncommitted or
+// untracked work is refused by git. That is a NOTE and not an error: the path is named, the seat keeps
+// working there until it commits, the run continues, and Check names the path until its link exists.
+func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservices.Worktree, out io.Writer) (map[string]string, error) {
+	branchHeld := make(map[string]string, len(derived))
 	repository := filepath.Join(mainRoot, clientSubmodule)
 	if info, err := os.Stat(repository); err != nil || !info.IsDir() {
 		// linkSubmodules owns this diagnosis and words it as the missing submodule it is; there is no
 		// worktree list to read until that is answered.
-		return nil
+		return branchHeld, nil
 	}
 	entries, err := Read(repository)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	holder := make(map[string]Entry, len(entries))
+	byPath := make(map[string]Entry, len(entries))
 	for _, entry := range entries {
-		if entry.Branch != "" {
-			holder[entry.Branch] = entry
-		}
+		byPath[canonicalPath(entry.Path)] = entry
 	}
 	for _, worktree := range derived {
 		if worktree.Branch == "" {
 			continue
 		}
-		entry, held := holder[worktree.Branch]
+		legacyPath := filepath.Join(roomDir, "wt", worktree.SeatKey+legacyClientSuffix)
+		entry, held := byPath[canonicalPath(legacyPath)]
 		if !held {
 			continue
 		}
-		if canonicalPath(entry.Path) != canonicalPath(filepath.Join(roomDir, "wt", worktree.SeatKey+legacyClientSuffix)) {
+		if _, err := runGit(repository, "worktree", "remove", entry.Path); err != nil {
+			fmt.Fprintf(out, "%s: NOT cleared, the pre-derivation client worktree still holds work: %v\n"+
+				"%s keeps its client code there until it commits; its link at %s waits for that\n",
+				entry.Path, err, worktree.SeatKey, filepath.Join(worktree.Path, clientSubmodule))
 			continue
 		}
-		if _, err := runGit(repository, "worktree", "remove", entry.Path); err != nil {
-			return fmt.Errorf("cannot clear the pre-derivation client worktree at %s, which holds %s: %v",
-				entry.Path, worktree.Branch, err)
+		if entry.Branch != "" {
+			branchHeld[worktree.SeatKey] = entry.Branch
+			fmt.Fprintf(out, "%s: cleared (the pre-derivation client worktree; %s survives)\n",
+				entry.Path, entry.Branch)
+		} else {
+			fmt.Fprintf(out, "%s: cleared (the pre-derivation client worktree; it was detached, nothing to lose)\n",
+				entry.Path)
 		}
-		fmt.Fprintf(out, "%s: cleared (the pre-derivation client worktree; %s survives)\n",
-			entry.Path, worktree.Branch)
 	}
-	return nil
+	return branchHeld, nil
 }
 
 // ensureOne is one derived worktree's three steps, and the ONE place the create/reuse/refuse decision
 // is made. Every refusal is answered BEFORE anything is created, so a refusal never leaves a
 // half-started path behind; it answers the word Ensure prints for that path.
-func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map[string]Entry) (string, error) {
+func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map[string]Entry, legacyBranch string, out io.Writer) (string, error) {
 	entry, isRegistered := registered[canonicalPath(worktree.Path)]
 	if isRegistered {
 		if entry.Prunable {
@@ -401,10 +404,9 @@ func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map
 					"`git -C %s worktree prune` and start again", worktree.Path, mainRoot)
 		}
 		// KEPT, not re-derived: the room has a worktree here and `up` reads it. Whatever branch it is on
-		// is the branch the seat works on now, so it is neither refused nor moved, and its submodule
-		// links are the seat's own business - a path that exists is read, and only a missing one is
-		// derived. The one write is this client's own `.env` link, which the seat's runtime reads its
-		// provider key from.
+		// is the branch the seat works on now, so it is neither refused nor moved. The two writes are the
+		// ones the ruling still places: the missing client link, and this client's own `.env` link.
+		placeClientLink(mainRoot, worktree, legacyBranch, out)
 		if err := linkKey(worktree); err != nil {
 			return "", err
 		}
@@ -423,7 +425,7 @@ func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map
 	if err := createWorktree(mainRoot, worktree); err != nil {
 		return "", err
 	}
-	if err := linkSubmodule(mainRoot, worktree); err != nil {
+	if err := linkSubmodule(mainRoot, worktree, worktree.Branch); err != nil {
 		return "", err
 	}
 	if err := linkKey(worktree); err != nil {
@@ -537,15 +539,16 @@ func refuseClientBranch(mainRoot string, worktree clientservices.Worktree) error
 		filepath.Join(worktree.Path, clientSubmodule))
 }
 
-// linkSubmodule places the client worktree inside a seat's worktree, at the parent's own gitlink. A
-// path that is already a worktree (its `.git` is there) is left alone, which is what makes a second
-// Ensure a no-op.
+// linkSubmodule places the client worktree inside a seat's worktree, at the parent's own gitlink, on the
+// branch it is given: the derived branch for a path this run creates, and the branch the seat's legacy
+// worktree held for a path the migration freed. A path that is already a worktree (its `.git` is there)
+// is left alone, which is what makes a second Ensure a no-op.
 //
 // The client submodule carries a branch, and it has two forms: a branch that already exists is ATTACHED
-// to, and a branch that does not is created at the parent's gitlink. The first form is what completes
-// the migration off a hand-made room, whose client branch survives the removal of its old holder.
-// `.claude` is not linked at all: it is not a submodule of this hub and has no gitlink to place.
-func linkSubmodule(mainRoot string, worktree clientservices.Worktree) error {
+// to, and a branch that does not is created at the parent's gitlink. An empty branch is a reviewer's,
+// whose link is detached at the pin. `.claude` is not linked at all: it is not a submodule of this hub
+// and has no gitlink to place.
+func linkSubmodule(mainRoot string, worktree clientservices.Worktree, branch string) error {
 	target := filepath.Join(worktree.Path, clientSubmodule)
 	if _, err := os.Lstat(filepath.Join(target, ".git")); err == nil {
 		return nil
@@ -559,17 +562,16 @@ func linkSubmodule(mainRoot string, worktree clientservices.Worktree) error {
 		return fmt.Errorf("cannot read the %s gitlink recorded in %s: %v", clientSubmodule, mainRoot, err)
 	}
 	args := []string{"worktree", "add"}
-	if worktree.Branch == "" {
+	if branch == "" {
 		// A reviewer's worktree never commits, so its client link is detached at the pin.
 		args = append(args, "--detach", target, pin)
 	} else {
-		// The client repository carries its own branch of the same name, and git refuses an existing
-		// one in the same unhelpful words - so a branch a worktree HOLDS is refused by name too. It was
-		// already asked before the parent worktree was created, so nothing is half-started here.
-		if err := branchRefusal(repository, worktree.Branch, target); err != nil {
+		// The client repository carries its own branch, and git refuses an existing branch a worktree
+		// holds in the same unhelpful words - so it is refused by name too.
+		if err := branchRefusal(repository, branch, target); err != nil {
 			return err
 		}
-		exists, err := clientBranchExists(repository, worktree.Branch)
+		exists, err := clientBranchExists(repository, branch)
 		if err != nil {
 			return err
 		}
@@ -577,15 +579,37 @@ func linkSubmodule(mainRoot string, worktree clientservices.Worktree) error {
 			// The branch carries the seat's own client commits - it is exactly the branch this link
 			// belongs on. `git worktree add <target> <branch>` places the link on it and re-points
 			// nothing, deletes nothing and adopts nothing by itself.
-			args = append(args, target, worktree.Branch)
+			args = append(args, target, branch)
 		} else {
-			args = append(args, "-b", worktree.Branch, target, pin)
+			args = append(args, "-b", branch, target, pin)
 		}
 	}
 	if _, err := runGit(repository, args...); err != nil {
 		return fmt.Errorf("cannot add the %s worktree at %s: %v", clientSubmodule, target, err)
 	}
 	return nil
+}
+
+// placeClientLink is the one write a KEPT path receives besides its `.env` link: the client link the
+// ruling says stays at `<roomDir>/wt/<seat>/agenthub_client`. It attaches to the branch the seat's
+// legacy `<seat>-client` held when the migration removed it, else to the branch the derivation names,
+// and creates that branch at the parent's gitlink when it does not exist.
+//
+// A failure is a printed NOTE, not a refusal: the branch may be held by a worktree somewhere this run
+// does not own, and failing here would leave the rest of the room unattempted. Check reports the path
+// as Wrong until its link exists, which is the truthful state.
+func placeClientLink(mainRoot string, worktree clientservices.Worktree, legacyBranch string, out io.Writer) {
+	target := filepath.Join(worktree.Path, clientSubmodule)
+	if _, err := os.Lstat(filepath.Join(target, ".git")); err == nil {
+		return
+	}
+	branch := legacyBranch
+	if branch == "" {
+		branch = worktree.Branch
+	}
+	if err := linkSubmodule(mainRoot, worktree, branch); err != nil {
+		fmt.Fprintf(out, "%s: NOTE the client link was not placed: %v\n", worktree.Path, err)
+	}
 }
 
 // gitlink is the commit the parent records for one submodule, which is the pin every seat worktree and
