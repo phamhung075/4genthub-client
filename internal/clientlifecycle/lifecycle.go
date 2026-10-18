@@ -485,6 +485,21 @@ func ensureWorktreesImpl(name string, spec clientruntime.RoomSpec, stdout, stder
 		fmt.Fprintf(stderr, "4genteam up: cannot derive the room's seat worktrees: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
+	// THE ROOM'S OWN REPOSITORY, and not the one `up` was run in: the definition records each seat's
+	// cwd, so the root is read from it rather than inherited from the working directory. Measured
+	// 2026-10-18: from a client worktree the inherited answer refused 6 of 6 paths as "not a worktree
+	// registered ... of <client repo>", naming a repository the paths never belonged to; from the
+	// project root the same command printed six kept lines.
+	if root, ok, seatErr := worktreeSeatRoot(roomSeatCwds(spec)); seatErr != nil {
+		// Two repositories: the definition is the record, but it cannot name one root, so the working
+		// directory's answer stands and the disagreement is said rather than hidden.
+		fmt.Fprintf(stderr, "4genteam up: the room's seats do not all live in one repository (%v); deriving from %s\n",
+			seatErr, mainRoot)
+	} else if ok && filepath.Clean(root) != filepath.Clean(mainRoot) {
+		fmt.Fprintf(stdout, "4genteam up: the room's seats live in %s, not in the working directory's %s; using %s\n",
+			root, mainRoot, root)
+		mainRoot = root
+	}
 	seats := make([]clientservices.SeatType, 0, len(spec.Seats))
 	for _, seat := range spec.Seats {
 		seats = append(seats, clientservices.SeatType{Key: seat.SeatKey, Type: seat.SeatType})
@@ -494,6 +509,22 @@ func ensureWorktreesImpl(name string, spec clientruntime.RoomSpec, stdout, stder
 		return clientcmd.ExitUnavailable
 	}
 	return clientcmd.ExitOK
+}
+
+// roomSeatCwds is the definition's own answer to "where do this room's seats live": each seat's cwd in
+// spec order, with the empty ones dropped. It reads the spec THIS START is about, so the root cannot be
+// taken from a second reading of the room.
+func roomSeatCwds(spec clientruntime.RoomSpec) []string {
+	cwds := make([]string, 0, len(spec.Seats))
+	for _, seat := range spec.Seats {
+		if seat.Cwd == nil {
+			continue
+		}
+		if cwd := strings.TrimSpace(*seat.Cwd); cwd != "" {
+			cwds = append(cwds, cwd)
+		}
+	}
+	return cwds
 }
 
 func ensureRigImpl(name string, spec clientruntime.RoomSpec, daemonLog string, stdout, stderr io.Writer) int {

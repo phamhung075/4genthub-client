@@ -142,6 +142,10 @@ var worktreeRoomDir = clientworktree.RoomDir
 var (
 	worktreeMainRoot = clientworktree.MainRoot
 	worktreeCheck    = clientworktree.Check
+	// worktreeSeatRoot names the repository the room's own seat directories belong to. It is the seam
+	// `up` reads the root through, so a case can make the working directory name one repository while
+	// the definition names another - the measured defect - without building two repositories.
+	worktreeSeatRoot = clientworktree.SeatProjectRoot
 	// worktreeEnsure is the step `up` runs, a seam for the same reason: a case asserts what `up` derives
 	// and what it does with a refusal without creating worktrees on the machine.
 	worktreeEnsure = clientworktree.Ensure

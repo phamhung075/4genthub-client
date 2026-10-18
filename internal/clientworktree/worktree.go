@@ -218,6 +218,54 @@ func MainRoot(flagValue string) (string, error) {
 	return filepath.Clean(out), nil
 }
 
+// SeatProjectRoot names the ONE repository the room's seat directories live in, read from the definition
+// the start already resolved: each seat's own cwd, and git's common directory behind it.
+//
+// WHY IT EXISTS, measured 2026-10-18: `up --room-only --allow-peak` run from a seat's client worktree -
+// and, the same way, from the client main checkout - refused 6 of 6 derived paths, each saying the path
+// "exists and is not a worktree registered in `git worktree list` of <CLIENT repo>", while the same
+// command from the project root printed six kept lines, exit 0. MainRoot falls back to the working
+// directory, so the refusal named the repository `up` happened to run in rather than the one the room's
+// seats belong to. The definition records the answer, so it is read rather than guessed.
+//
+// ok=false when NO seat directory could be read: a directory that is gone or is no repository says
+// nothing, and the caller keeps the working directory's answer. A non-nil error means the readable seat
+// directories name MORE THAN ONE repository; the caller keeps its own answer and says so, because a room
+// whose seats span two repositories cannot be derived from a single root and guessing one would derive
+// into the wrong tree.
+func SeatProjectRoot(cwds []string) (string, bool, error) {
+	var roots []string
+	seen := map[string]bool{}
+	for _, cwd := range cwds {
+		if cwd == "" {
+			continue
+		}
+		out, err := runGit(cwd, "rev-parse", "--git-common-dir")
+		if err != nil || out == "" {
+			continue
+		}
+		common := out
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(cwd, common)
+		}
+		root := filepath.Clean(filepath.Dir(common))
+		key := canonicalPath(root)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		roots = append(roots, root)
+	}
+	switch len(roots) {
+	case 0:
+		return "", false, nil
+	case 1:
+		return roots[0], true, nil
+	default:
+		return "", false, fmt.Errorf("the seat directories belong to %s", strings.Join(roots, " and "))
+	}
+}
+
 // canonicalPath is the ONE path identity this package compares with. A registered worktree's path
 // exists, so EvalSymlinks resolves it; a derived path that does not exist yet cannot be resolved and
 // keeps filepath.Clean. Comparing the raw strings (filepath.Clean alone) names the same directory twice
