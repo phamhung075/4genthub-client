@@ -741,3 +741,36 @@ func TestEnsureClearsADetachedLegacyClientWorktree(t *testing.T) {
 		t.Errorf("the reviewer's link is at %s, want the parent's gitlink %s", got, fixture.pins[clientSubmodule])
 	}
 }
+
+// The one thing a removal must never take is the only reference to a commit. A detached legacy whose
+// HEAD main does not contain exists only in that worktree's reflog - the same rule prune applies - so it
+// is refused and named, kept where it is, and nothing is placed for the seat.
+func TestEnsureRefusesToClearADetachedLegacyOnNoBranch(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "review", Type: "reviewer"}})
+	stubLinkProviderKey(t)
+	seat := fixture.derived()[0]
+	clientRepository := filepath.Join(fixture.main, clientSubmodule)
+	legacy := seat.Path + "-client"
+	link := filepath.Join(seat.Path, clientSubmodule)
+	gitIn(t, clientRepository, "worktree", "add", "--detach", legacy, fixture.pins[clientSubmodule])
+	// A commit only this worktree's HEAD holds: no branch and no main contains it.
+	orphan := commitIn(t, legacy, "a commit that exists only here")
+
+	var out strings.Builder
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("a refused legacy is a note, not a failure of the run: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), legacy+": refused, its detached HEAD is on no branch") {
+		t.Errorf("the run did not refuse %s by name:\n%s", legacy, out.String())
+	}
+	entry, registered := clientEntry(t, clientRepository, legacy)
+	if !registered || !entry.Detached {
+		t.Errorf("the only reference to %s was taken away: %+v (registered=%v)", orphan, entry, registered)
+	}
+	if got := gitIn(t, legacy, "rev-parse", "HEAD"); got != orphan {
+		t.Errorf("%s is at %s, want the ORPHAN commit %s to survive", legacy, got, orphan)
+	}
+	if _, registered := clientEntry(t, clientRepository, link); registered {
+		t.Errorf("a client link was placed at %s although the legacy was refused", link)
+	}
+}

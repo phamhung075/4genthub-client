@@ -382,6 +382,23 @@ func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservice
 		if !held {
 			continue
 		}
+		if entry.Detached {
+			// The ruling's one thing a removal must never take is the only reference to a commit: a
+			// detached legacy whose HEAD main does not contain exists only in that worktree's reflog, so
+			// it is refused and named, the same rule prune applies.
+			inMain, err := headInMain(repository, entry.Path)
+			switch {
+			case err != nil:
+				fmt.Fprintf(out, "%s: NOT cleared, cannot read its HEAD: %v\n", entry.Path, err)
+				found[worktree.SeatKey] = legacyClient{blocked: true}
+				continue
+			case !inMain:
+				fmt.Fprintf(out, "%s: refused, its detached HEAD is on no branch and is not in main, "+
+					"and removing it would delete the only reference to that commit\n", entry.Path)
+				found[worktree.SeatKey] = legacyClient{blocked: true}
+				continue
+			}
+		}
 		if _, err := runGit(repository, "worktree", "remove", entry.Path); err != nil {
 			fmt.Fprintf(out, "%s: NOT cleared, the pre-derivation client worktree still holds work: %v\n"+
 				"%s keeps its client code there until it commits; its link at %s waits for that\n",
@@ -446,8 +463,12 @@ func ensureOne(mainRoot string, worktree clientservices.Worktree, registered map
 	if err := createWorktree(mainRoot, worktree); err != nil {
 		return "", err
 	}
-	if err := linkSubmodule(mainRoot, worktree, branch); err != nil {
-		return "", err
+	if !legacy.blocked {
+		// A legacy the migration could not clear keeps the seat's client code, so nothing is placed:
+		// a link here would be the second client location the ruling forbids.
+		if err := linkSubmodule(mainRoot, worktree, branch); err != nil {
+			return "", err
+		}
 	}
 	if err := linkKey(worktree); err != nil {
 		return "", err
