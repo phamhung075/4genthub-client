@@ -35,6 +35,9 @@ type auditHarness struct {
 	socket string
 	frames []string
 	store  string
+	// state is what the daemon reports for the peer's seat. 7.11 decides against it, so a case that wants a
+	// non-live destination sets it; the zero value is the running seat every other case expects.
+	state string
 }
 
 // links is what the fake daemon answers GetRoomLinks with; sendReadErr, when set, makes the socket refuse
@@ -76,8 +79,12 @@ func newAuditHarness(t *testing.T, links string) *auditHarness {
 				case strings.Contains(text, `"Whoami"`):
 					_, _ = conn.Write([]byte(`{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"` + auditSender + `","sessionName":"agenthub--4genthub-min--` + auditSender + `"}}}` + "\n"))
 				case strings.Contains(text, `"GetRoomStatus"`):
+					state := harness.state
+					if state == "" {
+						state = "Running"
+					}
 					_, _ = conn.Write([]byte(`{"ok":true,"data":[{"room":"4genthub-min","seat":"reviewer",` +
-						`"session_name":"` + liveSession + `","runtime":"omp","state":"Running"}]}` + "\n"))
+						`"session_name":"` + liveSession + `","runtime":"omp","state":"` + state + `"}]}` + "\n"))
 				default:
 					// The runtime's own success document: a verdict is part of the answer, and only `submitted`
 					// earns a `delivered` outcome line (the audit line reads the same token the printed line does).
@@ -312,5 +319,37 @@ func TestASendWithNoIntentIsRefusedByADelegatesToLink(t *testing.T) {
 	}
 	if lines[0].Allowed || lines[0].Intent != commpolicy.IntentNotice {
 		t.Errorf("decision = %+v, want a denied line whose intent is the default notice", lines[0])
+	}
+}
+
+// (a2) A DESTINATION THE LINKS ALLOW AND THE ROOM NO LONGER RUNS IS REFUSED AS not_live. 7.11's reason for
+// the live set: a team definition keeps the link after the seat is gone, and words sent to it reach no reader
+// while the sender waits for a closure that cannot come. The decision is still audited - refused, with the
+// reason - and nothing is delivered.
+func TestASendToASeatTheRoomDoesNotRunIsRefusedAsNotLive(t *testing.T) {
+	harness := newAuditHarness(t, linkDoc(auditSender, auditPeer, "collaborates_with"))
+	harness.state = "Stopped"
+
+	var out, errOut bytes.Buffer
+	code := sendCommand{}.Run(context.Background(),
+		[]string{"4genthub-min", auditPeer, "words for a stopped seat", "--intent", "notice"}, &out, &errOut)
+
+	if code == clientcmd.ExitOK {
+		t.Fatalf("a send to a stopped seat exited 0; stdout %q", out.String())
+	}
+	if harness.sent() {
+		t.Errorf("the delivery reached the runtime although the seat is stopped; frames %v", harness.frames)
+	}
+	for _, want := range []string{"communication policy", "not_live", "nothing was sent"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr = %q, want it to contain %q", errOut.String(), want)
+		}
+	}
+	lines := harness.lines(t)
+	if len(lines) != 1 {
+		t.Fatalf("audit lines = %d, want the decision line alone: %+v", len(lines), lines)
+	}
+	if lines[0].Allowed || lines[0].Reason != "not_live" {
+		t.Errorf("decision line = %+v, want refused/not_live", lines[0])
 	}
 }
