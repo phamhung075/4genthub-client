@@ -105,7 +105,10 @@ the first responsive run reported "innerWidth 1280" for a 390 phone), and withou
 3. For anything visual, `production-walk.mjs capture --no-shots` + `compare` against the baseline
    tells you what changed *structurally* (headings, fields, buttons, links, tokens) since the
    baseline's date. Token/status moves are listed separately from structural ones — the token layer
-   moves by design.
+   moves by design. **Against the 2026-10-11 baseline the diff is noisy by construction** (776
+   entries, dominated by positional `api.N.path` reordering and the deliberate palette move from
+   `#3b82f6`): read the per-route `headings`/`fields`/`buttons` keys and ignore the `api.N` ones
+   before calling anything structural.
 
 **Updating the baseline** — only after a deliberate, reviewed change: capture with `--no-shots`,
 read the diff, then replace `baseline/production.json` and note the date here. Never blind-copy:
