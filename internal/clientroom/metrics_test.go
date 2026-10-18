@@ -2,6 +2,7 @@ package clientroom
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,12 +134,144 @@ func TestRoomMetricsIsIncrementalIdempotentAndRedacted(t *testing.T) {
 		t.Fatal("third run failed")
 	}
 	grown := readEvents(t, out)
-	if len(grown) != len(events)+1 {
-		t.Fatalf("third run appended %d lines, want 1", len(grown)-len(events))
+	if len(grown) != len(events)+2 {
+		t.Fatalf("third run appended %d lines, want 2 (the turn and the block it followed)", len(grown)-len(events))
 	}
-	last := grown[len(grown)-1]
+	var last, retry map[string]any
+	for _, event := range grown[len(events):] {
+		if event["event"] == "turn" {
+			last = event
+			continue
+		}
+		retry = event
+	}
 	if last["activity"] != "test/build" || last["first_tool"] != "bash" || last["tools"].(float64) != 1 || last["task"] != openTaskID || last["model"] != "m" {
 		t.Errorf("new turn: %v", last)
+	}
+	if retry["event"] != "block_retry" || retry["rule"] != "push" || retry["cost_usd"].(float64) != 2 ||
+		retry["blocked_ts"] != at || retry["seat"] != "go-dev" {
+		t.Errorf("block retry: %v", retry)
+	}
+}
+
+func TestRoomMetricsRecordsARefusedCommitWithPathClasses(t *testing.T) {
+	now := time.Now().UTC()
+	roomDir, repo := reportFixture(t, now)
+	spool := filepath.Join(repo, ".git", "parked-diffs", "refusals.jsonl")
+	if err := os.MkdirAll(filepath.Dir(spool), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	at := now.Add(-30 * time.Minute)
+	// The wrapper writes `datetime.now(timezone.utc).isoformat()`: microseconds and a +00:00 offset.
+	line := fmt.Sprintf(`{"id":"r1","ts":%q,"seat":"go-dev","session":"s1","rule":"docs_only","docs":2,"code":0}`+"\n",
+		at.Format("2006-01-02T15:04:05.000000+00:00"))
+	if err := os.WriteFile(spool, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	daemon := newFakeDaemon(t, map[string]string{"QueueList": okData("[]")})
+	daemon.stateDir = filepath.Dir(filepath.Dir(roomDir))
+	args := daemon.args("metrics", "room-a")
+	if code, _, stderr := runRoom(t, args...); code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	out := filepath.Join(roomDir, "metrics", "go-dev.jsonl")
+	var refused map[string]any
+	for _, event := range readEvents(t, out) {
+		if event["event"] == "commit_refused" {
+			refused = event
+		}
+	}
+	if refused == nil {
+		t.Fatal("no commit_refused event")
+	}
+	if refused["rule"] != "docs_only" || refused["docs"].(float64) != 2 || refused["code"].(float64) != 0 ||
+		refused["seat"] != "go-dev" || refused["session"] != "s1" ||
+		refused["ts"] != at.Truncate(time.Microsecond).UTC().Format(time.RFC3339Nano) {
+		t.Errorf("commit_refused: %v", refused)
+	}
+	// The spool line carries classes, and the metrics line must not carry the paths it was computed from.
+	raw, _ := os.ReadFile(out)
+	for _, forbidden := range []string{"CHANGELOG", "docs/", "notes.md"} {
+		if strings.Contains(string(raw), forbidden) {
+			t.Errorf("the metrics log contains %q", forbidden)
+		}
+	}
+	// Idempotent by refusal id: the spool is re-read whole, and nothing is appended twice.
+	if code, stdout, _ := runRoom(t, args...); code != clientcmd.ExitOK || !strings.Contains(stdout, "0 new lines") {
+		t.Fatalf("second run: exit %d, stdout %q", code, stdout)
+	}
+}
+
+func TestRoomMetricsAttributesTheTurnABlockCosts(t *testing.T) {
+	now := time.Now().UTC()
+	roomDir, _ := reportFixture(t, now)
+	seatDir := filepath.Join(roomDir, "seats", "go-dev")
+	blockAt := now.Add(-10 * time.Minute)
+	calls := fmt.Sprintf(`{"at":%q,"seat":"go-dev","session":"s1","tool":"bash","target":"git push","outcome":"blocked","rule":"push"}`+"\n",
+		blockAt.Format(time.RFC3339Nano))
+	if err := os.WriteFile(filepath.Join(seatDir, "tool-calls.jsonl"), []byte(calls), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	daemon := newFakeDaemon(t, map[string]string{"QueueList": okData("[]")})
+	daemon.stateDir = filepath.Dir(filepath.Dir(roomDir))
+	args := daemon.args("metrics", "room-a")
+	if code, _, stderr := runRoom(t, args...); code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, stderr %q", code, stderr)
+	}
+	out := filepath.Join(roomDir, "metrics", "go-dev.jsonl")
+	for _, event := range readEvents(t, out) {
+		if event["event"] == "block_retry" {
+			t.Fatalf("a block with no turn after it was attributed: %v", event)
+		}
+	}
+	// The retry is the seat's first turn after the block; it is attributed on the next run, from the cursor.
+	turn := fmt.Sprintf(`{"type":"message","timestamp":%q,"message":{"role":"assistant","model":"m","content":[{"type":"toolCall","name":"bash","arguments":{"command":"go test ./..."}},{"type":"toolCall","name":"read","arguments":{"path":"/r/a.go"}}],"usage":{"cost":{"total":4}}}}`+"\n",
+		now.Add(-time.Minute).Format(time.RFC3339Nano))
+	file, err := os.OpenFile(filepath.Join(seatDir, "sessions", "s.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.WriteString(turn)
+	file.Close()
+	if code, _, stderr := runRoom(t, args...); code != clientcmd.ExitOK {
+		t.Fatalf("second run: exit %d, stderr %q", code, stderr)
+	}
+	var retry map[string]any
+	for _, event := range readEvents(t, out) {
+		if event["event"] == "block_retry" {
+			retry = event
+		}
+	}
+	if retry == nil {
+		t.Fatal("no block_retry after the turn that followed the block")
+	}
+	if retry["rule"] != "push" || retry["blocked_ts"] != blockAt.Format(time.RFC3339Nano) ||
+		retry["cost_usd"].(float64) != 4 || retry["tools"].(float64) != 2 || retry["session"] != "s" {
+		t.Errorf("block_retry: %v", retry)
+	}
+	// A turn is one retry: the block is consumed, and a further turn does not charge it again.
+	later := fmt.Sprintf(`{"type":"message","timestamp":%q,"message":{"role":"assistant","model":"m","content":[{"type":"text","text":"next"}],"usage":{"cost":{"total":9}}}}`+"\n",
+		now.Format(time.RFC3339Nano))
+	if file, err := os.OpenFile(filepath.Join(seatDir, "sessions", "s.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600); err != nil {
+		t.Fatal(err)
+	} else {
+		file.WriteString(later)
+		file.Close()
+	}
+	if code, _, stderr := runRoom(t, args...); code != clientcmd.ExitOK {
+		t.Fatalf("third run: exit %d, stderr %q", code, stderr)
+	}
+	blocks := 0
+	for _, event := range readEvents(t, out) {
+		if event["event"] == "block_retry" {
+			blocks++
+		}
+	}
+	if blocks != 1 {
+		t.Fatalf("a later turn was charged to the same block: %d block_retry rows", blocks)
+	}
+	if code, stdout, _ := runRoom(t, args...); code != clientcmd.ExitOK || !strings.Contains(stdout, "0 new lines") {
+		t.Fatalf("fourth run: exit %d, stdout %q", code, stdout)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -43,6 +44,8 @@ Every line: ts (UTC ISO-8601), schema (1), room, seat, session (transcript id, n
   turn       model tokens_in tokens_out cache_read cache_write cost_usd activity first_tool tools wall_ms task
   tool       tool target_class outcome ms blocked_rule bytes_out
   commit     sha files docs_only task
+  commit_refused  rule docs code
+  block_retry     rule blocked_ts cost_usd wall_ms tools
   queue_row  qitem priority tag summary_chars body_chars to
 Activity is a turn's FIRST-tool class: code-edit doc-edit measuring-bash test/build queue-write queue-poll read
 text-only other. The report scores code-edit by ANY call, so the two are deliberately different readings - the
@@ -55,6 +58,8 @@ jq, with M=~/.config/4genthub/rooms/ROOM/metrics:
   docs-only commits    jq -s '[.[]|select(.event=="commit")]|{commits:length,docs_only:(map(select(.docs_only))|length)}|.share=.docs_only/.commits' $M/*.jsonl
   rows/day by priority jq -s '[.[]|select(.event=="queue_row")]|group_by(.ts[:10]+" "+.priority)|map({day_priority:(.[0].ts[:10]+" "+.[0].priority),rows:length})' $M/*.jsonl
   blocked by rule      jq -s '[.[]|select(.event=="tool" and .blocked_rule!=null)]|group_by(.blocked_rule)|map({rule:.[0].blocked_rule,n:length})' $M/*.jsonl
+  refused commits      jq -s '[.[]|select(.event=="commit_refused")]|group_by(.rule)|map({rule:.[0].rule,n:length,docs:(map(.docs)|add),code:(map(.code)|add)})' $M/*.jsonl
+  cost of a block      jq -s '[.[]|select(.event=="block_retry")]|{blocks:length,usd:(map(.cost_usd)|add),ms:(map(.wall_ms)|add)}' $M/*.jsonl
   cost per task        jq -s '[.[]|select(.event=="turn" and .task!=null)]|group_by(.task)|map({task:.[0].task,usd:(map(.cost_usd)|add)})' $M/*.jsonl
   top expensive turns  jq -s '[.[]|select(.event=="turn")]|sort_by(-.cost_usd)|.[:10]|map({ts,seat,activity,cost_usd})' $M/*.jsonl`
 
@@ -101,6 +106,27 @@ type commitEvent struct {
 	Task     *string `json:"task"`
 }
 
+// commitRefusedEvent is a commit the wrapper refused before git ran it: the rule that refused and the
+// CLASSES of the path set it carried. The paths themselves are never written (O9a), and the class counts
+// are what a review needs to tell a docs-only refusal from a code one.
+type commitRefusedEvent struct {
+	metricBase
+	Rule string `json:"rule"`
+	Docs int    `json:"docs"`
+	Code int    `json:"code"`
+}
+
+// blockRetryEvent attributes the turn a blocked tool call cost: the block, and the seat's first turn after
+// it. The turn is emitted as usual; this is the link, so the retry's cost is readable without joining files.
+type blockRetryEvent struct {
+	metricBase
+	Rule      string  `json:"rule"`
+	BlockedTS string  `json:"blocked_ts"`
+	CostUSD   float64 `json:"cost_usd"`
+	WallMS    int64   `json:"wall_ms"`
+	Tools     int     `json:"tools"`
+}
+
 type queueRowEvent struct {
 	metricBase
 	Qitem        string `json:"qitem"`
@@ -111,11 +137,21 @@ type queueRowEvent struct {
 	To           string `json:"to"`
 }
 
+// pendingBlock is a blocked tool call whose seat has not had a turn since: the next turn is the retry it
+// cost. It is kept in the cursor so a run that sees the block but not yet its turn still attributes it.
+type pendingBlock struct {
+	Seat string    `json:"seat"`
+	At   time.Time `json:"at"`
+	Rule string    `json:"rule"`
+}
+
 // metricsCursor is what a run has already consumed.
 type metricsCursor struct {
-	Offsets map[string]int64 `json:"offsets"` // "<seat>/<file relative to the seat dir>" -> bytes consumed
-	Commits map[string]bool  `json:"commits"`
-	Queue   map[string]bool  `json:"queue"`
+	Offsets  map[string]int64 `json:"offsets"` // "<seat>/<file relative to the seat dir>" -> bytes consumed
+	Commits  map[string]bool  `json:"commits"`
+	Queue    map[string]bool  `json:"queue"`
+	Refusals map[string]bool  `json:"refusals"` // refusal spool ids already written
+	Blocks   []pendingBlock   `json:"blocks"`   // blocks awaiting the turn that followed them
 }
 
 func loadMetricsCursor(path string) (*metricsCursor, error) {
@@ -135,6 +171,9 @@ func loadMetricsCursor(path string) (*metricsCursor, error) {
 	}
 	if cursor.Queue == nil {
 		cursor.Queue = map[string]bool{}
+	}
+	if cursor.Refusals == nil {
+		cursor.Refusals = map[string]bool{}
 	}
 	return cursor, nil
 }
@@ -219,6 +258,13 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// turnRecord is one emitted turn, kept so a pending block can be attributed to it.
+type turnRecord struct {
+	At      time.Time
+	Session string
+	Event   turnEvent
+}
+
 // metricsRun is one extraction: what it appends, per seat, as encoded lines.
 type metricsRun struct {
 	room    string
@@ -226,6 +272,8 @@ type metricsRun struct {
 	cutoff  time.Time
 	cursor  *metricsCursor
 	lines   map[string][][]byte
+	turns   map[string][]turnRecord
+	blocks  []pendingBlock
 }
 
 func (r *metricsRun) emit(seat string, event any) {
@@ -286,6 +334,7 @@ func (r *metricsRun) readTurns(seat, key, path string) error {
 				turn.Task = &id
 			}
 		}
+		r.turns[seat] = append(r.turns[seat], turnRecord{At: at, Session: session, Event: turn})
 		r.emit(seat, turn)
 	})
 	r.cursor.Offsets[key] = next
@@ -313,6 +362,9 @@ func (r *metricsRun) readTools(seat, key, path string) error {
 		if rule == "" && line.Outcome == "blocked" {
 			rule = line.Rule
 		}
+		if rule != "" {
+			r.blocks = append(r.blocks, pendingBlock{Seat: seat, At: at, Rule: rule})
+		}
 		r.emit(seat, toolEvent{metricBase: r.base(at, seat, line.Session, "tool"), Tool: line.Tool, TargetClass: class,
 			Outcome: line.Outcome, MS: line.MS, BlockedRule: strPtr(rule), BytesOut: line.BytesOut})
 	})
@@ -332,6 +384,101 @@ func (r *metricsRun) addCommits(commits []commitRecord, only string) {
 		r.cursor.Commits[c.SHA] = true
 		r.emit(seat, commitEvent{metricBase: r.base(c.Time, seat, "", "commit"), SHA: c.SHA, Files: c.Files, DocsOnly: c.DocsOnly, Task: strPtr(c.TaskID)})
 	}
+}
+
+// blockPendingTTL bounds how long a block waits for the turn that followed it. A seat's turn comes after
+// the block in the same session, so a block this old has no retry left to attribute.
+const blockPendingTTL = 24 * time.Hour
+
+// attributeBlocks links each blocked call to the seat's first turn after it: that turn is the retry the
+// block cost, and it is emitted as block_retry with the rule and the turn's own cost. One turn is one
+// retry, so when several blocks precede it only the newest is named and the older ones are superseded -
+// one row per block would charge the same turn again.
+func (r *metricsRun) attributeBlocks(now time.Time) {
+	pending := append(append([]pendingBlock{}, r.cursor.Blocks...), r.blocks...)
+	sort.SliceStable(pending, func(i, j int) bool { return pending[i].At.Before(pending[j].At) })
+	for seat, turns := range r.turns {
+		sort.SliceStable(turns, func(i, j int) bool { return turns[i].At.Before(turns[j].At) })
+		for _, turn := range turns {
+			cause := -1
+			for i := range pending {
+				if pending[i].Seat == seat && pending[i].At.Before(turn.At) {
+					cause = i
+				}
+			}
+			if cause < 0 {
+				continue
+			}
+			r.emit(seat, blockRetryEvent{metricBase: r.base(turn.At, seat, turn.Session, "block_retry"),
+				Rule: pending[cause].Rule, BlockedTS: pending[cause].At.UTC().Format(time.RFC3339Nano),
+				CostUSD: turn.Event.CostUSD, WallMS: turn.Event.WallMS, Tools: turn.Event.Tools})
+			// Every block this turn followed is spent, the named one included: the next turn is a turn,
+			// not another retry, and keeping the cause would charge one block to every later turn.
+			kept := pending[:0]
+			for _, block := range pending {
+				if block.Seat == seat && block.At.Before(turn.At) {
+					continue
+				}
+				kept = append(kept, block)
+			}
+			pending = kept
+		}
+	}
+	kept := pending[:0]
+	for _, block := range pending {
+		if now.Sub(block.At) <= blockPendingTTL {
+			kept = append(kept, block)
+		}
+	}
+	r.cursor.Blocks = kept
+}
+
+// refusalSpool is the wrapper's own record of the commits it refused:
+// <git dir>/parked-diffs/refusals.jsonl, one line per refusal, written when the refusal happens. A
+// refused commit never runs git at all, so `git log` can never carry it - this file is the only durable
+// trace.
+func refusalSpool(repo string) (string, error) {
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "--absolute-git-dir").Output()
+	if err != nil {
+		return "", fmt.Errorf("git dir of %s: %w", repo, err)
+	}
+	return filepath.Join(strings.TrimSpace(string(out)), "parked-diffs", "refusals.jsonl"), nil
+}
+
+// refusalLine is one line of that spool. It holds the rule and the path CLASSES, never a path: the review
+// needs to tell a docs-only refusal from a code one, and O9a keeps the names on the machine.
+type refusalLine struct {
+	ID      string `json:"id"`
+	At      string `json:"ts"`
+	Seat    string `json:"seat"`
+	Session string `json:"session"`
+	Rule    string `json:"rule"`
+	Docs    int    `json:"docs"`
+	Code    int    `json:"code"`
+}
+
+// addRefusals emits a commit_refused per new refusal line.
+func (r *metricsRun) addRefusals(path, only string) {
+	_ = forEachLine(path, func(raw []byte) {
+		var line refusalLine
+		if json.Unmarshal(raw, &line) != nil || line.ID == "" || r.cursor.Refusals[line.ID] {
+			return
+		}
+		at, err := time.Parse(time.RFC3339Nano, line.At)
+		if err != nil || at.Before(r.cutoff) {
+			return
+		}
+		seat := line.Seat
+		if seat == "" {
+			seat = "other"
+		}
+		if only != "" && seat != only {
+			return
+		}
+		r.cursor.Refusals[line.ID] = true
+		r.emit(seat, commitRefusedEvent{metricBase: r.base(at, seat, line.Session, "commit_refused"),
+			Rule: line.Rule, Docs: line.Docs, Code: line.Code})
+	})
 }
 
 // addQueueRows emits a queue_row per row created at or after the cutoff; the body is measured, never kept.
@@ -357,7 +504,8 @@ func (r *metricsRun) addQueueRows(rows []clientruntime.QueueRow, only string) {
 // A source that cannot be read goes in warnings; the others are still written.
 func extractMetrics(room, roomDir, only string, cutoff time.Time, cursor *metricsCursor,
 	queueRows func() ([]clientruntime.QueueRow, error)) (*metricsRun, []string, error) {
-	run := &metricsRun{room: room, roomDir: roomDir, cutoff: cutoff, cursor: cursor, lines: map[string][][]byte{}}
+	run := &metricsRun{room: room, roomDir: roomDir, cutoff: cutoff, cursor: cursor,
+		lines: map[string][][]byte{}, turns: map[string][]turnRecord{}}
 	seatDirs, err := filepath.Glob(filepath.Join(roomDir, "seats", "*"))
 	if err != nil {
 		return nil, nil, err
@@ -368,6 +516,11 @@ func extractMetrics(room, roomDir, only string, cutoff time.Time, cursor *metric
 		seat := filepath.Base(dir)
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() || (only != "" && seat != only) {
 			continue
+		}
+		// Tools first: a blocked call is read before the turn that followed it, so the turn can be
+		// attributed to the block in this same run.
+		if err := run.readTools(seat, seat+"/tool-calls.jsonl", filepath.Join(dir, "tool-calls.jsonl")); err != nil {
+			return nil, nil, fmt.Errorf("read %s tool calls: %w", seat, err)
 		}
 		transcripts, _ := filepath.Glob(filepath.Join(dir, "sessions", "*.jsonl"))
 		for _, path := range transcripts {
@@ -381,16 +534,21 @@ func extractMetrics(room, roomDir, only string, cutoff time.Time, cursor *metric
 				}
 			})
 		}
-		if err := run.readTools(seat, seat+"/tool-calls.jsonl", filepath.Join(dir, "tool-calls.jsonl")); err != nil {
-			return nil, nil, fmt.Errorf("read %s tool calls: %w", seat, err)
-		}
 	}
+	run.attributeBlocks(time.Now().UTC())
 	if repo := mostCommon(cwds); repo == "" {
 		warnings = append(warnings, "commits skipped: no session names a working directory")
-	} else if commits, err := gitCommits(repo, room, cutoff); err != nil {
-		warnings = append(warnings, "commits skipped: "+err.Error())
 	} else {
-		run.addCommits(commits, only)
+		if spool, err := refusalSpool(repo); err != nil {
+			warnings = append(warnings, "refusals skipped: "+err.Error())
+		} else {
+			run.addRefusals(spool, only)
+		}
+		if commits, err := gitCommits(repo, room, cutoff); err != nil {
+			warnings = append(warnings, "commits skipped: "+err.Error())
+		} else {
+			run.addCommits(commits, only)
+		}
 	}
 	if rows, err := queueRows(); err != nil {
 		warnings = append(warnings, "queue rows skipped: "+err.Error())
