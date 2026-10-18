@@ -73,7 +73,7 @@ it holds the user's key. `scripts/build.sh` creates it from `.env.sample` when n
 
 Ask the user for the key; do not generate one, and do not put one in this file yourself. The
 sample also lists the optional settings (`TYPESAFE_API_KEY`, which Jev uses on this machine for `4genteam decide` and `4genteam complete`; `DEEPSEEK_API_KEY`, the `COMPACT_*` limits,
-and `OFFPEAK_ONLY`); a blank value means the default shown in the sample. Only the
+`DEEPSEEK_MCP_SERVER`, the delegation server every seat is given when it names one, and `OFFPEAK_ONLY`); a blank value means the default shown in the sample. Only the
 `AGENTHUB_URL` and `AGENTHUB_TOKEN` have to be set for the client to talk to the server.
 
 ### 1.4 Connect a project to the 4genthub MCP

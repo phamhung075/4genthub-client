@@ -343,6 +343,50 @@ fn alert_for(facts: &SeatFacts) -> Option<SeatAlert> {
 const SEAT_MCP_CONFIG: &str = r#"{"mcpServers":{"agenthub_http":{"type":"http","url":"${AGENTHUB_URL}/mcp","headers":{"Accept":"application/json, text/event-stream","Authorization":"Bearer ${AGENTHUB_TOKEN}"}}}}
 "#;
 
+/// The variable that names the deepseek MCP server's script. THE PATH IS NEVER A LITERAL in this file: it is
+/// read from the seat's own environment (the state root's `.env`, then the spec), so a machine that names none
+/// writes no entry at all - the absence rule `SEAT_MCP_CONFIG` follows.
+const DEEPSEEK_MCP_SERVER_ENV: &str = "DEEPSEEK_MCP_SERVER";
+
+/// The delegation server's default working directory: the seat's own first scope directory, set by `seat_env`
+/// and read by the server. A job runs on the seat's files, never on whatever directory the daemon was started
+/// in - one daemon starts every seat of every room.
+const DEEPSEEK_MCP_CWD_ENV: &str = "DEEPSEEK_MCP_DEFAULT_CWD";
+
+/// The entry that gives a seat `deepseek_agent` and the rest of the delegation server's tools. The script is
+/// the one the environment names; the working directory is the seat's scope; the server's own git guard refuses
+/// writes to the caller's branch, and its permission prompts take the first allow, which is what an unattended
+/// seat can answer.
+fn deepseek_mcp_entry(server: &str, cwd: &Path) -> serde_json::Value {
+    serde_json::json!({
+        "command": "node",
+        "args": [server],
+        "env": {
+            DEEPSEEK_MCP_CWD_ENV: cwd.to_string_lossy(),
+            "DEEPSEEK_WORKSPACE_ATTACH": "1",
+            "DEEPSEEK_MCP_PERMISSION": "allow",
+        }
+    })
+}
+
+/// The seat's `mcp.json`: the cloud entry every seat has, plus the delegation server when the seat's
+/// environment names one. With no `DEEPSEEK_MCP_SERVER` the file is `SEAT_MCP_CONFIG` VERBATIM - a machine that
+/// configures nothing writes exactly today's file.
+fn seat_mcp_config(env: &HashMap<String, String>, cwd: &Path) -> String {
+    let Some(server) = env
+        .get(DEEPSEEK_MCP_SERVER_ENV)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|server| !server.is_empty())
+    else {
+        return SEAT_MCP_CONFIG.to_string();
+    };
+    let mut config: serde_json::Value =
+        serde_json::from_str(SEAT_MCP_CONFIG).expect("the seat MCP config is JSON");
+    config["mcpServers"]["deepseek"] = deepseek_mcp_entry(server, cwd);
+    serde_json::to_string(&config).expect("the seat MCP config is JSON") + "\n"
+}
+
 /// The seat's tool hook: omp loads `hooks/pre/*.ts` from its agent dir, and this one refuses the calls the owner's
 /// rules forbid a seat (printing a `.env`, Docker, a push) and appends one line per tool call to the seat's
 /// `tool-calls.jsonl`. The runtime owns it because the seat dir is the runtime's: a hook a seat or an operator had
@@ -425,10 +469,32 @@ fn agy_mcp_entry() -> serde_json::Value {
     serde_json::json!({"command": "sh", "args": ["-c", AGY_MCP_COMMAND], "disabled": false})
 }
 
-/// Make sure agy's global `mcp_config.json` carries the seat's MCP server, and touch nothing else in it: the file
-/// also holds the owner's own servers. A file that is not a JSON object is an error rather than a file to
-/// overwrite, and so is an `mcpServers` that is not an object.
-fn install_agy_mcp_server(home: &Path) -> Result<(), String> {
+/// The second entry the runtime owns in agy's global file: the delegation server, under the same name the omp
+/// seat file gives it, so a seat's tools are called the same thing whichever runtime hosts it.
+const AGY_DEEPSEEK_SERVER: &str = "deepseek";
+
+/// What an agy session runs for the delegation server, in the same form as the cloud bridge: the LINE reads the
+/// seat's own variables at connect time, so this shared file holds no path, and both halves of the guard are
+/// checked - a session that is not a seat, or one whose environment names no script, starts nothing.
+const AGY_DEEPSEEK_COMMAND: &str = concat!(
+    "if [ -n \"$AGENTHUB_SEAT\" ] && [ -n \"$DEEPSEEK_MCP_SERVER\" ];",
+    " then exec node \"$DEEPSEEK_MCP_SERVER\"; fi"
+);
+
+/// The entry agy loads for the delegation server.
+fn agy_deepseek_entry() -> serde_json::Value {
+    serde_json::json!({"command": "sh", "args": ["-c", AGY_DEEPSEEK_COMMAND], "disabled": false})
+}
+
+/// Make sure agy's global `mcp_config.json` carries the seat's MCP server and, when the seat's environment names
+/// a script, the delegation server, and touch nothing else in it: the file also holds the owner's own servers. A
+/// file that is not a JSON object is an error rather than a file to overwrite, and so is an `mcpServers` that is
+/// not an object.
+///
+/// The delegation name is OURS: a `deepseek` entry without the script in the environment is removed, because a
+/// hardcoded path left in a shared file is the defect this install exists to remove. With the script configured
+/// the entry is replaced by the guarded line, and every other server is left as it was.
+fn install_agy_mcp_server(home: &Path, deepseek: bool) -> Result<(), String> {
     let path = home.join(".gemini").join("config").join("mcp_config.json");
     let mut config = match fs::read_to_string(&path) {
         Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
@@ -447,11 +513,28 @@ fn install_agy_mcp_server(home: &Path) -> Result<(), String> {
     if config.get("mcpServers").is_none() {
         config["mcpServers"] = serde_json::json!({});
     }
-    let entry = agy_mcp_entry();
-    if config["mcpServers"].get(AGY_MCP_SERVER) == Some(&entry) {
+    let changed = {
+        let servers = config["mcpServers"].as_object_mut().expect("mcpServers is an object");
+        let mut changed = false;
+        let entry = agy_mcp_entry();
+        if servers.get(AGY_MCP_SERVER) != Some(&entry) {
+            servers.insert(AGY_MCP_SERVER.to_string(), entry);
+            changed = true;
+        }
+        if deepseek {
+            let entry = agy_deepseek_entry();
+            if servers.get(AGY_DEEPSEEK_SERVER) != Some(&entry) {
+                servers.insert(AGY_DEEPSEEK_SERVER.to_string(), entry);
+                changed = true;
+            }
+        } else if servers.remove(AGY_DEEPSEEK_SERVER).is_some() {
+            changed = true;
+        }
+        changed
+    };
+    if !changed {
         return Ok(());
     }
-    config["mcpServers"][AGY_MCP_SERVER] = entry;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
@@ -460,10 +543,10 @@ fn install_agy_mcp_server(home: &Path) -> Result<(), String> {
 }
 
 /// Everything an agy seat's start installs in agy's OWN files, in one place: agy is the runtime whose tool guard
-/// and whose MCP server both live in its config, and both are inert outside a seat.
-fn install_agy_start_files(home: &Path) -> Result<(), String> {
+/// and whose MCP servers both live in its config, and both are inert outside a seat.
+fn install_agy_start_files(home: &Path, deepseek: bool) -> Result<(), String> {
     install_agy_guard_hook(home)?;
-    install_agy_mcp_server(home)
+    install_agy_mcp_server(home, deepseek)
 }
 
 /// The variable that names the client's skill tree (`share/`, `rooms/<room>/`, `rooms/<room>/<seat>/`). It is
@@ -573,6 +656,7 @@ fn seat_env(
     seat_dir: &Path,
     runtime_socket: &Path,
     state_dir: &Path,
+    cwd: &Path,
 ) -> HashMap<String, String> {
     // The state root's own `.env` is the client's one configuration file (the MCP URL and token, the provider
     // keys): every seat starts with it, so no seat is asked to hold a copy. A key the seat's spec names wins
@@ -592,6 +676,13 @@ fn seat_env(
     if let Some(m) = &seat.model {
         env.insert("AGENTHUB_MODEL".into(), m.clone());
     }
+    // THE DELEGATION SERVER'S TWO FACTS, decided here with the rest of a seat's contract. The directory a job
+    // runs in is the seat's own first scope, never the daemon's cwd: one daemon starts every seat of every room,
+    // so an inherited cwd would hand one room's tree to another room's job. The script is the environment's
+    // (`DEEPSEEK_MCP_SERVER`, from the state root's `.env` or the seat's spec) and is carried to the seat even
+    // though only mcp.json and agy's line consume it, because those two read the SEAT's environment at connect
+    // time - a variable missing here is a server that starts with an empty path.
+    env.insert(DEEPSEEK_MCP_CWD_ENV.into(), cwd.to_string_lossy().to_string());
     // The connector credential never enters a seat's environment, and the filter sits HERE - the one place a
     // seat's environment is decided - rather than downstream: this map IS the pane's `-e` list, so a key
     // dropped only at that point is a key that had already reached the seat's contract. Nothing a seat does
@@ -779,7 +870,19 @@ impl RoomSupervisor {
         let cwd = scope[0].clone();
         let seat_dir = room_dir.join("seats").join(&seat.seat_key);
         fs::create_dir_all(&seat_dir).map_err(|e| format!("cannot create seat dir: {e}"))?;
-        fs::write(seat_dir.join("mcp.json"), SEAT_MCP_CONFIG)
+        // The seat's environment is decided BEFORE its config files, because two of them read it: mcp.json
+        // carries the delegation server only when the environment names one, and agy's global file follows the
+        // same presence rule. One map, computed once, is also the pane's `-e` list further down.
+        let mut env = seat_env(
+            seat,
+            room,
+            &session_name,
+            &seat_dir,
+            &self.runtime_socket,
+            &self.base_state_dir,
+            &cwd,
+        );
+        fs::write(seat_dir.join("mcp.json"), seat_mcp_config(&env, &cwd))
             .map_err(|e| format!("cannot write the seat's mcp.json: {e}"))?;
         // THE SEAT'S POLICY FILE LANDS HERE, in the same window as mcp.json and for the same reason: omp reads
         // `<PI_CODING_AGENT_DIR>/config.yml` when the agent starts, so a file written after the pane exists is a
@@ -800,7 +903,7 @@ impl RoomSupervisor {
         install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
         if matches!(AgentRuntime::from_str_loose(&seat.runtime), AgentRuntime::Agy) {
             let home = std::env::var_os("HOME").ok_or("HOME is not set, so agy's own config cannot be found")?;
-            install_agy_start_files(Path::new(&home))?;
+            install_agy_start_files(Path::new(&home), env.contains_key(DEEPSEEK_MCP_SERVER_ENV))?;
         }
 
         // Build command line according to runtime. An omp seat's pane runs THIS binary as a runner, which
@@ -828,7 +931,6 @@ impl RoomSupervisor {
         };
 
         // Build environment variables
-        let mut env = seat_env(seat, room, &session_name, &seat_dir, &self.runtime_socket, &self.base_state_dir);
         // The guard refuses writes outside the seat's own directories, and it takes them from HERE: the runtime
         // owns the room layout, so the list is decided once, at the launch, and never re-derived where it could
         // disagree. The first entry is the directory the pane starts in.
@@ -3876,6 +3978,7 @@ mod tests {
             Path::new("/state/rooms/isolated/seats/dev"),
             Path::new("/tmp/isolation/rt/agenthub.sock"),
             Path::new("/nonexistent-state-root"),
+            Path::new("/state/rooms/isolated/wt/dev"),
         );
 
         assert_eq!(
@@ -3907,7 +4010,7 @@ mod tests {
             "env": {"AGENTHUB_CONNECTOR_TOKEN": "from-the-spec"}
         }))
         .expect("seat");
-        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir);
+        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir, Path::new("/rooms/demo/wt/dev"));
         assert!(
             !env.contains_key("AGENTHUB_CONNECTOR_TOKEN"),
             "the credential must not reach a seat, from the file ({env:?})"
@@ -3932,14 +4035,14 @@ mod tests {
             "env": {"SPEC_WINS": "spec"}
         }))
         .expect("seat");
-        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir);
+        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir, Path::new("/rooms/demo/wt/dev"));
         assert_eq!(env.get("AGENTHUB_MCP_URL").map(String::as_str), Some("http://127.0.0.1:8000/mcp"));
         assert_eq!(env.get("QUOTED").map(String::as_str), Some("a b"));
         assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
         assert_eq!(env.get("SPEC_WINS").map(String::as_str), Some("spec"), "the spec wins over the file");
         assert_eq!(env.get("AGENTHUB_ROOM").map(String::as_str), Some("demo"), "the runtime wins over both");
         assert!(!env.contains_key("bad key"));
-        let none = seat_env(&seat, "demo", "s", Path::new("/s"), Path::new("/r.sock"), Path::new("/nonexistent-state-root"));
+        let none = seat_env(&seat, "demo", "s", Path::new("/s"), Path::new("/r.sock"), Path::new("/nonexistent-state-root"), Path::new("/rooms/demo/wt/dev"));
         assert!(!none.contains_key("AGENTHUB_MCP_URL"), "no file, no variables");
     }
 
@@ -3951,6 +4054,64 @@ mod tests {
         let server = &parsed["mcpServers"]["agenthub_http"];
         assert_eq!(server["url"], "${AGENTHUB_URL}/mcp");
         assert_eq!(server["headers"]["Authorization"], "Bearer ${AGENTHUB_TOKEN}");
+    }
+
+    /// THE DELEGATION ENTRY IS THE ENVIRONMENT'S, NOT THE FILE'S. With no script named the seat's mcp.json is
+    /// the constant byte for byte; with one named, the entry runs THAT script with the seat's own scope as the
+    /// delegation's working directory. A blank value is absence, because a shell that exports the name with
+    /// nothing in it must not point node at an empty path.
+    #[test]
+    fn a_seat_gets_the_delegation_server_only_when_the_environment_names_one() {
+        let cwd = Path::new("/rooms/demo/wt/dev");
+        assert_eq!(
+            seat_mcp_config(&HashMap::new(), cwd),
+            SEAT_MCP_CONFIG,
+            "absence must write today's file"
+        );
+        let mut env = HashMap::new();
+        env.insert(DEEPSEEK_MCP_SERVER_ENV.to_string(), "/opt/deepseek/server.cjs".to_string());
+        let text = seat_mcp_config(&env, cwd);
+        let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid json");
+        let server = &parsed["mcpServers"]["deepseek"];
+        assert_eq!(server["command"], "node");
+        assert_eq!(server["args"][0], "/opt/deepseek/server.cjs");
+        assert_eq!(server["env"][DEEPSEEK_MCP_CWD_ENV], "/rooms/demo/wt/dev");
+        assert_eq!(server["env"]["DEEPSEEK_WORKSPACE_ATTACH"], "1");
+        assert_eq!(server["env"]["DEEPSEEK_MCP_PERMISSION"], "allow");
+        assert_eq!(
+            parsed["mcpServers"]["agenthub_http"]["url"], "${AGENTHUB_URL}/mcp",
+            "the cloud entry survives"
+        );
+        env.insert(DEEPSEEK_MCP_SERVER_ENV.to_string(), "   ".to_string());
+        assert_eq!(seat_mcp_config(&env, cwd), SEAT_MCP_CONFIG, "a blank script is no script");
+    }
+
+    /// The delegation server's working directory is decided by the runtime, not inherited: one daemon starts
+    /// every seat of every room, so the seat's own scope is the only directory that cannot hand another room's
+    /// tree to a job. A value left in the `.env` does not win.
+    #[test]
+    fn a_seats_env_points_the_delegation_server_at_the_seats_scope() {
+        let dir = scratch("seat-env-deepseek");
+        fs::write(
+            dir.join(".env"),
+            "DEEPSEEK_MCP_DEFAULT_CWD=/elsewhere\nDEEPSEEK_MCP_SERVER=/opt/ds/server.cjs\n",
+        )
+        .expect("write .env");
+        let seat: SeatSpec = serde_json::from_value(serde_json::json!({
+            "seat_key": "dev", "seat_type": "developer", "runtime": "omp"
+        }))
+        .expect("seat");
+        let env = seat_env(
+            &seat,
+            "demo",
+            "agenthub--demo--dev",
+            Path::new("/s"),
+            Path::new("/r.sock"),
+            &dir,
+            Path::new("/rooms/demo/wt/dev"),
+        );
+        assert_eq!(env.get(DEEPSEEK_MCP_CWD_ENV).map(String::as_str), Some("/rooms/demo/wt/dev"));
+        assert_eq!(env.get(DEEPSEEK_MCP_SERVER_ENV).map(String::as_str), Some("/opt/ds/server.cjs"));
     }
 
     /// The hook the runtime writes is the one that blocks and logs: if it lost its guard or its log the seat would
@@ -4115,19 +4276,23 @@ mod tests {
     /// AN AGY SEAT REACHES THE CLOUD THROUGH AGY'S OWN SERVER FILE, and the entry is added beside the owner's own
     /// servers without touching them. It carries no credential - the shell line reads the seat's own variables at
     /// connect time - and it starts nothing at all outside a seat, which is what keeps one global file safe to
-    /// hold.
+    /// hold. A second install changes nothing, and the owner's other servers survive it.
     #[test]
     fn the_agy_mcp_server_joins_the_global_file_and_leaves_the_rest() {
         let home = scratch("agy-mcp");
         let path = home.join(".gemini/config/mcp_config.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, r#"{"mcpServers":{"deepseek":{"command":"node","args":["server.cjs"]}}}"#).unwrap();
-        install_agy_mcp_server(&home).unwrap();
+        fs::write(&path, r#"{"mcpServers":{"owner-server":{"command":"node","args":["server.cjs"]}}}"#).unwrap();
+        install_agy_mcp_server(&home, false).unwrap();
         let first = fs::read_to_string(&path).unwrap();
-        install_agy_mcp_server(&home).unwrap();
+        install_agy_mcp_server(&home, false).unwrap();
         assert_eq!(first, fs::read_to_string(&path).unwrap(), "a second install changed the file");
         let config: serde_json::Value = serde_json::from_str(&first).unwrap();
-        assert_eq!(config["mcpServers"]["deepseek"]["command"], "node", "the owner's own server was touched");
+        assert_eq!(config["mcpServers"]["owner-server"]["command"], "node", "the owner's own server was touched");
+        assert!(
+            config["mcpServers"].get(AGY_DEEPSEEK_SERVER).is_none(),
+            "no script named, no delegation entry"
+        );
         let server = &config["mcpServers"][AGY_MCP_SERVER];
         assert_eq!(server["command"], "sh");
         assert_eq!(server["disabled"], false, "agy leaves a disabled server unloaded");
@@ -4137,11 +4302,47 @@ mod tests {
         assert!(line.contains("Bearer $AGENTHUB_TOKEN"), "the token is read, never stored: {line}");
         assert!(line.contains(r#"[ -n "$AGENTHUB_SEAT" ]"#), "a session that is not a seat starts no bridge: {line}");
         fs::write(&path, r#"{"mcpServers":[]}"#).unwrap();
-        assert!(install_agy_mcp_server(&home).is_err());
+        assert!(install_agy_mcp_server(&home, false).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"mcpServers":[]}"#);
         fs::write(&path, "[1]").unwrap();
-        assert!(install_agy_mcp_server(&home).is_err());
+        assert!(install_agy_mcp_server(&home, false).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "[1]");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// THE DELEGATION ENTRY IN AGY'S SHARED FILE: the runtime owns the name, so it is installed when the seat's
+    /// environment names a script and REMOVED when it does not - a hardcoded path left in a global file is the
+    /// defect the rule exists to remove. The line holds no path and starts nothing outside a seat.
+    #[test]
+    fn the_agy_delegation_entry_follows_the_environment() {
+        let home = scratch("agy-deepseek");
+        let path = home.join(".gemini/config/mcp_config.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r#"{"mcpServers":{"deepseek":{"command":"node","args":["/stale/hardcoded/server.cjs"]},"exa":{"type":"http","url":"http://x"}}}"#,
+        )
+        .unwrap();
+        install_agy_mcp_server(&home, true).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let server = &config["mcpServers"][AGY_DEEPSEEK_SERVER];
+        assert_eq!(server["command"], "sh");
+        assert_eq!(server["disabled"], false);
+        let line = server["args"][1].as_str().unwrap();
+        assert!(line.contains(r#"[ -n "$DEEPSEEK_MCP_SERVER" ]"#), "the path is read at connect time: {line}");
+        assert!(line.contains(r#"exec node "$DEEPSEEK_MCP_SERVER""#), "{line}");
+        assert!(!line.contains("/stale/hardcoded/server.cjs"), "a literal path survived: {line}");
+        assert_eq!(config["mcpServers"]["exa"]["url"], "http://x", "another server was touched");
+        install_agy_mcp_server(&home, false).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            config["mcpServers"].get(AGY_DEEPSEEK_SERVER).is_none(),
+            "absence must leave no entry"
+        );
+        assert_eq!(config["mcpServers"]["exa"]["url"], "http://x", "another server was touched");
+        assert!(config["mcpServers"][AGY_MCP_SERVER].is_object());
         let _ = fs::remove_dir_all(&home);
     }
 
@@ -4150,7 +4351,7 @@ mod tests {
     #[test]
     fn an_agy_start_installs_the_guard_hook_and_the_mcp_server() {
         let home = scratch("agy-start");
-        install_agy_start_files(&home).unwrap();
+        install_agy_start_files(&home, false).unwrap();
         assert!(home.join(".gemini/config/hooks.json").is_file(), "no guard hook was installed");
         assert!(home.join(".gemini/config/mcp_config.json").is_file(), "no MCP server was installed");
         let _ = fs::remove_dir_all(&home);

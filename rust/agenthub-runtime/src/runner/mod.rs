@@ -145,6 +145,13 @@ fn child_argv(runtime: &AgentRuntime, seat_dir: &Path, seat: &SeatSpec) -> Resul
                 }
                 .to_string(),
             );
+            // THE SEAT'S OWN MCP FILE, which is where the cloud entry and - when the environment names one -
+            // the delegation server live. claude reads no server from the seat dir without this flag, so
+            // without it a claude seat reaches no daemon and no `deepseek_agent`; the file is per seat (its
+            // delegation entry names the seat's own scope), which is why a shared project config cannot stand
+            // in for it.
+            argv.push("--mcp-config".to_string());
+            argv.push(seat_dir.join("mcp.json").to_string_lossy().to_string());
             if let Some(model) = seat.model.as_deref().filter(|m| !m.trim().is_empty()) {
                 argv.push("--model".to_string());
                 argv.push(model.to_string());
@@ -2181,13 +2188,21 @@ mod tests {
             argv,
             vec![
                 "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                "--include-partial-messages", "--permission-mode", "bypassPermissions", "--model", "opus",
+                "--include-partial-messages", "--permission-mode", "bypassPermissions", "--mcp-config",
+                "/state/s/mcp.json", "--model", "opus",
             ]
+        );
+        assert!(
+            argv.windows(2).any(|pair| pair == ["--mcp-config", "/state/s/mcp.json"]),
+            "the seat's own MCP file is what gives claude its cloud and delegation servers: {argv:?}"
         );
         seat.permission_policy = Some("locked".into());
         seat.model = None;
         let argv = child_argv(&AgentRuntime::ClaudeCode, Path::new("/state/s"), &seat).expect("argv");
-        assert_eq!(argv.last().map(String::as_str), Some("default"));
+        assert!(
+            argv.windows(2).any(|pair| pair == ["--permission-mode", "default"]),
+            "an unspecified posture must deny, not ask: {argv:?}"
+        );
         assert_eq!(child_program(&AgentRuntime::ClaudeCode, &seat), "claude");
     }
 
