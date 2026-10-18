@@ -265,6 +265,118 @@ func TestAShaAndCountCriterionIsNotWarned(t *testing.T) {
 	}
 }
 
+// stateServer is jevServer that also records the `state` object of every request, so a fixture can pin the
+// counts the judge is shown for its diff rather than trusting the counting code on another body.
+func stateServer(t *testing.T, reply string) (clientjev.Config, *int, *[]map[string]any) {
+	t.Helper()
+	hits := 0
+	states := []map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		var payload map[string]json.RawMessage
+		var state map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("the request body is not JSON: %v", err)
+		}
+		if raw, ok := payload["state"]; ok {
+			if err := json.Unmarshal(raw, &state); err != nil {
+				t.Errorf("state is not an object: %v", err)
+			}
+			states = append(states, state)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("TYPESAFE_BASE_URL", srv.URL)
+	t.Setenv("TYPESAFE_API_KEY", "key-secret")
+	t.Setenv("JEV_DECISION_LOG_PATH", filepath.Join(t.TempDir(), "jev.log"))
+	cfg, err := clientjev.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, &hits, &states
+}
+
+// The two closures review 2 line 1 names, settled as fixtures: a merge commit whose only change is a one-line
+// gitlink pin (the review's 634ac5c9 shape) and an ordinary two-file docs diff (the review's a669935d shape).
+// Neither commit is in a repository on this machine, so the shas are the review's own prefixes and the counts
+// are the shapes it measured; what the test pins is that the sha+counts criterion is ADMITTED, that the
+// counts the criterion names are the counts the judge is shown, and that the measured band's answer accepts.
+func TestAMergeGitlinkDiffAndATwoFileDocsDiffAreAdmitted(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		body      clientevidence.Body
+		command   string
+		criterion string
+		files     float64
+		lines     float64
+	}{
+		{
+			name: "a merge commit's gitlink pin",
+			body: clientevidence.Body{
+				BaseSHA: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+				HeadSHA: "634ac5c9e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8",
+				Numstat: "1\t1\tagenthub_client\n",
+			},
+			command:   "go test ./...",
+			criterion: "the merge 634ac5c9 changes 1 file and 2 lines, the agenthub_client pin, and its test run exits 0",
+			files:     1,
+			lines:     2,
+		},
+		{
+			name: "a two-file docs diff",
+			body: clientevidence.Body{
+				BaseSHA: "216a89d1f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5",
+				HeadSHA: "a669935d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f",
+				Numstat: "14\t0\tai_docs/agent-system/task-workflow-and-reporting.md\n7\t0\tai_docs/agent-system/seat-model-and-mcp-surface.md\n",
+			},
+			command:   "go test ./...",
+			criterion: "the branch a669935d changes 2 files and 21 lines of ai_docs",
+			files:     2,
+			lines:     21,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tc.body
+			body.Test.Command = tc.command
+			cfg, hits, states := stateServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+			got := evaluate(context.Background(), cfg, []string{tc.criterion}, body)
+			if got.Verdict != clientjev.Accept || got.Evaluator != "jev" || *hits != 1 {
+				t.Fatalf("a sha+counts criterion on this diff is a bundle fact, so it is judged: got %+v, %d calls",
+					got, *hits)
+			}
+			if len(got.Warnings) != 0 {
+				t.Errorf("the criterion names a sha, so it is not judged blind: %q", got.Warnings)
+			}
+			if len(*states) != 1 {
+				t.Fatalf("the judge was shown %d states, want the one counts summary", len(*states))
+			}
+			state := (*states)[0]
+			if state["files_changed"] != tc.files || state["lines_changed"] != tc.lines {
+				t.Errorf("state counts = %v files / %v lines, want %v / %v: the criterion names numbers the judge "+
+					"must read", state["files_changed"], state["lines_changed"], tc.files, tc.lines)
+			}
+		})
+	}
+}
+
+// The review's other half: widening the vocabulary must not widen the verdict, so a criterion that names only
+// a count - no command, no exit code, no path, no sha - is still refused at entry and never reaches the judge.
+func TestACountOnlyCriterionIsRefusedAtEntry(t *testing.T) {
+	cfg, hits, asked := stateServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, []string{"the diff is fewer than 80 lines"}, measured())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+		t.Fatalf("a count alone is not a fact the bundle carries: got %+v, %d calls", got, *hits)
+	}
+	if *hits != 0 {
+		t.Errorf("Jev was called for a count-only criterion: %v", *asked)
+	}
+	if !strings.Contains(got.Reasons, "fewer than 80 lines") {
+		t.Errorf("the refusal must name the criterion it refused:\n%s", got.Reasons)
+	}
+}
+
 func TestOneRefusedCriterionRefusesTheCompletionEvenWhenTheOthersWouldAccept(t *testing.T) {
 	cfg, hits, asked := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99},"criterion_3":{"noul":0.99}}}`)
 	criteria := []string{
