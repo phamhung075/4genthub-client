@@ -24,6 +24,28 @@ Owner decision, 2026-10-11. Every seat that writes files works in its own git wo
 - A merge conflict is resolved by the author seat on its own branch, then the change goes through the gate again.
 - A seat that finishes tells the lead the branch name and the commit range. The lead does the rest.
 
+## Making a CLIENT tip reachable before naming its sha
+
+A worktree's `agenthub_client` is a **separate clone**, not a checkout of the canonical one: inside
+`<roomDir>/wt/<seat>/agenthub_client`, `.git` is a file pointing at
+`~/__projects__/4genthub/.git/worktrees/<worktree>/modules/agenthub_client`, which has its own objects and
+its own `origin`. A commit made there is **not an object** in `~/__projects__/4genthub/agenthub_client`, so
+the lead's `git cat-file -t <sha>` and `git log --all` there say it does not exist - a correct check of the
+wrong repo (measured 2026-10-18: three tips read as missing; the fetch below made all three visible).
+
+Before you name a client sha, write the branch into the canonical repo:
+
+```
+git -C ~/__projects__/4genthub/agenthub_client fetch \
+  ~/__projects__/4genthub/.git/worktrees/<worktree>/modules/agenthub_client \
+  <branch>:refs/heads/<branch>
+```
+
+It writes a ref and objects only - no working tree, no index, no remote push - and it needs no force when the
+branch does not exist there yet. Then prove it from the repo the lead reads:
+`git -C ~/__projects__/4genthub/agenthub_client cat-file -t <sha>` and `log --all --oneline | grep <sha>`.
+Name the sha in the same message you name the fetch, so the lead's first check is the true one.
+
 ## Reading other seats' work
 
 Read it from git (`git log`, `git diff main..<branch>`, `git show <commit>`), not from their files. Another seat's uncommitted files are not a source of truth.
