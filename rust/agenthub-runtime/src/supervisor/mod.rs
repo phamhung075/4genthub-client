@@ -143,6 +143,37 @@ fn readiness_written_by(path: &Path, launched_at: std::time::SystemTime) -> bool
     }
 }
 
+/// The executable a newly launched seat's pane must run: THIS binary, named by a path that still reaches it.
+///
+/// `std::env::current_exe()` answers through `/proc/self/exe`, and on Linux a binary REPLACED ON DISK while it
+/// ran - a rebuild, `cargo install`, a `cp` over `~/.local/bin/agenthub-runtime` - leaves the running process
+/// holding `…/agenthub-runtime (deleted)`: a string, not a file. Measured 2026-10-18 on this box: the room's
+/// daemon started 10:02, the installed binary was replaced later that day, and every seat started after that
+/// died within milliseconds. The pane's whole output, recovered with `remain-on-exit` on, was
+/// `bash: -c: line 1: 'env -u TMUX -u TMUX_PANE /home/daihu/.local/bin/agenthub-runtime (deleted) --state-dir
+/// …'` with exit status 2, and the supervisor reported `its pane is gone` 20 ms after the launch with nothing
+/// naming the cause - three start attempts, all identical.
+///
+/// The inode is still executable for as long as this process lives, and `/proc/<pid>/exe` names it after the
+/// unlink (the kernel resolves the magic link to the inode). So a path that no longer exists is replaced by
+/// that one, and a process that has neither is refused HERE, by name, instead of handing a shell a string that
+/// cannot exec.
+fn launch_executable(resolved: PathBuf, proc_exe: PathBuf) -> Result<PathBuf, String> {
+    if resolved.is_file() {
+        return Ok(resolved);
+    }
+    if proc_exe.is_file() {
+        return Ok(proc_exe);
+    }
+    Err(format!(
+        "this daemon's own binary no longer exists on disk ({}), and {} names nothing either - a seat launched \
+         now would die in its pane, so nothing was launched; restart the daemon so new seats run the installed \
+         agenthub-runtime",
+        resolved.display(),
+        proc_exe.display()
+    ))
+}
+
 /// The state a state file publishes, or `None` when it is missing or unparseable. The same field
 /// `seat_facts` reads for its own report, kept separate here because the readiness loop asks the question
 /// before any status exists.
@@ -778,8 +809,11 @@ impl RoomSupervisor {
         let runtime = AgentRuntime::from_str_loose(&seat.runtime);
         let cmd = match &runtime {
             AgentRuntime::Omp | AgentRuntime::ClaudeCode => {
-                let self_exe = std::env::current_exe()
-                    .map_err(|e| format!("cannot resolve this binary's path: {e}"))?;
+                let self_exe = launch_executable(
+                    std::env::current_exe()
+                        .map_err(|e| format!("cannot resolve this binary's path: {e}"))?,
+                    Path::new("/proc").join(std::process::id().to_string()).join("exe"),
+                )?;
                 format!(
                     "{} --state-dir {} runner {}/{}",
                     self_exe.display(),
@@ -2420,6 +2454,45 @@ mod tests {
             "zero is a window of nothing, not the whole file"
         );
         assert_eq!(tail_lines("", 3), "");
+    }
+
+    /// The launch names a binary that EXISTS, or it names the running inode - and when it can name neither it
+    /// refuses by name. The measured failure this pins: a daemon whose installed binary was replaced while it
+    /// ran handed every new pane the string `…/agenthub-runtime (deleted)`, which the pane's shell could not
+    /// exec (exit 2), and the seat was reported `its pane is gone` with nothing naming the cause.
+    #[test]
+    fn a_launch_runs_the_path_that_exists_and_the_running_inode_when_it_does_not() {
+        let dir = scratch("launch-executable");
+        let installed = dir.join("agenthub-runtime");
+        fs::write(&installed, b"binary").unwrap();
+        let gone = dir.join("agenthub-runtime (deleted)");
+        let through_proc = dir.join("proc-exe");
+        fs::write(&through_proc, b"binary").unwrap();
+
+        assert_eq!(
+            launch_executable(installed.clone(), through_proc.clone()).unwrap(),
+            installed,
+            "a path that exists is the binary the daemon is running and is used as it is"
+        );
+        assert_eq!(
+            launch_executable(gone.clone(), through_proc.clone()).unwrap(),
+            through_proc,
+            "a replaced binary's own path is a string, not a file: the running inode names it"
+        );
+
+        let missing = dir.join("also-missing");
+        let err = launch_executable(gone.clone(), missing.clone())
+            .expect_err("two paths that name nothing are a refusal, not a launch");
+        assert!(
+            err.contains(&gone.display().to_string()) && err.contains(&missing.display().to_string()),
+            "the refusal names both paths so a reader can check them: {err}"
+        );
+        assert!(
+            err.contains("restart the daemon"),
+            "and it names the remedy: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// A scratch state dir under the system temp dir, unique per test, removed by the caller.
