@@ -17,7 +17,7 @@
 - `internal/clientcomplete/gate.go`: `register` carries `NumstatStats` instead of a path slice; `names`
   returns a `facts` struct (command, exitCode, path, sha, count); `carries` is the OR of the five; the
   duplicate `parseNumstat` is deleted. A count fact is true only when the criterion spells a wire count key
-  (snake or spaced form) and the FIRST integer in that key's own clause - from the end of the key to the
+  (snake or spaced form, either case) and the FIRST integer in that key's own clause - from the end of the key to the
   next count-key occurrence or the end of the criterion - equals this bundle's number for it. A match
   anywhere in the text is rejected: the sha tokenizer splits `2c34515` into `2` and `34515`, so a global
   match admits `files_changed is 2` on a three-file change. `pathOnlyWarnings` gains `count` to its

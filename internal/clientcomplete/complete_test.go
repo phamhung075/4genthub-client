@@ -641,6 +641,7 @@ func TestACountKeyWithTheBundlesNumberIsAFact(t *testing.T) {
 		admitted  bool
 	}{
 		{"files_changed is 4", true},
+		{"FILES_CHANGED is 4", true},
 		{"files changed is 4", true},
 		{"files_changed across the whole change is 4", true},
 		{"lines_changed is 51", true},

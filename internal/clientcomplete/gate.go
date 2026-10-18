@@ -120,6 +120,7 @@ var countKeys = []struct {
 // three-file change whose sha carries a 2. No fixed radius either: "files_changed across the whole change
 // is 7" is still the key's own clause.
 func (r register) namesACount(c string) bool {
+	c = strings.ToLower(c)
 	type occurrence struct {
 		start, end, value int
 	}
