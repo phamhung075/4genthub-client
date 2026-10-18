@@ -62,7 +62,7 @@ var (
 )
 
 const (
-	upUsage         = "usage: 4genteam up RIG [--team DIR] [--state-root DIR] [--room-only] " + clientoffpeak.ModeFlagUsage
+	upUsage         = "usage: 4genteam up RIG [--team DIR] [--state-root DIR] [--room-only] [--respawn] " + clientoffpeak.ModeFlagUsage
 	compactUsage    = "usage: 4genteam compact RIG " + clientoffpeak.ModeFlagUsage
 	stopUsage       = "usage: 4genteam stop RIG"
 	statusUsage     = "usage: 4genteam status RIG [--state-root DIR]"
@@ -195,6 +195,12 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 				"own spec.json, and prints one line per seat. It EXCLUDES agent, the bridge, the watch view, the UI\n"+
 				"and herdr, whose failures are not this verb's verdict - and it must not be used to make a red go\n"+
 				"away.\n"+
+				"--respawn REPLACES the running runtime daemon instead of reusing it: agent is stopped (it is the\n"+
+				"single restart authority, so its children stop with it), then the daemon serving this state root\n"+
+				"is signalled and waited out, and this same run starts the daemon again - so the binary installed\n"+
+				"by scripts/build.sh is the one that serves the room. The room is then read and started as below;\n"+
+				"its record, its seats' directories and their worktrees are left in place. A daemon that does not\n"+
+				"exit within the window is reported by process id and this run refuses rather than starting a second one.\n"+
 				"The acceptance invocation, so a reader re-reads the signature instead of remembering it:\n"+
 				"  4genteam up RIG [--team DIR] [--state-root DIR] --room-only\n"+
 				"WHAT IT EXITS WITH (design §2.5), counting only the room's own verdict:\n"+
@@ -226,6 +232,7 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 	flags.SetOutput(stderr)
 	teamDir := flags.String("team", "", "the team definition directory that holds team.json (optional: a room with its own record starts from it)")
 	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before agent, the bridge, the watch view and the UI")
+	respawn := flags.Bool("respawn", false, "stop agent and replace the runtime daemon serving this state root, so the installed binary serves the room")
 	flagArgs, positional := splitFlagsAndPositional(rest)
 	for _, arg := range flagArgs {
 		if name := flagName(arg); name != "" && !upTakesFlag(name) {
@@ -250,7 +257,7 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 	// environment - so the run SAYS which daemon it is talking to instead of leaving a reader to guess, and
 	// the room's own lines below are read against it (design §1).
 	fmt.Fprintf(stdout, "state dir: %s\nsocket: %s\n", root, clientruntime.DefaultSocketPath())
-	return runUp(name, *teamDir, root, allowPeak, *roomOnly, stdout, stderr)
+	return runUp(name, *teamDir, root, allowPeak, *roomOnly, *respawn, stdout, stderr)
 }
 
 // splitFlagsAndPositional separates this verb's flags from its one positional, and puts the positionals
@@ -298,13 +305,13 @@ func upFlagTakesValue(name string) bool { return name == "team" }
 // (and refused the runtime's spelling), so a flag set that still named it would be a second reader.
 func upTakesFlag(name string) bool {
 	switch name {
-	case "team", "room-only", "h", "help":
+	case "team", "room-only", "respawn", "h", "help":
 		return true
 	}
 	return false
 }
 
-func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, stderr io.Writer) int {
+func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, stdout, stderr io.Writer) int {
 	// The team is read FIRST: a --team typo is a caller error, and it must be reported before a daemon is
 	// started or a seat is touched. The room name must be the room the input names, which is the same rule
 	// clientpolicy applies to its own --room.
@@ -314,6 +321,16 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
 		return clientcmd.ExitRoomRefused
+	}
+	// --respawn REPLACES THE DAEMON, and it does so BEFORE the reachability read below can reuse it: the
+	// daemon is nobody's child and keeps running the binary it was started with, so a build that renamed a
+	// new one into place changes nothing until the old process is gone. Agent goes first because it is the
+	// restart authority: a watchdog left running would restore the seats of the room being cycled.
+	if respawn {
+		stopAgent(name, stdout)
+		if !respawnDaemon(stateDir, stdout, stderr) {
+			return clientcmd.ExitUnavailable
+		}
 	}
 	daemonLog, err := ensureDaemon(stateDir, stderr)
 	if err != nil {
