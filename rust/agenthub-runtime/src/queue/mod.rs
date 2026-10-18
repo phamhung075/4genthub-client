@@ -921,6 +921,16 @@ impl QueueStore {
             .map_err(|e| format!("cannot hand off queue row '{}': {}", input.qitem_id, e))?;
 
             let successor = new_qitem_id();
+            // THE SUCCESSOR'S BODY IS THE CLOSURE NOTE: the note is the fresh account the receiver acts
+            // on, and copying the source body hands it the stale question the note replaces (measured
+            // 2026-10-18: a 409 question handed off with its ruling arrived as the question again, and
+            // the receiver re-asked it). An empty note is no account at all, so the source body is the
+            // best there is and is carried unchanged.
+            let successor_body = if input.transition_note.trim().is_empty() {
+                current.body.clone()
+            } else {
+                note.clone()
+            };
             let mut chain = current.chain_of_record.clone();
             chain.push(current.qitem_id.clone());
             let chain_json = serde_json::to_string(&chain)
@@ -936,7 +946,7 @@ impl QueueStore {
                 rusqlite::params![
                     successor,
                     current.summary,
-                    current.body,
+                    successor_body,
                     input.actor_session,
                     to,
                     chain_json,
@@ -1155,6 +1165,10 @@ mod tests {
         assert_eq!(successor.state, "pending");
         assert_eq!(successor.source_session, "seat-c");
         assert_eq!(successor.summary, "hand me the build log");
+        assert_eq!(
+            successor.body, "over to seat-d",
+            "the successor's body is the closure note, not a copy of the stale source body"
+        );
         assert_eq!(successor.chain_of_record, vec![row.qitem_id.clone()]);
         assert_eq!(successor.transitions.len(), 1);
         assert_eq!(
@@ -1189,6 +1203,26 @@ mod tests {
             (done.transitions[1].from_state.as_deref(), done.transitions[1].state.as_str()),
             (Some("pending"), "done")
         );
+    }
+
+    /// An empty note is no account at all: the successor carries the source body unchanged, because a
+    /// handoff with nothing to say must not blank the work it hands over.
+    #[test]
+    fn a_handoff_without_a_note_keeps_the_source_body() {
+        let (_dir, store) = temp_store();
+        let row = new_row(&store, "seat-a", "seat-b", "hand me the build log");
+        let mut input = close_input(&row.qitem_id, "handed_off_to", Some("seat-d"));
+        input.transition_note = String::new();
+        store.close(input).expect("close");
+
+        let successors = store
+            .list(&ListFilter {
+                destination_session: Some("seat-d".into()),
+                ..Default::default()
+            })
+            .expect("list for the target");
+        assert_eq!(successors.len(), 1, "one successor for the target: {successors:?}");
+        assert_eq!(successors[0].body, schema_body());
     }
 
     #[test]
