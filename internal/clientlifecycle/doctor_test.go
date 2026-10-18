@@ -54,15 +54,20 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 	previousStatePath := clientservices.AgentStatePath
 	previousNow, previousLive := clientservices.Now, clientservices.Live
 	previousOrphans := orphanRowsFor
+	previousSeats := seatsRowFor
 	t.Cleanup(func() {
 		clientservices.AgentStatePath = previousStatePath
 		clientservices.Now, clientservices.Live = previousNow, previousLive
 		orphanRowsFor = previousOrphans
+		seatsRowFor = previousSeats
 	})
 	// The orphan row reads the queue and the node list through the rig tool, and no test in this file runs
 	// a daemon: the default here is a report with NO orphan row at all, so every case below sees exactly
 	// the safeguard rows it was written for. A case that wants the row replaces this.
 	orphanRowsFor = func(string) []orphanRow { return nil }
+	// The seats row runs the skills check, which needs a runtime and a room record: no test in this file has
+	// either, so the default is a report with no seats row. A case that wants the row replaces this.
+	seatsRowFor = func(string, string) []seatSkillsRow { return nil }
 
 	clientservices.AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
 

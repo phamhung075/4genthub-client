@@ -53,6 +53,9 @@ const (
 	// messages carry a sender identity, and the ones whose do not. Like OrphanHandoffs it carries no pid and
 	// no heartbeat.
 	Identity = "identity"
+	// Seats is `doctor`'s row about the skills the seats of a room actually loaded. Like OrphanHandoffs it
+	// is about WORK rather than about a child: there is no single process to pgrep and no heartbeat to age.
+	Seats = "seats"
 )
 
 // The two states the identity row adds to 7.2's. They are not safeguards and never appear in Obligatory;
@@ -63,6 +66,10 @@ const (
 	// GuardAbsent is a checkout whose `core.hooksPath` names a folder with no git guard in it: a guard that was
 	// installed and is now switched off.
 	GuardAbsent = "guard_absent"
+	// SkillsStale is the seats row's one failing state: a seat's loaded skills differ from the set the
+	// runtime installed for it. It is deliberately NOT one of the four states below - it names a different
+	// question - and NotRunning counts it, so a stale seat fails `doctor` the way a dead safeguard does.
+	SkillsStale = "skills_stale"
 )
 
 // The four states of 7.2. There is no fifth, and `running` is the ONLY state doctor accepts.

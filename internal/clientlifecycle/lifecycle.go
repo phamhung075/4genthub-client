@@ -365,6 +365,20 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly bool, stdout, std
 		return clientcmd.ExitUnavailable
 	}
 
+	// 7.5's skills check runs HERE: the room is up, so every seat is launched and the skills each one
+	// actually loaded can be named. It is BEFORE the watch view, the UI and herdr, so a seat that loaded
+	// something other than the set the runtime installed for it is named before anything else proceeds. It
+	// starts, restarts and signals NOTHING: `up` does not kill a working seat to fix its skills.
+	//
+	// Every line the check produces is reported, failures AND the notes about an input this client could not
+	// obtain: a reader must be able to tell "the seats are right" from "the seats could not be looked at".
+	// Only the failures make the verb refuse.
+	verdict := roomSkillsVerdict(stateDir, name)
+	reportSeatSkills(verdict, stderr)
+	if len(verdict.Failures) > 0 {
+		return clientcmd.ExitUnavailable
+	}
+
 	runWatchView(name, stderr)
 	openUI(stderr)
 	if os.Getenv("HERDR_ENV") == "" {

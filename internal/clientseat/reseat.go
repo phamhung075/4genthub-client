@@ -18,6 +18,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/commpolicy"
@@ -29,6 +30,7 @@ type reseatDeps struct {
 	nodes     func(rig string) ([]map[string]any, error)
 	waitQuiet func(rig, seat string) bool
 	relaunch  func(rig, seat string) error
+	checkSeat func(rig, seat string) []string
 	getenv    func(string) string
 	logf      func(format string, args ...any)
 }
@@ -39,7 +41,10 @@ func defaultReseatDeps(stateRoot string) *reseatDeps {
 		waitQuiet: func(rig, seat string) bool { return NewQuietWaiter(stateRoot).Wait(rig, seat) },
 		relaunch:  relaunch,
 		getenv:    os.Getenv,
-		logf:      logLine,
+		checkSeat: func(rig, seat string) []string {
+			return clientlifecycle.SeatCheckLines(stateRoot, rig, seat)
+		},
+		logf: logLine,
 	}
 }
 
@@ -136,6 +141,14 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 			return 0, err
 		}
 		deps.logf("%s: restarted", seat)
+		// The seat doctor's checks, on the seat just restarted: the cwd it came back in, the skills it loaded
+		// and whether they are the tree's copies. They are what the restart was for, so they are reported
+		// the moment it returns - a runtime relaunch that did not bring the seat back leaves its status
+		// saying so, and the check answers with that fact rather than silently. They are findings, never a
+		// refusal: reseat's exit code is the one it already had.
+		for _, line := range deps.checkSeat(rig, seat) {
+			deps.logf("%s", line)
+		}
 	}
 	if failed > 0 {
 		return ExitFailed, nil
