@@ -87,8 +87,8 @@ func stubLinkProviderKey(t *testing.T) *[]string {
 	return &linked
 }
 
-// seatFixture is a main checkout with both submodules, a room whose team file names the given seats,
-// and the two seams the verbs need.
+// seatFixture is a main checkout with the client submodule, a room whose team file names the given
+// seats, and the two seams the verbs need.
 type seatFixture struct {
 	t     *testing.T
 	main  string // the checkout whose worktrees these are
@@ -99,8 +99,8 @@ type seatFixture struct {
 	pins  map[string]string // submodule name → the gitlink the parent records
 }
 
-// newSeatFixture builds the whole fixture. The submodule SOURCES ARE DELETED after the clone, so the
-// pins the parent records exist nowhere else on the machine: that is the ruling's "a pin that was never
+// newSeatFixture builds the whole fixture. The submodule SOURCE IS DELETED after the clone, so the pin
+// the parent records exists nowhere else on the machine: that is the ruling's "a pin that was never
 // pushed", made real rather than asserted, and it is why `submodule update --init` cannot work here.
 func newSeatFixture(t *testing.T, seats []clientservices.SeatType) *seatFixture {
 	t.Helper()
@@ -108,14 +108,12 @@ func newSeatFixture(t *testing.T, seats []clientservices.SeatType) *seatFixture 
 	fixture := &seatFixture{t: t, rig: "fixture-room", seats: seats, pins: map[string]string{}}
 
 	sources := filepath.Join(t.TempDir(), "sources")
-	for _, submodule := range submodules {
-		source := filepath.Join(sources, strings.TrimPrefix(submodule, "."))
-		mkdirAll(t, source)
-		gitIn(t, source, "init", "-q", "-b", "main")
-		writeFile(t, filepath.Join(source, "PAYLOAD.md"), "the "+submodule+" payload\n")
-		gitIn(t, source, "add", "PAYLOAD.md")
-		gitIn(t, source, "commit", "-q", "-m", "the "+submodule+" payload")
-	}
+	source := filepath.Join(sources, clientSubmodule)
+	mkdirAll(t, source)
+	gitIn(t, source, "init", "-q", "-b", "main")
+	writeFile(t, filepath.Join(source, "PAYLOAD.md"), "the "+clientSubmodule+" payload\n")
+	gitIn(t, source, "add", "PAYLOAD.md")
+	gitIn(t, source, "commit", "-q", "-m", "the "+clientSubmodule+" payload")
 
 	fixture.main = filepath.Join(t.TempDir(), "main")
 	mkdirAll(t, fixture.main)
@@ -123,16 +121,12 @@ func newSeatFixture(t *testing.T, seats []clientservices.SeatType) *seatFixture 
 	writeFile(t, filepath.Join(fixture.main, "README.md"), "the main checkout\n")
 	gitIn(t, fixture.main, "add", "README.md")
 	gitIn(t, fixture.main, "commit", "-q", "-m", "the main checkout")
-	for _, submodule := range submodules {
-		// protocol.file.allow is needed because the URL is a local path: this room never pushes, and a
-		// fixture cannot either.
-		gitIn(t, fixture.main, "-c", "protocol.file.allow=always",
-			"submodule", "add", "-q", filepath.Join(sources, strings.TrimPrefix(submodule, ".")), submodule)
-	}
-	gitIn(t, fixture.main, "commit", "-q", "-m", "the two submodules")
-	for _, submodule := range submodules {
-		fixture.pins[submodule] = gitIn(t, fixture.main, "rev-parse", "HEAD:"+submodule)
-	}
+	// protocol.file.allow is needed because the URL is a local path: this room never pushes, and a
+	// fixture cannot either.
+	gitIn(t, fixture.main, "-c", "protocol.file.allow=always",
+		"submodule", "add", "-q", source, clientSubmodule)
+	gitIn(t, fixture.main, "commit", "-q", "-m", "the client submodule")
+	fixture.pins[clientSubmodule] = gitIn(t, fixture.main, "rev-parse", "HEAD:"+clientSubmodule)
 	if err := os.RemoveAll(sources); err != nil {
 		t.Fatalf("remove the submodule sources: %v", err)
 	}

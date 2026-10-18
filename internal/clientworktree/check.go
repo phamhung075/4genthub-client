@@ -18,10 +18,16 @@ import (
 // A foreign entry is NOT an error and never fails the check: the ruling says a foreign count above
 // zero is a detail on doctor's worktrees row, and this client's own machine holds foreign worktrees by
 // design (the gates in `/tmp/gate-*`, and checkouts an operator keeps beside the repository).
+//
+// A registered worktree is Registered WHATEVER BRANCH IT HOLDS. A seat's worktree moves onto the lane
+// it is working, and a reviewer's is detached; the branch the derivation names is the branch a MISSING
+// path is created on, not a rule an existing one must keep. Measured on the live room (2026-10-18):
+// fe-dev and architect sat on other branches and the reviewer on its own, and a check that called all
+// three wrong refused every start of a room that was fine.
 type CheckVerdict struct {
-	Registered []string // derived, registered on its branch, both submodules present
+	Registered []string // derived and registered, with the client link present
 	Missing    []string // derived, not in `git worktree list` at all
-	Wrong      []string // derived, present but not right (another branch, not a worktree, a submodule missing)
+	Wrong      []string // derived, present but not right (not a worktree, or the client link missing)
 	Foreign    []string // every entry that is not derived
 }
 
@@ -42,7 +48,7 @@ func Check(mainRoot, roomDir, rig string, seats []clientservices.SeatType) (Chec
 	var verdict CheckVerdict
 	for _, worktree := range derived {
 		derivedPaths[canonicalPath(worktree.Path)] = true
-		entry, registered := present[canonicalPath(worktree.Path)]
+		_, registered := present[canonicalPath(worktree.Path)]
 		switch {
 		case !registered:
 			// A path that is on disk but not in the listing is a path that is not a worktree: it is
@@ -53,7 +59,7 @@ func Check(mainRoot, roomDir, rig string, seats []clientservices.SeatType) (Chec
 			} else {
 				verdict.Missing = append(verdict.Missing, worktree.Path)
 			}
-		case sameWorktree(entry, worktree) != nil || !submodulesPresent(worktree.Path):
+		case !clientLinkPresent(worktree.Path):
 			verdict.Wrong = append(verdict.Wrong, worktree.Path)
 		default:
 			verdict.Registered = append(verdict.Registered, worktree.Path)
@@ -67,14 +73,10 @@ func Check(mainRoot, roomDir, rig string, seats []clientservices.SeatType) (Chec
 	return verdict, nil
 }
 
-// submodulesPresent is the second half of the ruling's registered test: both submodule paths must be
-// linked worktrees under the derived path. A `.git` that is missing is the shape a worktree has when
-// its submodules were never placed, which is exactly the seat that cannot build.
-func submodulesPresent(path string) bool {
-	for _, submodule := range submodules {
-		if _, err := os.Lstat(filepath.Join(path, submodule, ".git")); err != nil {
-			return false
-		}
-	}
-	return true
+// clientLinkPresent is the second half of the ruling's registered test: the seat's client submodule
+// must be a linked worktree under the derived path. A `.git` that is missing is the shape a worktree
+// has when the link was never placed, which is exactly the seat that cannot build.
+func clientLinkPresent(path string) bool {
+	_, err := os.Lstat(filepath.Join(path, clientSubmodule, ".git"))
+	return err == nil
 }

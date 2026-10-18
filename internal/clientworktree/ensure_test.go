@@ -47,8 +47,8 @@ func TestEnsureRunTwiceChangesNothing(t *testing.T) {
 		}
 	}
 	for _, worktree := range fixture.derived() {
-		if !strings.Contains(second.String(), worktree.Path+": reused") {
-			t.Errorf("the second run did not reuse %s:\n%s", worktree.Path, second.String())
+		if !strings.Contains(second.String(), worktree.Path+": kept") {
+			t.Errorf("the second run did not keep %s:\n%s", worktree.Path, second.String())
 		}
 	}
 	if strings.Contains(second.String(), ": created") {
@@ -80,9 +80,11 @@ func TestEnsureRunTwiceChangesNothing(t *testing.T) {
 	}
 }
 
-// The ruling's other test: a derived path that exists on another branch is refused, named and
-// untouched - and every other derived worktree is still attempted.
-func TestEnsureRefusesADerivedPathOnAnotherBranch(t *testing.T) {
+// A LIVE ROOM IS READ: a derived path that is registered on another branch is KEPT, untouched, and the
+// rest of the room is still attempted. Measured on the live room (2026-10-18): fe-dev sat on
+// `fe-dashboard-update-depth` and architect on `g3-drop-classification`, and a refusal over the branch
+// they held made every `up` - including the heal after a reboot - fail on a room that was fine.
+func TestEnsureKeepsADerivedPathOnAnotherBranch(t *testing.T) {
 	fixture := newSeatFixture(t, []clientservices.SeatType{
 		{Key: "go-dev", Type: "developer"},
 		{Key: "lead", Type: "lead"},
@@ -93,29 +95,25 @@ func TestEnsureRefusesADerivedPathOnAnotherBranch(t *testing.T) {
 	gitIn(t, fixture.main, "worktree", "add", "-b", "somebody-elses-branch", developer.Path, "main")
 
 	var out strings.Builder
-	err := fixture.ensure(&out)
-	if err == nil {
-		t.Fatalf("a derived path on another branch must be refused:\n%s", out.String())
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("a registered derived path must be kept, not refused: %v\n%s", err, out.String())
 	}
-	if !strings.Contains(err.Error(), developer.Path) {
-		t.Errorf("the refusal did not name %s: %v", developer.Path, err)
-	}
-	if !strings.Contains(out.String(), developer.Path+": refused:") {
-		t.Errorf("the line for %s did not say refused:\n%s", developer.Path, out.String())
+	if !strings.Contains(out.String(), developer.Path+": kept") {
+		t.Errorf("the line for %s did not say kept:\n%s", developer.Path, out.String())
 	}
 	if branch := gitIn(t, developer.Path, "rev-parse", "--abbrev-ref", "HEAD"); branch != "somebody-elses-branch" {
-		t.Errorf("the refused worktree was moved to %s: nothing may be overwritten", branch)
+		t.Errorf("the kept worktree was moved to %s: nothing may be overwritten", branch)
 	}
 	if entry, registered := fixture.entry(t, developer.Path); !registered || entry.Branch != "somebody-elses-branch" {
-		t.Errorf("the refused worktree is no longer registered on its own branch: %+v", entry)
+		t.Errorf("the kept worktree is no longer registered on its own branch: %+v", entry)
 	}
-	// EVERY derived worktree is attempted, never just up to the first refusal.
+	// EVERY derived worktree is attempted, never just up to the first one seen.
 	for _, want := range []string{
 		filepath.Join(fixture.room, "wt", "lead") + ": created",
 		filepath.Join(fixture.room, "wt", "integration") + ": created",
 	} {
 		if !strings.Contains(out.String(), want) {
-			t.Errorf("the refusal stopped the run before %q:\n%s", want, out.String())
+			t.Errorf("the kept path stopped the run before %q:\n%s", want, out.String())
 		}
 	}
 }
@@ -178,27 +176,27 @@ func TestEnsureStartsWithASubmodulePinThatWasNeverPushed(t *testing.T) {
 		case entry.Detached || entry.Branch != worktree.Branch:
 			t.Errorf("%s is on %q, want %s", worktree.Path, entry.Branch, worktree.Branch)
 		}
-		if !submodulesPresent(worktree.Path) {
-			t.Errorf("%s does not carry both submodule worktrees", worktree.Path)
+		if !clientLinkPresent(worktree.Path) {
+			t.Errorf("%s does not carry the client submodule worktree", worktree.Path)
 		}
 	}
 
 	lead := filepath.Join(fixture.room, "wt", "lead")
 	status := gitIn(t, lead, "submodule", "status")
-	for _, submodule := range submodules {
-		if !strings.Contains(status, fixture.pins[submodule]) {
-			t.Errorf("`git -C %s submodule status` does not show the %s pin %s:\n%s",
-				lead, submodule, fixture.pins[submodule], status)
-		}
-		if !strings.Contains(status, submodule) {
-			t.Errorf("`git -C %s submodule status` does not name %s:\n%s", lead, submodule, status)
-		}
+	if !strings.Contains(status, fixture.pins[clientSubmodule]) {
+		t.Errorf("`git -C %s submodule status` does not show the %s pin %s:\n%s",
+			lead, clientSubmodule, fixture.pins[clientSubmodule], status)
+	}
+	if !strings.Contains(status, clientSubmodule) {
+		t.Errorf("`git -C %s submodule status` does not name %s:\n%s", lead, clientSubmodule, status)
 	}
 	if branch := gitIn(t, filepath.Join(lead, "agenthub_client"), "rev-parse", "--abbrev-ref", "HEAD"); branch != fixture.rig+"/lead" {
 		t.Errorf("the client submodule worktree is on %s, want %s/lead", branch, fixture.rig)
 	}
-	if branch := gitIn(t, filepath.Join(lead, ".claude"), "rev-parse", "--abbrev-ref", "HEAD"); branch != "HEAD" {
-		t.Errorf("the .claude submodule worktree is on %s, want a detached HEAD", branch)
+	// `.claude` is not a submodule of this hub and has no gitlink: the link must not be attempted at
+	// all, and the seat's worktree must not carry one.
+	if _, err := os.Lstat(filepath.Join(lead, ".claude")); err == nil {
+		t.Errorf("%s carries a .claude path; .claude is not a submodule and is never linked", lead)
 	}
 
 	// The pin is unpushed for real: the source the submodule was cloned from is gone, so the URL cannot
@@ -280,30 +278,36 @@ func TestEnsureRefusesAClientBranchAnotherWorktreeHolds(t *testing.T) {
 	}
 }
 
-// The third state: the branch exists and no worktree holds it. Nothing is adopted and nothing is
-// deleted - a seat's branch carries the seat's own commits, so re-pointing it or dropping it is the
-// operator's decision, and the refusal says so.
-func TestEnsureRefusesAnExistingBranchNoWorktreeHolds(t *testing.T) {
+// The branch exists and no worktree holds it: that is the seat's OWN branch, and the derivation attaches
+// to it - `git worktree add <path> <branch>` re-points nothing, deletes nothing and adopts nothing but
+// the committed state. Refusing this was what made `up` fail on the live room's go-dev (its branch
+// existed, its worktree did not), so the heal after a reboot refused a seat that only needed its path.
+func TestEnsureCreatesTheSeatWorktreeOnItsOwnExistingBranch(t *testing.T) {
 	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "go-dev", Type: "developer"}})
 	stubLinkProviderKey(t)
 	developer := fixture.derived()[0]
 	gitIn(t, fixture.main, "branch", developer.Branch, "main")
+	before := gitIn(t, fixture.main, "rev-parse", "refs/heads/"+developer.Branch)
 
 	var out strings.Builder
-	err := fixture.ensure(&out)
-	if err == nil {
-		t.Fatalf("an existing branch must be refused:\n%s", out.String())
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("a seat's own branch must be attached to, not refused: %v\n%s", err, out.String())
 	}
-	for _, want := range []string{developer.Branch, fixture.main, "no worktree holds it"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %q: %v", want, err)
-		}
+	if !strings.Contains(out.String(), developer.Path+": created") {
+		t.Errorf("the line for %s did not say created:\n%s", developer.Path, out.String())
 	}
-	if _, statErr := os.Stat(developer.Path); statErr == nil {
-		t.Errorf("%s was created although its branch already exists", developer.Path)
+	if branch := gitIn(t, developer.Path, "rev-parse", "--abbrev-ref", "HEAD"); branch != developer.Branch {
+		t.Errorf("%s is on %s, want the seat's own branch %s", developer.Path, branch, developer.Branch)
 	}
-	if branch := gitIn(t, fixture.main, "rev-parse", "--verify", "refs/heads/"+developer.Branch); branch == "" {
-		t.Errorf("the branch %s was deleted: nothing is deleted by this client", developer.Branch)
+	after := gitIn(t, fixture.main, "rev-parse", "refs/heads/"+developer.Branch)
+	if after != before {
+		t.Errorf("the branch %s was re-pointed from %s to %s: nothing is re-pointed", developer.Branch, before, after)
+	}
+	if entry, registered := fixture.entry(t, developer.Path); !registered || entry.Branch != developer.Branch {
+		t.Errorf("%s is not registered on its own branch: %+v", developer.Path, entry)
+	}
+	if !clientLinkPresent(developer.Path) {
+		t.Errorf("%s does not carry the client submodule worktree", developer.Path)
 	}
 }
 
@@ -401,8 +405,8 @@ func TestEnsureReusesARoomReachedThroughASymlink(t *testing.T) {
 	if strings.Contains(second.String(), "refused") {
 		t.Errorf("a room reached through a symlink refused a worktree:\n%s", second.String())
 	}
-	if want := filepath.Join(link, "wt", "go-dev") + ": reused"; !strings.Contains(second.String(), want) {
-		t.Errorf("the second run did not reuse %s:\n%s", filepath.Join(link, "wt", "go-dev"), second.String())
+	if want := filepath.Join(link, "wt", "go-dev") + ": kept"; !strings.Contains(second.String(), want) {
+		t.Errorf("the second run did not keep %s:\n%s", filepath.Join(link, "wt", "go-dev"), second.String())
 	}
 	// The direct refusal is the same rule, from the other end: the worktree that holds the branch IS
 	// this path, so it is the reuse carve-out and not a refusal.

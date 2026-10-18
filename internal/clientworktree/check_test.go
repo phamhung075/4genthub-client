@@ -29,9 +29,16 @@ func TestCheckSortsTheDerivedWorktreesIntoBuckets(t *testing.T) {
 		t.Fatalf("remove %s: %v", missing, err)
 	}
 	gitIn(t, fixture.main, "worktree", "prune")
-	// A derived worktree on another branch: registered, and on the wrong one.
-	wrong := filepath.Join(fixture.room, "wt", "review")
-	gitIn(t, wrong, "checkout", "-q", "-b", "somebody-elses-branch")
+	// A derived worktree on another branch: registered, and on the branch its seat works on. It is
+	// Registered, not Wrong - a seat's worktree moves onto its lane, and the branch the derivation
+	// names is where a MISSING path is created.
+	moved := filepath.Join(fixture.room, "wt", "review")
+	gitIn(t, moved, "checkout", "-q", "-b", "somebody-elses-branch")
+	// A derived worktree whose client link was never placed: that is the shape a seat cannot build in.
+	wrong := filepath.Join(fixture.room, "wt", "lead")
+	if err := os.RemoveAll(filepath.Join(wrong, clientSubmodule)); err != nil {
+		t.Fatalf("remove the client link under %s: %v", wrong, err)
+	}
 	// An entry that is not derived at all.
 	foreign := filepath.Join(t.TempDir(), "somebodys-checkout")
 	gitIn(t, fixture.main, "worktree", "add", "--detach", foreign, "main")
@@ -42,7 +49,7 @@ func TestCheckSortsTheDerivedWorktreesIntoBuckets(t *testing.T) {
 		t.Fatalf("Check: %v", err)
 	}
 	wantRegistered := []string{
-		filepath.Join(fixture.room, "wt", "lead"),
+		moved,
 		filepath.Join(fixture.room, "wt", "integration"),
 	}
 	if !equalStrings(verdict.Registered, wantRegistered) {
