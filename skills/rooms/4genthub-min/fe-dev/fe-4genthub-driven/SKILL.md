@@ -61,7 +61,7 @@ A known run against production on 2026-10-11 ended with four failing checks — 
 responsive and CRUD animation. Those are the findings recorded below, not toolkit bugs. Exit code 0
 means production passed everything **on the bundle measured**.
 
-## The four viewports — a phone is not a small laptop
+## The viewports — a phone is not a small laptop
 
 [lib.mjs](lib.mjs) carries one `VIEWPORTS` table every check spreads into `browser.newContext`:
 

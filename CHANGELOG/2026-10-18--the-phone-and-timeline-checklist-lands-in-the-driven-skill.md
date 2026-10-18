@@ -17,7 +17,7 @@ for the two faults the owner reported this week. Three things were missing from 
 - `skills/rooms/4genthub-min/fe-dev/fe-4genthub-driven/SKILL.md`
   - Quick start gains step 0, the phone spec; the viewport section names the room's two widths and
     says the phone verdict is the spec, not this toolkit's 390 emulation.
-  - New section "Pre-merge checklist: phone and timeline" - eight phone lines and seven timeline
+  - New section "Pre-merge checklist: phone and timeline" - eight phone lines and six timeline
     lines, each a command or a measurement, with the measured min-content floors (550, 549, 634) and
     the 40px touch floor named.
   - The two dated "Measured state" sections collapse into one dated 2026-10-18: what the deploy line
