@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientguard"
 )
 
 const (
@@ -91,6 +92,25 @@ func ownerNodeSession(rig string) string {
 // server's render carries, and a client constant table of members would be the second source of truth that
 // `policy` already retired.
 const ownerMember = "owner"
+
+// viaOwnerRefusal is the ruling's guarantee on this side (2026-10-18): --via-owner signs with the OWNER
+// NODE's terminal, so only that node may ask for it. The caller's own sender is read through the SAME
+// resolution the envelope uses - clientguard.SessionFromEnv, one identity source - and anything but
+// `<rig>-owner@<rig>` is refused before a file is written or a key is typed. The empty string means the
+// request came from the owner node itself. It is attribution, not authentication: a process that sets the
+// variable forges through plain send regardless, so this closes the documented and prompt-injected route,
+// not a hostile local process.
+func viaOwnerRefusal(rig string, getenv func(string) string) string {
+	want := ownerNodeSession(rig)
+	sender := "unset (no " + clientguard.SessionEnv + ")"
+	if session, ok := clientguard.SessionFromEnv(getenv); ok {
+		sender = session.Line()
+	}
+	if sender == want {
+		return ""
+	}
+	return fmt.Sprintf("--via-owner is %s's route and this shell's sender is %s; a seat may not send as the owner (attribution, not authentication)", want, sender)
+}
 
 // sendViaOwnerNode is method C itself: private message file, one typed command, result read back.
 func sendViaOwnerNode(deps *ownerSendDeps, rig, seat, text string, stdout, stderr io.Writer) int {

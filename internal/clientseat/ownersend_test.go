@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientguard"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
@@ -155,6 +156,9 @@ func TestSendSendsTheTextVerbatimWithNoAddedSender(t *testing.T) {
 // --via-owner reaches the node route, so the flag is not accepted and then ignored: nothing is resolved on the
 // runtime and nothing is delivered there.
 func TestSendViaOwnerFlagReachesTheNodeRoute(t *testing.T) {
+	// The node's own shell is the only one allowed to ask for this route (viaOwnerRefusal), so the test
+	// runs the verb with the environment that shell carries.
+	t.Setenv(clientguard.SessionEnv, "demo-owner@demo")
 	restore := ownerSendDepsFor
 	t.Cleanup(func() { ownerSendDepsFor = restore })
 
@@ -173,5 +177,41 @@ func TestSendViaOwnerFlagReachesTheNodeRoute(t *testing.T) {
 	}
 	if session != "demo-owner@demo" || !strings.Contains(typed, "4genteam send demo-lead@demo") {
 		t.Errorf("--via-owner did not type into the owner node: session %q command %q", session, typed)
+	}
+}
+
+// A SEAT MAY NOT ASK FOR THE OWNER'S SIGNATURE (ruling 2026-10-18): the flag types into the node's terminal,
+// so the decision is made before a message file is written or a key is typed, and the refusal names the rule.
+func TestSendViaOwnerRefusesASeat(t *testing.T) {
+	restore := ownerSendDepsFor
+	t.Cleanup(func() { ownerSendDepsFor = restore })
+	touched := false
+	ownerSendDepsFor = func() *ownerSendDeps {
+		return &ownerSendDeps{
+			sendKeys: func(string, string) error { touched = true; return nil },
+			timeout:  time.Second, poll: time.Millisecond,
+		}
+	}
+
+	for name, env := range map[string]string{
+		"a seat":        "demo-go-dev@demo",
+		"another rig":   "other-owner@other",
+		"no env at all": "",
+	} {
+		t.Setenv(clientguard.SessionEnv, env)
+		var stdout, stderr bytes.Buffer
+		code := (sendCommand{}).Run(context.Background(),
+			[]string{"--via-owner", "demo", "lead", "hello"}, &stdout, &stderr)
+		if code != clientcmd.ExitRefused {
+			t.Fatalf("%s: exit %d, want the named refusal %d (stderr %q)", name, code, clientcmd.ExitRefused, stderr.String())
+		}
+		if touched {
+			t.Fatalf("%s: the refusal reached the node", name)
+		}
+		for _, want := range []string{"demo-owner@demo", "attribution, not authentication", "nothing was sent"} {
+			if !strings.Contains(stderr.String(), want) {
+				t.Fatalf("%s: refusal does not name %q: %q", name, want, stderr.String())
+			}
+		}
 	}
 }

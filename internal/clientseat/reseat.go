@@ -272,7 +272,7 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		fmt.Fprintln(stdout, "           decision line. DEFAULT: "+string(commpolicy.IntentNotice)+".")
 		fmt.Fprintln(stdout, "  --via-owner  send from the room's owner node: the message goes to a private file and one command")
 		fmt.Fprintln(stdout, "  carrying only its path is typed into that node, so the signature is the node's own - attribution, NOT")
-		fmt.Fprintln(stdout, "  authentication")
+		fmt.Fprintln(stdout, "  authentication. Only that node may ask for it: any other shell is refused (exit "+fmt.Sprint(clientcmd.ExitRefused)+")")
 		fmt.Fprintln(stdout, "  --raw    send the text exactly, with no From/To/Sent envelope")
 		fmt.Fprintln(stdout, "  --json   print the runtime's answer as JSON")
 		fmt.Fprintln(stdout, "  --socket PATH  the runtime daemon's Unix socket: the flag, else $"+clientruntime.RuntimeSocketEnv+", else")
@@ -339,6 +339,12 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	// own envelope here, or the owner node's terminal on the --via-owner route).
 	text := strings.Join(positional[2:], " ")
 	if opts["via-owner"] == "true" {
+		// THE NODE'S SIGNATURE IS THE ROUTE, so the node is the only caller allowed to ask for it: the
+		// refusal is decided here, before a message file is written or a key is typed (ruling 2026-10-18).
+		if refusal := viaOwnerRefusal(rig, os.Getenv); refusal != "" {
+			fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", refusal)
+			return clientcmd.ExitRefused
+		}
 		return sendViaOwnerNode(ownerSendDepsFor(), rig, seat, text, stdout, stderr)
 	}
 
