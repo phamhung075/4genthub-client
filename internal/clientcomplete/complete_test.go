@@ -783,29 +783,26 @@ func TestEvidenceNotStoredNamesTheTaskUnchanged(t *testing.T) {
 	}
 }
 
-// TestStoredEvidenceContinuesPast409 is the retry path: the hub already holds this run's evidence, so
-// the verb completes on the stored submission instead of making a post-failure retry impossible.
-func TestStoredEvidenceContinuesPast409(t *testing.T) {
+// TestEvidenceConflictStopsTheCompletion is the 409's meaning after the hub made an identical replay a
+// 200: a 409 means the task's latest evidence for this head_sha is a DIFFERENT account of it, so the
+// completion must not run - the judge would read evidence this run never computed its verdict on.
+func TestEvidenceConflictStopsTheCompletion(t *testing.T) {
 	base := repo(t)
 	rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
 	rec.evidenceStatus = http.StatusConflict
 	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
 	t.Setenv(enforcementEnv, "true")
 	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d, want 0; stderr %q", code, errs)
+	if code != clientcmd.ExitRemote {
+		t.Fatalf("exit %d, want %d; stderr %q", code, clientcmd.ExitRemote, errs)
 	}
-	if !strings.Contains(errs, "already has evidence; completing on the stored submission") {
-		t.Fatalf("the continuation is not named: %q", errs)
+	if !strings.Contains(errs, "the task was not completed: the evidence was not stored; task t1 is unchanged") {
+		t.Fatalf("the consequence is not named: %q", errs)
 	}
-	completes := 0
 	for _, call := range rec.calls {
 		if strings.HasSuffix(call, "/complete") {
-			completes++
+			t.Fatalf("a 409 must not reach the completion: %v", rec.calls)
 		}
-	}
-	if completes != 1 {
-		t.Fatalf("completion calls = %d, want exactly 1: %v", completes, rec.calls)
 	}
 }
 
@@ -816,7 +813,7 @@ func TestCompletionFailureReadsTheStateBack(t *testing.T) {
 		taskStatus string
 		want       string
 	}{
-		"still open":  {"in_progress", "the task was not completed: the completion request failed and task t1 reads in_progress"},
+		"still open":   {"in_progress", "the task was not completed: the completion request failed and task t1 reads in_progress"},
 		"already done": {"done", "the completion request failed, but task t1 reads done: it completed"},
 	}
 	for name, c := range cases {

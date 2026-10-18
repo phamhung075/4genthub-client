@@ -173,16 +173,10 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 	fmt.Fprintf(stderr, "4genteam complete: gate (%s) %s: %s\n", mode, verdict.Verdict, verdict.Reasons)
 
 	stored := clientevidence.Post(ctx, baseURL, token, opts.task, body, io.Discard, stderr)
-	switch {
-	case stored.Exit == clientcmd.ExitOK || stored.Exit == 5:
-		// stored, with or without a failing test run: the completion may proceed.
-	case stored.HTTPStatus == http.StatusConflict:
-		// The evidence for this run's own bundle is ALREADY on the hub (a retry after a failed
-		// completion). Refusing here would make the retry impossible, and the completion gate above
-		// judged this run's local bundle, of which the stored submission is the hub's record.
-		fmt.Fprintf(stderr, "4genteam complete: warning: head_sha %s already has evidence; completing on the stored submission\n", body.HeadSHA)
-		stored.Exit = clientcmd.ExitOK
-	default:
+	// A 409 is NOT a retry path any more. The hub answers an identical replay with 200 and the stored
+	// entry, so a 409 means the task's latest evidence for this head_sha is a DIFFERENT account of it:
+	// completing on it would attach this run's verdict to evidence the judge will never see.
+	if stored.Exit != clientcmd.ExitOK && stored.Exit != 5 {
 		fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the evidence was not stored; task %s is unchanged\n", opts.task)
 		return stored.Exit
 	}

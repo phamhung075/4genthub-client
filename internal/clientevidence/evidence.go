@@ -449,8 +449,9 @@ func extractFailedTests(output string) []string {
 	return names
 }
 
-// postEvidence sends the submission and relays the answer honestly. A 2xx relays the created event to
-// stdout; a 409 reads as a REFUSAL naming the head_sha that already has evidence, never as a success;
+// postEvidence sends the submission and relays the answer honestly. A 2xx relays the answered event to
+// stdout - the created one (201) or, for an identical replay, the stored one (200), which is the same
+// record; a 409 reads as a REFUSAL naming the head_sha whose stored account DIFFERS, never as a success;
 // any other non-2xx is a failure with the status named. The token is in the header and nowhere else.
 func postEvidence(ctx context.Context, baseURL, token, taskID string, body evidenceBody, stdout, stderr io.Writer) PostResult {
 	route := strings.TrimRight(baseURL, "/") + fmt.Sprintf(evidencePath, url.PathEscape(taskID))
@@ -491,8 +492,8 @@ func postEvidence(ctx context.Context, baseURL, token, taskID string, body evide
 		}
 		return PostResult{Exit: clientcmd.ExitOK, HTTPStatus: resp.StatusCode}
 	case resp.StatusCode == http.StatusConflict:
-		fmt.Fprintf(stderr, "4genteam evidence: refused (HTTP 409): head_sha %s already has evidence on this "+
-			"task, so nothing was stored; the earlier submission stands\n", body.HeadSHA)
+		fmt.Fprintf(stderr, "4genteam evidence: refused (HTTP 409): head_sha %s already carries a different "+
+			"submission on this task; nothing was stored\n", body.HeadSHA)
 		relayRefusal(stderr, answer)
 		return PostResult{Exit: clientcmd.ExitRemote, HTTPStatus: resp.StatusCode}
 	default:
