@@ -340,8 +340,14 @@ impl TerminalManager {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // Ignore session not found
-            if !stderr.contains("can't find session") && !stderr.contains("no server running") {
+            // Ignore session not found. `no current target` is the SAME fact on a server that holds no sessions
+            // at all - measured 2026-10-18 with `exit-empty off`, a `kill-session -t <name>` on a live, empty
+            // server answers `no current target` rather than `can't find session` - and a reseat that refuses
+            // there would refuse to start the first seat of a room whose server has no seats yet.
+            if !stderr.contains("can't find session")
+                && !stderr.contains("no server running")
+                && !stderr.contains("no current target")
+            {
                 return Err(format!("tmux kill-session failed: {stderr}"));
             }
         }
@@ -648,6 +654,20 @@ mod launch_env_tests {
 
         let _ = TerminalManager::stop_session(&session);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// An empty server's `kill-session` answers `no current target`, which is the same fact as `can't find
+    /// session` for a server that holds seats: there is nothing to stop. Measured 2026-10-18 on a root whose
+    /// server was up with `exit-empty off` and no sessions - a reseat of a room's first seat died there with
+    /// `tmux kill-session failed: no current target` before it could start anything.
+    #[test]
+    fn a_stop_on_a_server_holding_no_sessions_is_nothing_to_stop() {
+        let _server = super::test_servers::own("stop-empty");
+        super::ensure_server().expect("a server with no sessions");
+        assert!(
+            TerminalManager::stop_session("agenthub--nowhere--nobody").is_ok(),
+            "an empty server is not a refusal to stop a session that is not there"
+        );
     }
 
     /// The umask the runtime takes reaches a pane's command, and through it the agent that writes the
