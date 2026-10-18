@@ -31,7 +31,7 @@ read, a guard is enforced.
 2. **Pick the row of the table above** and send the owning seat an `assignment` whose definition of
    done is "committed in that file". Never a `guide` alone.
 3. **Commit by pathspec with a test or a guard** where the change is checkable; add the changelog file.
-4. **Deliver:** push the client, bump the hub pin, push the hub (owner approves each push; client first),
+4. **Deliver:** push the client, bump the hub pin, push the hub (the lead pushes after the gate; client first),
    rebuild with `./scripts/build.sh --no-test` when code changed, then `4genteam room reseat <rig> <seat>` for each affected seat.
 5. **Prove delivery:** read the installed copy under `~/.config/4genthub/rooms/<rig>/seats/<seat>/skills`
    (or its `AGENTS.md`) and confirm the new text is there. A change not found there did not ship.
@@ -49,6 +49,6 @@ read, a guard is enforced.
 
 - [ ] The target metric and its before-value were recorded.
 - [ ] The change is in a committed file named in the table, with a test or guard where checkable.
-- [ ] Client, pin and hub were pushed with the owner's approval, in that order.
+- [ ] Client, pin and hub were pushed by the lead, in that order.
 - [ ] The installed seat copy shows the new text after reseat.
 - [ ] A later benchmark shows the metric moved, or the change is reverted.

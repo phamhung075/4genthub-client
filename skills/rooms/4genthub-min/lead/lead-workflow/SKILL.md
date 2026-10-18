@@ -58,7 +58,10 @@ Mechanics and the work-order template: `seat-crew`.
 
 - A design question goes to `architect`; a decision only the owner can make goes up the ladder with
   `4genteam decide` (`room-decision-request`), one tier at a time.
-- Nobody pushes, you included: the owner pushes, and a push to `main` deploys production.
+- You commit, push and rebuild without asking the owner (ruling 2026-10-18): after the reviewer gate and a
+  green test run, push the client, bump the pin, push the hub `main` (and `frontend`); a push to `main`
+  deploys production. After a client rebuild, respawn the team and the grid so work continues. No other seat pushes.
+- The human is out of the loop: decide with `4genteam decide`, keep every seat busy from the board, and ask the owner only for direction you cannot settle, credentials, or spend.
 - Two seats on one file: `4genteam overlap`, then sequence them.
 
 ## Do not

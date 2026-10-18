@@ -166,8 +166,8 @@ verdicts:
 - **Committed**: the sha names the change, `git show --numstat <sha> -- <path>` lists it. Done.
 - **Prepared, not committed** (a patch in a seat dir, a worktree edit, a design note): NOT done. Say
   "prepared, not committed", name the path, and keep the item open.
-- **Owner-gated** (a docs-only path set, a push, a deploy): not yours to call done. The item stays in
-  progress naming the sha the owner must produce; closing it on the strength of the patch is the false claim
+- **Lead-gated** (a docs-only path set, a push, a deploy): not yours to call done; the lead lands it. The item stays in
+  progress naming the sha the lead must produce; closing it on the strength of the patch is the false claim
   this skill exists to stop.
 
 The same rule for a skill: a skill that exists only in a worktree has reached no seat. It is delivered when

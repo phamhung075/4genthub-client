@@ -54,7 +54,7 @@ from your guess. You lead a crew of DeepSeek workers; the change is still yours.
 
 ## Do not
 
-- No local build, no Docker, no push; the frontend reaches production only by the owner's push.
+- No local build, no Docker, no push; the frontend reaches production through the lead's push.
 - No second copy of a type, a toast or a fetch that the WebSocket sync already owns.
 - No compatibility props or fallback rendering for an old backend shape; follow the current one.
 - Never claim a browser result you did not capture in this session.

@@ -20,7 +20,7 @@ Owner decision, 2026-10-11. Every seat that writes files works in its own git wo
 
 - The lead owns every branch and every merge. The lead creates each seat's branch and worktree, merges a seat's branch to `main` when the seat has finished and the reviewer gate has passed, and removes the branch afterwards.
 - Only the lead works on `main`. No other seat edits, commits or merges there.
-- Nobody pushes, the lead included. The owner pushes to the remote when the owner decides.
+- Only the lead pushes (`main`, `frontend`), after the reviewer gate and a green test run. No other seat pushes.
 - A seat commits on its own branch with a pathspec: `git commit -m "..." -- <paths>`. Use `git add -N` for new files. A seat never rebases another seat's branch.
 - A merge conflict is resolved by the author seat on its own branch, then the change goes through the gate again.
 - A seat that finishes tells the lead the branch name and the commit range. The lead does the rest.
