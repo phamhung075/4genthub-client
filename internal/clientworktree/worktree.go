@@ -374,9 +374,9 @@ func clearStaleClientWorktrees(mainRoot, roomDir string, derived []clientservice
 		byPath[canonicalPath(entry.Path)] = entry
 	}
 	for _, worktree := range derived {
-		if worktree.Branch == "" {
-			continue
-		}
+		// EVERY derived seat, a detached one included: the record says `<seat>-client` is the
+		// pre-derivation layout, and a reviewer's legacy is that layout too. Its link is detached at the
+		// pin either way, so there is no branch a removal would need to preserve.
 		legacyPath := filepath.Join(roomDir, "wt", worktree.SeatKey+legacyClientSuffix)
 		entry, held := byPath[canonicalPath(legacyPath)]
 		if !held {

@@ -704,3 +704,40 @@ func TestEnsureNotesAKeptPathsLinkThatCannotBePlaced(t *testing.T) {
 		t.Errorf("the kept path %s is no longer registered", seat.Path)
 	}
 }
+
+// A DETACHED legacy is the same pre-derivation layout, so it is cleared too - the reviewer is a derived
+// seat and its link is detached at the pin, so there is no branch a removal would need to preserve. It is
+// the last shape the by-branch test used to skip.
+func TestEnsureClearsADetachedLegacyClientWorktree(t *testing.T) {
+	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "review", Type: "reviewer"}})
+	stubLinkProviderKey(t)
+	seat := fixture.derived()[0]
+	if seat.Branch != "" {
+		t.Fatalf("the fixture's reviewer is on branch %q; this case needs a detached seat", seat.Branch)
+	}
+	clientRepository := filepath.Join(fixture.main, clientSubmodule)
+	legacy := seat.Path + "-client"
+	link := filepath.Join(seat.Path, clientSubmodule)
+	gitIn(t, clientRepository, "worktree", "add", "--detach", legacy, fixture.pins[clientSubmodule])
+
+	var out strings.Builder
+	if err := fixture.ensure(&out); err != nil {
+		t.Fatalf("a clean detached legacy blocked the start step: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), legacy+": cleared") {
+		t.Errorf("the run did not report clearing %s:\n%s", legacy, out.String())
+	}
+	if entry, registered := clientEntry(t, clientRepository, legacy); registered {
+		t.Errorf("%s is still a registered worktree of the client repository: %+v", legacy, entry)
+	}
+	// The reviewer's link is detached at the pin, as it always is: the migration removed a location, it
+	// did not change where the reviewer's client code is read.
+	entry, registered := clientEntry(t, clientRepository, link)
+	if !registered || !entry.Detached {
+		t.Errorf("the reviewer's client link at %s is %+v (registered=%v); want it detached at the pin",
+			link, entry, registered)
+	}
+	if got := gitIn(t, link, "rev-parse", "HEAD"); got != fixture.pins[clientSubmodule] {
+		t.Errorf("the reviewer's link is at %s, want the parent's gitlink %s", got, fixture.pins[clientSubmodule])
+	}
+}
