@@ -1404,6 +1404,11 @@ mod tests {
             "the wake names its blocker: {}",
             wake[0].transition_note
         );
+        // The wake moves the STATE, never the destination: the transition's actor is whoever CLOSED the blocker -
+        // the audit's "who woke this" - and reading it as a new destination is what made an owner row look
+        // re-routed three times on 2026-10-18 while its destination field never changed.
+        assert_eq!(woken.destination_session, dependent.destination_session);
+        assert_eq!(wake[0].actor_session, "seat-closer");
 
         for (row, label) in [(&elsewhere, "another row"), (&parked, "no blocked_on")] {
             let still = store.show(&row.qitem_id).expect("show");

@@ -128,7 +128,7 @@ func TestRoomQueueCreateSendsTheEnvSessionAsSource(t *testing.T) {
 	}
 	want := "room: " + testRoom + "@" + daemon.stateDir + " socket: " + daemon.socket + "\n" +
 		"qitem-new pending normal hand me the build log\n" +
-		"1 2026-10-14T00:17:00Z - -> pending " + testSeat + " | created\n"
+		"1 2026-10-14T00:17:00Z - -> pending by " + testSeat + " | created\n"
 	if stdout != want {
 		t.Fatalf("stdout:\n got %q\nwant %q (stderr %q)", stdout, want, stderr)
 	}
@@ -235,7 +235,7 @@ func TestRoomQueueUpdateWithANoteSendsAStatePreservingTransition(t *testing.T) {
 	}
 	want := "room: " + testRoom + "@" + daemon.stateDir + " socket: " + daemon.socket + "\n" +
 		"qitem-x in-progress high hand me the build log\n" +
-		"2 2026-10-14T00:24:00Z in-progress -> in-progress " + testSeat + " | waiting on the log\n"
+		"2 2026-10-14T00:24:00Z in-progress -> in-progress by " + testSeat + " | waiting on the log\n"
 	if stdout != want {
 		t.Fatalf("stdout:\n got %q\nwant %q (stderr %q)", stdout, want, stderr)
 	}
@@ -297,8 +297,8 @@ func TestRoomQueueShowPrintsTheRowsFieldsThenItsTransitions(t *testing.T) {
 		"ts_created: -\n" +
 		"ts_updated: -\n" +
 		"transitions: 2\n" +
-		"1 2026-10-14T00:17:00Z - -> pending lead@rig | created\n" +
-		"2 2026-10-14T00:24:00Z pending -> in-progress " + testSeat + " | claimed\n"
+		"1 2026-10-14T00:17:00Z - -> pending by lead@rig | created\n" +
+		"2 2026-10-14T00:24:00Z pending -> in-progress by " + testSeat + " | claimed\n"
 	if stdout != want {
 		t.Fatalf("stdout:\n got %q\nwant %q (stderr %q)", stdout, want, stderr)
 	}

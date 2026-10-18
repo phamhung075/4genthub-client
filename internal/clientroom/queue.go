@@ -328,11 +328,14 @@ func queueRowLine(row clientruntime.QueueRow) string {
 }
 
 // queueTransitionLine is one transition as show and the write verbs render it:
-// `<transition_id> <ts> <from_state> -> <state> <actor> | <note>`. The note is the transition's own text,
-// appended after the bar; a transition that carries no note still ends at the bar, so a note-less step is
-// visibly note-less rather than looking like a row whose note was not printed.
+// `<transition_id> <ts> <from_state> -> <state> by <actor> | <note>`. The actor is LABELLED because printed bare
+// after the arrow it read as the row's new DESTINATION: on 2026-10-18 an owner row was believed routed away from
+// its addressee three times - "blocked -> pending agenthub--rig--reviewer" - while the destination field never
+// changed and the line only named who closed the blocker. The note is the transition's own text, appended after
+// the bar; a transition that carries no note still ends at the bar, so a note-less step is visibly note-less
+// rather than looking like a row whose note was not printed.
 func queueTransitionLine(transition clientruntime.QueueTransition) string {
-	line := fmt.Sprintf("%d %s %s -> %s %s |",
+	line := fmt.Sprintf("%d %s %s -> %s by %s |",
 		transition.TransitionID, transition.Ts, dashPointer(transition.FromState),
 		transition.State, orDash(transition.ActorSession))
 	if transition.TransitionNote != "" {
