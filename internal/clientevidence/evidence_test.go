@@ -215,6 +215,7 @@ func TestEvidenceUsageErrorsNeverWork(t *testing.T) {
 		{"base flag with no value", []string{"--task", "task-1", "--base"}, "--base is required"},
 		{"unknown argument", []string{"--task", "task-1", "--base", "main", "--nope"}, "unknown argument: --nope"},
 		{"unterminated quote in the test line", []string{"--task", "task-1", "--base", "main", "--test", "go test 'oops"}, "--test has an unterminated quote"},
+		{"a sentence in the test line", []string{"--task", "task-1", "--base", "main", "--test", "go test ./... (green at 1daa0e6d; repoguards 0.2s)"}, "--test is split into an argument list"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -665,6 +666,9 @@ func TestSplitCommand(t *testing.T) {
 		{`python -m pytest -k "not slow" tests/`, []string{"python", "-m", "pytest", "-k", "not slow", "tests/"}},
 		{`echo "  spaced  "`, []string{"echo", "  spaced  "}},
 		{`echo a\ b`, []string{"echo", "a b"}},
+		// A quoted line is a shell's own job, so the characters a shell acts on survive inside the quotes
+		// and the caller that wants them names the shell.
+		{`sh -c 'go test ./... (green at 1daa0e6d)'`, []string{"sh", "-c", "go test ./... (green at 1daa0e6d)"}},
 		{"", nil},
 	}
 	for _, tc := range cases {
@@ -685,6 +689,25 @@ func TestSplitCommand(t *testing.T) {
 	for _, line := range []string{"go test 'oops", `echo "oops`, `echo "oops'`} {
 		if _, err := splitCommand(line); err == nil {
 			t.Errorf("splitCommand(%q) accepted an unterminated quote", line)
+		}
+	}
+	// Measured 2026-10-18: this exact line was passed to a completion gate, ran as `go ... (green`, exited
+	// non-zero and was read as D3 "the test run failed" over a green tree. Each metacharacter is now a
+	// refusal naming the splitting; the quoted forms above are how a line that needs one still runs.
+	for _, line := range []string{
+		"go test ./... (green at 1daa0e6d)",
+		"go test ./... | grep FAIL",
+		"go test ./...; echo done",
+		"go test ./... > out.txt",
+		"echo `date`",
+	} {
+		_, err := splitCommand(line)
+		if err == nil {
+			t.Errorf("splitCommand(%q) accepted an unquoted shell metacharacter", line)
+			continue
+		}
+		if !strings.Contains(err.Error(), "argument list") {
+			t.Errorf("splitCommand(%q) error = %q, want it to name the argument-list split", line, err)
 		}
 	}
 }

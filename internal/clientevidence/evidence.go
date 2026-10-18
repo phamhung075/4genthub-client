@@ -314,11 +314,22 @@ func parseEvidenceArgs(args []string) (evidenceOptions, bool, error) {
 	return opts, false, nil
 }
 
+// shellMetachars are the characters a shell would act on and this splitter would not: unquoted, they
+// are prose or a script the verb cannot honour, so splitCommand refuses them instead of running a
+// command line that means something else than what was typed.
+const shellMetachars = "()|&;<>`"
+
 // splitCommand splits a command LINE into an argument list without a shell. Quotes are honoured ('...'
 // is literal, "..." honours a backslash escape) and the rules are the Unix ones, because the seat's own
 // shell is where the user typed the line. A command that needs a pipe, a redirect or a glob must be
 // wrapped by the caller in a shell it names itself: this verb will not hand a string to sh -c or cmd /c,
 // which is the client's no-shell-strings rule and the reason the same code can run on Windows.
+//
+// An UNQUOTED shell metacharacter is REFUSED, not passed on. Without a shell `(` `)` `;` `|` `&` `<` `>`
+// and a backtick are ordinary argument characters, so a sentence typed into --test - the measured case,
+// `go test ./... (green at 1daa0e6d; repoguards 0.2s)` - reached the command as `(green` and friends,
+// the command exited non-zero for a reason that was never a test failure, and the gate read D3 "the test
+// run failed" over a green tree. The refusal names the splitting and the quoted form that still works.
 func splitCommand(line string) ([]string, error) {
 	runes := []rune(line)
 	var args []string
@@ -340,6 +351,10 @@ func splitCommand(line string) ([]string, error) {
 		switch {
 		case quote == 0 && unicode.IsSpace(r):
 			flush()
+		case quote == 0 && strings.ContainsRune(shellMetachars, r):
+			return nil, fmt.Errorf("--test is split into an argument list and never read by a shell, so the unquoted %q "+
+				"would be passed to the command as its own argument: pass the bare command, or put the whole line "+
+				"inside a shell you name yourself, e.g. sh -c '...'", r)
 		case r == '\'' && quote != '"':
 			if quote == '\'' {
 				quote = 0
