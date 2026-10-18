@@ -168,6 +168,10 @@ func TestACwdOutsideTheDerivedWorktreeIsF1(t *testing.T) {
 	if !strings.Contains(verdict.Failures[0].Detail, f.worktree) {
 		t.Fatalf("F1 does not name the derived worktree: %q", verdict.Failures[0].Detail)
 	}
+	// The refusal names the way out, with the room and the seat the remedy takes.
+	if !strings.Contains(verdict.Failures[0].Detail, "4genteam seat reseat "+f.room+" --seat "+f.seat) {
+		t.Fatalf("F1 does not name the remedy: %q", verdict.Failures[0].Detail)
+	}
 }
 
 func TestASetSkillTheRuntimeDidNotLoadIsF3(t *testing.T) {
@@ -203,8 +207,9 @@ func TestASkillInstalledButNotInTheTreeIsF2(t *testing.T) {
 	if len(verdict.Failures) != 1 || verdict.Failures[0].Code != codeForeign {
 		t.Fatalf("want one F2, got %v", codes(verdict.Failures))
 	}
-	if !strings.Contains(verdict.Failures[0].Detail, "leftover") {
-		t.Fatalf("F2 does not name the skill: %q", verdict.Failures[0].Detail)
+	if !strings.Contains(verdict.Failures[0].Detail, "leftover") ||
+		!strings.Contains(verdict.Failures[0].Detail, filepath.Join("leftover", clientskills.SkillFile)) {
+		t.Fatalf("F2 does not name the skill and its file: %q", verdict.Failures[0].Detail)
 	}
 }
 

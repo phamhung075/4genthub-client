@@ -42,8 +42,20 @@ it compares each seat's INSTALLED tree with the tree the runtime installed from.
 
 `doctor 4genthub-min` now names real drift: five seats' cwds are hand-made worktrees (F1, lead and go-dev
 included), the installed `seat-worktree` and `short-output` copies carry a pre-change description (F5),
-and `fe-dev` holds a skill the tree does not declare (F2) while missing one it does (F3). Row line
-`4genthub-min seats: skills_stale`, 16 reasons on `--json`, exit 3.
+and `fe-dev`'s installed `taste-skill/SKILL.md` declares `name: design-taste-frontend`, so omp loads
+`design-taste-frontend` (F2, the name the set does not carry) and never loads `taste-skill` (F3). The
+installed copy is byte-identical to the tree's - F5 is silent on it, correctly - so the defect is in the
+tree's own frontmatter, not in a stale install. Row line `4genthub-min seats: skills_stale`, 16 reasons
+on `--json`, exit 3.
+
+### The two lines a reader acts on
+
+- **F1's refusal names the way out**, because on a rig whose seats run in hand-made worktrees it refuses
+  `up` every time and that is the rule working: `... is not its worktree <path>; reseat it
+  (\`4genteam seat reseat <room> --seat <seat>\`) or start it so its worktree is derived`.
+- **F2 names the FILE**, not only the directory: `skill "<name>" loads from <filePath> in the installed
+  tree, but the tree declares no skill by that name` - an installed `SKILL.md` that declares a name
+  differing from its directory is the case the line exists for.
 
 ### Tests
 

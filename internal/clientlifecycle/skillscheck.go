@@ -101,6 +101,9 @@ type seatSkillsVerdict struct {
 // own; an empty field is "not observed", which the check reports as a note rather than deciding a code from
 // a guess.
 type seatSkillInput struct {
+	// Room is the room the seat belongs to: F1's refusal names the verb that fixes it, and that verb takes
+	// the room first.
+	Room string
 	// Seat is the seat's name within the room.
 	Seat string
 	// Runtime is the seat spec's runtime: "omp" is the one this check has evidence for.
@@ -172,7 +175,11 @@ func checkOneSeatSkills(in seatSkillInput) ([]seatSkillFailure, []seatSkillFailu
 	case in.Cwd == "" || in.Worktree == "":
 		note("the seat's cwd or its worktree was not obtainable, so F1 cwd cannot be decided")
 	case in.Cwd != in.Worktree:
-		fail(codeCwd, fmt.Sprintf("cwd %s is not its worktree %s", in.Cwd, in.Worktree))
+		// A REFUSAL NAMES THE WAY OUT. On a rig whose seats run in hand-made worktrees this line refuses
+		// `up` every time, and that is the rule working - but a refusal with no remedy is a dead end for the
+		// owner, so the two routes that put the seat in its derived worktree are named beside the finding.
+		fail(codeCwd, fmt.Sprintf("cwd %s is not its worktree %s; reseat it (`4genteam seat reseat %s --seat %s`) "+
+			"or start it so its worktree is derived", in.Cwd, in.Worktree, in.Room, in.Seat))
 	}
 
 	if in.Runtime != runtimeOMP {
@@ -262,8 +269,12 @@ func checkOmpList(in seatSkillInput, listed []ompSkillEntry, fail func(code, det
 					entry.Name, entry.Source))
 				continue
 			}
+			// Name the FILE, not only the directory: an installed skill whose SKILL.md declares a different
+			// name is the case this line exists for, and the filePath is what tells a reader which entry is
+			// wrong.
 			fail(codeForeign, fmt.Sprintf(
-				"skill %q is installed at %s but the tree does not declare it", entry.Name, installed))
+				"skill %q loads from %s in the installed tree, but the tree declares no skill by that name",
+				entry.Name, entry.FilePath))
 			continue
 		}
 		if !pathWithin(installed, entry.FilePath) {
@@ -599,6 +610,7 @@ func seatSkillInputs(root, room string) ([]seatSkillInput, []seatSkillFailure) {
 		}
 		agentDir := filepath.Join(roomDir, "seats", status.Seat)
 		inputs = append(inputs, seatSkillInput{
+			Room:     room,
 			Seat:     status.Seat,
 			Runtime:  status.Runtime,
 			AgentDir: agentDir,
