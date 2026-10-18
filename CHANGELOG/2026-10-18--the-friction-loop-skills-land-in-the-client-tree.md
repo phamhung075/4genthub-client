@@ -36,20 +36,24 @@ other` (`internal/clientfeedback/feedback.go`), so both now say `client`.
   `friction-triage` and not `improvement-review`; for `architect` it carries `system-improvement-analysis`;
   for `reviewer` it carries `improvement-review`; `architect-ecosystem-review`, `friction-report` and
   `self-check-while-working` are in every seat's set.
+- Second commit (docs only): `go test -count=1 ./internal/clientskills/ ./internal/clientlifecycle/` ok -
+  the first reads every `SKILL.md` in the tree and fails on a link that does not resolve.
 
-## Found, not changed - for the lead's ruling
+## The two stale lines, fixed under the lead's ruling
 
-Two claims in the recovered text are stale against this tree. Both are outside this recovery's ruling
-("byte-identical except `openrig` -> `client`"), so they are reported rather than edited here:
+The lead ruled them in scope, superseding "byte-identical except `openrig` -> `client`"; the second commit
+on this branch fixes both, bytes otherwise unchanged:
 
-- `skills/rooms/4genthub-min/architect-ecosystem-review/SKILL.md` reads stuck work from `rig parked`. `rig`
-  is not this client (the client is `4genteam`; `rig` is not on PATH on this box), and the live surface is
-  `4genteam room status`, whose seat row carries the `parked=` field with the record's reason and numbers
-  (`internal/clientroom/park.go`).
-- `skills/share/self-check-while-working/SKILL.md` names the `F1`-`F5` launch check as "implemented on the
-  client branch `4genthub-min/go-dev` (`63bf909`), not yet landed". It has landed on `main`: `up` runs it
-  after every seat launch and `doctor` reports it as the seats row
-  (`internal/clientlifecycle/skillscheck.go`, `runUp`'s `roomSkillsVerdict` in `lifecycle.go`).
+- `skills/rooms/4genthub-min/architect-ecosystem-review/SKILL.md` reads stuck work from the `parked=` field
+  on a `4genteam room status` seat row (`internal/clientroom/park.go`), not the retired `rig parked`.
+- `skills/share/self-check-while-working/SKILL.md` names the `F1`-`F5` launch check as landed on client
+  `main` (`617c283`, `992d184`) in `internal/clientlifecycle/skillscheck.go`, which `up`, `doctor` and
+  `reseat` run - not "implemented on branch `4genthub-min/go-dev` (`63bf909`), not yet landed", a hash that
+  resolves in no repository.
+
+As found before the ruling, for the record: the live check landed with `up` reading what the runtime
+installed and `doctor` reporting it as the seats row (`internal/clientlifecycle/skillscheck.go`,
+`runUp`'s `roomSkillsVerdict`, `lifecycle.go`).
 
 ## Not in this change
 

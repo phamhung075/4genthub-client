@@ -13,7 +13,7 @@ named below. Read the owner; do not copy it here.
 | Check | Owner |
 |---|---|
 | I am in my own worktree, on my own branch | `seat-worktree` |
-| I have the skills and tools this item needs | the `F1`-`F5` launch check - defined by the seat-skills ruling, `ai_docs/core-architecture/seat-skills.md` §6 (4genthub repo); implemented on the client branch `4genthub-min/go-dev` (`63bf909`), not yet landed |
+| I have the skills and tools this item needs | the `F1`-`F5` launch check - defined by the seat-skills ruling, `ai_docs/core-architecture/seat-skills.md` §6 (4genthub repo); landed on client `main` (`617c283`, `992d184`) in `internal/clientlifecycle/skillscheck.go`, which `up`, `doctor` and `reseat` run |
 | I know the acceptance criterion and where the evidence goes | the item's own brief |
 
 ## At item close

@@ -15,7 +15,7 @@ Per batch first; daily only if the trial earns it. A review that does not change
 
 - the feedback channel, grouped by `layer`;
 - the board's `friction` items and their triage outcomes;
-- stuck work: `rig parked`, blocked rows;
+- stuck work: the `parked=` field on a `4genteam room status` seat row, blocked rows;
 - cost rows.
 
 ## Output (one artifact)
