@@ -3,7 +3,8 @@
 //
 // It does two jobs and nothing else:
 //   1. GUARD: block the calls the owner's standing rules forbid a seat - printing a secret from a `.env`
-//      file, running Docker, pushing (a push to main deploys production, and the owner approves every one), changing the room's own tmux server,
+//      file, running Docker, pushing (a push to main deploys production; the lead pushes after the reviewer
+//      gate and a green test run, every other seat does not), changing the room's own tmux server,
 //      bypassing the git hooks, destructive git, killing processes by pattern, building the frontend locally
 //      (a vite build took 3.9 GB), and writing outside the directories
 //      the launcher names for the seat ($AGENTHUB_WORKTREES, set by the supervisor from the room spec) or into the
@@ -25,6 +26,35 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const seat = process.env.AGENTHUB_SEAT ?? "";
+
+/// The one seat the owner's 2026-10-18 ruling lets push: the lead, after the reviewer gate and a green test
+/// run. The exception is the seat KEY, not a room, a path or a name that merely starts with it, and it is
+/// read from either spelling a runtime sets - `agenthub--<room>--<seat>` or `<room>-<seat>@<room>`.
+const PUSH_AUTHORITY_SEAT = "lead";
+
+/// The seat a session name names, in either spelling; "" when it names none.
+function sessionSeat(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed.startsWith("agenthub--")) {
+    const rest = trimmed.slice("agenthub--".length);
+    const at = rest.lastIndexOf("--");
+    if (at <= 0 || at === rest.length - 2) return "";
+    return rest.slice(at + 2);
+  }
+  const at = trimmed.lastIndexOf("@");
+  if (at <= 0 || at === trimmed.length - 1) return "";
+  const room = trimmed.slice(at + 1);
+  const left = trimmed.slice(0, at);
+  const prefix = `${room}-`;
+  return left.startsWith(prefix) ? left.slice(prefix.length) : "";
+}
+
+function pushAuthority(): boolean {
+  if (seat === PUSH_AUTHORITY_SEAT) return true;
+  return [process.env.AGENTHUB_SESSION_NAME ?? "", process.env.OPENRIG_SESSION_NAME ?? ""].some(
+    (name) => sessionSeat(name) === PUSH_AUTHORITY_SEAT,
+  );
+}
 const logPath = join(process.env.PI_CODING_AGENT_DIR ?? ".", "tool-calls.jsonl");
 const MAX_TARGET = 240;
 // A refused command is kept whole: the rule that blocked it is judged by reading what it blocked.
@@ -475,11 +505,13 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     },
   },
   {
+    // The lead is the one seat the owner's 2026-10-18 ruling lets push, after the reviewer gate and a green
+    // test run. Every other seat keeps the refusal below.
     rule: "push",
     check: (tool, input) =>
-      tool === "bash" && statements(input).some((part) => GIT_PUSH_CALL.test(part))
-        ? "a seat does not push: a push to main deploys production and the owner approves every one. Report the commit to the lead"
-        : "",
+      pushAuthority() || tool !== "bash" || !statements(input).some((part) => GIT_PUSH_CALL.test(part))
+        ? ""
+        : "a seat does not push: a push to main deploys production and only the lead pushes it. Report the commit to the lead",
   },
   {
     // A ceiling a seat can raise is not a ceiling. READING the room's limits stays the seat's business - it should

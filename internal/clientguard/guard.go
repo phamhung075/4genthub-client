@@ -12,7 +12,12 @@
 //
 // A REFUSAL MUST BE ACTIONABLE. 4.4's second risk is a blocked seat with nobody watching: a refusal without
 // a human present is a stall, not a stop. Every refusal this package writes names what was seen, why it is
-// refused, and the route out - the owner pushes, the seat commits in its own worktree, the lead is told.
+// refused, and the route out - the lead pushes after the reviewer gate, the seat commits in its own worktree.
+//
+// THE LEAD PUSHES (owner's ruling, 2026-10-18). The lead commits, pushes and rebuilds without asking the
+// owner; no other seat pushes. The exception is decided from the seat the environment names, never from a
+// path: a lead session may push from the checkout or from a linked worktree, and is not refused for
+// committing in the checkout it owns. Every other seat keeps the standing rule.
 package clientguard
 
 import (
@@ -33,6 +38,18 @@ const (
 // runtime-neutral way to tell a seat's shell from a terminal the owner is working in.
 const SessionEnv = "OPENRIG_SESSION_NAME"
 
+// CanonicalSessionEnv is the variable the 4genthub runtime sets on every seat (`agenthub--<room>--<seat>`).
+// Both spellings are read: the guard has to name the seat it judges on the host it runs on, and the room's
+// seats carry the canonical one.
+const CanonicalSessionEnv = "AGENTHUB_SESSION_NAME"
+
+// canonicalSessionPrefix begins the canonical session name; the room and the seat follow it, dot-free.
+const canonicalSessionPrefix = "agenthub--"
+
+// PushAuthoritySeat is the one seat the owner's ruling lets push. The exception is a seat KEY, not a room,
+// a path or a role string read from elsewhere: the same key names the session on every runtime.
+const PushAuthoritySeat = "lead"
+
 // Session is what the daemon's session name says: `<room>-<seat>@<room>`, both ends matched so a name that
 // merely contains the room is another room's session.
 type Session struct {
@@ -43,13 +60,35 @@ type Session struct {
 // Line is the session name back in the shape the environment carries.
 func (s Session) Line() string { return s.Room + "-" + s.Seat + "@" + s.Room }
 
-// SessionFromEnv reads a seat's session out of the environment. `false` means this shell is not a seat's:
-// either the variable is absent (the owner's terminal, where the daemon sets nothing) or it does not name a
-// session, which is a fact the caller reports rather than guesses around.
+// SessionFromEnv reads a seat's session out of the environment, in either spelling the runtimes set: the
+// OpenRig name (`<room>-<seat>@<room>`) or the canonical one (`agenthub--<room>--<seat>`). `false` means this
+// shell is not a seat's: either no variable is present (the owner's terminal, where nothing is set) or none
+// names a session, which is a fact the caller reports rather than guesses around.
 func SessionFromEnv(getenv func(string) string) (Session, bool) {
-	name := strings.TrimSpace(getenv(SessionEnv))
+	for _, name := range []string{SessionEnv, CanonicalSessionEnv} {
+		if session, ok := sessionNamed(getenv(name)); ok {
+			return session, true
+		}
+	}
+	return Session{}, false
+}
+
+// sessionNamed parses one session name in either spelling; anything else is not a session.
+func sessionNamed(name string) (Session, bool) {
+	name = strings.TrimSpace(name)
 	if name == "" {
 		return Session{}, false
+	}
+	if rest, ok := strings.CutPrefix(name, canonicalSessionPrefix); ok {
+		at := strings.LastIndex(rest, "--")
+		if at <= 0 || at == len(rest)-2 {
+			return Session{}, false
+		}
+		room, seat := rest[:at], rest[at+2:]
+		if seat == "" || strings.ContainsAny(room+seat, " /") {
+			return Session{}, false
+		}
+		return Session{Room: room, Seat: seat}, true
 	}
 	at := strings.LastIndex(name, "@")
 	if at <= 0 || at == len(name)-1 {
@@ -107,6 +146,10 @@ type Verdict struct {
 // Refused reports whether the git command must not proceed.
 func (v Verdict) Refused() bool { return len(v.Refusals) > 0 }
 
+// pushes reports whether this session is the seat the owner's ruling lets push. A session is required: a
+// working tree with no session name is never assumed to be the lead.
+func (f Facts) pushes() bool { return f.HasSession && f.Session.Seat == PushAuthoritySeat }
+
 // Lines is everything the guard says, refusals first, so one writer can report it.
 func (v Verdict) Lines() []string {
 	lines := make([]string, 0, len(v.Refusals)+len(v.Warnings))
@@ -127,17 +170,18 @@ func Decide(f Facts) Verdict {
 	if f.Hook == HookPrePush {
 		// Push fails CLOSED (4.4): from a seat's worktree, or from a shell the daemon named as a seat, the
 		// answer is no - and it is still no when the two disagree, because only a checkout without either
-		// signal may push.
-		if seat || inWorktree {
+		// signal may push. The lead is the one seat the owner's ruling lets push.
+		if !f.pushes() && (seat || inWorktree) {
 			verdict.Refusals = append(verdict.Refusals, refusalPush(f))
 		}
 	} else {
 		// A SEAT's commit in the shared checkout is refused: it is the day's own failure, and a commit made
 		// there is attributed to no seat and mixes with everyone else's. The owner commits in the checkout
 		// legitimately - the checkout is the owner's tree, not a seat's - so the refusal needs the daemon's
-		// session name, which every runtime's seat has. Without it this is the doctor's F1 row to report, not
-		// a refusal that would stop the owner's own work (4.4's first risk).
-		if !inWorktree && seat {
+		// session name, which every runtime's seat has. The lead is exempt: the checkout is where the lead
+		// merges and commits main. Without a session name this is the doctor's F1 row to report, not a
+		// refusal that would stop the owner's own work (4.4's first risk).
+		if !inWorktree && seat && !f.pushes() {
 			verdict.Refusals = append(verdict.Refusals, refusalSharedCheckout(f))
 		}
 		if line := refusalForeignAuthor(f); line != "" {
@@ -163,14 +207,14 @@ func Decide(f Facts) Verdict {
 var SecretInChange = secretscan.Contains
 
 func refusalPush(f Facts) string {
-	who := "this working tree is a linked worktree"
+	who := "this linked worktree"
 	if f.HasSession {
 		who = "session " + f.Session.Line()
 	}
-	return "the git guard refuses a push: " + who + " is a seat, and seats do not push (the owner does). " +
-		"Nothing was pushed and nothing was changed here. Hand the commit hash to the lead, who asks the " +
-		"owner to push it; if you are the owner, run the push from the checkout itself, not from a seat's " +
-		"worktree " + f.Worktree + "."
+	return "the git guard refuses a push: " + who + " is a seat, and only the lead pushes (after the " +
+		"reviewer gate and a green test run). Nothing was pushed and nothing was changed here. Hand the " +
+		"commit hash to the lead, who pushes it; if you are the owner, run the push from the checkout " +
+		"itself, not from a seat's worktree " + f.Worktree + "."
 }
 
 func refusalSharedCheckout(f Facts) string {
