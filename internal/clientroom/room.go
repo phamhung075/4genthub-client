@@ -55,7 +55,7 @@ type RoomCommand struct{}
 // because the group's own announcements were four hand-written copies of the same four names, and `queue`,
 // `report`, `metrics` and `limits` all shipped while every copy still said four: a ninth verb is now one line
 // here, and TestEveryDispatchedRoomVerbIsAnnounced fails if the dispatcher and this list ever part company.
-var roomVerbs = []string{"status", "stop", "reseat", "compact", "queue", "report", "metrics", "limits"}
+var roomVerbs = []string{"status", "stop", "reseat", "compact", "queue", "report", "metrics", "limits", "sync"}
 
 func roomVerbList() string { return strings.Join(roomVerbs, ", ") }
 
@@ -90,12 +90,14 @@ func (RoomCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		return runMetrics(args[1:], stdout, stderr)
 	case "limits":
 		return runLimits(args[1:], stdout, stderr)
+	case "sync":
+		return runSync(ctx, args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "4genteam room: unknown verb %q; the verbs are %s\n", args[0], roomVerbList())
 	return clientcmd.ExitRoomRefused
 }
 
-const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM SEAT | compact ROOM | queue SUB-VERB ROOM | report ROOM | metrics ROOM | limits ROOM) [--state-root DIR] [--socket PATH]"
+const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM SEAT | compact ROOM | queue SUB-VERB ROOM | report ROOM | metrics ROOM | limits ROOM | sync [ROOM]) [--state-root DIR] [--socket PATH]"
 
 // subUsages is one line per sub-verb, so a usage error prints the shape of the verb the caller actually
 // typed instead of the whole group's grammar.
@@ -108,6 +110,7 @@ var subUsages = map[string]string{
 	"report":  reportUsage,
 	"metrics": metricsUsage,
 	"limits":  limitsUsage,
+	"sync":    "usage: 4genteam room sync [ROOM] [--json] [--url BASE]",
 }
 
 func subUsage(verb string) string {
@@ -122,10 +125,11 @@ func subUsage(verb string) string {
 // is only honest when the reader is told what fills the gap.
 func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, subUsage(verb))
-	fmt.Fprintln(out, "\nEvery sub-verb prints the pair it ran against - `room: <room>@<state-dir> socket: <socket>` -")
+	fmt.Fprintln(out, "\nEvery sub-verb that asks the runtime prints the pair it ran against - `room: <room>@<state-dir> socket: <socket>` -")
 	fmt.Fprintln(out, "because neither is resolved implicitly. --state-root is the flag, else ~/.config/4genthub,")
 	fmt.Fprintln(out, "--socket is the flag, else $"+clientruntime.RuntimeSocketEnv+", else this")
-	fmt.Fprintln(out, "machine's own.")
+	fmt.Fprintln(out, "machine's own. `sync` is the one CLOUD sub-verb - it asks the hub, not a daemon - so it prints")
+	fmt.Fprintln(out, "`room: <room>@<url>` and takes --url instead of a socket; ROOM defaults to $AGENTHUB_ROOM.")
 	fmt.Fprintln(out, "\nstatus reads GetRoomStatus and prints one line per seat: SEAT RUNTIME STATE SESSION, plus an")
 	fmt.Fprintln(out, "ALERT segment when the runtime flagged the seat - alert=<kind> quiet_seconds=<secs|unknown>")
 	fmt.Fprintln(out, "waiting_qitem_ids=<id,id|none>. A seat with no alert prints the four fields and nothing else, and")
