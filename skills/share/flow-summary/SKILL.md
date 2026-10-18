@@ -34,6 +34,9 @@ rebuilt in 6,600+ commands and the rail in 5,316 - each a turn spent on a fact t
 - A secret's presence is a fact with one command: `test -n "$AGENTHUB_TOKEN"` and echo the result, never
   `cat ~/.config/4genthub/.env` - the seat guard refuses that read as `env-secret`, so the turn is spent on a
   refusal and a retry. Measured on this room (2026-10-18): 73 such refusals, 30 of them go-dev's.
+- Every figure names its source: the verb key, the row, or the board Progress section that already carries
+  it. A number a row or a Progress line states is cited, never measured again - and measuring it again is
+  what bash-first turns cost: $8.40 over 8,193 turns on 2026-10-18, 24% of the room's spend.
 
 ## The other three lines
 

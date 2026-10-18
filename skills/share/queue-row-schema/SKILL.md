@@ -25,6 +25,18 @@ next: <the one action the destination takes, and who takes it>
 - The body is create-only: `queue update` takes `--note`, `--summary`, `--state`, never `--body`, so the
   rule governs what may be ADDED - rows written earlier keep their bodies verbatim.
 
+## A row is a handoff, not a transcript
+
+A row exists to hand ONE action to ONE seat, or to record ONE decision for the seat that reads it. Progress,
+status and the evidence behind a claim go into the board item's Progress (`manage_task` update with
+`details`, appending one `=== Progress N ===` per call), which is the surface the item shows and the reader
+walks; the rail is not a log.
+
+A row that repeats a status costs the room twice - it is written by one seat and polled by the next. Measured
+on this room (2026-10-18): queue traffic is $6.44 of $34.35, 17% of spend - writes $3.75 over 3,351 turns,
+polls $2.69 over 2,618 - and one seat wrote 177, 155 and 93 rows on three consecutive days. The fix is not a
+smaller row; it is one row per handoff.
+
 ## What goes in `facts`
 
 `4genteam facts` field paths verbatim, e.g. `worktree.head=8e706e18; queue.pending=1`. When a needed fact
