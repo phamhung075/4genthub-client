@@ -529,6 +529,14 @@ func TestRoomStopRefusesToWriteAListItCouldNotRead(t *testing.T) {
 // shape, while a name the switch does not know prints "unknown verb". Driving one WITH a room would resolve
 // this machine's daemon and answer on the live room, which no test may do.
 func TestEveryDispatchedRoomVerbIsAnnounced(t *testing.T) {
+	// THE ROOM VARIABLE IS CLEARED FIRST. ROOM defaults from $AGENTHUB_ROOM (queue.go,
+	// queueDefaultRoom), and every seat shell exports it; left alone, a verb driven with NO room
+	// answers on this machine's live room instead of printing its own usage - the ambient-env red
+	// measured 2026-10-19, where the suite passed for the owner and failed in any seat shell. An empty
+	// value reads as unset (queueDefaultRoom trims it), so clearing and unsetting are one state here.
+	// The tests that PIN the default set it themselves, which is why this clear is local and not in
+	// runRoom.
+	t.Setenv(roomEnv, "")
 	code, _, pick := runRoom(t)
 	if code != clientcmd.ExitRoomRefused {
 		t.Fatalf("room with no verb: exit %d, want %d", code, clientcmd.ExitRoomRefused)
