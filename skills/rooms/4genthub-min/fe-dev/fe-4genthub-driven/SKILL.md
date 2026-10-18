@@ -1,15 +1,15 @@
 ---
 name: fe-4genthub-driven
-description: "Recheck the 4genthub frontend where it actually runs — production or a local build — as a real signed-in user with the shared e2e account. A measured toolkit, not a checklist of opinions: the front door, backend-call truth, theme in both color modes, WCAG AA contrast, motion under prefers-reduced-motion, CRUD-animation wiring, and responsive layout on phone, laptop and desktop. Run the suite before shipping a frontend change, and diff a fresh capture against the committed baseline after deploying."
+description: "Recheck the 4genthub frontend where it actually runs — production or a local build — as a real signed-in user with the shared e2e account. A measured toolkit, not a checklist of opinions: the front door, backend-call truth, theme in both color modes, WCAG AA contrast, motion under prefers-reduced-motion, CRUD-animation wiring, and responsive layout on phone, laptop and desktop, plus the phone walk the room now ships as e2e/phone-layout.spec.ts. Run the pre-merge checklist before shipping a frontend change, and diff a fresh capture against the committed baseline after deploying."
 ---
 
 # fe-4genthub-driven
 
 The frontend's job is to be **correct against the backend, tasteful in its color logic, helpful in
 its animation, and usable on a telephone and on a PC**. This skill proves each of those with a
-browser instead of assuming it. Every number in this document was measured on
-https://www.4genthub.com on 2026-10-11 — the checks were run until they were honest (many of the
-traps below were bugs in the checks themselves, found by disbelieving a result).
+browser instead of assuming it. Every number in this document was measured on a served
+https://www.4genthub.com, and the date beside it says which bundle — a measurement is only as
+current as the asset it was taken on.
 
 The walk is **read-only**: no token is minted, no room or seat or session is created, no setting is
 changed. The account is read inside the process from the repo-root `e2e-test-account` file and is
@@ -18,6 +18,12 @@ never printed, logged, or committed.
 ## Quick start
 
 ```bash
+# 0. The phone verdict, before anything else — the room's own spec, on the room's harness.
+#    20 route-viewports: 375x667 and 320x568 over the ten signed-in routes. This is the command
+#    the mobile board item is accepted on; it exits 1 on any route that drags or any icon control
+#    under 40x40. Needs the account file for the frontend checkout it runs in.
+cd /path/to/agenthub-frontend && npx playwright test e2e/phone-layout.spec.ts
+
 # 1. The whole check — eight checks, one summary, exit 1 when any check failed.
 node checks/all.mjs --fe /path/to/agenthub-frontend
 
@@ -51,12 +57,11 @@ the installed Google Chrome — see trap 18).
 | [checks/check-contrast.mjs](checks/check-contrast.mjs) | Every text run against its **effective** background: WCAG AA (4.5:1 normal, 3:1 large), computed by ratio, not by eye. | Text a user with ordinary eyesight has to squint at. |
 | [checks/check-crud-animation.mjs](checks/check-crud-animation.mjs) | For every entity × create/update/delete: is the class the applier builds defined in shipped CSS, does applying it start a real animation of the registry's duration, is it gated under prefers-reduced-motion, and does nothing fire at rest? | A state-change animation silently cannot play — a renamed class, a missing rule, or a class removed before its animation ends. |
 
-A known run against production on 2026-10-11 ends with four failing checks — contrast, motion,
-responsive and CRUD animation (whose seven failures are: three dead `branchRow*` classes, three
-dead `projectRow*` classes, one truncated subtask create). Those are the findings below, not
-toolkit bugs. Exit code 0 means production passed everything.
+A known run against production on 2026-10-11 ended with four failing checks — contrast, motion,
+responsive and CRUD animation. Those are the findings recorded below, not toolkit bugs. Exit code 0
+means production passed everything **on the bundle measured**.
 
-## The three viewports — a phone is not a small laptop
+## The viewports — a phone is not a small laptop
 
 [lib.mjs](lib.mjs) carries one `VIEWPORTS` table every check spreads into `browser.newContext`:
 
@@ -67,6 +72,11 @@ toolkit bugs. Exit code 0 means production passed everything.
   behavior (`width=device-width` honored, tap targets, the hamburger instead of the sidebar) is
   what gets measured
 
+The room's own phone widths are **375×667 and 320×568**, and they live in
+`agenthub-frontend/e2e/phone-layout.spec.ts` rather than in this table: 320 is where the fixed
+`p-3`/`gap` arithmetic stops fitting, and the two widths together are what the mobile board item is
+accepted on. Use the spec for the phone verdict; use this toolkit for everything else.
+
 Two traps to keep in mind if you add a viewport: Playwright **silently ignores** a bare
 `{ width, height }` spread into `newContext` (every number comes back at the 1280×720 default —
 the first responsive run reported "innerWidth 1280" for a 390 phone), and without `isMobile` a
@@ -75,21 +85,30 @@ the first responsive run reported "innerWidth 1280" for a 390 phone), and withou
 ## Procedure
 
 **Before shipping a frontend change (owner rule: no local build):**
-1. Type-check only: `npx tsc --noEmit -p .` from the frontend checkout, plus the frontend's own
+1. Walk [the pre-merge checklist](#pre-merge-checklist-phone-and-timeline) below — it is the part
+   this week's phone and timeline work paid for.
+2. Type-check only: `npx tsc --noEmit -p .` from the frontend checkout, plus the frontend's own
    `npx vitest run` for the tests this skill does not cover. Do NOT run `vite build`, `npm run build`
    or `npx vite` — a seat-local build is forbidden (2026-10-17, 4 GB each); the deploy builds it.
-2. Reason about the change against [baseline/production.json](baseline/production.json) from the
+3. Reason about the change against [baseline/production.json](baseline/production.json) from the
    source, not from a local rendering: what the route renders today is the baseline, and your diff
    is the delta you intend.
-3. Ship (the owner/lead deploys). Then capture production and compare: what you see should be what
+4. Ship (the owner/lead deploys). Then capture production and compare: what you see should be what
    you intended, and every diff should be attributable to a commit.
 
 **When production is suspicious (a report, a regression, a deploy):**
-1. Run the suite. The per-check output names routes, selectors and measured numbers — that output
+1. Check the deploy happened before checking the code: fetch the served entry asset name and grep it
+   for the change (trap 20). A push is not a deploy, and a bundle without your class is a stale
+   bundle, not a broken fix.
+2. Run the suite. The per-check output names routes, selectors and measured numbers — that output
    *is* the bug report; quote it.
-2. For anything visual, `production-walk.mjs capture --no-shots` + `compare` against the baseline
-   tells you what changed *structurally* (headings, fields, buttons, links, tokens) since 2026-10-11.
-   Token/status moves are listed separately from structural ones — the token layer moves by design.
+3. For anything visual, `production-walk.mjs capture --no-shots` + `compare` against the baseline
+   tells you what changed *structurally* (headings, fields, buttons, links, tokens) since the
+   baseline's date. Token/status moves are listed separately from structural ones — the token layer
+   moves by design. **Against the 2026-10-11 baseline the diff is noisy by construction** (776
+   entries, dominated by positional `api.N.path` reordering and the deliberate palette move from
+   `#3b82f6`): read the per-route `headings`/`fields`/`buttons` keys and ignore the `api.N` ones
+   before calling anything structural.
 
 **Updating the baseline** — only after a deliberate, reviewed change: capture with `--no-shots`,
 read the diff, then replace `baseline/production.json` and note the date here. Never blind-copy:
@@ -98,43 +117,75 @@ the baseline's whole value is that a human confirmed what it records.
 **Dynamic routes** (a project, a branch, a task, a seat, a session) need an id and are out of the
 static walk. Pass them explicitly: `--routes /seats/<id>`.
 
-## Measured state of production — 2026-10-17 (new deploy, new engine)
+## Pre-merge checklist: phone and timeline
 
-**The deploy moved and so did the browser.** `www.4genthub.com` serves entry
-`assets/index-dUxpxWZA.js` (295,147 B) instead of the Oct 8 `index-BMd9UnWH.js`, `/health` reports
-`0.0.38`, and all 97 assets the entry and its chunks name return 200. Captured on Playwright's
-bundled Chromium 141: **11/11 static routes render** — `/login` (3 fields, 3 buttons, 2 links),
-`/dashboard` first heading "DECISION REQUESTS", `/tokens` (3 fields, 18 buttons — the presets are now
-Client connector / Client MCP / Clear All, Full Access and Read Only gone), `/seats` (heading
-"Seats"; sections Company version policy, Create a room, Rooms, Bridge machines), `/seats/authoring`
-(20 fields, 225 buttons), `/sessions` (empty state, 30 buttons — no session is registered for the
-account), `/topology`, `/feedback`, `/profile`, `/docs`, `/help-setup`.
+Both lists are commands and measurements, not opinions. A change is not ready to hand to review
+until every line that applies to it has an answer.
 
-**Run this toolkit on the bundled engine (the default now).** Under headless Google Chrome 153
-every canvas page wedges (trap 18) and `/login` — built directly on `FallingGlitch`'s
-`ctx.scale(dpr,dpr)` — reads as a dead page. `FE_BROWSER=chrome` is only for the question "is this
-browser broken": headed Chrome 153 renders the same login page normally, so the app is not at fault.
+### Phone
 
-**The rigd witnesses are on the live surface:** `seat_state` in `SessionsPage-C2eQtlu2.js` with the
-ruled precedence (`status==="offline" ? "offline" : seat_state==="stopped" ? "stopped" : "live"`),
-`agent_session` in `useRealtimeSync-Bs0iYGI9.js`, "Withheld locally" in `SessionsPage-C2eQtlu2.js`,
-and no `SeatInputBox` anywhere in the served bundle.
+- [ ] `npx playwright test e2e/phone-layout.spec.ts` **against the origin the deploy will build**
+      exits 0 at 20/20. Before a deploy, say "pending the deploy" rather than claiming it.
+- [ ] Every signed-in route fits at 375 and 320: `document.scrollingElement.scrollWidth ===
+      innerWidth` **and** `main.scrollWidth === main.clientWidth`.
+- [ ] A route that still drags is fixed at its own **min-content**; `overflow-x-hidden` is a mask
+      and is never the fix (trap 22). The measured floors on the pre-fix bundle were `/seats` 550,
+      `/seats/authoring` 549 and `/topology` 634 inside a 375 viewport.
+- [ ] Touch: every icon button (`button`/`[role=button]` with no non-whitespace text) under
+      `main`/`header`/`aside` has a **≥40×40 border box** — measured on the button, not on the span
+      inside it (trap 21). Text links are exempt (WCAG 2.5.8).
+- [ ] The floating sidebar toggle is the only route to the project tree on a phone: it stays
+      `bottom-6 left-6`, it opens and closes the drawer, and its box is 40×40.
+- [ ] Routes you did not touch keep their equality — a fix that widens one page must not narrow
+      another. Compare `main.scrollWidth` per route before and after, not just the page you edited.
+- [ ] Long unbreakable content is given `break-all`/`break-words` where it can be: 64-char snapshot
+      hashes, pull commands, model ids, URLs. That class of string is what set three of the four
+      measured min-content floors.
+- [ ] A table or graph that cannot shrink scrolls **inside its own card** (`overflow-x-auto` on the
+      card), never inside `main`.
 
-**`compare` against the Oct 11 baseline is noisy by construction** — 776 entries, dominated by
-positional `api.N.path` reordering and the deliberate palette move (`#3b82f6` → `#4f46e5`, etc.).
-Read the per-route `headings`/`fields`/`buttons` keys, not the `api.N` keys, before calling anything
-structural. The baseline was NOT replaced: a human should review the route-level diffs first.
+### Timeline
 
-## Measured state of production — 2026-10-11
+The task-detail timeline is `agenthub-frontend/src/components/TaskEventTimeline.tsx` over
+`src/lib/taskTimeline.ts`; its vocabulary is the ledger's, mirrored in `src/types/taskTypes.ts`.
 
-**Passing (verified, not assumed):** 16/16 static routes return 200 with zero console errors; the
-single API origin is `https://api.4genthub.com`; the login POST and `/health` answer 200; 47
-distinct endpoints observed across the walk, all 200; on mobile every route fits (no sideways drag,
-no scrollbar false positives) and the "Toggle mobile menu" affordance is present; the theme layer
-passes everything — system dark paints `rgb(15, 23, 42)` (luminance 0.009), system light paints
-white, a saved preference outranks the system, and the toggle provably makes no non-GET API call.
+- [ ] A row says **what changed**, not that something changed: a context update names its level and
+      its version. `Context updated` with no payload is a defect the owner has reported twice.
+- [ ] The phase is derived from the events and never read from the task: the component takes
+      `taskId` (and `progressHistory`) and deliberately no status prop. A change that reads
+      `task.status` into the badge breaks that invariant.
+- [ ] A new event kind is added in four places together — `TASK_EVENT_KINDS` and the DDL's
+      `ck_task_event_kind` mirror, `describeEvent`, and the label maps (`PHASE_LABELS`,
+      `ACTOR_LABELS`) — and the coverage test `src/tests/lib/taskTimeline.test.ts` still passes.
+      Removing a kind is a breaking change: the `assigned` kind's removal turned CI red on tests
+      that still named it.
+- [ ] Rows merge the ledger with the served `progress_history` text by comparing
+      `cleanProgressText` on both sides. Change that cleaning and the merge either duplicates a note
+      or drops one; test the two-source case, not just the ledger-only case.
+- [ ] Nothing claims more than the ledger holds: `LEDGER_NOT_RECORDED` stays under the list,
+      because a status change to `testing`/`review` is not a test verdict.
+- [ ] On a phone the timeline lives inside the task dialog: long timestamps (`toLocaleString`),
+      actor names and level names must wrap rather than set a min-content floor for the dialog.
 
-**Open findings for fe-dev:**
+## Measured state of production — 2026-10-18
+
+**What the deploy line is.** Production builds the `frontend` branch, not `main` (measured
+2026-10-18: a push of `main` left the served entry `assets/index-CPfacvin.js` unchanged, and that
+bundle was missing a class `main` already carried). Before believing any "it did not work" report,
+establish which branch the served bundle came from — trap 19.
+
+**Where the phone verdict lives.** `agenthub-frontend/e2e/phone-layout.spec.ts`, on the repo
+Playwright harness, 20 route-viewports. On the pre-fix bundle it measured **8 passed / 12 failed**:
+`/seats` main 550 wide in 375 and in 320, `/seats/authoring` 549, `/topology` 634, `/dashboard`
+twelve project-row icon buttons at 28×28, `/docs` and `/help-setup` a 36×36 docs menu and a 32×32
+theme button, `/seats/authoring` at 320 two delete buttons at 34.8×40 and 33.55×40. Readiness inside
+that spec is text floor **plus** an /api quiet window (trap 15, amendment).
+
+**The engine.** Bundled Chromium 141 (Playwright's) is the default and the right engine; headless
+Google Chrome 153 wedges on the first canvas draw (trap 18), so a dead `/login` under
+`FE_BROWSER=chrome` is the browser's verdict, not the page's.
+
+**Carried forward from the 2026-10-11 run, NOT re-measured since — re-run before quoting:**
 
 1. **Contrast — 7 WCAG AA violations** (AA needs 4.5:1), each with the color that produced it:
    - `/login` (anonymous): "Email Address" 3.68:1 `rgb(59, 130, 246)` (16px/400, `#email-label`),
@@ -146,28 +197,25 @@ white, a saved preference outranks the system, and the toggle provably makes no 
    - Measured fix candidates: blue `#2563eb` → 5.17:1 (or `#1d4ed8` → 6.70:1); green `#15803d` →
      5.02:1. One token change per color family clears every listed run — re-run the check to confirm.
 
-2. **Motion — `/dashboard` violates reduced-motion.** `shimmer-spin` (2500ms, infinite) runs on
+2. **Motion — `/dashboard` violates reduced-motion.** `shimmer-spin` (2500ms, infinite) ran on
    4 × `div.absolute.inset-0` even under `prefers-reduced-motion: reduce`. Gate it behind the
-   media query (the taste skill section 6.B rule). `/login` is clean — only 10ms MUI autofill
-   animations remain, and the longest normal transition is 300ms.
+   media query (the taste skill section 6.B rule). **The gate may live in an injected sheet, not in
+   the served CSS** — trap 17 is exactly this finding; enumerate `document.styleSheets` before
+   saying where a rule is.
 
 3. **Responsive — the shell does not fit a 1280 laptop.** The signed-in shell's minimum width
-   measures ~1351px (culprits: `div.flex.items-center` spanning x 137–1351, and the account-chip
-   row at x 1181–1351 — `div.relative.inline-block`, `div.cursor-pointer`, `button.flex.items-center`),
-   so **every** signed-in shell route — `/dashboard`, `/tokens`, `/seats`, `/seats/authoring`,
-   `/sessions`, `/topology`, `/feedback`, `/profile` — drags sideways by 71px at 1280×800 (client
-   1280, inner 1280, scroll 1351; identical on all eight). Desktop and mobile are both clean; the
+   measured ~1351px (culprits: `div.flex.items-center` spanning x 137–1351, and the account-chip
+   row at x 1181–1351), so every signed-in shell route dragged sideways by 71px at 1280×800. The
    fix is to let the top bar shrink (truncate, wrap, or hide the chip's email before 1280px), not
    to hide the overflow.
 
 4. **CRUD state-change animations — three entities mis-wired, one truncated.** Measured per entity
    × create/update/delete: class defined in shipped CSS? applying it starts a real engine
    animation? registry removal duration ≥ CSS duration? reduce-gated? at rest clean?
-   - **task** and **seat** rows play correctly: create 500ms (the registry holds the class 800ms —
+   - **task** and **seat** rows played correctly: create 500ms (the registry holds the class 800ms —
      a benign 300ms linger), update 1700ms, delete 800ms — engine-measured, reduce-gated.
    - **subtask create is cut**: the CSS runs 1000ms, but AnimationFactory removes the class after
-     800ms, truncating the slide-in for its last 200ms. Align the two (subtask CSS 0.5s, or the
-     registry 1000ms).
+     800ms, truncating the slide-in for its last 200ms. Align the two.
    - **branch animates nothing**: the factory builds `branchRowCreateAnimation` but the CSS
      defines `branchCreateAnimation` — the name drifted (no "Row"), so all three branch classes
      are dead. Rename one side so they agree.
@@ -175,7 +223,7 @@ white, a saved preference outranks the system, and the toggle provably makes no 
      at all. Either add the rules or stop triggering.
    - the registered `'complete'` type is inert: no CSS defines it, no hook calls it — implement or
      remove.
-   - At rest on `/seats` and `/dashboard`, no row carries any CRUD class 2.5s after load — the
+   - At rest on `/seats` and `/dashboard`, no row carried any CRUD class 2.5s after load — the
      trigger fires on the state change, not on render (verified).
    - A read-only walk cannot prove a real CRUD event *calls* animate(); that link belongs to the
      frontend's own tests (`websocket-animations-e2e.test.tsx`, `taskUpdateAnimation.test.ts`).
@@ -250,6 +298,12 @@ the same traps will catch the next person writing a frontend measurement.
     FAIL, which still exits non-zero — so their row can be a measurement of a page that never
     reached the floor. The goto-level warm-up and sign-out navigations are deliberately left ungated:
     they assert nothing about the page.
+    **Amendment 2026-10-18, from the phone work:** a character floor alone is not enough on a route
+    with a data-driven layout. `/seats` lays out at 375 wide before its project tree arrives and
+    550 once it settles, so a text floor alone let a route that drags pass by racing. The spec waits
+    for **both** `main` text > 60 **and** the app's `/api` requests quiet for 750ms; three runs then
+    gave the same split. A long-lived poll is not "quiet" — count only the page's own request
+    events and treat the socket separately.
 16. **A report is only as wide as the map it reads.** `check-crud-animation` collected CSS names
     from the CRUD matrix, then filtered the five `*RowCompleteAnimation` classes out of that same
     map and reported them "defined in no CSS and called from no hook/component". The first clause
@@ -295,6 +349,35 @@ the same traps will catch the next person writing a frontend measurement.
     question "is this browser broken", and read a wedged tab as the browser's verdict, never the
     page's.
 
+19. **The deploy line is a branch, and it is not always `main`.** Measured 2026-10-18: the owner
+    pushed `main`, and production kept serving the older bundle, because the build reads the
+    `frontend` branch — a fix that was on `main` was absent from the served entry asset. So "the fix
+    is on main" answers nothing about what a user sees, and a branch that looks stale may be the one
+    that deploys. Establish the deploy line before diagnosing (ask the lead, or diff the served
+    entry against each candidate branch), and land into the deploy line, not just into main.
+
+20. **A push is not a deploy, and the served asset name is the cheapest proof.** Before blaming a
+    change, fetch `https://www.4genthub.com/`, read the entry `assets/index-*.js` it names, and
+    grep that file for a string the change introduced (a class, a literal, a route). Absent → the
+    deploy has not happened, and every measurement is of the old bundle. This also tells you which
+    measurements from earlier in the day are still valid: a new asset name invalidates all of them.
+
+21. **A size class on the inner element is not the control's box.** The phone toggle measured
+    39×39 because `ShimmerButton`'s `size="icon"` puts `h-9 w-9` on an inner `<span>` (36×36) and
+    the outer `<button>` adds `p-[1.5px]` on each side: 36 + 3 = 39. Sizing the button required a
+    class on the button instance (`h-10 w-10`), and the fix landed in `App.tsx`, not in the shared
+    icon size. Two more facts from the same measurement: `twMerge` decides display by group, so
+    that instance's `block` overrides the component's `inline-flex`; and a JIT Tailwind build emits
+    a utility only when the **content it scans** names it — compiling the parent tree and finding
+    0 occurrences proves nothing about the branch that carries the class.
+
+22. **`overflow-x-hidden` is never a responsive fix.** On this shell `main` is `overflow-y-auto`, so
+    `overflow-x` computes to `auto` and a too-wide page scrolls **inside the pane** instead of
+    dragging the document — which is why `window.scrollX` alone reported the phone layout as clean.
+    Hiding the overflow instead masks every such fault silently and leaves the content unreachable;
+    the fix is always the page's min-content floor (an unbreakable hash, a six-column table, a
+    non-wrapping header), measured per route with `main.scrollWidth === main.clientWidth`.
+
 ## Rules
 
 - **Read-only against production.** No writes, no token minted, no resource created. The only
@@ -306,6 +389,8 @@ the same traps will catch the next person writing a frontend measurement.
   recorded as `userChip.present` — a boolean, not a name.
 - **Quote the measured line** when reporting: selector, px/weight, ratio. "Contrast is bad" is not
   a finding; "3.30:1, 12px/500, span.text-xs.font-medium" is.
+- **Never run a local build.** `npx tsc --noEmit -p .` and the tests only; the deploy builds the
+  bundle every browser number is taken on.
 
 ## Files in this skill
 
@@ -315,7 +400,8 @@ the same traps will catch the next person writing a frontend measurement.
 | [production-walk.mjs](production-walk.mjs) | `capture` — sign in, walk routes, record what rendered; `compare` — structural diff of two captures. |
 | [checks/all.mjs](checks/all.mjs) | The runner: each check in its own process, one summary, one exit code. |
 | [checks/check-login.mjs](checks/check-login.mjs) · [checks/check-nav.mjs](checks/check-nav.mjs) · [checks/check-backend.mjs](checks/check-backend.mjs) · [checks/check-responsive.mjs](checks/check-responsive.mjs) · [checks/check-theme.mjs](checks/check-theme.mjs) · [checks/check-motion.mjs](checks/check-motion.mjs) · [checks/check-contrast.mjs](checks/check-contrast.mjs) · [checks/check-crud-animation.mjs](checks/check-crud-animation.mjs) | The eight checks, above. |
-| [baseline/production.json](baseline/production.json) | What production rendered on 2026-10-11 — 11 routes (`/login` + the ten signed-in static routes). The `compare` target. |
+| [baseline/production.json](baseline/production.json) | What production rendered on 2026-10-11 — 11 routes (`/login` + the ten signed-in static routes). The `compare` target; its date is its scope. |
 
 The design rules this toolkit enforces (color lock, shape lock, the reduced-motion rule) live in
-the seat's taste skill, one directory over: `../taste-skill/SKILL.md`.
+the seat's taste skill, one directory over: `../taste-skill/SKILL.md`. The phone walk itself lives in
+the frontend, `agenthub-frontend/e2e/phone-layout.spec.ts`, and is run — not reimplemented — from here.
