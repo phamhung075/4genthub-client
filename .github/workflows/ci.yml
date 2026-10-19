@@ -1,0 +1,41 @@
+name: CI
+
+# The client repo had no CI, so a change here was tested only by the seat that made it. Two jobs,
+# the two languages the client ships:
+#   go   - the CLI and its packages (module root)
+#   rust - the runtime crate under rust/agenthub-runtime
+#
+# `--locked`, not `--offline`: the runner starts with an empty cargo cache, and `--offline` with no
+# cached registry fails before it compiles anything. The lockfile is committed, so `--locked` makes
+# the build the same everywhere and still fetches from crates.io on a cold runner. Locally the seat
+# runs `cargo test --offline`, which is the same test binary against the warm cache.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go vet ./...
+      - run: go test ./...
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/agenthub-runtime
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust/agenthub-runtime
+      - run: cargo test --locked
