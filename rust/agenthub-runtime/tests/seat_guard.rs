@@ -73,8 +73,30 @@ fn refusal_for_seat(
     name: &str,
     args: serde_json::Value,
 ) -> Option<String> {
+    refusal_full(dir, worktrees, session, seat, "", name, args)
+}
+
+/// The same, with the room's `wt/` handed over as the LANE ROOT (`AGENTHUB_LANES_ROOT`): the guard admits
+/// `<wt>/<seat>` and `<wt>/<seat>-*` by the seat key it was launched with, and refuses the rest of the room.
+fn refusal_lanes(dir: &Path, lanes: &str, name: &str, args: serde_json::Value) -> Option<String> {
+    refusal_full(dir, WORKTREES, "", "dev", lanes, name, args)
+}
+
+/// The guard call every helper above makes: the seat's session, the seat key, and the lane root when a case names
+/// one. An empty lane root is ABSENT from the environment - which is exactly what a launch predating the variable
+/// looks like, so the unset case is the old launch and not a second spelling of the new one.
+fn refusal_full(
+    dir: &Path,
+    worktrees: &str,
+    session: &str,
+    seat: &str,
+    lanes: &str,
+    name: &str,
+    args: serde_json::Value,
+) -> Option<String> {
     std::fs::create_dir_all(dir).unwrap();
-    let mut child = Command::new("node")
+    let mut command = Command::new("node");
+    command
         .arg(guard())
         .args(["--agy-hook", "pre"])
         .env("AGENTHUB_SEAT", seat)
@@ -84,9 +106,13 @@ fn refusal_for_seat(
         .env("PI_CODING_AGENT_DIR", dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("node is needed to run the seat guard");
+        .stderr(Stdio::null());
+    if lanes.is_empty() {
+        command.env_remove("AGENTHUB_LANES_ROOT");
+    } else {
+        command.env("AGENTHUB_LANES_ROOT", lanes);
+    }
+    let mut child = command.spawn().expect("node is needed to run the seat guard");
     let payload = serde_json::json!({"toolCall": {"name": name, "args": args}});
     child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
     let out = child.wait_with_output().unwrap();
@@ -640,4 +666,50 @@ fn a_seat_cannot_run_a_local_frontend_build() {
         ],
     );
     allowed(&["npx tsc --noEmit", "vite --version", "npm run lint", "npx vitest run"]);
+}
+
+// ---- the lane ------------------------------------------------------------------------------------------------
+
+/// THE LANE IS NAMED BY THE SEAT KEY. With the room's `wt/` handed over as `AGENTHUB_LANES_ROOT`, a worktree the
+/// seat opens mid-session at `<wt>/<seat>-<name>` is inside its scope without re-reading the launch list; another
+/// seat's lane, a name that merely STARTS with the key (`devv`), and the room root itself stay refused. A launch
+/// with no lane root admits no lane, and the reason the seat reads is today's string, byte for byte, because the
+/// lane hint is printed only when a lane root arrived.
+#[test]
+fn a_lane_is_admitted_by_the_seat_key_and_only_that_prefix() {
+    let dir = fresh_dir("lane");
+    let rule = |lanes: &str, path: &str| {
+        refusal_lanes(&dir, lanes, "write_to_file", serde_json::json!({ "TargetFile": path }))
+            .map(|r| r.split(['(', ')']).nth(1).unwrap_or_default().to_owned())
+    };
+
+    assert_eq!(
+        rule("/work/wt", "/work/wt/dev-lane6/src/x.go"),
+        None,
+        "a lane named by the seat key is the seat's own"
+    );
+    assert_eq!(rule("/work/wt", "/work/wt/dev/x.go"), None, "the seat's own directory stays inside");
+    assert_eq!(
+        rule("/work/wt", "/work/wt/devv/x.go").as_deref(),
+        Some("worktree-scope"),
+        "a name that merely STARTS with the key must not pass the prefix test"
+    );
+    assert_eq!(
+        rule("/work/wt", "/work/wt/other-lane/x.go").as_deref(),
+        Some("worktree-scope"),
+        "another seat's lane is not this seat's"
+    );
+    assert_eq!(
+        rule("/work/wt", "/work/x").as_deref(),
+        Some("worktree-scope"),
+        "the room root itself is not a lane"
+    );
+
+    let refusal = refusal_lanes(&dir, "", "write_to_file", serde_json::json!({ "TargetFile": "/work/wt/dev-lane6/src/x.go" }))
+        .expect("without a lane root no lane is admitted");
+    assert_eq!(
+        refusal,
+        "blocked by seat guard (worktree-scope): /work/wt/dev-lane6/src/x.go is outside your worktrees /work/wt/dev, /work/wt/dev-client; edit inside them and report the commit to the lead",
+        "the unset launch keeps today's refusal byte for byte"
+    );
 }

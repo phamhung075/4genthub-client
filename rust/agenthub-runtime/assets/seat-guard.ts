@@ -267,6 +267,17 @@ const absolute = (path: string): string =>
   resolve(worktrees[0] ?? process.env.PI_CODING_AGENT_DIR ?? ".", path.replace(/^~(?=\/|$)/, homedir()));
 const within = (path: string, root: string): boolean => path === root || path.startsWith(root + "/");
 
+// A LANE THE SEAT OPENS MID-SESSION is admitted by NAME, not by a list the guard would have to re-read: the runtime
+// hands the room's `wt/` (AGENTHUB_LANES_ROOT) beside the list, and a first segment equal to the seat key or
+// starting `<seat>-` under it is that seat's own lane. The room refuses a spec whose seat keys would make two seats
+// share such a prefix, so the test stays a test. Unset (an older launch) admits no lane, exactly as before.
+const lanesRoot = process.env.AGENTHUB_LANES_ROOT ? resolve(process.env.AGENTHUB_LANES_ROOT) : "";
+const lane = (abs: string): boolean => {
+  if (!lanesRoot || !seat || !abs.startsWith(lanesRoot + "/")) return false;
+  const first = abs.slice(lanesRoot.length + 1).split("/")[0] ?? "";
+  return first === seat || first.startsWith(`${seat}-`);
+};
+
 // The plan files are frozen: NEXT-GEN*.md, GATE-*.md and ai_docs/reports-status/ were written by a past review and
 // a seat that edits them is writing a report instead of shipping.
 const frozen = (abs: string): boolean =>
@@ -498,9 +509,13 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     rule: "worktree-scope",
     check: (tool, input) => {
       const roots = [...worktrees, process.env.PI_CODING_AGENT_DIR ?? "", tmpdir()].filter(Boolean).map((r) => resolve(r));
-      const outside = writeTargets(tool, input).find((p) => !roots.some((r) => within(absolute(p), r)));
+      const outside = writeTargets(tool, input).find((p) => {
+        const abs = absolute(p);
+        return !roots.some((r) => within(abs, r)) && !lane(abs);
+      });
+      const lanes = lanesRoot ? ` (a lane of yours is ${lanesRoot}/${seat}-<name>)` : "";
       return outside
-        ? `${outside} is outside your worktrees ${worktrees.join(", ") || "(none named for this seat)"}; edit inside them and report the commit to the lead`
+        ? `${outside} is outside your worktrees ${worktrees.join(", ") || "(none named for this seat)"}; edit inside them and report the commit to the lead${lanes}`
         : "";
     },
   },
