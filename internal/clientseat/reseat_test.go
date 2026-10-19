@@ -145,3 +145,44 @@ func TestReseatNamesTheBudgetASeatMissedWithADuration(t *testing.T) {
 		t.Errorf("the missed budget is not named with the duration (%s): %q", quietBudget(), said[1])
 	}
 }
+
+// THE FLAG REACHES THE DEPS, not only the parser: `seat reseat` called ResolveStateRoot("") and never read a
+// --state-root at all, so a caller working in another state tree was refused the flag and quietly given the
+// machine's own root - the quiet waiter and the seat doctor then read a tree the caller did not name.
+func TestReseatReadsTheStateRootFlagInsteadOfTheMachineDefault(t *testing.T) {
+	root := t.TempDir()
+	got := ""
+	old := reseatDepsFor
+	reseatDepsFor = func(stateRoot string) *reseatDeps {
+		got = stateRoot
+		deps, _ := reseatFixture(true)
+		return deps
+	}
+	defer func() { reseatDepsFor = old }()
+
+	var out, errOut strings.Builder
+	if code := runReseat([]string{"r", "--seat", "lead", "--state-root", root}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("seat reseat --state-root exited %d (%s); want the flag honoured", code, errOut.String())
+	}
+	if got != root {
+		t.Fatalf("the verb handed its deps %q; want the flag's root %q", got, root)
+	}
+
+	// The runtime's retired spelling is refused by the same extraction, before any seat is touched.
+	got = ""
+	out.Reset()
+	errOut.Reset()
+	if code := runReseat([]string{"r", "--seat", "lead", "--state-dir", root}, &out, &errOut); code != clientcmd.ExitUsage || !strings.Contains(errOut.String(), "--state-root DIR") {
+		t.Fatalf("--state-dir exited %d (%q); want the one refusal naming --state-root", code, errOut.String())
+	}
+	if got != "" {
+		t.Fatalf("a refused flag still built deps for %q", got)
+	}
+
+	// The flag is advertised, or a caller reading another tree cannot discover it.
+	out.Reset()
+	errOut.Reset()
+	if code := runReseat([]string{"--help"}, &out, &errOut); code != clientcmd.ExitOK || !strings.Contains(out.String(), "[--state-root DIR]") {
+		t.Fatalf("usage does not list --state-root: %q", out.String())
+	}
+}
