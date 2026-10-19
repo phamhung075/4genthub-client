@@ -483,10 +483,15 @@ const AGY_MCP_SERVER: &str = "agenthub_http";
 /// that is not a seat (`AGENTHUB_SEAT` unset) starts no bridge at all. agy speaks stdio to `mcp-proxy`, which
 /// speaks Streamable HTTP to the seat's own daemon: the transport a `url` entry would use, in the one form that
 /// needs no credential in agy's shared config file.
+///
+/// The credential reaches the bridge in its ENVIRONMENT, never in an argument: `mcp-proxy` reads
+/// `API_ACCESS_TOKEN` from its own environment and sets `Authorization: Bearer <it>` itself, and the shell
+/// hands the seat's token over through a variable assignment that `exec` carries into the child's environment.
+/// An expanded `--headers Authorization` argument would sit in `/proc/<pid>/cmdline`, which every local user can
+/// read; `/proc/<pid>/environ` is owner-only. The bridge's argv is the transport, the Accept header and the URL.
 const AGY_MCP_COMMAND: &str = concat!(
-    "if [ -n \"$AGENTHUB_SEAT\" ]; then exec mcp-proxy --transport streamablehttp",
+    "if [ -n \"$AGENTHUB_SEAT\" ]; then API_ACCESS_TOKEN=\"$AGENTHUB_TOKEN\" exec mcp-proxy --transport streamablehttp",
     " --headers Accept 'application/json, text/event-stream'",
-    " --headers Authorization \"Bearer $AGENTHUB_TOKEN\"",
     " \"$AGENTHUB_URL/mcp\"; fi"
 );
 
@@ -4596,7 +4601,11 @@ mod tests {
         let line = server["args"][1].as_str().unwrap();
         assert!(line.contains("mcp-proxy --transport streamablehttp"), "{line}");
         assert!(line.contains(r#""$AGENTHUB_URL/mcp""#), "the bridge must reach the seat's own daemon: {line}");
-        assert!(line.contains("Bearer $AGENTHUB_TOKEN"), "the token is read, never stored: {line}");
+        assert!(
+            line.contains(r#"API_ACCESS_TOKEN="$AGENTHUB_TOKEN" exec mcp-proxy"#),
+            "the token is handed over in the bridge's environment, read at connect time: {line}"
+        );
+        assert!(!line.contains("Bearer"), "an Authorization argument would publish the token in argv: {line}");
         assert!(line.contains(r#"[ -n "$AGENTHUB_SEAT" ]"#), "a session that is not a seat starts no bridge: {line}");
         fs::write(&path, r#"{"mcpServers":[]}"#).unwrap();
         assert!(install_agy_mcp_server(&home, false).is_err());
@@ -4604,6 +4613,53 @@ mod tests {
         fs::write(&path, "[1]").unwrap();
         assert!(install_agy_mcp_server(&home, false).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "[1]");
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// THE BRIDGE'S ARGV CARRIES NO CREDENTIAL: the installed line hands the seat's token to `mcp-proxy` through
+    /// `API_ACCESS_TOKEN`, which the bridge reads from its own environment and turns into
+    /// `Authorization: Bearer ...`; nothing expands into an argument. `/proc/<pid>/cmdline` is world-readable and
+    /// `/proc/<pid>/environ` is owner-only, so this is the difference between a machine-wide and an owner-only
+    /// credential. A stand-in `mcp-proxy` on PATH records what the shell really spawned.
+    #[test]
+    fn the_agy_bridge_argv_carries_no_credential() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = scratch("agy-argv");
+        let bin = home.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let argv_out = home.join("argv");
+        let env_out = home.join("env");
+        let proxy = bin.join("mcp-proxy");
+        fs::write(
+            &proxy,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGV_OUT\"\nprintf '%s' \"${API_ACCESS_TOKEN:+set}\" > \"$ENV_OUT\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&proxy, fs::Permissions::from_mode(0o755)).unwrap();
+        let line = agy_mcp_entry()["args"][1].as_str().unwrap().to_string();
+        let inherited_path = std::env::var("PATH").unwrap_or_default();
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&line)
+            .env("PATH", format!("{}:{inherited_path}", bin.display()))
+            .env("AGENTHUB_SEAT", "1")
+            .env("AGENTHUB_TOKEN", "SECRET-bearer-value")
+            .env("AGENTHUB_URL", "http://127.0.0.1:9")
+            .env("ARGV_OUT", &argv_out)
+            .env("ENV_OUT", &env_out)
+            .status()
+            .unwrap();
+        assert!(status.success(), "the installed line did not run: {status}");
+        let argv = fs::read_to_string(&argv_out).unwrap();
+        assert!(!argv.contains("SECRET-bearer-value"), "the credential is in the bridge's argv: {argv}");
+        assert!(!argv.contains("Bearer"), "an expanded Authorization reached argv: {argv}");
+        assert!(argv.contains("streamablehttp"), "the bridge must still be the HTTP client: {argv}");
+        assert!(argv.contains("http://127.0.0.1:9/mcp"), "the bridge must reach the seat's own daemon: {argv}");
+        assert_eq!(
+            fs::read_to_string(&env_out).unwrap(),
+            "set",
+            "the token must reach the bridge's environment"
+        );
         let _ = fs::remove_dir_all(&home);
     }
 
