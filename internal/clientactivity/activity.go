@@ -27,7 +27,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-const usage = `usage: 4genteam activity ROOM [--seat S] [--kind tool|send|jev] [--problems] [--since DURATION] [--limit N] [--json]
+const usage = `usage: 4genteam activity ROOM [--seat S] [--kind tool|send|jev] [--problems] [--since DURATION] [--limit N] [--json] [--state-root DIR]
 
 One timeline of what a room's seats did: their tool calls, their sends and the Jev decisions that concern them.
 
@@ -37,8 +37,9 @@ One timeline of what a room's seats did: their tool calls, their sends and the J
   --since     only the last DURATION (30m, 2h, 24h); the default is everything
   --limit     the newest N lines (default 200)
   --json      one JSON object per line instead of text
+  --state-root DIR  read DIR's records instead of this machine's own ~/.config/4genthub
 
-Reads ~/.config/4genthub only; nothing is written.
+Reads the state root only; nothing is written.
 `
 
 // Commands is what the dispatcher registers from this package: one verb, `activity`.
@@ -130,15 +131,20 @@ func (activityCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 		_, _ = io.WriteString(stdout, usage)
 		return clientcmd.ExitOK
 	}
-	opts, err := parse(args)
+	rootFlag, remaining, rootErr := clientenv.StateRootFromFlags(args)
+	if rootErr != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam activity: %v\n", rootErr)
+		return clientcmd.CodeOf(rootErr, clientcmd.ExitUsage)
+	}
+	opts, err := parse(remaining)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "4genteam activity: %v\n%s", err, usage)
 		return clientcmd.ExitUsage
 	}
-	root := clientenv.DefaultStateRoot()
-	if root == "" {
-		_, _ = io.WriteString(stderr, "4genteam activity: "+clientenv.StateRootMessage+"\n")
-		return clientcmd.ExitUsage
+	root, err := clientenv.ResolveStateRoot(rootFlag)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam activity: %v\n", err)
+		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
 	}
 	events := Collect(root, opts.room)
 	events = filter(events, opts, time.Now())

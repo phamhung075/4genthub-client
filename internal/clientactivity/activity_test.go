@@ -1,6 +1,8 @@
 package clientactivity
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientjev"
 )
 
@@ -83,5 +86,41 @@ func TestProblemsKeepsAnUnjudgeableGateAndDropsAnAcceptingOne(t *testing.T) {
 	line := render(problems[0])
 	if !strings.Contains(line, "unjudgeable") || !strings.Contains(line, "gate") || !strings.Contains(line, "task t-1") {
 		t.Fatalf("a refused gate must read as one line naming its verdict and the task: %q", line)
+	}
+}
+
+// `4genteam activity ROOM --state-root DIR` reads DIR, not the machine default: today the verb re-derives
+// DefaultStateRoot and has no --state-root case, so a caller inspecting another state tree is silently
+// shown this machine's events. The room name is the fixture directory's own basename, which cannot exist
+// under the machine default, so a verb that ignored the flag would print nothing.
+func TestTheStateRootFlagIsReadInsteadOfTheMachineDefault(t *testing.T) {
+	root := t.TempDir()
+	room := "port03-" + filepath.Base(root)
+	write(t, filepath.Join(root, "rooms", room, "seats", "lead", "tool-calls.jsonl"),
+		`{"at":"2026-10-19T10:00:00Z","tool":"bash","target":"from-the-flag","outcome":"ok","ms":3}`+"\n")
+
+	var out, errOut bytes.Buffer
+	code := (activityCommand{}).Run(context.Background(), []string{room, "--state-root", root, "--json"}, &out, &errOut)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("activity --state-root exited %d (%s); want the flag honoured", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "from-the-flag") {
+		t.Fatalf("the timeline does not carry the fixture root's event - the machine default was read instead: %q", out.String())
+	}
+
+	// The runtime's retired spelling is refused by the same extraction, before anything is read.
+	out.Reset()
+	errOut.Reset()
+	code = (activityCommand{}).Run(context.Background(), []string{room, "--state-dir", root}, &out, &errOut)
+	if code != clientcmd.ExitUsage || !strings.Contains(errOut.String(), "--state-root DIR") {
+		t.Fatalf("--state-dir exited %d (%q); want the one refusal naming --state-root", code, errOut.String())
+	}
+
+	// The flag is advertised, or a caller reading another tree cannot discover it.
+	out.Reset()
+	errOut.Reset()
+	code = (activityCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut)
+	if code != clientcmd.ExitOK || !strings.Contains(out.String(), "[--state-root DIR]") {
+		t.Fatalf("usage does not list --state-root: %q", out.String())
 	}
 }
