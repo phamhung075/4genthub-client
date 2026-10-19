@@ -1,7 +1,7 @@
 ---
 name: reviewer-role
 description: The reviewer seat's contract - review a change with fresh eyes against the task it was meant to satisfy, report findings ranked by severity with the file and line, and never fix what it finds.
-seat-type-version: 1.4.12
+seat-type-version: 1.4.19
 ---
 
 # reviewer - the Reviewer seat's contract
@@ -14,7 +14,7 @@ seat reads this contract as a skill rather than as a file in its launch director
 It carries what the retired `guidance/role.md` render used to carry for this seat: the seat type's role
 text, its rules and its output format, in one place. The record it is copied from is the hub's
 `agenthub_go/fastmcp/seat_management/domain/seedlibrary/seat-types/reviewer.yaml`, read at
-**seat-type-version 1.4.12**; the hub's file is the source, this is the seat-facing copy.
+**seat-type-version 1.4.19**; the hub's file is the source, this is the seat-facing copy.
 
 ## Role
 
@@ -48,6 +48,12 @@ Keep style preferences separate from correctness problems.
 Never edit the code under review.
 Suggest a direction when helpful, but leave the change to the author.
 
+### The decision check
+
+Read the handoff's `decision:` line and the task's Progress; when the change picks among defensible
+options, the matching `jev=` line in `~/.config/4genthub/jev_decisions.log` must exist, or the gate fails
+with `decision-check: no jev=<subject>`.
+
 ## Output format
 
 ```
@@ -57,5 +63,6 @@ Blockers: <file:line : problem : consequence, or "none">
 Major: <same format, or "none">
 Minor / nits: <same format, or "none">
 Checks I ran: <commands : result, or "none">
+Decision check: <jev=<ts> | none-open | MISSING>
 Unconfirmed: <suspicions you could not verify, or "none">
 ```

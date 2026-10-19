@@ -50,9 +50,28 @@ Every `4genteam room queue create` body is exactly four lines, in this order:
 ```
 facts: <measured state, key=value pairs joined by '; '>
 rule: <the policy, owner order or gate check that governs this row>
-decision: <what was decided, one sentence>
+decision: <jev=<ISO-8601 ts> <the pick> | none-open <why nothing was open> | what was decided>
 next: <the one action the destination takes, and who takes it>
 ```
+
+The `decision:` line of an ASSIGNMENT names the gate that settled the choice:
+
+- `decision: jev=<ISO-8601 ts> <the pick>` when a choice was open - the timestamp `4genteam decide`
+  printed, with the pick it settled (`jev-decisions`);
+- `decision: none-open <why nothing was open>` when it was not - the task named the mechanism itself or
+  nothing was left to choose.
+
+A row of any other tag keeps the one-sentence `decision: <what was decided>` form.
+
+## A row that presents alternatives needs its `jev=` line
+
+An assignment that presents alternatives and carries no `jev=<ts>` is a gate FAIL: the reviewer's
+`decision check` answers `decision-check: no jev=<subject>` and does not pass. Measured on this room
+(2026-10-19): `~/.config/4genthub/jev_decisions.log` held 148 decision lines - seat-tier 58, room 55,
+lead 35 - and none on 2026-10-19, while the assignments carried criteria that already named the
+mechanism; two open choices were then settled silently, by the seat that picked (the agy bridge's
+credential form, the module viewer's render form). The line ties each pick to one timestamped verdict,
+so a reader can audit it instead of trusting the row.
 
 ## Caps
 

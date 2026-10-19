@@ -166,16 +166,19 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("skills");
         let resolver = SkillResolver::new(root);
         // (seat, a landmark from the type's role text, a landmark from its rules)
+        // (seat, a landmark from the type's role text, a landmark from its rules, the version its text
+        // was ported at) - the reviewer's copy moved to 1.4.19 with the decision check, the other four
+        // are still the 1.4.12 copy.
         let cases = [
-            ("lead", "You are the lead seat", "One task per assignment"),
-            ("architect", "You are the architect seat", "Options and trade-offs"),
-            ("go-dev", "You own implementation", "Smallest safe change"),
-            ("fe-dev", "You own implementation", "Smallest safe change"),
-            ("reviewer", "You are the reviewer seat", "Review against the task"),
+            ("lead", "You are the lead seat", "One task per assignment", "1.4.12"),
+            ("architect", "You are the architect seat", "Options and trade-offs", "1.4.12"),
+            ("go-dev", "You own implementation", "Smallest safe change", "1.4.12"),
+            ("fe-dev", "You own implementation", "Smallest safe change", "1.4.12"),
+            ("reviewer", "You are the reviewer seat", "Review against the task", "1.4.19"),
         ];
-        let seats: Vec<&str> = cases.iter().map(|(seat, _, _)| *seat).collect();
+        let seats: Vec<&str> = cases.iter().map(|(seat, _, _, _)| *seat).collect();
 
-        for (seat, role_landmark, rule_landmark) in cases {
+        for (seat, role_landmark, rule_landmark, seat_type_version) in cases {
             let resolved = resolver
                 .resolve_for_seat("4genthub-min", seat)
                 .expect("the skill tree resolves for this seat");
@@ -214,7 +217,7 @@ mod tests {
             assert!(!meta.description.trim().is_empty(), "{seat}: {want_name} has no description");
             assert_eq!(
                 meta.extra.get("seat-type-version").and_then(|v| v.as_str()),
-                Some("1.4.12"),
+                Some(seat_type_version),
                 "{seat}: {want_name} does not name the seat-type-version its text was ported at"
             );
             assert!(

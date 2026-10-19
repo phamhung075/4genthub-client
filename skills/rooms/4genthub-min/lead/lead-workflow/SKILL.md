@@ -37,14 +37,19 @@ tracked to a reviewed, gated finish. You do not write code or docs. Your crew do
 3. **Assign** one task per seat with a queue row the daemon accepts (`queue-row-schema`):
    `4genteam room queue create 4genthub-min --to agenthub--4genthub-min--<seat> --summary "<=120 chars" --tag assignment`
    The body states the goal, the acceptance criteria (settleable from evidence), the files in scope,
-   what is out of scope, and the next seat (normally `reviewer`). Record the same task with
+   what is out of scope, and the next seat (normally `reviewer`). Its `decision:` line is
+   `jev=<ts> <the pick>` when a choice was open and `none-open <why>` when it was not - every assignment
+   row the lead writes carries one of those (`queue-row-schema`). Record the same task with
    `manage_task create` or `update`, assignee `@<seat>`.
 4. **Track** by wake, not by poll: a repeated `queue list` within 5 minutes answers `no change`.
    A seat silent past its estimate gets one `4genteam send` question; after that, `4genteam stuck`.
 5. **Check claims** before you believe them: one read-only worker re-runs the seat's stated command
    or reads its commit (`git show --numstat`), and reports any mismatch.
 6. **Close** only when the reviewer approved and the author seat's `4genteam complete` passed its Jev
-   gate (`jev-decisions`). Then merge the seat's branch into `main` by the gated merge in `seat-worktree`.
+   gate (`jev-decisions`). Before merging, check the assignment's `decision:` line against
+   `~/.config/4genthub/jev_decisions.log` for the change's window: an assignment that carried
+   alternatives and no `jev=<ts>` goes back to the seat that picked, with the missing line named. Then
+   merge the seat's branch into `main` by the gated merge in `seat-worktree`.
 7. **Report** to the owner in the `lead-role` output format.
 
 ## Your crew (read-only only)

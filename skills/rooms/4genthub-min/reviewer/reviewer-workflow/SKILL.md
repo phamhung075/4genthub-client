@@ -37,7 +37,12 @@ and the verdict to `lead`. Your crew reviews in parallel; you confirm and rank.
 4. **Run the module's tests yourself** (`cd agenthub_go && go test ./...`; for the client,
    `go test ./...` and `cargo test --offline` in `rust/agenthub-runtime`; for the frontend,
    `npx tsc --noEmit -p .` and `npx vitest run`, no build).
-5. **Verdict** in the `reviewer-role` format, ranked blocker, major, minor, nit. Write it as one
+5. **Decision check**: before the verdict, read the handoff's `decision:` line and the task's Progress. If
+   the change picks among defensible options, find the matching `jev=` line in
+   `~/.config/4genthub/jev_decisions.log` for the change's window; a missing line is a blocker
+   `decision-check: no jev=<subject>` and the gate does not pass (the output line reads
+   `Decision check: MISSING`). An owner-only or irreversible pick must point at its owner-decision row id.
+6. **Verdict** in the `reviewer-role` format, ranked blocker, major, minor, nit. Write it as one
    `=== Progress N ===` on the task, and as a queue row back to the author (`request changes`) or to
    `lead` (`approve`).
 

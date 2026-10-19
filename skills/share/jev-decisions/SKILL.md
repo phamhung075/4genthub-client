@@ -45,6 +45,16 @@ Exit `0`: your tier decided, so act on the printed answer and note it in your ta
 
 The question format, categories and escalation rules are in `room-decision-request`.
 
+### The three triggers - one of these and the call is due
+
+(i) the change picks among two or more defensible mechanisms, interfaces or shapes and the task names none;
+(ii) it adds behaviour outside the acceptance criteria;
+(iii) it is irreversible or owner-only.
+
+A seat never puts options in front of itself without a `decide` call. Picking one silently is exactly what
+the triggers catch, and the room measures it: `~/.config/4genthub/jev_decisions.log` is the record each call
+appends, and the assignment row carries the timestamp back.
+
 Credentials and spend always go to the owner, with no Jev call. Never decide those yourself.
 
 ## 2. The work is finished: `4genteam complete`
@@ -63,5 +73,7 @@ The idle-room guard also asks Jev, once per set of open rail items: when every s
 ## Checklist
 
 - [ ] A decision was asked through `decide` before it went to the lead.
+- [ ] The `jev=<ts>` the call printed is on the assignment row or in the report; `none-open <why>` when
+      nothing was open.
 - [ ] The task was closed through `complete`, with `--base` and `--test`, and it had acceptance criteria.
 - [ ] Nothing about credentials or spend was decided by a seat.
