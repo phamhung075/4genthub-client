@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -179,8 +178,14 @@ impl From<Result<u32, String>> for PaneRecord {
     /// by a caller writing its own match.
     fn from(read: Result<u32, String>) -> Self {
         match read {
-            Ok(pid) => PaneRecord { pid: Some(pid), unread: None },
-            Err(reason) => PaneRecord { pid: None, unread: Some(reason) },
+            Ok(pid) => PaneRecord {
+                pid: Some(pid),
+                unread: None,
+            },
+            Err(reason) => PaneRecord {
+                pid: None,
+                unread: Some(reason),
+            },
         }
     }
 }
@@ -198,7 +203,10 @@ pub fn pane_pid(session_name: &str) -> Result<u32, String> {
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
-            format!("tmux list-panes exited {} with nothing on stderr", out.status)
+            format!(
+                "tmux list-panes exited {} with nothing on stderr",
+                out.status
+            )
         } else {
             format!("tmux list-panes refused: {stderr}")
         });
@@ -216,12 +224,20 @@ fn pane_dead(session_name: &str) -> Result<bool, String> {
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(if stderr.is_empty() {
-            format!("tmux list-panes exited {} with nothing on stderr", out.status)
+            format!(
+                "tmux list-panes exited {} with nothing on stderr",
+                out.status
+            )
         } else {
             format!("tmux list-panes refused: {stderr}")
         });
     }
-    match String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or("").trim() {
+    match String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+    {
         "0" => Ok(false),
         "1" => Ok(true),
         other => Err(format!("tmux reported an unreadable pane state {other:?}")),
@@ -247,7 +263,11 @@ impl TerminalManager {
         runtime_cmd: &str,
         env_vars: &HashMap<String, String>,
     ) -> Result<PaneRecord, String> {
-        info!("launching session {} in cwd {}", session_name, cwd.display());
+        info!(
+            "launching session {} in cwd {}",
+            session_name,
+            cwd.display()
+        );
 
         // The server first, and from a client that carries none of this seat's environment: whoever creates it
         // keeps its argv (see `ensure_server`), and every call below connects to the server this one started.
@@ -261,7 +281,9 @@ impl TerminalManager {
         if let Ok(out) = check {
             if out.status.success() {
                 warn!("session {} already exists; killing first", session_name);
-                let _ = tmux_command().args(["kill-session", "-t", session_name]).output();
+                let _ = tmux_command()
+                    .args(["kill-session", "-t", session_name])
+                    .output();
             }
         }
 
@@ -314,7 +336,9 @@ impl TerminalManager {
         // it starts were clean. Scrubbing it here costs nothing and leaves no process in the launch carrying
         // the live rig's addressing.
         crate::scrub_env(&mut cmd);
-        let output = cmd.output().map_err(|e| format!("failed to start tmux: {e}"))?;
+        let output = cmd
+            .output()
+            .map_err(|e| format!("failed to start tmux: {e}"))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("tmux new-session failed: {stderr}"));
@@ -324,7 +348,9 @@ impl TerminalManager {
         // bare 0 - see PaneRecord.
         let pane = PaneRecord::from(pane_pid(session_name));
         if let Some(reason) = pane.unread.as_deref() {
-            warn!("session {session_name} was created but its pane pid could not be read: {reason}");
+            warn!(
+                "session {session_name} was created but its pane pid could not be read: {reason}"
+            );
         }
 
         info!("session {} started with {}", session_name, pane.describe());
@@ -371,19 +397,34 @@ impl TerminalManager {
 
         if !load.status.success() {
             let _ = fs::remove_file(&temp_file);
-            return Err(format!("tmux load-buffer failed: {}", String::from_utf8_lossy(&load.stderr)));
+            return Err(format!(
+                "tmux load-buffer failed: {}",
+                String::from_utf8_lossy(&load.stderr)
+            ));
         }
 
         // 2. Paste buffer with -p (bracketed), -r (raw LF), -d (drop buffer after paste)
         let paste = tmux_command()
-            .args(["paste-buffer", "-t", session_name, "-b", &buf_id, "-d", "-r", "-p"])
+            .args([
+                "paste-buffer",
+                "-t",
+                session_name,
+                "-b",
+                &buf_id,
+                "-d",
+                "-r",
+                "-p",
+            ])
             .output();
 
         let _ = fs::remove_file(&temp_file);
 
         let paste_out = paste.map_err(|e| format!("tmux paste-buffer failed: {e}"))?;
         if !paste_out.status.success() {
-            return Err(format!("tmux paste-buffer failed: {}", String::from_utf8_lossy(&paste_out.stderr)));
+            return Err(format!(
+                "tmux paste-buffer failed: {}",
+                String::from_utf8_lossy(&paste_out.stderr)
+            ));
         }
 
         // 3. Press Enter, then check the pane moved. A TUI that was not reading when the paste landed
@@ -405,7 +446,10 @@ impl TerminalManager {
         if enter.status.success() {
             Ok(())
         } else {
-            Err(format!("tmux send-keys Enter failed: {}", String::from_utf8_lossy(&enter.stderr)))
+            Err(format!(
+                "tmux send-keys Enter failed: {}",
+                String::from_utf8_lossy(&enter.stderr)
+            ))
         }
     }
 
@@ -458,7 +502,10 @@ mod submit_tests {
         let presses = Cell::new(0);
         let out = confirm_submission(
             Some("> hello".into()),
-            || { presses.set(presses.get() + 1); Ok(()) },
+            || {
+                presses.set(presses.get() + 1);
+                Ok(())
+            },
             || Some("> ".into()),
             ZERO,
         );
@@ -471,8 +518,17 @@ mod submit_tests {
         let presses = Cell::new(0);
         let out = confirm_submission(
             Some("> hello".into()),
-            || { presses.set(presses.get() + 1); Ok(()) },
-            || Some(if presses.get() < 2 { "> hello".into() } else { "> ".into() }),
+            || {
+                presses.set(presses.get() + 1);
+                Ok(())
+            },
+            || {
+                Some(if presses.get() < 2 {
+                    "> hello".into()
+                } else {
+                    "> ".into()
+                })
+            },
             ZERO,
         );
         assert_eq!(out, Ok(SendOutcome::Submitted));
@@ -484,7 +540,10 @@ mod submit_tests {
         let presses = Cell::new(0);
         let out = confirm_submission(
             Some("> hello".into()),
-            || { presses.set(presses.get() + 1); Ok(()) },
+            || {
+                presses.set(presses.get() + 1);
+                Ok(())
+            },
             || Some("> hello".into()),
             ZERO,
         );
@@ -512,8 +571,14 @@ mod submit_tests {
 
     #[test]
     fn outcomes_serialize_kebab_case() {
-        assert_eq!(serde_json::to_string(&SendOutcome::Submitted).unwrap(), "\"submitted\"");
-        assert_eq!(serde_json::to_string(&SendOutcome::Unconfirmed).unwrap(), "\"unconfirmed\"");
+        assert_eq!(
+            serde_json::to_string(&SendOutcome::Submitted).unwrap(),
+            "\"submitted\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SendOutcome::Unconfirmed).unwrap(),
+            "\"unconfirmed\""
+        );
     }
 }
 
@@ -530,7 +595,10 @@ mod launch_env_tests {
             pane_command(&["RIGGED_A".to_string()], "/bin/runner x"),
             "env -u RIGGED_A -u TMUX -u TMUX_PANE /bin/runner x"
         );
-        assert_eq!(pane_command(&[], "/bin/runner x"), "env -u TMUX -u TMUX_PANE /bin/runner x");
+        assert_eq!(
+            pane_command(&[], "/bin/runner x"),
+            "env -u TMUX -u TMUX_PANE /bin/runner x"
+        );
     }
 
     /// The two mechanisms are kept apart on purpose. The credential is denied by NAME and cleaned off the tmux
@@ -543,7 +611,9 @@ mod launch_env_tests {
         assert!(crate::env_is_denied("AGENTHUB_CONNECTOR_TOKEN"));
         assert!(crate::denied_name_keys().contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()));
         assert!(!crate::denied_env_keys().contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()));
-        assert!(!pane_command(&crate::denied_env_keys(), "/bin/runner x").contains("CONNECTOR_TOKEN"));
+        assert!(
+            !pane_command(&crate::denied_env_keys(), "/bin/runner x").contains("CONNECTOR_TOKEN")
+        );
         std::env::remove_var("AGENTHUB_CONNECTOR_TOKEN");
     }
 
@@ -553,14 +623,23 @@ mod launch_env_tests {
     #[test]
     fn a_denied_credential_never_becomes_a_pane_env_argument() {
         let env = HashMap::from([
-            ("AGENTHUB_CONNECTOR_TOKEN".to_string(), "connector".to_string()),
+            (
+                "AGENTHUB_CONNECTOR_TOKEN".to_string(),
+                "connector".to_string(),
+            ),
             ("AGENTHUB_TOKEN".to_string(), "mcp".to_string()),
             ("AGENTHUB_SEAT".to_string(), "dev".to_string()),
             ("RIGGED_SESSION_NAME".to_string(), "elsewhere".to_string()),
         ]);
         let args = pane_env_args(&env);
-        assert!(!args.iter().any(|a| a.contains("AGENTHUB_CONNECTOR_TOKEN")), "{args:?}");
-        assert!(!args.iter().any(|a| a.contains("RIGGED_SESSION_NAME")), "{args:?}");
+        assert!(
+            !args.iter().any(|a| a.contains("AGENTHUB_CONNECTOR_TOKEN")),
+            "{args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("RIGGED_SESSION_NAME")),
+            "{args:?}"
+        );
         assert!(args.contains(&"AGENTHUB_SEAT=dev".to_string()), "{args:?}");
         assert!(args.contains(&"AGENTHUB_TOKEN=mcp".to_string()), "{args:?}");
     }
@@ -576,7 +655,10 @@ mod launch_env_tests {
                 let session = format!("pty-launch-env-{}-{}", std::process::id(), seat);
                 let out = dir.join(seat);
                 let env = HashMap::from([("AGENTHUB_SEAT".to_string(), seat.to_string())]);
-                let cmd = format!("sh -c 'printf %s \"$AGENTHUB_SEAT\" > {}; sleep 5'", out.display());
+                let cmd = format!(
+                    "sh -c 'printf %s \"$AGENTHUB_SEAT\" > {}; sleep 5'",
+                    out.display()
+                );
                 TerminalManager::launch_session(&session, &dir, &cmd, &env).unwrap();
                 (session, out)
             })
@@ -620,7 +702,10 @@ mod launch_env_tests {
         let session = format!("pty-server-argv-{}", std::process::id());
         let delivered = dir.join("seat-env");
         let env = HashMap::from([
-            ("DEEPSEEK_API_KEY".to_string(), SECRET_IN_THE_ENV.to_string()),
+            (
+                "DEEPSEEK_API_KEY".to_string(),
+                SECRET_IN_THE_ENV.to_string(),
+            ),
             ("AGENTHUB_SEAT".to_string(), "dev".to_string()),
         ]);
         let cmd = format!(
@@ -640,7 +725,10 @@ mod launch_env_tests {
         );
 
         let argv = server_argv(server.root()).expect("the root's own tmux server");
-        assert!(argv.len() > 1, "a one-word argv is not a server's: {argv:?}");
+        assert!(
+            argv.len() > 1,
+            "a one-word argv is not a server's: {argv:?}"
+        );
         for arg in &argv {
             assert!(
                 !arg.contains(SECRET_IN_THE_ENV),
@@ -710,7 +798,9 @@ mod launch_env_tests {
         let Some((name, _)) = arg.split_once('=') else {
             return false;
         };
-        ["TOKEN", "KEY", "SECRET", "PASSWORD"].iter().any(|word| name.contains(word))
+        ["TOKEN", "KEY", "SECRET", "PASSWORD"]
+            .iter()
+            .any(|word| name.contains(word))
     }
 
     /// The command line of THIS root's tmux server, read the way the owner's measurement reads it: the server is
@@ -805,7 +895,9 @@ pub(crate) mod test_servers {
     /// Hold the process's tmux root for the rest of the test, pointed at a scratch server of this test's own.
     /// The guard must stay alive while the test opens panes.
     pub(crate) fn own(tag: &str) -> Server {
-        let guard = TMUX_ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let guard = TMUX_ENV
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = std::env::temp_dir().join(format!("agenthub-tmux-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch tmux server dir");
@@ -829,7 +921,13 @@ mod pane_pid_tests {
     /// instead of a pid is a FAILED READ, and a pane whose process is gone - 0 - is a PID that parses.
     #[test]
     fn an_unparsable_answer_is_a_failed_read_not_a_pid_of_zero() {
-        for answer in ["", "\n", "no server running on /tmp/tmux-1000/default", "not-a-pid", "7958 extra"] {
+        for answer in [
+            "",
+            "\n",
+            "no server running on /tmp/tmux-1000/default",
+            "not-a-pid",
+            "7958 extra",
+        ] {
             let err = parse_pane_pid(answer).expect_err("this is not a pane pid");
             assert!(err.contains("which is not a pane pid"), "{err}");
             assert!(!err.contains("pane pid 0"), "{err}");
@@ -863,10 +961,18 @@ mod pane_pid_tests {
         let dir = std::env::temp_dir().join(format!("pty-pane-pid-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let session = format!("pane-pid-live-{}", std::process::id());
-        let record = TerminalManager::launch_session(&session, &dir, "sleep 5", &HashMap::new()).unwrap();
-        assert!(record.pid.is_some(), "a live pane must answer a pid: {record:?}");
+        let record =
+            TerminalManager::launch_session(&session, &dir, "sleep 5", &HashMap::new()).unwrap();
+        assert!(
+            record.pid.is_some(),
+            "a live pane must answer a pid: {record:?}"
+        );
         assert!(record.unread.is_none(), "{record:?}");
-        assert!(record.describe().starts_with("pane pid "), "{}", record.describe());
+        assert!(
+            record.describe().starts_with("pane pid "),
+            "{}",
+            record.describe()
+        );
         let _ = TerminalManager::stop_session(&session);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -888,13 +994,19 @@ mod pane_pid_tests {
     /// boundary the supervisor and the log both read, so neither can turn a failure into a 0 on its own.
     #[test]
     fn a_failed_read_becomes_words_and_a_successful_one_becomes_a_pid() {
-        let failed = PaneRecord::from(Err("tmux list-panes refused: can't find session".to_string()));
+        let failed = PaneRecord::from(Err(
+            "tmux list-panes refused: can't find session".to_string()
+        ));
         assert_eq!(failed.pid, None);
         assert_eq!(
             failed.unread.as_deref(),
             Some("tmux list-panes refused: can't find session")
         );
-        assert!(failed.describe().contains("can't find session"), "{}", failed.describe());
+        assert!(
+            failed.describe().contains("can't find session"),
+            "{}",
+            failed.describe()
+        );
 
         let read = PaneRecord::from(Ok(8167));
         assert_eq!(read.pid, Some(8167));

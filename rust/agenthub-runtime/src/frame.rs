@@ -69,7 +69,11 @@ impl SpillTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sent {
     Data,
-    Spilled { path: PathBuf, bytes: u64, sha256: String },
+    Spilled {
+        path: PathBuf,
+        bytes: u64,
+        sha256: String,
+    },
 }
 
 /// One frame, encoded as the line that goes on the wire. Always exactly one line: JSON escapes the tabs and
@@ -139,7 +143,8 @@ pub fn next_spill_name() -> String {
 /// The handle is the contract: `bytes` and `sha256` are authoritative, the path is where the reader finds
 /// it, and `head`/`tail` are for a log line and a human glance.
 pub fn write_spill(dir: &Path, name: &str, bytes: &[u8], utf8: bool) -> Result<Value, String> {
-    fs::create_dir_all(dir).map_err(|e| format!("cannot create spill dir {}: {e}", dir.display()))?;
+    fs::create_dir_all(dir)
+        .map_err(|e| format!("cannot create spill dir {}: {e}", dir.display()))?;
     let path = dir.join(name);
     fs::write(&path, bytes).map_err(|e| format!("cannot write spill {}: {e}", path.display()))?;
     let (head, tail) = head_and_tail(bytes, utf8);
@@ -295,7 +300,10 @@ pub fn gc_spills(dir: &Path, budget: u64) -> Result<Vec<String>, String> {
         }
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
         files.push((
-            path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
             size,
         ));
     }
@@ -339,9 +347,8 @@ pub fn remove_spill_trees(room_dir: &Path) -> Result<(), String> {
 /// relayed, and only the peer can say which. No `replyTo` means fire-and-forget, which stays the behaviour
 /// of the existing `compact` callers.
 pub fn reply(reply_to: &str, id: &str, result: Result<Value, String>) -> Result<(), String> {
-    let mut stream = std::os::unix::net::UnixStream::connect(reply_to).map_err(|e| {
-        format!("cannot reach the reply socket {reply_to}: {e}")
-    })?;
+    let mut stream = std::os::unix::net::UnixStream::connect(reply_to)
+        .map_err(|e| format!("cannot reach the reply socket {reply_to}: {e}"))?;
     let line = match result {
         Ok(data) => encode_line(&json!({"id": id, "ok": true, "data": data}))?,
         Err(reason) => encode_line(&json!({"id": id, "ok": false, "error": reason}))?,
@@ -349,7 +356,9 @@ pub fn reply(reply_to: &str, id: &str, result: Result<Value, String>) -> Result<
     stream
         .write_all(line.as_bytes())
         .map_err(|e| format!("cannot answer on {reply_to}: {e}"))?;
-    stream.flush().map_err(|e| format!("cannot flush {reply_to}: {e}"))
+    stream
+        .flush()
+        .map_err(|e| format!("cannot flush {reply_to}: {e}"))
 }
 
 /// Send one frame and, when a spill was produced, say so in the same voice as every other runner line.
@@ -458,27 +467,36 @@ mod tests {
 
     #[test]
     fn an_overlong_line_aborts_the_connection_with_framing_error() {
-        let mut no_newline = std::io::BufReader::new(std::io::Cursor::new(vec![
-            b'x';
-            MAX_FRAME_BYTES + 8
-        ]));
+        let mut no_newline =
+            std::io::BufReader::new(std::io::Cursor::new(vec![b'x'; MAX_FRAME_BYTES + 8]));
         let err = read_line_bounded(&mut no_newline, MAX_FRAME_BYTES).unwrap_err();
         assert!(err.contains(FRAMING_ERROR), "got {err}");
 
         // A whole line under the limit is still read back whole.
         let mut ok = std::io::BufReader::new(std::io::Cursor::new(b"{\"id\":\"a\"}\n".to_vec()));
-        assert_eq!(read_line_bounded(&mut ok, MAX_FRAME_BYTES).unwrap().trim(), "{\"id\":\"a\"}");
+        assert_eq!(
+            read_line_bounded(&mut ok, MAX_FRAME_BYTES).unwrap().trim(),
+            "{\"id\":\"a\"}"
+        );
     }
 
     #[test]
     fn gc_keeps_the_newest_within_budget_and_removes_the_oldest_first() {
         let dir = std::env::temp_dir().join(format!("frame-test-{}-gc", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        for name in ["0000000000001-000000-x.bin", "0000000000002-000000-x.bin", "0000000000003-000000-x.bin"] {
+        for name in [
+            "0000000000001-000000-x.bin",
+            "0000000000002-000000-x.bin",
+            "0000000000003-000000-x.bin",
+        ] {
             fs::write(dir.join(name), vec![b'z'; 100]).unwrap();
         }
         let removed = gc_spills(&dir, 150).unwrap();
-        assert_eq!(removed.len(), 2, "the two oldest go, the newest stays: {removed:?}");
+        assert_eq!(
+            removed.len(),
+            2,
+            "the two oldest go, the newest stays: {removed:?}"
+        );
         assert!(dir.join("0000000000003-000000-x.bin").exists());
         assert!(!dir.join("0000000000001-000000-x.bin").exists());
         let _ = fs::remove_dir_all(&dir);
@@ -487,14 +505,23 @@ mod tests {
     #[test]
     fn a_room_stop_removes_the_whole_spill_tree() {
         let state = std::env::temp_dir().join(format!("frame-test-{}-room", std::process::id()));
-        let target = SpillTarget::Seat { room: "r".into(), seat: "s".into() };
+        let target = SpillTarget::Seat {
+            room: "r".into(),
+            seat: "s".into(),
+        };
         let seat_spill = target.dir(&state);
         write_spill(&seat_spill, "s.bin", b"seat payload", true).unwrap();
         let room_spill = SpillTarget::Room { room: "r".into() }.dir(&state);
         write_spill(&room_spill, "r.bin", b"room payload", true).unwrap();
         remove_spill_trees(&state.join("rooms").join("r")).unwrap();
-        assert!(!seat_spill.exists(), "the seat's spill tree is gone with the room");
-        assert!(!room_spill.exists(), "the room's spill tree is gone with the room");
+        assert!(
+            !seat_spill.exists(),
+            "the seat's spill tree is gone with the room"
+        );
+        assert!(
+            !room_spill.exists(),
+            "the room's spill tree is gone with the room"
+        );
         let _ = fs::remove_dir_all(&state);
     }
 
@@ -502,7 +529,8 @@ mod tests {
     fn a_reply_carries_ok_or_a_real_refusal() {
         use std::io::Read;
         use std::os::unix::net::UnixListener;
-        let path = std::env::temp_dir().join(format!("frame-test-{}-reply.sock", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("frame-test-{}-reply.sock", std::process::id()));
         let _ = fs::remove_file(&path);
         let listener = UnixListener::bind(&path).unwrap();
         let handle = std::thread::spawn(move || {
@@ -511,7 +539,12 @@ mod tests {
             stream.read_to_string(&mut text).unwrap();
             text
         });
-        reply(&path.to_string_lossy(), "abc", Err("unsupported_type".to_string())).unwrap();
+        reply(
+            &path.to_string_lossy(),
+            "abc",
+            Err("unsupported_type".to_string()),
+        )
+        .unwrap();
         let answered = handle.join().unwrap();
         let frame: Value = serde_json::from_str(answered.trim()).unwrap();
         assert_eq!(frame["id"], "abc");

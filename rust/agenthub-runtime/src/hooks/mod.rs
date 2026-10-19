@@ -45,6 +45,7 @@ impl HookBus {
         bus
     }
 
+    #[cfg(test)]
     pub fn subscribe(&self) -> broadcast::Receiver<SeatEvent> {
         self.sender.subscribe()
     }
@@ -85,7 +86,11 @@ impl HookBus {
 
                 let audit_path = room_dir.join(format!("{seat}-audit.jsonl"));
                 if let Ok(json_line) = serde_json::to_string(&event) {
-                    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&audit_path) {
+                    if let Ok(mut f) = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&audit_path)
+                    {
                         let _ = writeln!(f, "{json_line}");
                     }
                 }
@@ -99,7 +104,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("agenthub-hooks-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("agenthub-hooks-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
@@ -147,6 +153,9 @@ mod tests {
             bus.emit(started("lead"));
         }
         bus.emit(started("after-burst"));
-        assert_eq!(lines(&dir.join("r/after-burst-audit.jsonl"), 1).await.len(), 1);
+        assert_eq!(
+            lines(&dir.join("r/after-burst-audit.jsonl"), 1).await.len(),
+            1
+        );
     }
 }

@@ -22,16 +22,16 @@
 
 mod claude;
 
+use crate::frame::{self, SpillTarget};
 use crate::types::{AgentRuntime, RoomSpec, SeatSpec};
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use crate::frame::{self, SpillTarget};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use parking_lot::Mutex;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, OnceLock};
@@ -68,9 +68,9 @@ pub struct RunnerTarget {
 
 impl RunnerTarget {
     pub fn parse(spec: &str) -> Result<Self, String> {
-        let (room, seat) = spec.split_once('/').ok_or_else(|| {
-            format!("runner target must be <room>/<seat>; got '{spec}'")
-        })?;
+        let (room, seat) = spec
+            .split_once('/')
+            .ok_or_else(|| format!("runner target must be <room>/<seat>; got '{spec}'"))?;
         if room.trim().is_empty() || seat.trim().is_empty() {
             return Err(format!(
                 "runner target must be <room>/<seat> with both non-empty; got '{spec}'"
@@ -104,7 +104,11 @@ fn seat_dir(state_dir: &Path, target: &RunnerTarget) -> PathBuf {
 
 /// The child's argv, per `PR:220-242`: the RPC mode, the seat's own session directory, the approval
 /// mode for this runtime, and the model when the seat has one.
-fn child_argv(runtime: &AgentRuntime, seat_dir: &Path, seat: &SeatSpec) -> Result<Vec<String>, String> {
+fn child_argv(
+    runtime: &AgentRuntime,
+    seat_dir: &Path,
+    seat: &SeatSpec,
+) -> Result<Vec<String>, String> {
     match runtime {
         AgentRuntime::Omp => {
             let mut argv = vec![
@@ -244,8 +248,8 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit()); // the pane: the human sees omp's own errors
-    // Default deny, before anything is spawned: the agent must not inherit the live rig's addressing, which
-    // the daemon's own environment would otherwise hand it (`crate::scrub_env` states the measurement).
+                                   // Default deny, before anything is spawned: the agent must not inherit the live rig's addressing, which
+                                   // the daemon's own environment would otherwise hand it (`crate::scrub_env` states the measurement).
     crate::scrub_env(&mut launch);
     let mut child = launch
         .spawn()
@@ -286,24 +290,36 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                 None => frame,
                 Some(bridge) => {
                     let outbound = match serde_json::from_str::<serde_json::Value>(frame.trim()) {
-                        Ok(value) => bridge.from_runner(&value),
+                        Ok(value) => bridge.translate_runner_frame(&value),
                         Err(_) => continue,
                     };
                     for reply in outbound.to_reader {
                         let _ = writer_reader_tx.send(reply.to_string());
                     }
-                    outbound.to_agent.iter().map(|f| format!("{f}\n")).collect::<String>()
+                    outbound
+                        .to_agent
+                        .iter()
+                        .map(|f| format!("{f}\n"))
+                        .collect::<String>()
                 }
             };
             if frame.is_empty() {
                 continue;
             }
-            if let Err(e) = stdin.write_all(frame.as_bytes()).and_then(|_| stdin.flush()) {
+            if let Err(e) = stdin
+                .write_all(frame.as_bytes())
+                .and_then(|_| stdin.flush())
+            {
                 // The child's end of the channel is gone. That is a fact the runner must *publish*: a
                 // sealed pipe is not the same event as the child exiting, and a daemon that only sees its
                 // own mailbox connection close cannot tell them apart (`SPEC` §3).
                 warn!("runner: cannot write to the child: {e}");
-                let _ = write_state(&state_path, "agent_socket_closed", "the child's channel is gone", 0);
+                let _ = write_state(
+                    &state_path,
+                    "agent_socket_closed",
+                    "the child's channel is gone",
+                    0,
+                );
                 break;
             }
         }
@@ -415,7 +431,9 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                             mirror(&format!("ERROR rpc: {err}"));
                         }
                         if failed && is_compact_reply(id) {
-                            mirror("compact refused; no turn is affected, the seat keeps its state");
+                            mirror(
+                                "compact refused; no turn is affected, the seat keeps its state",
+                            );
                         } else if failed {
                             if let Some(err) = error_text {
                                 let has_pending = pending_reader.lock().is_some();
@@ -428,7 +446,13 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                 // while the agent has its own retry in flight, this ladder must not start
                                 // one of its own. That makes the property local — a fact this runner
                                 // observed — instead of an inference about the order omp sends its frames.
-                                match decide_resume(is_our_prompt, turn_active || agent_retrying, has_pending, &err, attempts) {
+                                match decide_resume(
+                                    is_our_prompt,
+                                    turn_active || agent_retrying,
+                                    has_pending,
+                                    &err,
+                                    attempts,
+                                ) {
                                     Resume::Nothing(reason) => {
                                         mirror(&format!("rpc error, nothing to resume: {reason}"));
                                     }
@@ -450,41 +474,46 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                                 "failure already counted (attempt {attempt}/{MAX_RESUME_ATTEMPTS}); not sending a second copy: {label}"
                                             ));
                                         } else {
-                                        attempts = attempt;
-                                        mirror(&format!(
+                                            attempts = attempt;
+                                            mirror(&format!(
                                             "retry {attempt}/{MAX_RESUME_ATTEMPTS} in {delay_secs}s: {label} :: {err}"
                                         ));
-                                        let _ = write_state(&state_path, "retrying", label, attempts);
-                                        let resume_prompt =
-                                            pending_reader.lock().as_ref().cloned();
-                                        if let Some(prompt) = resume_prompt {
-                                            let sender = to_child_reader.clone();
-                                            let pending_retry = Arc::clone(&pending_reader);
-                                            thread::spawn(move || {
-                                                thread::sleep(Duration::from_secs(delay_secs));
-                                                let id = format!(
-                                                    "runner-resume-{}-{attempt}",
-                                                    std::process::id()
-                                                );
-                                                // The origin and the held count ride along: this is the same
-                                                // text, so it is the same sender to answer to and the same
-                                                // bound to compare against.
-                                                *pending_retry.lock() = Some(PendingPrompt {
-                                                    id: id.clone(),
-                                                    text: prompt.text.clone(),
-                                                    origin: prompt.origin,
-                                                    held_attempts: prompt.held_attempts,
+                                            let _ = write_state(
+                                                &state_path,
+                                                "retrying",
+                                                label,
+                                                attempts,
+                                            );
+                                            let resume_prompt =
+                                                pending_reader.lock().as_ref().cloned();
+                                            if let Some(prompt) = resume_prompt {
+                                                let sender = to_child_reader.clone();
+                                                let pending_retry = Arc::clone(&pending_reader);
+                                                thread::spawn(move || {
+                                                    thread::sleep(Duration::from_secs(delay_secs));
+                                                    let id = format!(
+                                                        "runner-resume-{}-{attempt}",
+                                                        std::process::id()
+                                                    );
+                                                    // The origin and the held count ride along: this is the same
+                                                    // text, so it is the same sender to answer to and the same
+                                                    // bound to compare against.
+                                                    *pending_retry.lock() = Some(PendingPrompt {
+                                                        id: id.clone(),
+                                                        text: prompt.text.clone(),
+                                                        origin: prompt.origin,
+                                                        held_attempts: prompt.held_attempts,
+                                                    });
+                                                    let _ = send(
+                                                        &sender,
+                                                        &serde_json::json!({
+                                                            "id": id,
+                                                            "type": "prompt",
+                                                            "message": prompt.text
+                                                        }),
+                                                    );
                                                 });
-                                                let _ = send(
-                                                    &sender,
-                                                    &serde_json::json!({
-                                                        "id": id,
-                                                        "type": "prompt",
-                                                        "message": prompt.text
-                                                    }),
-                                                );
-                                            });
-                                        }
+                                            }
                                         }
                                     }
                                     Resume::Blocked(reason) => {
@@ -613,7 +642,12 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                             "auto_retry_start" => {
                                 agent_retrying = true;
                                 mirror("provider retry in progress (omp's own)");
-                                let _ = write_state(&state_path, "retrying", "omp auto-retry", attempts);
+                                let _ = write_state(
+                                    &state_path,
+                                    "retrying",
+                                    "omp auto-retry",
+                                    attempts,
+                                );
                             }
                             "auto_retry_end" => {
                                 agent_retrying = false;
@@ -623,7 +657,12 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                             // answer a dialog (its input is a prompt), so it is cancelled the way the
                             // reference cancels what it cannot present (`P:434-438`).
                             "extension_ui_request" => {
-                                let _ = write_state(&state_path, "needs_input", "a dialog this pane cannot answer", attempts);
+                                let _ = write_state(
+                                    &state_path,
+                                    "needs_input",
+                                    "a dialog this pane cannot answer",
+                                    attempts,
+                                );
                                 mirror("a dialog arrived; this pane cannot answer it, cancelling it for the agent");
                                 if let Some(id) = record.get("id").and_then(|v| v.as_str()) {
                                     let _ = send(
@@ -649,7 +688,8 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                 // `idle` is a seat at its prompt, and this arm may have just handed the held
                                 // text back: a prompt in flight — or a text still waiting for the next turn —
                                 // is not that, so only a seat with neither reads as idle here.
-                                if pending_reader.lock().is_some() || !held_reader.lock().is_empty() {
+                                if pending_reader.lock().is_some() || !held_reader.lock().is_empty()
+                                {
                                     let _ = write_state(&state_path, "working", "", attempts);
                                 } else {
                                     let _ = write_state(&state_path, "idle", "", attempts);
@@ -674,9 +714,15 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
             }
             // The child's stdout ended. That is its own fact — the reader is the only party that can tell
             // an EOF from a sealed pipe or an exit (`SPEC` §3) — so it is published, not just mirrored.
-            let _ = write_state(&state_path, "agent_stdio_eof", "the child's stdout ended", attempts);
+            let _ = write_state(
+                &state_path,
+                "agent_stdio_eof",
+                "the child's stdout ended",
+                attempts,
+            );
             if !announced_ready {
-                let _ = ready_tx.send(Err("the child's stdout ended before the ready frame".into()));
+                let _ =
+                    ready_tx.send(Err("the child's stdout ended before the ready frame".into()));
             }
         });
         ready_rx
@@ -686,7 +732,10 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
     ready?;
 
     // The handshake done, ask for the state the pane and the daemon both need (`P:299`).
-    send(&to_child, &serde_json::json!({"id": "runner-get-state", "type": "get_state"}))?;
+    send(
+        &to_child,
+        &serde_json::json!({"id": "runner-get-state", "type": "get_state"}),
+    )?;
 
     let pane = spawn_pane_input(to_child.clone(), Arc::clone(&pending));
     let exit = wait_child(&mut child);
@@ -698,14 +747,24 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
             // The last writer wins and the most specific fact is the exit. It is written on the main thread
             // *after* the child is reaped, so it cannot lose a race with this process ending — which is what
             // makes "the seat is not-running with a reason" true for a reader that arrives afterwards.
-            let _ = write_state(&state_path, "agent_exited", &format!("agent_exited({code})"), 0);
+            let _ = write_state(
+                &state_path,
+                "agent_exited",
+                &format!("agent_exited({code})"),
+                0,
+            );
             Ok(())
         }
         Err(e) => {
             // A child killed by a signal, or one whose wait itself failed, has still *left*: publish it,
             // because a seat the transport killed must never be readable as healthy afterwards.
             mirror(&format!("EXITED {e}"));
-            let _ = write_state(&state_path, "agent_exited", &format!("agent_exited({e})"), 0);
+            let _ = write_state(
+                &state_path,
+                "agent_exited",
+                &format!("agent_exited({e})"),
+                0,
+            );
             Err(e)
         }
     }
@@ -732,7 +791,7 @@ fn agent_lines(
             let Ok(line) = line else { break };
             match serde_json::from_str::<serde_json::Value>(line.trim()) {
                 Ok(record) => {
-                    for frame in bridge.from_agent(&record) {
+                    for frame in bridge.translate_agent_record(&record) {
                         let _ = reader_tx.send(frame.to_string());
                     }
                 }
@@ -764,8 +823,8 @@ fn spawn_mailbox(
         fs::create_dir_all(parent).map_err(|e| format!("cannot create run dir: {e}"))?;
     }
     let _ = fs::remove_file(&path);
-    let listener =
-        UnixListener::bind(&path).map_err(|e| format!("cannot bind mailbox {}: {e}", path.display()))?;
+    let listener = UnixListener::bind(&path)
+        .map_err(|e| format!("cannot bind mailbox {}: {e}", path.display()))?;
     info!("runner mailbox listening at {}", path.display());
     thread::spawn(move || {
         for stream in listener.incoming() {
@@ -823,7 +882,10 @@ fn serve_mailbox_stream(
             .and_then(|v| v.as_str())
             .unwrap_or("runner-frame")
             .to_string();
-        let reply_to = value.get("replyTo").and_then(|v| v.as_str()).map(str::to_string);
+        let reply_to = value
+            .get("replyTo")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         let kind = value
             .get("type")
             .and_then(|v| v.as_str())
@@ -914,11 +976,7 @@ fn relay_frame(
             // THE FRAME'S ORIGIN IS REMEMBERED WITH IT (`from`, `verb`), because this is the last moment the
             // sender is known: a text that is later held, handed back or given up on has to name whose it
             // was, and the response that reports the refusal carries an id and nothing else.
-            *pending.lock() = Some(PendingPrompt::relayed(
-                id,
-                text,
-                Origin::from_frame(value),
-            ));
+            *pending.lock() = Some(PendingPrompt::relayed(id, text, Origin::from_frame(value)));
             // THE TURN IS PUBLISHED WHEN IT STARTS, not when it ends: a prompt handed to the agent is work
             // in flight, and a state file left at `idle` is how a mid-turn seat read as a seat at its
             // prompt while it was busy (`SPEC` §3).
@@ -951,12 +1009,14 @@ pub fn target_from_session(session_or_target: &str) -> Result<RunnerTarget, Stri
     match session_or_target.split_once('/') {
         Some(_) => RunnerTarget::parse(session_or_target),
         None => {
-            let rest = session_or_target.strip_prefix("agenthub--").ok_or_else(|| {
-                format!(
-                    "'{session_or_target}' is neither <room>/<seat> nor the session name \
+            let rest = session_or_target
+                .strip_prefix("agenthub--")
+                .ok_or_else(|| {
+                    format!(
+                        "'{session_or_target}' is neither <room>/<seat> nor the session name \
                      agenthub--<room>--<seat>"
-                )
-            })?;
+                    )
+                })?;
             let (room, seat) = rest
                 .rsplit_once("--")
                 .ok_or_else(|| format!("'{session_or_target}' does not name a room and a seat"))?;
@@ -1006,11 +1066,17 @@ pub fn send_to_seat(
             .join("rooms")
             .join(&target.room)
             .join("run")
-            .join(format!("{}.reply-{}-{seq}.sock", target.seat, std::process::id()));
+            .join(format!(
+                "{}.reply-{}-{seq}.sock",
+                target.seat,
+                std::process::id()
+            ));
         let _ = fs::remove_file(&path);
-        Some((UnixListener::bind(&path).map_err(|e| {
-            format!("cannot bind a reply socket {}: {e}", path.display())
-        })?, path))
+        Some((
+            UnixListener::bind(&path)
+                .map_err(|e| format!("cannot bind a reply socket {}: {e}", path.display()))?,
+            path,
+        ))
     } else {
         None
     };
@@ -1049,7 +1115,12 @@ pub fn send_to_seat(
     match reply_listener {
         None => Ok(serde_json::json!({"id": id, "ok": true})),
         Some((listener, path)) => {
-            let reply = read_reply(&listener, &target.room, &target.seat, Instant::now() + REPLY_TIMEOUT);
+            let reply = read_reply(
+                &listener,
+                &target.room,
+                &target.seat,
+                Instant::now() + REPLY_TIMEOUT,
+            );
             // The socket file goes on EVERY path, a timeout and a refusal alike: a unique name that leaked
             // would leave one stale inode per failed call.
             let _ = fs::remove_file(&path);
@@ -1079,7 +1150,12 @@ pub fn send_to_seat(
 /// (never "nothing was sent") when the reason carries `no answer from the runner for`
 /// (`internal/clientruntime.IsNoAnswer`), because the frame WAS written to the runner's mailbox and the text
 /// may be held for its next turn. Anything that is not the wait elapsing keeps its own words.
-fn read_reply(listener: &UnixListener, room: &str, seat: &str, deadline: Instant) -> Result<String, String> {
+fn read_reply(
+    listener: &UnixListener,
+    room: &str,
+    seat: &str,
+    deadline: Instant,
+) -> Result<String, String> {
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("cannot wait on the reply socket: {e}"))?;
@@ -1127,13 +1203,24 @@ fn reply_timed_out(room: &str, seat: &str) -> String {
 }
 
 /// Keep a room's spill tree inside its budget, opportunistically, on the side that wrote a spill.
-fn gc_after_spill(state_dir: &Path, target: &RunnerTarget, sent: &frame::Sent) -> Result<(), String> {
+fn gc_after_spill(
+    state_dir: &Path,
+    target: &RunnerTarget,
+    sent: &frame::Sent,
+) -> Result<(), String> {
     if !matches!(sent, frame::Sent::Spilled { .. }) {
         return Ok(());
     }
     for dir in [
-        SpillTarget::Seat { room: target.room.clone(), seat: target.seat.clone() }.dir(state_dir),
-        SpillTarget::Room { room: target.room.clone() }.dir(state_dir),
+        SpillTarget::Seat {
+            room: target.room.clone(),
+            seat: target.seat.clone(),
+        }
+        .dir(state_dir),
+        SpillTarget::Room {
+            room: target.room.clone(),
+        }
+        .dir(state_dir),
     ] {
         frame::gc_spills(&dir, frame::SPILL_BUDGET_BYTES)?;
     }
@@ -1267,9 +1354,18 @@ pub const NOOP_SIGNATURES: [(&str, &str); 2] = [
 /// The measured signatures of a transport/provider failure (`FINDING-omp-runner-death-pattern`, and the
 /// scout's map of `pi-runner.js`): these two are omp's own rpc errors, the third is its socket close.
 pub const RETRYABLE_SIGNATURES: [(&str, &str); 8] = [
-    ("RPC response exceeded the transport limit", "omp's rpc response cap"),
-    ("rpc chunk payload exceeds the transport limit", "omp's rpc chunk cap"),
-    ("The socket connection was closed unexpectedly", "the agent socket closed"),
+    (
+        "RPC response exceeded the transport limit",
+        "omp's rpc response cap",
+    ),
+    (
+        "rpc chunk payload exceeds the transport limit",
+        "omp's rpc chunk cap",
+    ),
+    (
+        "The socket connection was closed unexpectedly",
+        "the agent socket closed",
+    ),
     ("rate limit", "provider rate limit"),
     ("overloaded", "provider overloaded"),
     ("timed out", "timeout"),
@@ -1630,8 +1726,19 @@ pub fn nudge_seat(
 
 /// The seat's own state, written where the daemon and `ps` can read it (the reference writes a
 /// `runner-state.json` beside the session for the same reason, `pi-runner-protocol.js:26`).
-pub fn write_state(state_path: &Path, state: &str, classification: &str, attempts: u32) -> Result<(), String> {
-    write_state_with_pid(state_path, state, classification, attempts, std::process::id())
+pub fn write_state(
+    state_path: &Path,
+    state: &str,
+    classification: &str,
+    attempts: u32,
+) -> Result<(), String> {
+    write_state_with_pid(
+        state_path,
+        state,
+        classification,
+        attempts,
+        std::process::id(),
+    )
 }
 
 /// The same document, with the pid that BACKS the claim named by the caller. The runner publishes its own
@@ -1665,7 +1772,8 @@ pub fn write_state_with_pid(
     if let Some(parent) = state_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("cannot create run dir: {e}"))?;
     }
-    let text = serde_json::to_string_pretty(&payload).map_err(|e| format!("cannot encode state: {e}"))?;
+    let text =
+        serde_json::to_string_pretty(&payload).map_err(|e| format!("cannot encode state: {e}"))?;
     let tmp = state_path.with_extension("json.tmp");
     fs::write(&tmp, text).map_err(|e| format!("cannot write state: {e}"))?;
     fs::rename(&tmp, state_path).map_err(|e| format!("cannot publish state: {e}"))
@@ -2066,7 +2174,10 @@ fn append_mirrored(path: &Path, text: &str) {
         Ok(mut file) => {
             let _ = writeln!(file, "{line}");
         }
-        Err(e) => eprintln!("{PANE_PREFIX} cannot write the seat's log {}: {e}", path.display()),
+        Err(e) => eprintln!(
+            "{PANE_PREFIX} cannot write the seat's log {}: {e}",
+            path.display()
+        ),
     }
 }
 
@@ -2137,7 +2248,10 @@ mod tests {
         // The two things a reader greps this file for: the ladder, and the cap line - legible as text
         // rather than escaped into a form no reader looking for them would match.
         assert!(text.contains("retry 1/3"), "the ladder is legible: {text}");
-        assert!(text.contains(PANE_INPUT_REJECTED), "the cap line is legible: {text}");
+        assert!(
+            text.contains(PANE_INPUT_REJECTED),
+            "the cap line is legible: {text}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -2169,8 +2283,12 @@ mod tests {
             policy_document: None,
             env: Default::default(),
         };
-        let argv = child_argv(&AgentRuntime::Omp, Path::new("/state/rooms/roomA/seats/dev"), &seat)
-            .expect("argv");
+        let argv = child_argv(
+            &AgentRuntime::Omp,
+            Path::new("/state/rooms/roomA/seats/dev"),
+            &seat,
+        )
+        .expect("argv");
         assert_eq!(
             argv,
             vec![
@@ -2199,13 +2317,24 @@ mod tests {
             policy_document: None,
             env: Default::default(),
         };
-        let argv = child_argv(&AgentRuntime::ClaudeCode, Path::new("/state/s"), &seat).expect("argv");
+        let argv =
+            child_argv(&AgentRuntime::ClaudeCode, Path::new("/state/s"), &seat).expect("argv");
         assert_eq!(
             argv,
             vec![
-                "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                "--include-partial-messages", "--permission-mode", "bypassPermissions", "--mcp-config",
-                "/state/s/mcp.json", "--model", "opus",
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+                "--include-partial-messages",
+                "--permission-mode",
+                "bypassPermissions",
+                "--mcp-config",
+                "/state/s/mcp.json",
+                "--model",
+                "opus",
             ]
         );
         assert!(
@@ -2214,9 +2343,11 @@ mod tests {
         );
         seat.permission_policy = Some("locked".into());
         seat.model = None;
-        let argv = child_argv(&AgentRuntime::ClaudeCode, Path::new("/state/s"), &seat).expect("argv");
+        let argv =
+            child_argv(&AgentRuntime::ClaudeCode, Path::new("/state/s"), &seat).expect("argv");
         assert!(
-            argv.windows(2).any(|pair| pair == ["--permission-mode", "default"]),
+            argv.windows(2)
+                .any(|pair| pair == ["--permission-mode", "default"]),
             "an unspecified posture must deny, not ask: {argv:?}"
         );
         assert_eq!(child_program(&AgentRuntime::ClaudeCode, &seat), "claude");
@@ -2242,12 +2373,16 @@ mod tests {
         let file = dir.join(crate::supervisor::SEAT_WORKFLOW_FILE);
         let _ = fs::remove_file(&file);
         let argv = child_argv(&AgentRuntime::ClaudeCode, &dir, &seat).expect("argv");
-        assert!(!argv.iter().any(|a| a == "--append-system-prompt-file"), "no workflow, no flag: {argv:?}");
+        assert!(
+            !argv.iter().any(|a| a == "--append-system-prompt-file"),
+            "no workflow, no flag: {argv:?}"
+        );
         fs::write(&file, "# architect\n").expect("workflow");
         let argv = child_argv(&AgentRuntime::ClaudeCode, &dir, &seat).expect("argv");
         let expected = file.to_string_lossy().to_string();
         assert!(
-            argv.windows(2).any(|pair| pair[0] == "--append-system-prompt-file" && pair[1] == expected),
+            argv.windows(2)
+                .any(|pair| pair[0] == "--append-system-prompt-file" && pair[1] == expected),
             "the workflow file is appended: {argv:?}"
         );
         fs::remove_dir_all(&dir).expect("cleanup");
@@ -2263,7 +2398,11 @@ mod tests {
             assert_eq!(approval_mode(Some(policy)).unwrap(), "yolo", "{policy:?}");
         }
         for policy in ["locked", "standard", "open", "none"] {
-            assert_eq!(approval_mode(Some(policy)).unwrap(), "always-ask", "{policy:?}");
+            assert_eq!(
+                approval_mode(Some(policy)).unwrap(),
+                "always-ask",
+                "{policy:?}"
+            );
         }
         // An OMITTED field is not a blank one, and the two used to collapse: a `String` with
         // `#[serde(default)]` turned absence into "", so the blank-refusal below swallowed the documented
@@ -2279,7 +2418,10 @@ mod tests {
         for policy in ["", "  "] {
             let err = approval_mode(Some(policy)).unwrap_err();
             assert!(err.contains("empty"), "{policy:?}: {err}");
-            assert!(err.contains("locked|standard|open|yolo|none"), "{policy:?}: {err}");
+            assert!(
+                err.contains("locked|standard|open|yolo|none"),
+                "{policy:?}: {err}"
+            );
         }
         // "approve" is not in the repo's vocabulary - it was this module's own invention, which is how the
         // mapping came to be inverted. It is refused now, by name.
@@ -2293,10 +2435,9 @@ mod tests {
     /// `#[serde(default)] String` could not represent the difference at all - absence became `""`.
     #[test]
     fn an_absent_policy_and_a_blank_one_deserialize_differently() {
-        let omitted: SeatSpec = serde_json::from_str(
-            r#"{"seat_key":"dev","seat_type":"developer","runtime":"omp"}"#,
-        )
-        .expect("a seat with no permission_policy must deserialize");
+        let omitted: SeatSpec =
+            serde_json::from_str(r#"{"seat_key":"dev","seat_type":"developer","runtime":"omp"}"#)
+                .expect("a seat with no permission_policy must deserialize");
         assert_eq!(omitted.permission_policy, None);
         assert_eq!(
             approval_mode(omitted.permission_policy.as_deref()).unwrap(),
@@ -2406,7 +2547,9 @@ mod tests {
             match classify_failure(error) {
                 Failure::Noop(what) => assert_eq!(what, label, "{error}"),
                 Failure::Terminal(what) => panic!("a compact refusal classified terminal ({what})"),
-                Failure::Retryable(what) => panic!("a compact refusal classified retryable ({what})"),
+                Failure::Retryable(what) => {
+                    panic!("a compact refusal classified retryable ({what})")
+                }
             }
             // The shape a fire-and-forget compact reply actually arrives in: no pending prompt, no turn
             // running. NOT blocked: the seat is healthy and has to stay wakeable.
@@ -2468,7 +2611,10 @@ mod tests {
         assert_eq!(resume_delay(3), Duration::from_secs(4));
         // Past the bound the schedule stops growing: a bounded retry must not become a busy loop.
         assert_eq!(resume_delay(4), Duration::from_secs(4));
-        assert_eq!(resume_delay(MAX_RESUME_ATTEMPTS + 5), Duration::from_secs(4));
+        assert_eq!(
+            resume_delay(MAX_RESUME_ATTEMPTS + 5),
+            Duration::from_secs(4)
+        );
     }
 
     #[test]
@@ -2486,7 +2632,9 @@ mod tests {
         // cannot drift: `retrying` is work in flight, which is `working` in the daemon's vocabulary - and a
         // reader that compares this against `agentActivity.state` compares like with like.
         assert_eq!(read["activity"], "working");
-        assert!(read["updated_at"].as_str().is_some_and(|t| t.ends_with('Z')));
+        assert!(read["updated_at"]
+            .as_str()
+            .is_some_and(|t| t.ends_with('Z')));
         // no temp file survives the publish
         assert!(!path.with_extension("json.tmp").exists());
         let _ = std::fs::remove_dir_all(&dir);
@@ -2511,7 +2659,10 @@ mod tests {
         let one = vec!["qitem-b".to_string(), "qitem-a".to_string()];
         let reordered = vec!["qitem-a".to_string(), "qitem-b".to_string()];
         assert_eq!(nudge_key("dev", &one), nudge_key("dev", &reordered));
-        assert_ne!(nudge_key("dev", &one), nudge_key("dev", &["qitem-a".to_string()]));
+        assert_ne!(
+            nudge_key("dev", &one),
+            nudge_key("dev", &["qitem-a".to_string()])
+        );
         assert_ne!(nudge_key("dev", &one), nudge_key("reviewer", &one));
     }
 
@@ -2525,7 +2676,10 @@ mod tests {
         let key = nudge_key("dev", &ids);
 
         // Nothing recorded yet: the pile has never been asked.
-        assert_eq!(nudge_progress(&dir, "demo", "dev", &key), NudgeProgress::default());
+        assert_eq!(
+            nudge_progress(&dir, "demo", "dev", &key),
+            NudgeProgress::default()
+        );
 
         for attempt in 1..=2u32 {
             append_nudge_attempt(
@@ -2606,7 +2760,9 @@ mod tests {
         .expect("a text frame is relayed");
         assert_eq!(answer, serde_json::json!({"relayed": "prompt"}));
 
-        let line = from_threads.recv_timeout(Duration::from_secs(1)).expect("a frame reached the agent");
+        let line = from_threads
+            .recv_timeout(Duration::from_secs(1))
+            .expect("a frame reached the agent");
         let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
         assert_eq!(frame["type"], "prompt");
         assert_eq!(frame["message"], "you have work waiting");
@@ -2627,8 +2783,12 @@ mod tests {
             "the relayed prompt is ours: its response is matched by this id, which is what lets a refusal of it be held"
         );
         let published: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
-        assert_eq!(published["state"], "working", "the turn is published when it starts");
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state"))
+                .expect("parse");
+        assert_eq!(
+            published["state"], "working",
+            "the turn is published when it starts"
+        );
         assert_eq!(published["activity"], "working");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2648,7 +2808,13 @@ mod tests {
         // The locked rule stands: a retryable error mid-turn is still nothing to resume, and a refusal that
         // is not ours is not held either.
         assert_eq!(
-            decide_resume(true, true, true, "RPC response exceeded the transport limit", 0),
+            decide_resume(
+                true,
+                true,
+                true,
+                "RPC response exceeded the transport limit",
+                0
+            ),
             Resume::Nothing("the turn is still running")
         );
         assert_eq!(
@@ -2667,26 +2833,46 @@ mod tests {
         assert_eq!(
             hold_text(
                 &held,
-                held_entry("send-1-1", "the text the agent refused", Some("agenthub--demo--lead"), 0)
+                held_entry(
+                    "send-1-1",
+                    "the text the agent refused",
+                    Some("agenthub--demo--lead"),
+                    0
+                )
             ),
             Ok(1),
             "a refused text is queued and the queue answers its depth"
         );
-        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, attempts);
+        deliver_held(
+            &held,
+            &pending,
+            &to_child,
+            &state_path,
+            &dir,
+            &target,
+            attempts,
+        );
         let line = from_threads
             .recv_timeout(Duration::from_secs(1))
             .expect("the held text is delivered");
         let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
         assert_eq!(frame["type"], "prompt");
         assert_eq!(frame["message"], "the text the agent refused");
-        assert!(held.lock().is_empty(), "the queue is emptied: nothing is delivered twice");
-        assert!(pending.lock().is_some(), "the redelivered prompt is ours to watch");
+        assert!(
+            held.lock().is_empty(),
+            "the queue is emptied: nothing is delivered twice"
+        );
+        assert!(
+            pending.lock().is_some(),
+            "the redelivered prompt is ours to watch"
+        );
         assert_eq!(
             attempts, 0,
             "a held delivery is NOT a resume attempt: the ladder's count is the ladder's (the two shared one counter, and that is what dropped the 19 texts)"
         );
         let published: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state"))
+                .expect("parse");
         assert_eq!(published["state"], "working");
         assert_eq!(published["activity"], "working");
 
@@ -2699,7 +2885,8 @@ mod tests {
             "the count is named in the sentence the state publishes: {sentence}"
         );
         let published: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state"))
+                .expect("parse");
         assert_eq!(published["classification"], sentence);
         assert_eq!(published["state"], "working");
         // AND A FULL QUEUE IS A REFUSAL THE RUNNER NAMES. The text is not kept and not silently dropped: the
@@ -2711,7 +2898,8 @@ mod tests {
             "the queue names the bound it reached: {full}"
         );
         let published: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state"))
+                .expect("parse");
         assert_eq!(published["state"], "blocked");
         assert_eq!(published["classification"], full);
 
@@ -2730,7 +2918,15 @@ mod tests {
             "the queue still has room"
         );
         attempts = MAX_RESUME_ATTEMPTS + 5;
-        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, attempts);
+        deliver_held(
+            &held,
+            &pending,
+            &to_child,
+            &state_path,
+            &dir,
+            &target,
+            attempts,
+        );
         let late: serde_json::Value = serde_json::from_str(
             from_threads
                 .recv_timeout(Duration::from_secs(1))
@@ -2767,7 +2963,12 @@ mod tests {
         assert_eq!(
             hold_text(
                 &held,
-                held_entry("send-1-over", "one too many", Some("agenthub--demo--lead"), 0)
+                held_entry(
+                    "send-1-over",
+                    "one too many",
+                    Some("agenthub--demo--lead"),
+                    0
+                )
             ),
             Err(MAX_HELD),
             "the text that does not fit is refused with the depth, not queued"
@@ -2797,19 +2998,29 @@ mod tests {
         let target = RunnerTarget::parse("demo/dev").unwrap();
         let held: Arc<Mutex<VecDeque<HeldText>>> = Arc::new(Mutex::new(VecDeque::new()));
         let pending: Arc<Mutex<Option<PendingPrompt>>> = Arc::new(Mutex::new(None));
-        let mut attempts: u32 = 0;
+        let attempts: u32 = 0;
 
         assert_eq!(
             hold_text(
                 &held,
-                held_entry("send-1-1", "the first refused text", Some("agenthub--demo--lead"), 0)
+                held_entry(
+                    "send-1-1",
+                    "the first refused text",
+                    Some("agenthub--demo--lead"),
+                    0
+                )
             ),
             Ok(1)
         );
         assert_eq!(
             hold_text(
                 &held,
-                held_entry("send-1-2", "the second refused text", Some("agenthub--demo--lead"), 0)
+                held_entry(
+                    "send-1-2",
+                    "the second refused text",
+                    Some("agenthub--demo--lead"),
+                    0
+                )
             ),
             Ok(2)
         );
@@ -2820,7 +3031,15 @@ mod tests {
         );
 
         // The turn both were refused in ends: the text in front comes back and the second keeps waiting.
-        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, attempts);
+        deliver_held(
+            &held,
+            &pending,
+            &to_child,
+            &state_path,
+            &dir,
+            &target,
+            attempts,
+        );
         let first: serde_json::Value = serde_json::from_str(
             from_threads
                 .recv_timeout(Duration::from_secs(1))
@@ -2836,7 +3055,15 @@ mod tests {
         );
 
         // ... and the turn that delivery opened ends: the second follows, in the order it was refused.
-        deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, attempts);
+        deliver_held(
+            &held,
+            &pending,
+            &to_child,
+            &state_path,
+            &dir,
+            &target,
+            attempts,
+        );
         let second: serde_json::Value = serde_json::from_str(
             from_threads
                 .recv_timeout(Duration::from_secs(1))
@@ -2845,10 +3072,17 @@ mod tests {
         )
         .expect("a JSON frame");
         assert_eq!(second["message"], "the second refused text");
-        assert!(held.lock().is_empty(), "both texts left the queue exactly once");
-        assert_eq!(attempts, 0, "and neither delivery counted as a resume attempt");
+        assert!(
+            held.lock().is_empty(),
+            "both texts left the queue exactly once"
+        );
+        assert_eq!(
+            attempts, 0,
+            "and neither delivery counted as a resume attempt"
+        );
         let published: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state"))
+                .expect("parse");
         assert_eq!(published["state"], "working");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2907,9 +3141,18 @@ mod tests {
         deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, 0);
         let returned = peer.join().expect("the sender's side");
 
-        assert_eq!(returned["type"], "text", "the text comes back on the verb it left on");
-        assert_eq!(returned["verb"], "return", "and it says which path returned it");
-        assert_eq!(returned["from"], "the runner for demo/dev", "attributed, not anonymous");
+        assert_eq!(
+            returned["type"], "text",
+            "the text comes back on the verb it left on"
+        );
+        assert_eq!(
+            returned["verb"], "return",
+            "and it says which path returned it"
+        );
+        assert_eq!(
+            returned["from"], "the runner for demo/dev",
+            "attributed, not anonymous"
+        );
         let body = returned["text"].as_str().expect("the returned body");
         assert!(
             body.contains("the text nobody took"),
@@ -2926,7 +3169,8 @@ mod tests {
         );
         assert!(pending.lock().is_none(), "and no prompt was opened for it");
         let published: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state"))
+                .expect("parse");
         assert_eq!(published["state"], "blocked");
         let classification = published["classification"].as_str().expect("a sentence");
         assert!(
@@ -2963,7 +3207,11 @@ mod tests {
         deliver_held(&held, &pending, &to_child, &state_path, &dir, &target, 0);
 
         let queue = held.lock();
-        assert_eq!(queue.len(), 1, "the text is still held: nothing was dropped");
+        assert_eq!(
+            queue.len(),
+            1,
+            "the text is still held: nothing was dropped"
+        );
         assert_eq!(
             queue.front().map(|entry| entry.attempts),
             Some(0),
@@ -2971,7 +3219,8 @@ mod tests {
         );
         drop(queue);
         let published: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state")).expect("parse");
+            serde_json::from_str(&std::fs::read_to_string(&state_path).expect("state"))
+                .expect("parse");
         assert_eq!(published["state"], "blocked");
         let classification = published["classification"].as_str().expect("a sentence");
         assert!(
@@ -3001,7 +3250,12 @@ mod tests {
         assert_eq!(
             hold_text(
                 &held,
-                held_entry("send-9-3", "the text the child cannot take", Some("agenthub--demo--lead"), 0)
+                held_entry(
+                    "send-9-3",
+                    "the text the child cannot take",
+                    Some("agenthub--demo--lead"),
+                    0
+                )
             ),
             Ok(1)
         );
@@ -3015,7 +3269,10 @@ mod tests {
             1,
             "a delivery that could not even reach the channel keeps the text"
         );
-        assert_eq!(queue.front().map(|entry| entry.refused_id.clone()), Some("send-9-3".to_string()));
+        assert_eq!(
+            queue.front().map(|entry| entry.refused_id.clone()),
+            Some("send-9-3".to_string())
+        );
         drop(queue);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3045,8 +3302,10 @@ mod tests {
             for _ in 0..3 {
                 let (stream, _) = listener.accept().expect("a delivery connects");
                 let mut reader = BufReader::new(stream);
-                let line = frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES).expect("a frame");
-                let value: serde_json::Value = serde_json::from_str(line.trim()).expect("a JSON frame");
+                let line =
+                    frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES).expect("a frame");
+                let value: serde_json::Value =
+                    serde_json::from_str(line.trim()).expect("a JSON frame");
                 // The pause is what makes the overlap real: both calls are inside their wait together.
                 thread::sleep(Duration::from_millis(50));
                 let reply_to = value["replyTo"].as_str().expect("the reply socket");
@@ -3073,10 +3332,22 @@ mod tests {
         };
         let first = deliver("send-1");
         let second = deliver("send-2");
-        let first = first.join().expect("the first call returns").expect("the first delivery is answered");
-        let second = second.join().expect("the second call returns").expect("the second delivery is answered");
-        assert_eq!(first["id"], "send-1", "each call reads ITS OWN reply: {first}");
-        assert_eq!(second["id"], "send-2", "each call reads ITS OWN reply: {second}");
+        let first = first
+            .join()
+            .expect("the first call returns")
+            .expect("the first delivery is answered");
+        let second = second
+            .join()
+            .expect("the second call returns")
+            .expect("the second delivery is answered");
+        assert_eq!(
+            first["id"], "send-1",
+            "each call reads ITS OWN reply: {first}"
+        );
+        assert_eq!(
+            second["id"], "send-2",
+            "each call reads ITS OWN reply: {second}"
+        );
         send_to_seat(
             &dir,
             "demo/dev",
@@ -3100,11 +3371,26 @@ mod tests {
         let path = dir.join("unanswered.sock");
         let listener = UnixListener::bind(&path).expect("a reply listener nothing will answer");
         let started = Instant::now();
-        let err = read_reply(&listener, "demo", "dev", started + Duration::from_millis(100))
-            .expect_err("no answer is an error");
-        assert!(err.contains("no answer from the runner for demo/dev"), "{err}");
-        assert!(err.contains("may be held for its next turn"), "the text's fate is named: {err}");
-        assert!(started.elapsed() < Duration::from_secs(2), "the wait is bounded: {:?}", started.elapsed());
+        let err = read_reply(
+            &listener,
+            "demo",
+            "dev",
+            started + Duration::from_millis(100),
+        )
+        .expect_err("no answer is an error");
+        assert!(
+            err.contains("no answer from the runner for demo/dev"),
+            "{err}"
+        );
+        assert!(
+            err.contains("may be held for its next turn"),
+            "the text's fate is named: {err}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the wait is bounded: {:?}",
+            started.elapsed()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3119,10 +3405,22 @@ mod tests {
         let listener = UnixListener::bind(&path).expect("a reply listener");
         let peer = UnixStream::connect(&path).expect("a peer that never answers");
         let started = Instant::now();
-        let err = read_reply(&listener, "demo", "dev", started + Duration::from_millis(100))
-            .expect_err("a silent peer is an error");
-        assert!(err.contains("no answer from the runner for demo/dev"), "{err}");
-        assert!(started.elapsed() < Duration::from_secs(2), "the read is bounded: {:?}", started.elapsed());
+        let err = read_reply(
+            &listener,
+            "demo",
+            "dev",
+            started + Duration::from_millis(100),
+        )
+        .expect_err("a silent peer is an error");
+        assert!(
+            err.contains("no answer from the runner for demo/dev"),
+            "{err}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the read is bounded: {:?}",
+            started.elapsed()
+        );
         drop(peer);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -3148,10 +3446,16 @@ mod tests {
         let peer = thread::spawn(move || {
             let (stream, _) = listener.accept().expect("the daemon's connection");
             let mut reader = BufReader::new(&stream);
-            let line = frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES).expect("the frame");
-            seen.store(line.contains("\"replyTo\""), std::sync::atomic::Ordering::SeqCst);
+            let line =
+                frame::read_line_bounded(&mut reader, frame::MAX_FRAME_BYTES).expect("the frame");
+            seen.store(
+                line.contains("\"replyTo\""),
+                std::sync::atomic::Ordering::SeqCst,
+            );
             // Never answer, and keep the connection open across the whole reply window.
-            thread::sleep(Duration::from_millis(REPLY_TIMEOUT.as_millis() as u64 + 500));
+            thread::sleep(Duration::from_millis(
+                REPLY_TIMEOUT.as_millis() as u64 + 500,
+            ));
             drop(stream);
         });
         let started = Instant::now();
@@ -3168,8 +3472,14 @@ mod tests {
             reached.load(std::sync::atomic::Ordering::SeqCst),
             "the premise of the sentence: the frame reached the mailbox with its replyTo"
         );
-        assert!(err.contains("no answer from the runner for demo/dev"), "{err}");
-        assert!(err.contains("may be held for its next turn"), "the text's fate is named: {err}");
+        assert!(
+            err.contains("no answer from the runner for demo/dev"),
+            "{err}"
+        );
+        assert!(
+            err.contains("may be held for its next turn"),
+            "the text's fate is named: {err}"
+        );
         assert!(
             elapsed >= REPLY_TIMEOUT - Duration::from_millis(500),
             "the wait is the bound, not a shorter guess: {elapsed:?}"
@@ -3199,8 +3509,16 @@ mod tests {
         )
         .expect("record");
 
-        let err = nudge_seat(&dir, "lab", "dev", "agenthub--lab--dev", &["qitem-1".to_string()], 1, true)
-            .expect_err("a parked seat is not nudged");
+        let err = nudge_seat(
+            &dir,
+            "lab",
+            "dev",
+            "agenthub--lab--dev",
+            &["qitem-1".to_string()],
+            1,
+            true,
+        )
+        .expect_err("a parked seat is not nudged");
         assert!(
             err.contains("PARKED") && err.contains("the rail prompt was not delivered"),
             "the nudge must refuse with the park, got {err:?}"
@@ -3215,7 +3533,15 @@ mod tests {
         // in is reachable on the next tick rather than the next daemon, and the attempt the refusal withheld is
         // recorded now - the ladder's half of the round trip, and the inverse of the assertion above.
         std::fs::remove_file(seat_dir.join("parked.json")).expect("the record is the whole park");
-        let after = nudge_seat(&dir, "lab", "dev", "agenthub--lab--dev", &["qitem-1".to_string()], 1, true);
+        let after = nudge_seat(
+            &dir,
+            "lab",
+            "dev",
+            "agenthub--lab--dev",
+            &["qitem-1".to_string()],
+            1,
+            true,
+        );
         assert!(
             !matches!(&after, Err(e) if e.contains("PARKED")),
             "with the record gone the same nudge must answer for itself again: {after:?}"

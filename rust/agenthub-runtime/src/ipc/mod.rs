@@ -1,9 +1,8 @@
-use crate::pty::TerminalManager;
 use crate::supervisor::RoomSupervisor;
 use crate::types::*;
 use chrono::Utc;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -22,7 +21,11 @@ impl IpcServer {
             return path;
         }
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-        PathBuf::from(home).join(".config").join("4genthub").join("run").join("runtime.sock")
+        PathBuf::from(home)
+            .join(".config")
+            .join("4genthub")
+            .join("run")
+            .join("runtime.sock")
     }
 
     pub fn new(socket_path: impl Into<PathBuf>, supervisor: Arc<RoomSupervisor>) -> Self {
@@ -38,10 +41,17 @@ impl IpcServer {
         }
         let _ = fs::remove_file(&self.socket_path);
 
-        let listener = UnixListener::bind(&self.socket_path)
-            .map_err(|e| format!("cannot bind unix socket {}: {e}", self.socket_path.display()))?;
+        let listener = UnixListener::bind(&self.socket_path).map_err(|e| {
+            format!(
+                "cannot bind unix socket {}: {e}",
+                self.socket_path.display()
+            )
+        })?;
 
-        info!("agenthub-runtime IPC server listening at {}", self.socket_path.display());
+        info!(
+            "agenthub-runtime IPC server listening at {}",
+            self.socket_path.display()
+        );
 
         // The daemon's one piece of periodic work. It is spawned here because this is where the daemon
         // owns its long-lived tasks (this accept loop and one task per client), and it is stopped through
@@ -62,8 +72,9 @@ impl IpcServer {
     /// supervisor, or a plain `kill`, stops a daemon). Both mean "the daemon is going", and both have to
     /// stop the nudge loop too - which is why the shutdown lives here rather than in `main`.
     async fn accept_until_shutdown(&self, listener: &UnixListener) -> Result<(), String> {
-        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .map_err(|e| format!("cannot listen for SIGTERM: {e}"))?;
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(|e| format!("cannot listen for SIGTERM: {e}"))?;
         let ctrl_c = tokio::signal::ctrl_c();
         tokio::pin!(ctrl_c);
         loop {
@@ -93,12 +104,20 @@ impl IpcServer {
         }
     }
 
-    async fn handle_client(stream: UnixStream, supervisor: Arc<RoomSupervisor>) -> Result<(), String> {
+    async fn handle_client(
+        stream: UnixStream,
+        supervisor: Arc<RoomSupervisor>,
+    ) -> Result<(), String> {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
 
-        while reader.read_line(&mut line).await.map_err(|e| e.to_string())? > 0 {
+        while reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| e.to_string())?
+            > 0
+        {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 line.clear();
@@ -110,9 +129,13 @@ impl IpcServer {
                 Err(e) => IpcResponse::err(format!("invalid request JSON: {e}")),
             };
 
-            let mut out = serde_json::to_string(&response).unwrap_or_else(|_| "{\"ok\":false}".into());
+            let mut out =
+                serde_json::to_string(&response).unwrap_or_else(|_| "{\"ok\":false}".into());
             out.push('\n');
-            writer.write_all(out.as_bytes()).await.map_err(|e| e.to_string())?;
+            writer
+                .write_all(out.as_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
             writer.flush().await.map_err(|e| e.to_string())?;
 
             line.clear();
@@ -140,14 +163,19 @@ impl IpcServer {
                 Err(e) => IpcResponse::err(e),
             },
 
-            IpcRequest::RestartSeat { room, seat, fresh, policy_document } => {
-                match supervisor.restart_seat(&room, &seat, fresh, policy_document.as_deref()) {
-                    Ok(status) => IpcResponse::success(serde_json::to_value(status).unwrap()),
-                    Err(e) => IpcResponse::err(e),
-                }
-            }
+            IpcRequest::RestartSeat {
+                room,
+                seat,
+                fresh,
+                policy_document,
+            } => match supervisor.restart_seat(&room, &seat, fresh, policy_document.as_deref()) {
+                Ok(status) => IpcResponse::success(serde_json::to_value(status).unwrap()),
+                Err(e) => IpcResponse::err(e),
+            },
 
-            IpcRequest::SetSeatModel { room, seat, model } => match supervisor.set_seat_model(&room, &seat, &model) {
+            IpcRequest::SetSeatModel { room, seat, model } => match supervisor
+                .set_seat_model(&room, &seat, &model)
+            {
                 Ok(_) => IpcResponse::success(serde_json::json!({"seat": seat, "model": model})),
                 Err(e) => IpcResponse::err(e),
             },
@@ -202,10 +230,12 @@ impl IpcServer {
                 }
             }
 
-            IpcRequest::ForceCompact { session } => match crate::runner::request_compact(supervisor.state_dir(), &session) {
-                Ok(msg) => IpcResponse::success(serde_json::json!({"result": msg})),
-                Err(e) => IpcResponse::err(e),
-            },
+            IpcRequest::ForceCompact { session } => {
+                match crate::runner::request_compact(supervisor.state_dir(), &session) {
+                    Ok(msg) => IpcResponse::success(serde_json::json!({"result": msg})),
+                    Err(e) => IpcResponse::err(e),
+                }
+            }
 
             IpcRequest::ListAllRooms => {
                 // List subdirectories under rooms/
@@ -224,18 +254,22 @@ impl IpcServer {
             // The room's durable rail. Every arm opens the room's own store and answers with the row
             // RE-READ from it, so what a caller is told is what the next read shows.
             IpcRequest::QueueCreate { room, mut input } => match supervisor.queue_store(&room) {
-                Ok(store) => match supervisor.resolve_queue_destination(&room, &input.destination_session) {
-                    Ok(destination) => {
-                        input.destination_session = destination;
-                        match store.create(input) {
-                            Ok(row) => serde_json::to_value(row)
-                                .map(IpcResponse::success)
-                                .unwrap_or_else(|e| IpcResponse::err(format!("serialize row: {e}"))),
-                            Err(e) => IpcResponse::err(e),
+                Ok(store) => {
+                    match supervisor.resolve_queue_destination(&room, &input.destination_session) {
+                        Ok(destination) => {
+                            input.destination_session = destination;
+                            match store.create(input) {
+                                Ok(row) => serde_json::to_value(row)
+                                    .map(IpcResponse::success)
+                                    .unwrap_or_else(|e| {
+                                        IpcResponse::err(format!("serialize row: {e}"))
+                                    }),
+                                Err(e) => IpcResponse::err(e),
+                            }
                         }
+                        Err(e) => IpcResponse::err(e),
                     }
-                    Err(e) => IpcResponse::err(e),
-                },
+                }
                 Err(e) => IpcResponse::err(e),
             },
 
@@ -307,7 +341,10 @@ const NUDGE_POLL_INTERVAL_SECS: u64 = 2;
 ///
 /// A pass shells out (tmux), opens SQLite and writes files, so it runs on the blocking pool rather than
 /// stalling the accept loop's runtime.
-async fn nudge_loop(supervisor: Arc<RoomSupervisor>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
+async fn nudge_loop(
+    supervisor: Arc<RoomSupervisor>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
     loop {
         tokio::select! {
             // Any change is the shutdown (`true`), and a dropped sender means the daemon is going too:

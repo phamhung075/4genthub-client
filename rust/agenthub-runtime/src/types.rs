@@ -42,40 +42,6 @@ impl AgentRuntime {
     }
 }
 
-/// Seat link connection kind between seats.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkKind {
-    DelegatesTo,
-    CollaboratesWith,
-    EscalatesTo,
-    SpawnedBy,
-    CanObserve,
-}
-
-impl LinkKind {
-    pub fn from_str_loose(s: &str) -> Option<Self> {
-        match s.trim().to_lowercase().as_str() {
-            "delegates_to" => Some(LinkKind::DelegatesTo),
-            "collaborates_with" => Some(LinkKind::CollaboratesWith),
-            "escalates_to" => Some(LinkKind::EscalatesTo),
-            "spawned_by" => Some(LinkKind::SpawnedBy),
-            "can_observe" => Some(LinkKind::CanObserve),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LinkKind::DelegatesTo => "delegates_to",
-            LinkKind::CollaboratesWith => "collaborates_with",
-            LinkKind::EscalatesTo => "escalates_to",
-            LinkKind::SpawnedBy => "spawned_by",
-            LinkKind::CanObserve => "can_observe",
-        }
-    }
-}
-
 /// Edge linking two seats.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeatLink {
@@ -408,8 +374,13 @@ pub struct CaptureAnswer {
 #[serde(tag = "action", content = "payload")]
 pub enum IpcRequest {
     StartRoom(RoomSpec),
-    StopRoom { room: String },
-    StopSeat { room: String, seat: String },
+    StopRoom {
+        room: String,
+    },
+    StopSeat {
+        room: String,
+        seat: String,
+    },
     /// `fresh` drops the seat's saved agent sessions before the start, so the new agent begins without the
     /// old one's context; absent means a plain restart (the wire older callers already write).
     ///
@@ -427,7 +398,11 @@ pub enum IpcRequest {
     },
     /// Record the model a seat starts with. It is written to the room's own spec, so it applies to the
     /// seat's NEXT start (a running agent keeps the model it was spawned with).
-    SetSeatModel { room: String, seat: String, model: String },
+    SetSeatModel {
+        room: String,
+        seat: String,
+        model: String,
+    },
     /// One message to one seat, with the origin the runner must name if it cannot deliver or cannot keep it:
     /// the caller's session name and the verb that carried the text. Absent fields stay absent - a caller
     /// that does not say who it is is named as unnamed rather than guessed at.
@@ -439,9 +414,13 @@ pub enum IpcRequest {
         #[serde(default)]
         verb: Option<String>,
     },
-    GetRoomStatus { room: String },
+    GetRoomStatus {
+        room: String,
+    },
     /// The links a room's spec declares between its seats, for the status bridge's topology report.
-    GetRoomLinks { room: String },
+    GetRoomLinks {
+        room: String,
+    },
     ListAllRooms,
     /// The session list this daemon can answer for: every seat of every room it hosts, in the CLI's own
     /// keys (`SessionEntry`). A `room` narrows it to one room; `None` means every room this daemon hosts.
@@ -463,17 +442,41 @@ pub enum IpcRequest {
         session: String,
         lines: Option<usize>,
     },
-    Whoami { session: Option<String>, pid: Option<u32> },
-    ForceCompact { session: String },
+    Whoami {
+        session: Option<String>,
+        pid: Option<u32>,
+    },
+    ForceCompact {
+        session: String,
+    },
     Ping,
     /// The room's durable rail (design §3). The room names which store answers; the client renders the
     /// rows and never opens the file, so the daemon stays the only writer.
-    QueueCreate { room: String, input: CreateInput },
-    QueueList { room: String, filter: ListFilter },
-    QueueShow { room: String, qitem_id: String },
-    QueueUpdate { room: String, input: UpdateInput },
-    QueueClaim { room: String, qitem_id: String, actor_session: String },
-    QueueClose { room: String, input: CloseInput },
+    QueueCreate {
+        room: String,
+        input: CreateInput,
+    },
+    QueueList {
+        room: String,
+        filter: ListFilter,
+    },
+    QueueShow {
+        room: String,
+        qitem_id: String,
+    },
+    QueueUpdate {
+        room: String,
+        input: UpdateInput,
+    },
+    QueueClaim {
+        room: String,
+        qitem_id: String,
+        actor_session: String,
+    },
+    QueueClose {
+        room: String,
+        input: CloseInput,
+    },
 }
 
 /// IPC Response frames.
@@ -636,11 +639,14 @@ mod tests {
 
         // AND THE FRAME WITH NO DOCUMENT: the key is absent rather than null, which is what leaves the room's
         // own record alone instead of overwriting it with an empty document.
-        let plain: IpcRequest =
-            serde_json::from_str(r#"{"action":"RestartSeat","payload":{"room":"room1","seat":"dev"}}"#)
-                .expect("the restart frame a caller with nothing newer writes");
+        let plain: IpcRequest = serde_json::from_str(
+            r#"{"action":"RestartSeat","payload":{"room":"room1","seat":"dev"}}"#,
+        )
+        .expect("the restart frame a caller with nothing newer writes");
         match plain {
-            IpcRequest::RestartSeat { policy_document, .. } => assert_eq!(policy_document, None),
+            IpcRequest::RestartSeat {
+                policy_document, ..
+            } => assert_eq!(policy_document, None),
             other => panic!("expected RestartSeat, got {other:?}"),
         }
     }

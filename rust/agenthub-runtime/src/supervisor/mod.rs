@@ -163,10 +163,10 @@ fn readiness_written_by(path: &Path, launched_at: std::time::SystemTime) -> bool
     if modified < launched_at {
         return false;
     }
-    match published_state(path).as_deref() {
-        Some(state) if DEATH_STATES.contains(&state) => false,
-        _ => true,
-    }
+    !matches!(
+        published_state(path).as_deref(),
+        Some(state) if DEATH_STATES.contains(&state)
+    )
 }
 
 /// The executable a newly launched seat's pane must run: THIS binary, named by a path that still reaches it.
@@ -328,7 +328,8 @@ fn last_tool_call_at(path: &Path) -> Option<DateTime<Utc>> {
     const TAIL_BYTES: u64 = 8 * 1024;
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
-    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES))).ok()?;
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
+        .ok()?;
     let mut buf = Vec::new();
     file.take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf);
@@ -344,7 +345,7 @@ fn last_tool_call_at(path: &Path) -> Option<DateTime<Utc>> {
                 .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
         })
         .map(|t| t.with_timezone(&Utc))
-        .last()
+        .next_back()
 }
 
 /// The alert rule, on the facts alone: a seat that is up with active rows waiting for it carries one.
@@ -458,7 +459,12 @@ fn install_agy_guard_hook(home: &Path) -> Result<(), String> {
         Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
             .ok()
             .filter(serde_json::Value::is_object)
-            .ok_or_else(|| format!("{} is not a JSON object; the agy seat guard was not installed", path.display()))?,
+            .ok_or_else(|| {
+                format!(
+                    "{} is not a JSON object; the agy seat guard was not installed",
+                    path.display()
+                )
+            })?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
@@ -531,11 +537,19 @@ fn install_agy_mcp_server(home: &Path, deepseek: bool) -> Result<(), String> {
         Ok(text) => serde_json::from_str::<serde_json::Value>(&text)
             .ok()
             .filter(serde_json::Value::is_object)
-            .ok_or_else(|| format!("{} is not a JSON object; the agy MCP server was not installed", path.display()))?,
+            .ok_or_else(|| {
+                format!(
+                    "{} is not a JSON object; the agy MCP server was not installed",
+                    path.display()
+                )
+            })?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
-    if config.get("mcpServers").is_some_and(|servers| !servers.is_object()) {
+    if config
+        .get("mcpServers")
+        .is_some_and(|servers| !servers.is_object())
+    {
         return Err(format!(
             "{} has an mcpServers that is not an object; the agy MCP server was not installed",
             path.display()
@@ -545,7 +559,9 @@ fn install_agy_mcp_server(home: &Path, deepseek: bool) -> Result<(), String> {
         config["mcpServers"] = serde_json::json!({});
     }
     let changed = {
-        let servers = config["mcpServers"].as_object_mut().expect("mcpServers is an object");
+        let servers = config["mcpServers"]
+            .as_object_mut()
+            .expect("mcpServers is an object");
         let mut changed = false;
         let entry = agy_mcp_entry();
         if servers.get(AGY_MCP_SERVER) != Some(&entry) {
@@ -595,7 +611,12 @@ const SKILLS_ROOT_ENV: &str = "AGENTHUB_CLIENT_SKILLS";
 /// The body of the seat's `<seat>-workflow` skill is therefore also written to `<seat dir>/AGENTS.md`, which
 /// omp loads at every start from its agent dir and claude receives through `--append-system-prompt-file`.
 /// That file is runtime-owned like `skills/`: a seat with no workflow skill has none left behind.
-fn install_seat_skills(state_dir: &Path, room: &str, seat: &str, seat_dir: &Path) -> Result<(), String> {
+fn install_seat_skills(
+    state_dir: &Path,
+    room: &str,
+    seat: &str,
+    seat_dir: &Path,
+) -> Result<(), String> {
     let root = env_file_vars(state_dir)
         .remove(SKILLS_ROOT_ENV)
         .or_else(|| std::env::var(SKILLS_ROOT_ENV).ok())
@@ -603,12 +624,15 @@ fn install_seat_skills(state_dir: &Path, room: &str, seat: &str, seat_dir: &Path
     let Some(root) = root else { return Ok(()) };
     let target = seat_dir.join("skills");
     if target.exists() {
-        fs::remove_dir_all(&target).map_err(|e| format!("cannot clear {}: {e}", target.display()))?;
+        fs::remove_dir_all(&target)
+            .map_err(|e| format!("cannot clear {}: {e}", target.display()))?;
     }
     let workflow_name = format!("{seat}-workflow");
     let mut workflow = None;
     for skill in crate::skills::SkillResolver::new(root).resolve_for_seat(room, seat)? {
-        let Some(source) = skill.path.parent() else { continue };
+        let Some(source) = skill.path.parent() else {
+            continue;
+        };
         copy_dir(source, &target.join(&skill.name))
             .map_err(|e| format!("cannot install the skill {}: {e}", skill.name))?;
         if skill.name == workflow_name {
@@ -683,7 +707,9 @@ fn env_file_vars(state_dir: &Path) -> HashMap<String, String> {
         }
         let value = value.trim();
         let value = match value.as_bytes() {
-            [q @ (b'"' | b'\''), .., last] if q == last && value.len() >= 2 => &value[1..value.len() - 1],
+            [q @ (b'"' | b'\''), .., last] if q == last && value.len() >= 2 => {
+                &value[1..value.len() - 1]
+            }
             _ => value,
         };
         vars.insert(key.to_string(), value.to_string());
@@ -721,7 +747,10 @@ fn seat_env(
     env.insert("AGENTHUB_ROLE".into(), seat.seat_type.clone());
     env.insert("AGENTHUB_RUNTIME".into(), seat.runtime.clone());
     env.insert("AGENTHUB_SESSION_NAME".into(), session_name.into());
-    env.insert("PI_CODING_AGENT_DIR".into(), seat_dir.to_string_lossy().to_string());
+    env.insert(
+        "PI_CODING_AGENT_DIR".into(),
+        seat_dir.to_string_lossy().to_string(),
+    );
     env.insert(
         "AGENTHUB_RUNTIME_SOCKET".into(),
         runtime_socket.to_string_lossy().to_string(),
@@ -735,7 +764,10 @@ fn seat_env(
     // (`DEEPSEEK_MCP_SERVER`, from the state root's `.env` or the seat's spec) and is carried to the seat even
     // though only mcp.json and agy's line consume it, because those two read the SEAT's environment at connect
     // time - a variable missing here is a server that starts with an empty path.
-    env.insert(DEEPSEEK_MCP_CWD_ENV.into(), cwd.to_string_lossy().to_string());
+    env.insert(
+        DEEPSEEK_MCP_CWD_ENV.into(),
+        cwd.to_string_lossy().to_string(),
+    );
     // The connector credential never enters a seat's environment, and the filter sits HERE - the one place a
     // seat's environment is decided - rather than downstream: this map IS the pane's `-e` list, so a key
     // dropped only at that point is a key that had already reached the seat's contract. Nothing a seat does
@@ -745,7 +777,11 @@ fn seat_env(
 }
 
 impl RoomSupervisor {
-    pub fn new(base_state_dir: impl Into<PathBuf>, hook_bus: HookBus, runtime_socket: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        base_state_dir: impl Into<PathBuf>,
+        hook_bus: HookBus,
+        runtime_socket: impl Into<PathBuf>,
+    ) -> Self {
         let base_state_dir = base_state_dir.into();
         let _ = fs::create_dir_all(&base_state_dir);
         Self {
@@ -815,7 +851,11 @@ impl RoomSupervisor {
     /// Start a room with its seats.
     pub fn start_room(&self, spec: RoomSpec) -> Result<Vec<SeatStatus>, String> {
         let room_name = spec.room.clone();
-        info!("starting room {} with {} seats", room_name, spec.seats.len());
+        info!(
+            "starting room {} with {} seats",
+            room_name,
+            spec.seats.len()
+        );
         // THE ROOM'S SEAT KEYS MUST BE TELLABLE APART BY NAME, and that is checked BEFORE the room's directory is
         // made: the guard admits a lane by the seat's own key prefix (`<seat>` or `<seat>-*` under the room's
         // `wt/`), so a room holding `go` and `go-dev` would let `go` write `go-dev`'s directory. A spec that
@@ -846,7 +886,8 @@ impl RoomSupervisor {
         }
 
         // Save spec to disk
-        let spec_json = serde_json::to_string_pretty(&final_spec).map_err(|e| format!("serialize spec: {e}"))?;
+        let spec_json = serde_json::to_string_pretty(&final_spec)
+            .map_err(|e| format!("serialize spec: {e}"))?;
         let _ = fs::write(&spec_file, spec_json);
 
         let mut statuses = Vec::new();
@@ -861,7 +902,12 @@ impl RoomSupervisor {
                     // and this is the status that makes that buildable.
                     error!("failed to start seat {}: {e}", seat.seat_key);
                     failures.push(format!("{}: {e}", seat.seat_key));
-                    statuses.push(Self::failed_seat_status(&self.base_state_dir, &room_name, seat, e));
+                    statuses.push(Self::failed_seat_status(
+                        &self.base_state_dir,
+                        &room_name,
+                        seat,
+                        e,
+                    ));
                 }
             }
         }
@@ -905,8 +951,11 @@ impl RoomSupervisor {
             started_at: None,
             token_estimate: 0,
             last_active: None,
-            transcript_path: seat_transcript_path(&base_state_dir.join("rooms").join(room), &seat.seat_key)
-                .map(|p| p.to_string_lossy().to_string()),
+            transcript_path: seat_transcript_path(
+                &base_state_dir.join("rooms").join(room),
+                &seat.seat_key,
+            )
+            .map(|p| p.to_string_lossy().to_string()),
             // A seat that never came up has nothing waiting *for it* - it is not the seat the rail's rows
             // name - so there is no join to report.
             alert: None,
@@ -925,7 +974,12 @@ impl RoomSupervisor {
     /// once. A preparation refusal - a park, a spec that cannot be read, a directory that cannot be
     /// written - is NOT retried: a second attempt would repeat the same refusal and dress it up as a
     /// transient fault.
-    pub fn start_seat(&self, room: &str, seat: &SeatSpec, spec: &RoomSpec) -> Result<SeatStatus, String> {
+    pub fn start_seat(
+        &self,
+        room: &str,
+        seat: &SeatSpec,
+        spec: &RoomSpec,
+    ) -> Result<SeatStatus, String> {
         let mut attempt = 0;
         loop {
             attempt += 1;
@@ -938,7 +992,9 @@ impl RoomSupervisor {
                         &self.base_state_dir,
                         room,
                         &seat.seat_key,
-                        &format!("start attempt {attempt}/{START_ATTEMPTS} failed at {stage}: {reason}"),
+                        &format!(
+                            "start attempt {attempt}/{START_ATTEMPTS} failed at {stage}: {reason}"
+                        ),
                     );
                     if attempt >= START_ATTEMPTS {
                         // FINAL, and it says so: the retry is the last one, and a reader must not have to
@@ -981,7 +1037,12 @@ impl RoomSupervisor {
         // funnel here, so a room start obeys the park through the room's own existing rule for a seat that did
         // not come up: it is reported by name with the park as the reason, and a room whose every seat is
         // parked starts no seat and says why.
-        crate::park::refuse(self.state_dir(), room, &seat.seat_key, "nothing was started")?;
+        crate::park::refuse(
+            self.state_dir(),
+            room,
+            &seat.seat_key,
+            "nothing was started",
+        )?;
         let session_name = Self::session_name(room, &seat.seat_key);
         let room_dir = self.room_dir(room);
         // WHERE THE SEAT RUNS AND WHAT IT MAY WRITE, decided before anything of it is written: a seat with no
@@ -1011,20 +1072,28 @@ impl RoomSupervisor {
         // runtime does not derive it, which is what keeps the file and the render from disagreeing. A seat whose
         // document is absent gets NO file - the absence rule mcp.json follows - and only an omp seat is written
         // for: another runtime's config is not this document's destination.
-        if matches!(AgentRuntime::from_str_loose(&seat.runtime), AgentRuntime::Omp) {
+        if matches!(
+            AgentRuntime::from_str_loose(&seat.runtime),
+            AgentRuntime::Omp
+        ) {
             if let Some(document) = seat.policy_document.as_deref() {
                 fs::write(seat_dir.join("config.yml"), document)
                     .map_err(|e| format!("cannot write the seat's config.yml: {e}"))?;
             }
         }
         let hook_dir = seat_dir.join("hooks").join("pre");
-        fs::create_dir_all(&hook_dir).map_err(|e| format!("cannot create the seat's hook dir: {e}"))?;
+        fs::create_dir_all(&hook_dir)
+            .map_err(|e| format!("cannot create the seat's hook dir: {e}"))?;
         fs::write(hook_dir.join("seat-guard.ts"), SEAT_TOOL_HOOK)
             .map_err(|e| format!("cannot write the seat's tool hook: {e}"))?;
         install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
-        if matches!(AgentRuntime::from_str_loose(&seat.runtime), AgentRuntime::Agy) {
-            let home = std::env::var_os("HOME")
-                .ok_or_else(|| "HOME is not set, so agy's own config cannot be found".to_string())?;
+        if matches!(
+            AgentRuntime::from_str_loose(&seat.runtime),
+            AgentRuntime::Agy
+        ) {
+            let home = std::env::var_os("HOME").ok_or_else(|| {
+                "HOME is not set, so agy's own config cannot be found".to_string()
+            })?;
             install_agy_start_files(Path::new(&home), env.contains_key(DEEPSEEK_MCP_SERVER_ENV))?;
         }
 
@@ -1037,7 +1106,9 @@ impl RoomSupervisor {
                 let self_exe = launch_executable(
                     std::env::current_exe()
                         .map_err(|e| format!("cannot resolve this binary's path: {e}"))?,
-                    Path::new("/proc").join(std::process::id().to_string()).join("exe"),
+                    Path::new("/proc")
+                        .join(std::process::id().to_string())
+                        .join("exe"),
                 )?;
                 format!(
                     "{} --state-dir {} runner {}/{}",
@@ -1085,8 +1156,13 @@ impl RoomSupervisor {
         let launched = std::time::Instant::now();
 
         // Launch tmux session
-        let pane = TerminalManager::launch_session(&session_name, &cwd, &cmd, &env)
-            .map_err(|e| StartFailure::Launch { stage: "tmux launch", reason: e })?;
+        let pane =
+            TerminalManager::launch_session(&session_name, &cwd, &cmd, &env).map_err(|e| {
+                StartFailure::Launch {
+                    stage: "tmux launch",
+                    reason: e,
+                }
+            })?;
 
         // A launch is not liveness. What tmux just handed back - a pid, or the read's OWN failure, and never a
         // bare 0 manufactured from a parse failure - is a **record** of the session it created,
@@ -1202,7 +1278,9 @@ impl RoomSupervisor {
         // has not made (the `Starting` arm of `get_room_status` exists for exactly that).
         if !AgentRuntime::from_str_loose(&seat.runtime).has_runner() {
             if let Some(pid) = pane.pid {
-                let state_path = room_dir.join("run").join(format!("{}.state.json", seat.seat_key));
+                let state_path = room_dir
+                    .join("run")
+                    .join(format!("{}.state.json", seat.seat_key));
                 if let Err(e) = crate::runner::write_state_with_pid(
                     &state_path,
                     "running",
@@ -1210,7 +1288,10 @@ impl RoomSupervisor {
                     0,
                     pid,
                 ) {
-                    warn!("cannot publish the launch state for {room}/{}: {e}", seat.seat_key);
+                    warn!(
+                        "cannot publish the launch state for {room}/{}: {e}",
+                        seat.seat_key
+                    );
                 }
             }
         }
@@ -1313,8 +1394,10 @@ impl RoomSupervisor {
             return Err("a seat model must not be empty".into());
         }
         let spec_file = self.room_dir(room).join("spec.json");
-        let content = fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
-        let mut spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        let content =
+            fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
+        let mut spec: RoomSpec =
+            serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
         let seat_spec = spec
             .seats
             .iter_mut()
@@ -1323,7 +1406,8 @@ impl RoomSupervisor {
         seat_spec.model = Some(model.to_string());
         // Compute the document before the file is opened for writing: a failed serialize must not leave
         // the room's only spec truncated.
-        let spec_json = serde_json::to_string_pretty(&spec).map_err(|e| format!("serialize spec: {e}"))?;
+        let spec_json =
+            serde_json::to_string_pretty(&spec).map_err(|e| format!("serialize spec: {e}"))?;
         fs::write(&spec_file, spec_json).map_err(|e| format!("cannot write room spec: {e}"))
     }
 
@@ -1362,8 +1446,10 @@ impl RoomSupervisor {
         }
         let room_dir = self.room_dir(room);
         let spec_file = room_dir.join("spec.json");
-        let content = fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
-        let mut spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        let content =
+            fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
+        let mut spec: RoomSpec =
+            serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
         if let Some(document) = policy_document {
             let entry = spec
                 .seats
@@ -1390,7 +1476,8 @@ impl RoomSupervisor {
     pub fn get_room_links(&self, room: &str) -> Result<Vec<SeatLink>, String> {
         let content = fs::read_to_string(self.room_dir(room).join("spec.json"))
             .map_err(|e| format!("cannot read room spec: {e}"))?;
-        let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        let spec: RoomSpec =
+            serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
         Ok(spec.links)
     }
 
@@ -1405,7 +1492,8 @@ impl RoomSupervisor {
     pub fn resolve_queue_destination(&self, room: &str, typed: &str) -> Result<String, String> {
         let content = fs::read_to_string(self.room_dir(room).join("spec.json"))
             .map_err(|e| format!("cannot read room spec: {e}"))?;
-        let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        let spec: RoomSpec =
+            serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
         let value = typed.trim();
         let (key, named_room) = match value.split_once('@') {
             Some((key, named)) => (key, Some(named)),
@@ -1429,7 +1517,13 @@ impl RoomSupervisor {
         let listed: Vec<String> = spec
             .seats
             .iter()
-            .map(|seat| format!("{} ({})", seat.seat_key, Self::session_name(room, &seat.seat_key)))
+            .map(|seat| {
+                format!(
+                    "{} ({})",
+                    seat.seat_key,
+                    Self::session_name(room, &seat.seat_key)
+                )
+            })
             .collect();
         Err(format!(
             "--to {value:?} names no seat of {room} and no session of it, so the row would be stored under a destination no nudge can match; the room's seats are {}, and a row is addressed by a seat's session name, <seat>@{room}, or the bare seat key. Nothing was written.",
@@ -1440,8 +1534,10 @@ impl RoomSupervisor {
     pub fn get_room_status(&self, room: &str) -> Result<Vec<SeatStatus>, String> {
         let room_dir = self.room_dir(room);
         let spec_file = room_dir.join("spec.json");
-        let content = fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
-        let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
+        let content =
+            fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec: {e}"))?;
+        let spec: RoomSpec =
+            serde_json::from_str(&content).map_err(|e| format!("parse spec: {e}"))?;
 
         let mut statuses = Vec::new();
         for seat in spec.seats {
@@ -1459,7 +1555,9 @@ impl RoomSupervisor {
             let seat_runtime = AgentRuntime::from_str_loose(&seat.runtime);
             let publishes_readiness = seat_runtime.has_runner();
             let died = facts.published_state.as_deref().is_some_and(is_death_word);
-            let state_path = room_dir.join("run").join(format!("{}.state.json", seat.seat_key));
+            let state_path = room_dir
+                .join("run")
+                .join(format!("{}.state.json", seat.seat_key));
             // THE DEATH THIS SIDE CAN OBSERVE, which is not the same as the death the runner published. A pane that
             // outlived its agent leaves a claim behind, and the daemon owns this file's path - so the claim is
             // corrected WHERE THE SEAT'S OWN WORDS LIVE, because the readers of that document are not all this
@@ -1475,7 +1573,9 @@ impl RoomSupervisor {
                 (true, true, true, _) => SeatLifecycleState::Dead,
                 // A pane that is up with no readiness document at all has not handshaked YET; calling that
                 // `running` is what let a restart inherit the previous generation's green in 0.03 s.
-                (true, true, false, false) if facts.published_state.is_none() => SeatLifecycleState::Starting,
+                (true, true, false, false) if facts.published_state.is_none() => {
+                    SeatLifecycleState::Starting
+                }
                 // AND A CLAIM WHOSE PUBLISHER IS GONE IS A DEATH THE PANE CANNOT SHOW: the runner is the process
                 // that writes this file, and a seat whose agent was killed out from under its pane keeps the last
                 // word it published - `working`, 42 minutes stale, measured.
@@ -1539,7 +1639,8 @@ impl RoomSupervisor {
                     // on disk, signed by the daemon. The only writers stay the runner (its real death) and
                     // the daemon through `observed_death` below, which has an observation to stand on.
                     _ => Some(
-                        "agent_socket_closed: the pane ended without publishing a death".to_string(),
+                        "agent_socket_closed: the pane ended without publishing a death"
+                            .to_string(),
                     ),
                 }
             };
@@ -1720,7 +1821,11 @@ impl RoomSupervisor {
             let outcome = TerminalManager::send_text(&canonical, text)?;
             return Ok(serde_json::json!({"delivered": canonical, "outcome": outcome}));
         }
-        let id = format!("send-{}-{}", std::process::id(), Utc::now().timestamp_millis());
+        let id = format!(
+            "send-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        );
         let mut frame = serde_json::json!({"id": id, "type": "text", "text": text});
         if let Some(from) = &origin.from {
             frame["from"] = serde_json::Value::String(from.clone());
@@ -1740,8 +1845,10 @@ impl RoomSupervisor {
 
     fn seat_runtime(&self, room: &str, seat: &str) -> Result<AgentRuntime, String> {
         let spec_file = self.room_dir(room).join("spec.json");
-        let content = fs::read_to_string(&spec_file).map_err(|e| format!("cannot read room spec for {room}: {e}"))?;
-        let spec: RoomSpec = serde_json::from_str(&content).map_err(|e| format!("parse spec for {room}: {e}"))?;
+        let content = fs::read_to_string(&spec_file)
+            .map_err(|e| format!("cannot read room spec for {room}: {e}"))?;
+        let spec: RoomSpec =
+            serde_json::from_str(&content).map_err(|e| format!("parse spec for {room}: {e}"))?;
         spec.seats
             .iter()
             .find(|s| s.seat_key == seat)
@@ -1855,7 +1962,8 @@ impl RoomSupervisor {
             .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
             .map(|t| t.with_timezone(&Utc));
         let tool_stamp = last_tool_call_at(
-            &self.room_dir(room)
+            &self
+                .room_dir(room)
                 .join("seats")
                 .join(seat)
                 .join("tool-calls.jsonl"),
@@ -1972,7 +2080,10 @@ impl RoomSupervisor {
                     if status.state != SeatLifecycleState::Running {
                         continue;
                     }
-                    let busy = matches!(status.activity, ActivityWord::Working | ActivityWord::NeedsInput);
+                    let busy = matches!(
+                        status.activity,
+                        ActivityWord::Working | ActivityWord::NeedsInput
+                    );
                     if busy {
                         continue;
                     }
@@ -2000,7 +2111,11 @@ impl RoomSupervisor {
     }
 
     /// Generate the exact `whoami` payload for an active seat session (Rule 1 parity).
-    pub fn resolve_whoami(&self, query_session: Option<&str>, _pid: Option<u32>) -> Result<WhoamiResponse, String> {
+    pub fn resolve_whoami(
+        &self,
+        query_session: Option<&str>,
+        _pid: Option<u32>,
+    ) -> Result<WhoamiResponse, String> {
         let rooms_dir = self.base_state_dir.join("rooms");
         let _ = fs::create_dir_all(&rooms_dir);
 
@@ -2019,7 +2134,9 @@ impl RoomSupervisor {
 
                             if matches {
                                 // Found seat! Construct WhoamiResponse
-                                let peers: Vec<WhoamiPeer> = spec.seats.iter()
+                                let peers: Vec<WhoamiPeer> = spec
+                                    .seats
+                                    .iter()
                                     .filter(|s| s.seat_key != seat.seat_key)
                                     .map(|s| WhoamiPeer {
                                         logical_id: s.seat_key.clone(),
@@ -2037,7 +2154,9 @@ impl RoomSupervisor {
                                             kind: link.kind.clone(),
                                             to: Some(WhoamiEndpoint {
                                                 logical_id: link.to.clone(),
-                                                session_name: Self::session_name(&spec.room, &link.to),
+                                                session_name: Self::session_name(
+                                                    &spec.room, &link.to,
+                                                ),
                                             }),
                                             from: None,
                                         });
@@ -2048,14 +2167,17 @@ impl RoomSupervisor {
                                             to: None,
                                             from: Some(WhoamiEndpoint {
                                                 logical_id: link.from.clone(),
-                                                session_name: Self::session_name(&spec.room, &link.from),
+                                                session_name: Self::session_name(
+                                                    &spec.room, &link.from,
+                                                ),
                                             }),
                                         });
                                     }
                                 }
 
-                                let transcript_str = seat_transcript_path(&entry.path(), &seat.seat_key)
-                                    .map(|p| p.to_string_lossy().to_string());
+                                let transcript_str =
+                                    seat_transcript_path(&entry.path(), &seat.seat_key)
+                                        .map(|p| p.to_string_lossy().to_string());
 
                                 return Ok(WhoamiResponse {
                                     resolved_by: "session_name".into(),
@@ -2072,7 +2194,9 @@ impl RoomSupervisor {
                                     edges: WhoamiEdges { outgoing, incoming },
                                     transcript: WhoamiTranscript {
                                         enabled: true,
-                                        tail_command: transcript_str.as_ref().map(|p| format!("tail -f {p}")),
+                                        tail_command: transcript_str
+                                            .as_ref()
+                                            .map(|p| format!("tail -f {p}")),
                                         path: transcript_str,
                                     },
                                 });
@@ -2104,7 +2228,10 @@ impl RoomSupervisor {
                     model,
                 },
                 peers: vec![],
-                edges: WhoamiEdges { outgoing: vec![], incoming: vec![] },
+                edges: WhoamiEdges {
+                    outgoing: vec![],
+                    incoming: vec![],
+                },
                 transcript: WhoamiTranscript {
                     enabled: true,
                     path: None,
@@ -2136,7 +2263,11 @@ fn seat_sessions_dir(room_dir: &Path, seat: &str) -> PathBuf {
 /// seats rooted there, and a seat's file landed in the shared checkout while its own worktree stayed clean).
 /// Naming the seat's directory is the room spec's job; a spec that does not is a room that cannot start a seat,
 /// and the refusal says which spec to write.
-pub fn seat_scope(seat: &SeatSpec, spec: &RoomSpec, room_dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub fn seat_scope(
+    seat: &SeatSpec,
+    spec: &RoomSpec,
+    room_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
     let mut scope: Vec<PathBuf> = Vec::new();
     if let Some(dir) = seat.cwd.as_deref().or(spec.cwd.as_deref()) {
         let path = PathBuf::from(dir);
@@ -2220,8 +2351,12 @@ fn own_worktrees(room_dir: &Path, seat: &str) -> Vec<PathBuf> {
 /// The absolute, symlink-free form of a directory that must already exist: every path a seat is given is one the
 /// runtime hands to tmux, to `/proc/<pid>/cwd` and to the guard, and all three must name the same directory.
 fn canonical_dir(path: &Path) -> Result<PathBuf, String> {
-    path.canonicalize()
-        .map_err(|e| format!("cannot resolve the seat's directory {}: {e}", path.display()))
+    path.canonicalize().map_err(|e| {
+        format!(
+            "cannot resolve the seat's directory {}: {e}",
+            path.display()
+        )
+    })
 }
 
 /// THE ONE DEFINITION OF A SEAT'S TRANSCRIPT: the newest `*.jsonl` the agent wrote into its sessions dir
@@ -2677,17 +2812,34 @@ mod tests {
         let status = supervisor.get_room_status(room).expect("status");
         assert_eq!(status[0].transcript_path, None, "no session file, no path");
 
-        let sessions = state_dir.join("rooms").join(room).join("seats").join(&seat).join("sessions");
+        let sessions = state_dir
+            .join("rooms")
+            .join(room)
+            .join("seats")
+            .join(&seat)
+            .join("sessions");
         fs::create_dir_all(&sessions).expect("sessions dir");
-        fs::write(sessions.join("2026-10-14T15-43-38-600Z_aaa.jsonl"), "old\n").expect("old session");
-        fs::write(sessions.join("2026-10-14T16-00-00-000Z_bbb.jsonl"), "one\ntwo\nthree\n").expect("new session");
+        fs::write(sessions.join("2026-10-14T15-43-38-600Z_aaa.jsonl"), "old\n")
+            .expect("old session");
+        fs::write(
+            sessions.join("2026-10-14T16-00-00-000Z_bbb.jsonl"),
+            "one\ntwo\nthree\n",
+        )
+        .expect("new session");
         fs::write(sessions.join("notes.txt"), "not a session").expect("noise");
 
         let whole = supervisor.read_transcript(&seat, None).expect("whole log");
         assert_eq!(whole.content, "one\ntwo\nthree\n");
-        assert!(whole.path.ends_with("2026-10-14T16-00-00-000Z_bbb.jsonl"), "{}", whole.path);
+        assert!(
+            whole.path.ends_with("2026-10-14T16-00-00-000Z_bbb.jsonl"),
+            "{}",
+            whole.path
+        );
         let status = supervisor.get_room_status(room).expect("status");
-        assert_eq!(status[0].transcript_path.as_deref(), Some(whole.path.as_str()));
+        assert_eq!(
+            status[0].transcript_path.as_deref(),
+            Some(whole.path.as_str())
+        );
         assert_eq!(
             whole.session,
             RoomSupervisor::canonical_session_name(room, &seat),
@@ -2756,7 +2908,8 @@ mod tests {
         let err = launch_executable(gone.clone(), missing.clone())
             .expect_err("two paths that name nothing are a refusal, not a launch");
         assert!(
-            err.contains(&gone.display().to_string()) && err.contains(&missing.display().to_string()),
+            err.contains(&gone.display().to_string())
+                && err.contains(&missing.display().to_string()),
             "the refusal names both paths so a reader can check them: {err}"
         );
         assert!(
@@ -2769,10 +2922,8 @@ mod tests {
 
     /// A scratch state dir under the system temp dir, unique per test, removed by the caller.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "agenthub-supervisor-{name}-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("agenthub-supervisor-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("scratch dir");
         // THE SKILLS ROOT IS ISOLATED HERE, because a seat's skills tree is named in the state root's `.env`
@@ -2851,7 +3002,9 @@ mod tests {
         let runner = std::thread::spawn(move || {
             let (stream, _) = listener.accept().expect("a frame");
             let mut line = String::new();
-            BufReader::new(stream).read_line(&mut line).expect("one line");
+            BufReader::new(stream)
+                .read_line(&mut line)
+                .expect("one line");
             let frame: serde_json::Value = serde_json::from_str(line.trim()).expect("a frame");
             let reply = frame["replyTo"].as_str().expect("replyTo").to_string();
             let mut back = UnixStream::connect(reply).expect("reply socket");
@@ -2860,15 +3013,16 @@ mod tests {
         });
 
         let text = "From: principal@demo\nTo: dev\n---\nthe body";
-        let answer = supervisor_at(&state_dir).deliver_text(
-            &seat,
-            text,
-            &crate::runner::Origin {
-                from: Some("agenthub--demo--principal".to_string()),
-                verb: Some("send".to_string()),
-            },
-        )
-        .expect("delivered");
+        let answer = supervisor_at(&state_dir)
+            .deliver_text(
+                &seat,
+                text,
+                &crate::runner::Origin {
+                    from: Some("agenthub--demo--principal".to_string()),
+                    verb: Some("send".to_string()),
+                },
+            )
+            .expect("delivered");
         let frame = runner.join().expect("runner thread");
         assert_eq!(frame["type"], "text");
         assert_eq!(frame["text"], text, "the whole message is one frame");
@@ -2880,7 +3034,10 @@ mod tests {
             frame["from"], "agenthub--demo--principal",
             "the frame names the sender the daemon was given"
         );
-        assert_eq!(frame["verb"], "send", "the frame names the verb that carried it");
+        assert_eq!(
+            frame["verb"], "send",
+            "the frame names the verb that carried it"
+        );
         assert_eq!(answer["outcome"], "relayed");
         assert_eq!(answer["runner"]["relayed"], "prompt");
 
@@ -2895,8 +3052,16 @@ mod tests {
         let mut events = supervisor.hook_bus.subscribe();
         supervisor.stop_room("demo").expect("stopped");
         match events.recv().await.expect("an event") {
-            SeatEvent::SessionTerminated { room, seat, exit_code, .. } => {
-                assert_eq!((room.as_str(), seat.as_str(), exit_code), ("demo", "dev", None));
+            SeatEvent::SessionTerminated {
+                room,
+                seat,
+                exit_code,
+                ..
+            } => {
+                assert_eq!(
+                    (room.as_str(), seat.as_str(), exit_code),
+                    ("demo", "dev", None)
+                );
             }
             other => panic!("expected SessionTerminated, got {other:?}"),
         }
@@ -3069,9 +3234,9 @@ mod tests {
             .start_seat(&room, &spec.seats[0], &spec)
             .expect("a live non-omp pane must be called running once its grace has passed");
         assert_eq!(status.state, SeatLifecycleState::Running);
-        assert!(TerminalManager::is_session_alive(&RoomSupervisor::session_name(
-            &room, &key
-        )));
+        assert!(TerminalManager::is_session_alive(
+            &RoomSupervisor::session_name(&room, &key)
+        ));
         // And RUNNING must not read as more than it is: no readiness channel was consulted for this runtime, so
         // the status has to say so rather than let a live-but-unconfigured agent pass as a working one.
         assert!(
@@ -3169,7 +3334,10 @@ mod tests {
         let log_path = crate::runner::seat_log_path(&dir, &room, &key);
         let log = fs::read_to_string(&log_path)
             .unwrap_or_else(|e| panic!("the seat's own log {}: {e}", log_path.display()));
-        let attempts = log.lines().filter(|line| line.contains("start attempt ")).count();
+        let attempts = log
+            .lines()
+            .filter(|line| line.contains("start attempt "))
+            .count();
         assert_eq!(
             attempts, 2,
             "the start must retry exactly once - two attempt lines, never a loop; log: {log}"
@@ -3179,7 +3347,8 @@ mod tests {
             "the log line must name the stage that failed, got: {log}"
         );
         assert!(
-            log.lines().any(|line| line.contains("start final: 2 attempts failed")),
+            log.lines()
+                .any(|line| line.contains("start final: 2 attempts failed")),
             "the second failure must be recorded as final, not as another attempt, got: {log}"
         );
 
@@ -3318,7 +3487,10 @@ mod tests {
         );
         // A relative directory would resolve against the daemon's own, which is the base this fix removes.
         let err = scope(Some("wt/dev")).expect_err("a relative directory is refused");
-        assert!(err.contains("is not absolute"), "the refusal says why, got: {err}");
+        assert!(
+            err.contains("is not absolute"),
+            "the refusal says why, got: {err}"
+        );
     }
 
     /// The lane rule admits `<wt>/<seat>` and `<wt>/<seat>-*` by name, so two seat keys where one equals the other
@@ -3407,7 +3579,14 @@ mod tests {
             "the refusal names the seat, got: {err}"
         );
         assert!(
-            err.contains("team.json") && err.contains(&room_dir_of(&dir, &room).join("wt").join(&key).display().to_string()),
+            err.contains("team.json")
+                && err.contains(
+                    &room_dir_of(&dir, &room)
+                        .join("wt")
+                        .join(&key)
+                        .display()
+                        .to_string()
+                ),
             "the refusal names both ways to give the seat a directory, got: {err}"
         );
         assert!(
@@ -3428,7 +3607,9 @@ mod tests {
         let room = format!("seat-worktree-{}", std::process::id());
         let key = seat_key("seat-worktree");
         let hub = seat_worktree(&dir, &room, &key);
-        let client = room_dir_of(&dir, &room).join("wt").join(format!("{key}-client"));
+        let client = room_dir_of(&dir, &room)
+            .join("wt")
+            .join(format!("{key}-client"));
         fs::create_dir_all(&client).expect("the seat's second worktree");
         let spec: RoomSpec = serde_json::from_value(serde_json::json!({
             "room": room,
@@ -3577,7 +3758,9 @@ mod tests {
         .expect("a live seat with work waiting carries an alert");
         assert_eq!(alert.kind, "seat_up_with_queued_work");
         assert_eq!(alert.waiting_qitem_ids, ids);
-        let quiet = alert.quiet_seconds.expect("a stamp was published, so the quiet time is known");
+        let quiet = alert
+            .quiet_seconds
+            .expect("a stamp was published, so the quiet time is known");
         assert!((119..=121).contains(&quiet), "quiet_seconds = {quiet}");
 
         // No stamp published: "how long quiet" is unknown, and the alert says unknown instead of a zero
@@ -3723,7 +3906,8 @@ mod tests {
             .resolve_queue_destination("demo", "nobody@demo")
             .expect_err("a value naming no seat is refused");
         assert!(
-            refused.contains("names no seat of demo") && refused.contains(&format!("{seat} ({session})")),
+            refused.contains("names no seat of demo")
+                && refused.contains(&format!("{seat} ({session})")),
             "{refused}"
         );
         assert!(refused.contains("Nothing was written"), "{refused}");
@@ -3762,7 +3946,11 @@ mod tests {
         let before = supervisor
             .queue_store("demo")
             .expect("open the rail")
-            .create(waiting_row("lead", seat.clone(), "before the room was rebuilt"))
+            .create(waiting_row(
+                "lead",
+                seat.clone(),
+                "before the room was rebuilt",
+            ))
             .expect("create");
         assert!(
             rail.is_file(),
@@ -3781,7 +3969,11 @@ mod tests {
         let after = supervisor
             .queue_store("demo")
             .expect("the next verb opens the file it is about to use")
-            .create(waiting_row("lead", seat.clone(), "after the room was rebuilt"))
+            .create(waiting_row(
+                "lead",
+                seat.clone(),
+                "after the room was rebuilt",
+            ))
             .expect("create into the new file");
 
         let rows = supervisor
@@ -3843,7 +4035,13 @@ mod tests {
         .expect("scratch pane");
         // The previous generation's death record, exactly as the live reviewer's `run/reviewer.state.json`
         // held it at 06:09Z.
-        write_state_file(&dir, &room, &key, "agent_socket_closed", "2026-10-17T04:00:36.547Z");
+        write_state_file(
+            &dir,
+            &room,
+            &key,
+            "agent_socket_closed",
+            "2026-10-17T04:00:36.547Z",
+        );
         let row = supervisor.queue_store(&room).expect("open the rail");
         let created = row
             .create(waiting_row("lead", session.clone(), "the owner's gate ask"))
@@ -3863,7 +4061,8 @@ mod tests {
 
         let log = fs::read_to_string(crate::runner::nudge_log_path(&dir, &room, &key))
             .expect("the pass must record its attempt, delivered or not");
-        let line: serde_json::Value = serde_json::from_str(log.lines().next().expect("one line")).expect("json");
+        let line: serde_json::Value =
+            serde_json::from_str(log.lines().next().expect("one line")).expect("json");
         assert_eq!(line["attempt"], 1);
         assert_eq!(line["qitem_ids"], serde_json::json!([created.qitem_id]));
         assert_eq!(
@@ -3948,14 +4147,20 @@ mod tests {
             .args(["set-option", "-t", &session, "remain-on-exit", "on"])
             .output()
             .expect("this test needs tmux");
-        assert!(kept.status.success(), "the pane must be kept after its command exits");
+        assert!(
+            kept.status.success(),
+            "the pane must be kept after its command exits"
+        );
         // The command has exited and the pane is kept: the session and its pid survive, the process does not.
         std::thread::sleep(Duration::from_millis(1200));
         assert!(
             TerminalManager::is_session_alive(&session),
             "the fixture rests on the session outliving its pane's process"
         );
-        assert!(!TerminalManager::pane_is_live(&session), "its process is gone");
+        assert!(
+            !TerminalManager::pane_is_live(&session),
+            "its process is gone"
+        );
         supervisor
             .queue_store(&room)
             .expect("open the rail")
@@ -4008,7 +4213,13 @@ mod tests {
         seat_worktree(&dir, &room, &key);
         let spec = startable_spec(&room, &key, "sleep 30");
         // The document the previous generation left, in the shape and time the live reviewer's held it.
-        write_state_file(&dir, &room, &key, "agent_socket_closed", "2026-10-17T04:00:36.547Z");
+        write_state_file(
+            &dir,
+            &room,
+            &key,
+            "agent_socket_closed",
+            "2026-10-17T04:00:36.547Z",
+        );
         let supervisor = supervisor_at(&dir);
 
         let status = supervisor
@@ -4021,9 +4232,10 @@ mod tests {
             .join(&room)
             .join("run")
             .join(format!("{key}.state.json"));
-        let doc: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&path).expect("the launch published its state"))
-                .expect("json");
+        let doc: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&path).expect("the launch published its state"),
+        )
+        .expect("json");
         assert_eq!(
             doc["state"], "running",
             "the pane is up, so the launch's own word replaces the previous generation's death"
@@ -4037,8 +4249,11 @@ mod tests {
             crate::pty::pane_pid(&RoomSupervisor::session_name(&room, &key)).unwrap(),
             "the claim names the pane's process, the one that can still be checked"
         );
-        let written: chrono::DateTime<chrono::Utc> =
-            doc["updated_at"].as_str().unwrap().parse().expect("rfc3339");
+        let written: chrono::DateTime<chrono::Utc> = doc["updated_at"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .expect("rfc3339");
         assert!(
             written > chrono::Utc::now() - chrono::Duration::minutes(5),
             "a stale timestamp would make the launch read as the old document, got {}",
@@ -4183,7 +4398,11 @@ mod tests {
         }
         // ...and the same seat one word later IS selected: the gate reads the word, not the history.
         write_state_file(&dir, &room, &key, "idle", "2026-10-17T06:00:00.000Z");
-        assert_eq!(supervisor.pending_nudges().len(), 1, "idle is the runner's come in");
+        assert_eq!(
+            supervisor.pending_nudges().len(),
+            1,
+            "idle is the runner's come in"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -4206,7 +4425,8 @@ mod tests {
         fs::create_dir_all(&run_dir).expect("run dir");
         fs::write(
             run_dir.join(format!("{key}.state.json")),
-            serde_json::json!({"state": "idle", "classification": "", "resume_attempts": 0}).to_string(),
+            serde_json::json!({"state": "idle", "classification": "", "resume_attempts": 0})
+                .to_string(),
         )
         .expect("state file");
         let row = supervisor.queue_store(&room).expect("open the rail");
@@ -4288,7 +4508,10 @@ mod tests {
             Some("/tmp/isolation/rt/agenthub.sock"),
             "the seat has to be told the socket of the daemon that started it"
         );
-        assert_eq!(env.get("AGENTHUB_ROOM").map(String::as_str), Some("isolated"));
+        assert_eq!(
+            env.get("AGENTHUB_ROOM").map(String::as_str),
+            Some("isolated")
+        );
         assert_eq!(
             env.get("AGENTHUB_SESSION_NAME").map(String::as_str),
             Some("agenthub--isolated--dev"),
@@ -4312,12 +4535,23 @@ mod tests {
             "env": {"AGENTHUB_CONNECTOR_TOKEN": "from-the-spec"}
         }))
         .expect("seat");
-        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir, Path::new("/rooms/demo/wt/dev"));
+        let env = seat_env(
+            &seat,
+            "demo",
+            "agenthub--demo--dev",
+            Path::new("/s"),
+            Path::new("/r.sock"),
+            &dir,
+            Path::new("/rooms/demo/wt/dev"),
+        );
         assert!(
             !env.contains_key("AGENTHUB_CONNECTOR_TOKEN"),
             "the credential must not reach a seat, from the file ({env:?})"
         );
-        assert_eq!(env.get("AGENTHUB_MCP_URL").map(String::as_str), Some("http://127.0.0.1:8000/mcp"));
+        assert_eq!(
+            env.get("AGENTHUB_MCP_URL").map(String::as_str),
+            Some("http://127.0.0.1:8000/mcp")
+        );
         assert_eq!(env.get("AGENTHUB_SEAT").map(String::as_str), Some("dev"));
     }
 
@@ -4337,15 +4571,45 @@ mod tests {
             "env": {"SPEC_WINS": "spec"}
         }))
         .expect("seat");
-        let env = seat_env(&seat, "demo", "agenthub--demo--dev", Path::new("/s"), Path::new("/r.sock"), &dir, Path::new("/rooms/demo/wt/dev"));
-        assert_eq!(env.get("AGENTHUB_MCP_URL").map(String::as_str), Some("http://127.0.0.1:8000/mcp"));
+        let env = seat_env(
+            &seat,
+            "demo",
+            "agenthub--demo--dev",
+            Path::new("/s"),
+            Path::new("/r.sock"),
+            &dir,
+            Path::new("/rooms/demo/wt/dev"),
+        );
+        assert_eq!(
+            env.get("AGENTHUB_MCP_URL").map(String::as_str),
+            Some("http://127.0.0.1:8000/mcp")
+        );
         assert_eq!(env.get("QUOTED").map(String::as_str), Some("a b"));
         assert_eq!(env.get("EMPTY").map(String::as_str), Some(""));
-        assert_eq!(env.get("SPEC_WINS").map(String::as_str), Some("spec"), "the spec wins over the file");
-        assert_eq!(env.get("AGENTHUB_ROOM").map(String::as_str), Some("demo"), "the runtime wins over both");
+        assert_eq!(
+            env.get("SPEC_WINS").map(String::as_str),
+            Some("spec"),
+            "the spec wins over the file"
+        );
+        assert_eq!(
+            env.get("AGENTHUB_ROOM").map(String::as_str),
+            Some("demo"),
+            "the runtime wins over both"
+        );
         assert!(!env.contains_key("bad key"));
-        let none = seat_env(&seat, "demo", "s", Path::new("/s"), Path::new("/r.sock"), Path::new("/nonexistent-state-root"), Path::new("/rooms/demo/wt/dev"));
-        assert!(!none.contains_key("AGENTHUB_MCP_URL"), "no file, no variables");
+        let none = seat_env(
+            &seat,
+            "demo",
+            "s",
+            Path::new("/s"),
+            Path::new("/r.sock"),
+            Path::new("/nonexistent-state-root"),
+            Path::new("/rooms/demo/wt/dev"),
+        );
+        assert!(
+            !none.contains_key("AGENTHUB_MCP_URL"),
+            "no file, no variables"
+        );
     }
 
     /// The MCP config a seat is started with carries variable references only, so it is safe to leave in the
@@ -4355,7 +4619,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(SEAT_MCP_CONFIG).expect("valid json");
         let server = &parsed["mcpServers"]["agenthub_http"];
         assert_eq!(server["url"], "${AGENTHUB_URL}/mcp");
-        assert_eq!(server["headers"]["Authorization"], "Bearer ${AGENTHUB_TOKEN}");
+        assert_eq!(
+            server["headers"]["Authorization"],
+            "Bearer ${AGENTHUB_TOKEN}"
+        );
     }
 
     /// THE DELEGATION ENTRY IS THE ENVIRONMENT'S, NOT THE FILE'S. With no script named the seat's mcp.json is
@@ -4371,7 +4638,10 @@ mod tests {
             "absence must write today's file"
         );
         let mut env = HashMap::new();
-        env.insert(DEEPSEEK_MCP_SERVER_ENV.to_string(), "/opt/deepseek/server.cjs".to_string());
+        env.insert(
+            DEEPSEEK_MCP_SERVER_ENV.to_string(),
+            "/opt/deepseek/server.cjs".to_string(),
+        );
         let text = seat_mcp_config(&env, cwd);
         let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid json");
         let server = &parsed["mcpServers"]["deepseek"];
@@ -4385,7 +4655,11 @@ mod tests {
             "the cloud entry survives"
         );
         env.insert(DEEPSEEK_MCP_SERVER_ENV.to_string(), "   ".to_string());
-        assert_eq!(seat_mcp_config(&env, cwd), SEAT_MCP_CONFIG, "a blank script is no script");
+        assert_eq!(
+            seat_mcp_config(&env, cwd),
+            SEAT_MCP_CONFIG,
+            "a blank script is no script"
+        );
     }
 
     /// The delegation server's working directory is decided by the runtime, not inherited: one daemon starts
@@ -4412,15 +4686,30 @@ mod tests {
             &dir,
             Path::new("/rooms/demo/wt/dev"),
         );
-        assert_eq!(env.get(DEEPSEEK_MCP_CWD_ENV).map(String::as_str), Some("/rooms/demo/wt/dev"));
-        assert_eq!(env.get(DEEPSEEK_MCP_SERVER_ENV).map(String::as_str), Some("/opt/ds/server.cjs"));
+        assert_eq!(
+            env.get(DEEPSEEK_MCP_CWD_ENV).map(String::as_str),
+            Some("/rooms/demo/wt/dev")
+        );
+        assert_eq!(
+            env.get(DEEPSEEK_MCP_SERVER_ENV).map(String::as_str),
+            Some("/opt/ds/server.cjs")
+        );
     }
 
     /// The hook the runtime writes is the one that blocks and logs: if it lost its guard or its log the seat would
     /// run unguarded and unrecorded with nothing failing.
     #[test]
     fn the_seat_tool_hook_guards_and_logs() {
-        for needle in ["\"tool_call\"", "\"tool_result\"", "block: true", "tool-calls.jsonl", "env-secret", "docker", "tmux-mutate", "push"] {
+        for needle in [
+            "\"tool_call\"",
+            "\"tool_result\"",
+            "block: true",
+            "tool-calls.jsonl",
+            "env-secret",
+            "docker",
+            "tmux-mutate",
+            "push",
+        ] {
             assert!(SEAT_TOOL_HOOK.contains(needle), "the hook lost {needle}");
         }
     }
@@ -4447,7 +4736,10 @@ mod tests {
 
         let _ = supervisor.start_seat(&room, &spec.seats[0], &spec);
 
-        let installed = room_dir_of(&dir, &room).join("seats").join(&key).join("config.yml");
+        let installed = room_dir_of(&dir, &room)
+            .join("seats")
+            .join(&key)
+            .join("config.yml");
         assert_eq!(
             fs::read_to_string(&installed).expect("the seat's config.yml"),
             document,
@@ -4472,7 +4764,10 @@ mod tests {
 
         let _ = supervisor.start_seat(&room, &spec.seats[0], &spec);
 
-        let installed = room_dir_of(&dir, &room).join("seats").join(&key).join("config.yml");
+        let installed = room_dir_of(&dir, &room)
+            .join("seats")
+            .join(&key)
+            .join("config.yml");
         assert!(
             !installed.exists(),
             "a seat of another runtime must not receive an omp config: {}",
@@ -4536,7 +4831,8 @@ mod tests {
             "a reseat installs the document it was handed, replacing the one the seat started on"
         );
         let recorded: RoomSpec =
-            serde_json::from_str(&fs::read_to_string(room_dir.join("spec.json")).expect("spec")).expect("spec");
+            serde_json::from_str(&fs::read_to_string(room_dir.join("spec.json")).expect("spec"))
+                .expect("spec");
         assert_eq!(
             recorded.seats[0].policy_document.as_deref(),
             Some(document),
@@ -4549,7 +4845,10 @@ mod tests {
     /// JSON object is refused rather than overwritten.
     #[test]
     fn an_agy_seat_is_launched_with_its_model() {
-        assert_eq!(agy_command(Some("gemini-3.8-flash-low")), "agy --model 'gemini-3.8-flash-low'");
+        assert_eq!(
+            agy_command(Some("gemini-3.8-flash-low")),
+            "agy --model 'gemini-3.8-flash-low'"
+        );
         assert_eq!(agy_command(Some("a'b")), r"agy --model 'a'\''b'");
         assert_eq!(agy_command(Some(" ")), "agy");
         assert_eq!(agy_command(None), "agy");
@@ -4564,11 +4863,20 @@ mod tests {
         install_agy_guard_hook(&home).unwrap();
         let first = fs::read_to_string(&path).unwrap();
         install_agy_guard_hook(&home).unwrap();
-        assert_eq!(first, fs::read_to_string(&path).unwrap(), "a second install changed the file");
+        assert_eq!(
+            first,
+            fs::read_to_string(&path).unwrap(),
+            "a second install changed the file"
+        );
         let hooks: serde_json::Value = serde_json::from_str(&first).unwrap();
         assert_eq!(hooks["herdr"]["PreInvocation"][0]["command"], "x");
-        let pre = hooks[AGY_GUARD_HOOK]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
-        assert!(pre.contains("--agy-hook pre") && pre.contains(r#"{"decision":"ask"}"#), "{pre}");
+        let pre = hooks[AGY_GUARD_HOOK]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            pre.contains("--agy-hook pre") && pre.contains(r#"{"decision":"ask"}"#),
+            "{pre}"
+        );
         fs::write(&path, "[1]").unwrap();
         assert!(install_agy_guard_hook(&home).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "[1]");
@@ -4584,29 +4892,55 @@ mod tests {
         let home = scratch("agy-mcp");
         let path = home.join(".gemini/config/mcp_config.json");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, r#"{"mcpServers":{"owner-server":{"command":"node","args":["server.cjs"]}}}"#).unwrap();
+        fs::write(
+            &path,
+            r#"{"mcpServers":{"owner-server":{"command":"node","args":["server.cjs"]}}}"#,
+        )
+        .unwrap();
         install_agy_mcp_server(&home, false).unwrap();
         let first = fs::read_to_string(&path).unwrap();
         install_agy_mcp_server(&home, false).unwrap();
-        assert_eq!(first, fs::read_to_string(&path).unwrap(), "a second install changed the file");
+        assert_eq!(
+            first,
+            fs::read_to_string(&path).unwrap(),
+            "a second install changed the file"
+        );
         let config: serde_json::Value = serde_json::from_str(&first).unwrap();
-        assert_eq!(config["mcpServers"]["owner-server"]["command"], "node", "the owner's own server was touched");
+        assert_eq!(
+            config["mcpServers"]["owner-server"]["command"], "node",
+            "the owner's own server was touched"
+        );
         assert!(
             config["mcpServers"].get(AGY_DEEPSEEK_SERVER).is_none(),
             "no script named, no delegation entry"
         );
         let server = &config["mcpServers"][AGY_MCP_SERVER];
         assert_eq!(server["command"], "sh");
-        assert_eq!(server["disabled"], false, "agy leaves a disabled server unloaded");
+        assert_eq!(
+            server["disabled"], false,
+            "agy leaves a disabled server unloaded"
+        );
         let line = server["args"][1].as_str().unwrap();
-        assert!(line.contains("mcp-proxy --transport streamablehttp"), "{line}");
-        assert!(line.contains(r#""$AGENTHUB_URL/mcp""#), "the bridge must reach the seat's own daemon: {line}");
+        assert!(
+            line.contains("mcp-proxy --transport streamablehttp"),
+            "{line}"
+        );
+        assert!(
+            line.contains(r#""$AGENTHUB_URL/mcp""#),
+            "the bridge must reach the seat's own daemon: {line}"
+        );
         assert!(
             line.contains(r#"API_ACCESS_TOKEN="$AGENTHUB_TOKEN" exec mcp-proxy"#),
             "the token is handed over in the bridge's environment, read at connect time: {line}"
         );
-        assert!(!line.contains("Bearer"), "an Authorization argument would publish the token in argv: {line}");
-        assert!(line.contains(r#"[ -n "$AGENTHUB_SEAT" ]"#), "a session that is not a seat starts no bridge: {line}");
+        assert!(
+            !line.contains("Bearer"),
+            "an Authorization argument would publish the token in argv: {line}"
+        );
+        assert!(
+            line.contains(r#"[ -n "$AGENTHUB_SEAT" ]"#),
+            "a session that is not a seat starts no bridge: {line}"
+        );
         fs::write(&path, r#"{"mcpServers":[]}"#).unwrap();
         assert!(install_agy_mcp_server(&home, false).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"mcpServers":[]}"#);
@@ -4651,10 +4985,22 @@ mod tests {
             .unwrap();
         assert!(status.success(), "the installed line did not run: {status}");
         let argv = fs::read_to_string(&argv_out).unwrap();
-        assert!(!argv.contains("SECRET-bearer-value"), "the credential is in the bridge's argv: {argv}");
-        assert!(!argv.contains("Bearer"), "an expanded Authorization reached argv: {argv}");
-        assert!(argv.contains("streamablehttp"), "the bridge must still be the HTTP client: {argv}");
-        assert!(argv.contains("http://127.0.0.1:9/mcp"), "the bridge must reach the seat's own daemon: {argv}");
+        assert!(
+            !argv.contains("SECRET-bearer-value"),
+            "the credential is in the bridge's argv: {argv}"
+        );
+        assert!(
+            !argv.contains("Bearer"),
+            "an expanded Authorization reached argv: {argv}"
+        );
+        assert!(
+            argv.contains("streamablehttp"),
+            "the bridge must still be the HTTP client: {argv}"
+        );
+        assert!(
+            argv.contains("http://127.0.0.1:9/mcp"),
+            "the bridge must reach the seat's own daemon: {argv}"
+        );
         assert_eq!(
             fs::read_to_string(&env_out).unwrap(),
             "set",
@@ -4683,10 +5029,22 @@ mod tests {
         assert_eq!(server["command"], "sh");
         assert_eq!(server["disabled"], false);
         let line = server["args"][1].as_str().unwrap();
-        assert!(line.contains(r#"[ -n "$DEEPSEEK_MCP_SERVER" ]"#), "the path is read at connect time: {line}");
-        assert!(line.contains(r#"exec node "$DEEPSEEK_MCP_SERVER""#), "{line}");
-        assert!(!line.contains("/stale/hardcoded/server.cjs"), "a literal path survived: {line}");
-        assert_eq!(config["mcpServers"]["exa"]["url"], "http://x", "another server was touched");
+        assert!(
+            line.contains(r#"[ -n "$DEEPSEEK_MCP_SERVER" ]"#),
+            "the path is read at connect time: {line}"
+        );
+        assert!(
+            line.contains(r#"exec node "$DEEPSEEK_MCP_SERVER""#),
+            "{line}"
+        );
+        assert!(
+            !line.contains("/stale/hardcoded/server.cjs"),
+            "a literal path survived: {line}"
+        );
+        assert_eq!(
+            config["mcpServers"]["exa"]["url"], "http://x",
+            "another server was touched"
+        );
         install_agy_mcp_server(&home, false).unwrap();
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
@@ -4694,7 +5052,10 @@ mod tests {
             config["mcpServers"].get(AGY_DEEPSEEK_SERVER).is_none(),
             "absence must leave no entry"
         );
-        assert_eq!(config["mcpServers"]["exa"]["url"], "http://x", "another server was touched");
+        assert_eq!(
+            config["mcpServers"]["exa"]["url"], "http://x",
+            "another server was touched"
+        );
         assert!(config["mcpServers"][AGY_MCP_SERVER].is_object());
         let _ = fs::remove_dir_all(&home);
     }
@@ -4705,8 +5066,14 @@ mod tests {
     fn an_agy_start_installs_the_guard_hook_and_the_mcp_server() {
         let home = scratch("agy-start");
         install_agy_start_files(&home, false).unwrap();
-        assert!(home.join(".gemini/config/hooks.json").is_file(), "no guard hook was installed");
-        assert!(home.join(".gemini/config/mcp_config.json").is_file(), "no MCP server was installed");
+        assert!(
+            home.join(".gemini/config/hooks.json").is_file(),
+            "no guard hook was installed"
+        );
+        assert!(
+            home.join(".gemini/config/mcp_config.json").is_file(),
+            "no MCP server was installed"
+        );
         let _ = fs::remove_dir_all(&home);
     }
 
@@ -4719,7 +5086,11 @@ mod tests {
         let skill = |rel: &str, extra: &str| {
             let dir = tree.join(rel);
             fs::create_dir_all(&dir).expect("dir");
-            fs::write(dir.join("SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n").expect("skill");
+            fs::write(
+                dir.join("SKILL.md"),
+                "---\nname: x\ndescription: d\n---\nbody\n",
+            )
+            .expect("skill");
             if !extra.is_empty() {
                 fs::write(dir.join(extra), "y").expect("extra");
             }
@@ -4730,7 +5101,11 @@ mod tests {
         skill("rooms/r/dev/own-skill", "baseline.json");
         skill("rooms/r/dev/both", "");
         skill("rooms/r/other/theirs", "");
-        fs::write(state.join(".env"), format!("{SKILLS_ROOT_ENV}={}\n", tree.display())).expect("env");
+        fs::write(
+            state.join(".env"),
+            format!("{SKILLS_ROOT_ENV}={}\n", tree.display()),
+        )
+        .expect("env");
         let seat_dir = state.join("rooms/r/seats/dev");
         fs::create_dir_all(seat_dir.join("skills/stale")).expect("stale");
         install_seat_skills(&state, "r", "dev", &seat_dir).expect("install");
@@ -4739,8 +5114,15 @@ mod tests {
             .map(|e| e.expect("entry").file_name().to_string_lossy().to_string())
             .collect();
         names.sort();
-        assert_eq!(names, ["both", "common", "own-skill", "room-skill"], "no stale, no other seat's skill");
-        assert!(seat_dir.join("skills/own-skill/baseline.json").is_file(), "files beside SKILL.md go too");
+        assert_eq!(
+            names,
+            ["both", "common", "own-skill", "room-skill"],
+            "no stale, no other seat's skill"
+        );
+        assert!(
+            seat_dir.join("skills/own-skill/baseline.json").is_file(),
+            "files beside SKILL.md go too"
+        );
     }
 
     /// The seat's `<seat>-workflow` body - frontmatter stripped - becomes `<seat dir>/AGENTS.md`, the file the
@@ -4753,19 +5135,33 @@ mod tests {
         let skill = |rel: &str, body: &str| {
             let dir = tree.join(rel);
             fs::create_dir_all(&dir).expect("dir");
-            fs::write(dir.join("SKILL.md"), format!("---\nname: x\ndescription: d\n---\n{body}\n")).expect("skill");
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: x\ndescription: d\n---\n{body}\n"),
+            )
+            .expect("skill");
         };
         skill("rooms/r/dev/dev-workflow", "# dev - how this seat works");
         skill("rooms/r/other/other-workflow", "# other");
-        fs::write(state.join(".env"), format!("{SKILLS_ROOT_ENV}={}\n", tree.display())).expect("env");
+        fs::write(
+            state.join(".env"),
+            format!("{SKILLS_ROOT_ENV}={}\n", tree.display()),
+        )
+        .expect("env");
         let seat_dir = state.join("rooms/r/seats/dev");
         install_seat_skills(&state, "r", "dev", &seat_dir).expect("install");
         let agents = seat_dir.join(SEAT_WORKFLOW_FILE);
-        assert_eq!(fs::read_to_string(&agents).expect("AGENTS.md"), "# dev - how this seat works\n");
+        assert_eq!(
+            fs::read_to_string(&agents).expect("AGENTS.md"),
+            "# dev - how this seat works\n"
+        );
 
         fs::remove_dir_all(tree.join("rooms/r/dev/dev-workflow")).expect("drop the workflow");
         install_seat_skills(&state, "r", "dev", &seat_dir).expect("reinstall");
-        assert!(!agents.exists(), "a removed workflow leaves no stale AGENTS.md");
+        assert!(
+            !agents.exists(),
+            "a removed workflow leaves no stale AGENTS.md"
+        );
     }
 
     /// A skill file's mode comes from the COPY, not from this process's umask: the source's bits are decided by
@@ -4778,7 +5174,8 @@ mod tests {
     fn an_installed_skill_keeps_the_owners_bits_and_drops_the_rest() {
         use std::os::unix::fs::PermissionsExt;
         let mode = |path: &Path, bits: u32| {
-            fs::set_permissions(path, fs::Permissions::from_mode(bits)).expect("set the source mode");
+            fs::set_permissions(path, fs::Permissions::from_mode(bits))
+                .expect("set the source mode");
         };
         let perm = |path: PathBuf| fs::metadata(path).expect("mode").permissions().mode() & 0o777;
 
@@ -4786,11 +5183,19 @@ mod tests {
         let tree = scratch("skills-modes-tree");
         let source = tree.join("share/common");
         fs::create_dir_all(&source).expect("dir");
-        fs::write(source.join("SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n").expect("skill");
+        fs::write(
+            source.join("SKILL.md"),
+            "---\nname: x\ndescription: d\n---\nbody\n",
+        )
+        .expect("skill");
         fs::write(source.join("polluter.sh"), "#!/bin/sh\n").expect("script");
         mode(&source.join("SKILL.md"), 0o644);
         mode(&source.join("polluter.sh"), 0o755);
-        fs::write(state.join(".env"), format!("{SKILLS_ROOT_ENV}={}\n", tree.display())).expect("env");
+        fs::write(
+            state.join(".env"),
+            format!("{SKILLS_ROOT_ENV}={}\n", tree.display()),
+        )
+        .expect("env");
 
         let seat_dir = state.join("rooms/r/seats/dev");
         install_seat_skills(&state, "r", "dev", &seat_dir).expect("install");
@@ -4835,15 +5240,30 @@ mod tests {
         write_spec(&dir, "lab", "dev");
         let supervisor = supervisor_at(&dir);
 
-        supervisor.set_seat_model("lab", "dev", "  deepseek/deepseek-flash ").unwrap();
+        supervisor
+            .set_seat_model("lab", "dev", "  deepseek/deepseek-flash ")
+            .unwrap();
 
         let saved: RoomSpec =
-            serde_json::from_str(&fs::read_to_string(dir.join("rooms/lab/spec.json")).unwrap()).unwrap();
-        assert_eq!(saved.seats[0].model.as_deref(), Some("deepseek/deepseek-flash"));
-        assert_eq!(saved.seats[0].runtime, "omp", "the rest of the seat record is untouched");
+            serde_json::from_str(&fs::read_to_string(dir.join("rooms/lab/spec.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            saved.seats[0].model.as_deref(),
+            Some("deepseek/deepseek-flash")
+        );
+        assert_eq!(
+            saved.seats[0].runtime, "omp",
+            "the rest of the seat record is untouched"
+        );
 
-        assert!(supervisor.set_seat_model("lab", "nobody", "m").unwrap_err().contains("not found"));
-        assert!(supervisor.set_seat_model("lab", "dev", " ").unwrap_err().contains("empty"));
+        assert!(supervisor
+            .set_seat_model("lab", "nobody", "m")
+            .unwrap_err()
+            .contains("not found"));
+        assert!(supervisor
+            .set_seat_model("lab", "dev", " ")
+            .unwrap_err()
+            .contains("empty"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -4856,13 +5276,28 @@ mod tests {
         assert!(supervisor.get_room_links("lab").unwrap().is_empty());
 
         let spec_file = dir.join("rooms/lab/spec.json");
-        let mut spec: RoomSpec = serde_json::from_str(&fs::read_to_string(&spec_file).unwrap()).unwrap();
-        spec.links.push(SeatLink { from: "dev".into(), kind: "delegates_to".into(), to: "qa".into() });
+        let mut spec: RoomSpec =
+            serde_json::from_str(&fs::read_to_string(&spec_file).unwrap()).unwrap();
+        spec.links.push(SeatLink {
+            from: "dev".into(),
+            kind: "delegates_to".into(),
+            to: "qa".into(),
+        });
         fs::write(&spec_file, serde_json::to_string(&spec).unwrap()).unwrap();
 
         let links = supervisor.get_room_links("lab").unwrap();
-        assert_eq!((links[0].from.as_str(), links[0].kind.as_str(), links[0].to.as_str()), ("dev", "delegates_to", "qa"));
-        assert!(supervisor.get_room_links("ghost").unwrap_err().contains("cannot read room spec"));
+        assert_eq!(
+            (
+                links[0].from.as_str(),
+                links[0].kind.as_str(),
+                links[0].to.as_str()
+            ),
+            ("dev", "delegates_to", "qa")
+        );
+        assert!(supervisor
+            .get_room_links("ghost")
+            .unwrap_err()
+            .contains("cannot read room spec"));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -4883,14 +5318,21 @@ mod tests {
 
         supervisor.clear_saved_sessions("lab", "dev").unwrap();
         assert!(!mine.exists(), "the seat's own sessions are gone");
-        assert!(other.join("a.jsonl").exists(), "another seat's sessions are untouched");
+        assert!(
+            other.join("a.jsonl").exists(),
+            "another seat's sessions are untouched"
+        );
         supervisor.clear_saved_sessions("lab", "dev").unwrap();
         let _ = fs::remove_dir_all(&dir);
     }
 
     /// The facts a claim makes, with the three fields this defect turns on: what the seat's document says, who
     /// published it, and whether that publisher is still there.
-    fn claim_facts(word: Option<&str>, publisher_pid: Option<u32>, publisher_alive: Option<bool>) -> SeatFacts {
+    fn claim_facts(
+        word: Option<&str>,
+        publisher_pid: Option<u32>,
+        publisher_alive: Option<bool>,
+    ) -> SeatFacts {
         SeatFacts {
             alive: true,
             published_state: word.map(str::to_string),
@@ -4911,11 +5353,20 @@ mod tests {
         let path = dir.join("dev.state.json");
         crate::runner::write_state(&path, "working", "a turn is running", 0).expect("write state");
 
-        let doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         let (word, pid) = published_claim(Some(&doc));
         assert_eq!(word.as_deref(), Some("working"));
-        assert_eq!(pid, Some(std::process::id()), "the document must name the process that wrote it");
-        assert_eq!(pid.and_then(process_is_alive), Some(true), "and that process is this test");
+        assert_eq!(
+            pid,
+            Some(std::process::id()),
+            "the document must name the process that wrote it"
+        );
+        assert_eq!(
+            pid.and_then(process_is_alive),
+            Some(true),
+            "and that process is this test"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -4926,8 +5377,14 @@ mod tests {
     fn an_observed_death_names_the_claim_whose_publisher_is_gone() {
         let why = observed_death(&claim_facts(Some("working"), Some(4242), Some(false)), true)
             .expect("a claim whose publisher is gone is the death this side can observe");
-        assert!(why.contains("pid 4242"), "the sentence must name the publisher: {why}");
-        assert!(why.contains("working"), "the sentence must name the stale word: {why}");
+        assert!(
+            why.contains("pid 4242"),
+            "the sentence must name the publisher: {why}"
+        );
+        assert!(
+            why.contains("working"),
+            "the sentence must name the stale word: {why}"
+        );
     }
 
     /// AND IT SAYS NOTHING IN EVERY OTHER CASE, which is what keeps it from killing live seats: a live publisher; a
@@ -4942,8 +5399,16 @@ mod tests {
             facts
         };
         let cases: [(&str, SeatFacts, bool); 6] = [
-            ("a runner that is alive", claim_facts(Some("working"), Some(4242), Some(true)), true),
-            ("a host that cannot answer", claim_facts(Some("working"), Some(4242), None), true),
+            (
+                "a runner that is alive",
+                claim_facts(Some("working"), Some(4242), Some(true)),
+                true,
+            ),
+            (
+                "a host that cannot answer",
+                claim_facts(Some("working"), Some(4242), None),
+                true,
+            ),
             (
                 "a death the runner published itself",
                 claim_facts(Some("agent_exited"), Some(4242), Some(false)),
@@ -4955,7 +5420,11 @@ mod tests {
                 claim_facts(Some("working"), Some(4242), Some(false)),
                 false,
             ),
-            ("a seat that published nothing", claim_facts(None, None, None), true),
+            (
+                "a seat that published nothing",
+                claim_facts(None, None, None),
+                true,
+            ),
         ];
         for (what, facts, publishes) in cases {
             assert!(
@@ -4973,15 +5442,23 @@ mod tests {
     fn the_observed_death_reaches_the_seat_state_file_and_stays_there() {
         let dir = scratch("state-corrected");
         let path = dir.join("reviewer.state.json");
-        crate::runner::write_state(&path, "working", "a turn is running", 0).expect("seed the stale claim");
+        crate::runner::write_state(&path, "working", "a turn is running", 0)
+            .expect("seed the stale claim");
 
-        let why = observed_death(&claim_facts(Some("working"), Some(4242), Some(false)), true).expect("observed");
+        let why = observed_death(&claim_facts(Some("working"), Some(4242), Some(false)), true)
+            .expect("observed");
         crate::runner::write_state(&path, "agent_exited", &why, 0).expect("correct the claim");
 
-        let doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(doc["state"], "agent_exited", "the file must carry the death, not the stale word");
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            doc["state"], "agent_exited",
+            "the file must carry the death, not the stale word"
+        );
         assert!(
-            doc["classification"].as_str().is_some_and(|c| c.contains("pid 4242")),
+            doc["classification"]
+                .as_str()
+                .is_some_and(|c| c.contains("pid 4242")),
             "the file must carry the reason the daemon observed: {doc}"
         );
 
@@ -4994,7 +5471,10 @@ mod tests {
             publisher_alive: pid.and_then(process_is_alive),
             ..claim_facts(None, None, None)
         };
-        assert!(observed_death(&reread, true).is_none(), "a corrected file must not be corrected again");
+        assert!(
+            observed_death(&reread, true).is_none(),
+            "a corrected file must not be corrected again"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -5015,7 +5495,10 @@ mod tests {
             .join(&room)
             .join("run")
             .join(format!("{key}.state.json"));
-        assert!(!state_path.exists(), "the fixture must start with no document");
+        assert!(
+            !state_path.exists(),
+            "the fixture must start with no document"
+        );
 
         let status = supervisor
             .get_room_status(&room)
@@ -5039,7 +5522,10 @@ mod tests {
         );
         // ...and a second read is no different: the assertion above is not a one-read accident.
         let _ = supervisor.get_room_status(&room).expect("status");
-        assert!(!state_path.exists(), "and a repeated read writes nothing either");
+        assert!(
+            !state_path.exists(),
+            "and a repeated read writes nothing either"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -5057,8 +5543,16 @@ mod tests {
             );
             return;
         }
-        assert_eq!(process_is_alive(std::process::id()), Some(true), "this test process is alive");
-        assert_eq!(process_is_alive(u32::MAX), Some(false), "a pid that cannot exist is not alive");
+        assert_eq!(
+            process_is_alive(std::process::id()),
+            Some(true),
+            "this test process is alive"
+        );
+        assert_eq!(
+            process_is_alive(u32::MAX),
+            Some(false),
+            "a pid that cannot exist is not alive"
+        );
     }
 
     /// DEFECT 2, THROUGH THE PATH THAT ACTUALLY RUNS IT. A real pane, a seat whose document claims a turn is
@@ -5081,21 +5575,31 @@ mod tests {
         let spec = startable_spec(&room, &key, "omp");
         let room_dir = dir.join("rooms").join(&room);
         fs::create_dir_all(room_dir.join("run")).unwrap();
-        fs::write(room_dir.join("spec.json"), serde_json::to_string(&spec).unwrap()).unwrap();
+        fs::write(
+            room_dir.join("spec.json"),
+            serde_json::to_string(&spec).unwrap(),
+        )
+        .unwrap();
 
         // A REAL pane under a private tmux server: the seat is up, and its agent is not.
         let session = RoomSupervisor::session_name(&room, &key);
-        TerminalManager::launch_session(&session, &room_dir, "sleep 30", &HashMap::new()).expect("pane");
+        TerminalManager::launch_session(&session, &room_dir, "sleep 30", &HashMap::new())
+            .expect("pane");
         let state_path = room_dir.join("run").join(format!("{key}.state.json"));
-        crate::runner::write_state(&state_path, "working", "a turn is running", 0).expect("the stale claim");
+        crate::runner::write_state(&state_path, "working", "a turn is running", 0)
+            .expect("the stale claim");
         // The publisher is then made a pid that cannot exist - the one way to fake a gone runner without killing
         // one - while the pane stays up.
-        let mut doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+        let mut doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
         doc["pid"] = serde_json::json!(u32::MAX);
         fs::write(&state_path, serde_json::to_string(&doc).unwrap()).unwrap();
 
         let statuses = supervisor.get_room_status(&room).expect("status");
-        let status = statuses.iter().find(|s| s.seat == key).expect("the seat's row");
+        let status = statuses
+            .iter()
+            .find(|s| s.seat == key)
+            .expect("the seat's row");
         assert_eq!(
             status.state,
             SeatLifecycleState::Dead,
@@ -5108,7 +5612,8 @@ mod tests {
             "the row must say what happened rather than repeat the word it could not trust: {detail}"
         );
 
-        let after: serde_json::Value = serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
         assert_eq!(
             after["state"], "agent_exited",
             "the document itself must stop claiming a live seat: {after}"
@@ -5158,9 +5663,13 @@ mod tests {
         )
         .expect("record");
 
-        let sent = supervisor.deliver_text(&session, "hi", &crate::runner::Origin::default()).expect_err("a send must refuse");
+        let sent = supervisor
+            .deliver_text(&session, "hi", &crate::runner::Origin::default())
+            .expect_err("a send must refuse");
         assert!(
-            sent.contains("PARKED") && sent.contains("cost_usd=1.50") && sent.contains("Nothing was sent"),
+            sent.contains("PARKED")
+                && sent.contains("cost_usd=1.50")
+                && sent.contains("Nothing was sent"),
             "deliver_text: {sent}"
         );
 

@@ -3,8 +3,8 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 static CALLS: AtomicUsize = AtomicUsize::new(0);
 /// The directory the seat starts in: the first entry of the list the launcher names, and what a relative path in
@@ -21,7 +21,11 @@ fn guard() -> PathBuf {
 
 /// A directory of this run's own, so no two cases share a log.
 fn fresh_dir(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("seat-guard-{tag}-{}-{}", std::process::id(), CALLS.fetch_add(1, Ordering::Relaxed)))
+    std::env::temp_dir().join(format!(
+        "seat-guard-{tag}-{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, Ordering::Relaxed)
+    ))
 }
 
 /// The rule that refused the call, or `None` when it was allowed.
@@ -37,11 +41,19 @@ fn verdict_in(dir: &std::path::Path, name: &str, args: serde_json::Value) -> Opt
 
 /// The same verdict with the launcher's list spelled out, so a case can show that the LIST is what the guard
 /// honors: the seat's own worktrees go in, another seat's does not.
-fn verdict_with(dir: &std::path::Path, worktrees: &str, name: &str, args: serde_json::Value) -> Option<String> {
+fn verdict_with(
+    dir: &std::path::Path,
+    worktrees: &str,
+    name: &str,
+    args: serde_json::Value,
+) -> Option<String> {
     refusal(dir, worktrees, name, args).map(|r| {
         let rule = r.split(['(', ')']).nth(1).unwrap_or_default().to_owned();
         let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap_or_default();
-        assert!(log.contains(&format!("\"rule\":\"{rule}\"")), "a refusal is logged as blocked: {log}");
+        assert!(
+            log.contains(&format!("\"rule\":\"{rule}\"")),
+            "a refusal is logged as blocked: {log}"
+        );
         rule
     })
 }
@@ -112,17 +124,29 @@ fn refusal_full(
     } else {
         command.env("AGENTHUB_LANES_ROOT", lanes);
     }
-    let mut child = command.spawn().expect("node is needed to run the seat guard");
+    let mut child = command
+        .spawn()
+        .expect("node is needed to run the seat guard");
     let payload = serde_json::json!({"toolCall": {"name": name, "args": args}});
-    child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
-    let answer: serde_json::Value = serde_json::from_slice(&out.stdout).expect("the guard answers JSON");
+    let answer: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("the guard answers JSON");
     answer["reason"].as_str().map(str::to_owned)
 }
 
 /// The one log line a call through the guard produced.
 fn logged(name: &str, args: serde_json::Value) -> serde_json::Value {
-    let dir = std::env::temp_dir().join(format!("seat-guard-log-{}-{}", std::process::id(), CALLS.fetch_add(1, Ordering::Relaxed)));
+    let dir = std::env::temp_dir().join(format!(
+        "seat-guard-log-{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let mut child = Command::new("node")
         .arg(guard())
@@ -137,7 +161,12 @@ fn logged(name: &str, args: serde_json::Value) -> serde_json::Value {
         .spawn()
         .expect("node is needed to run the seat guard");
     let payload = serde_json::json!({"toolCall": {"name": name, "args": args}});
-    child.stdin.take().unwrap().write_all(payload.to_string().as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
     child.wait().unwrap();
     let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap();
     serde_json::from_str(log.lines().next().expect("a refusal is logged")).unwrap()
@@ -145,13 +174,19 @@ fn logged(name: &str, args: serde_json::Value) -> serde_json::Value {
 
 #[test]
 fn a_log_line_carries_the_session_the_target_class_and_the_blocked_rule() {
-    let line = logged("run_command", serde_json::json!({ "CommandLine": "cd /x && git push origin main" }));
+    let line = logged(
+        "run_command",
+        serde_json::json!({ "CommandLine": "cd /x && git push origin main" }),
+    );
     assert_eq!(line["session"], "agenthub--room--dev");
     assert_eq!(line["target_class"], "git push");
     assert_eq!(line["blocked_rule"], "push");
     assert_eq!(line["rule"], "push", "the existing field stays");
     assert_eq!(line["outcome"], "blocked");
-    let secret = logged("run_command", serde_json::json!({ "CommandLine": "docker run -e API_KEY=hunter2 x" }));
+    let secret = logged(
+        "run_command",
+        serde_json::json!({ "CommandLine": "docker run -e API_KEY=hunter2 x" }),
+    );
     assert_eq!(secret["target_class"], "docker run");
     assert!(!secret["target_class"].as_str().unwrap().contains("hunter2"));
 }
@@ -196,27 +231,53 @@ fn the_lead_pushes_and_no_other_seat_does() {
     let push = || serde_json::json!({ "CommandLine": "git push origin main" });
 
     for session in ["agenthub--room--lead", "room-lead@room"] {
-        assert_eq!(refusal_as(&dir, WORKTREES, session, "run_command", push()), None, "{session}");
+        assert_eq!(
+            refusal_as(&dir, WORKTREES, session, "run_command", push()),
+            None,
+            "{session}"
+        );
     }
     assert_eq!(
-        refusal_for_seat(&dir, WORKTREES, "agenthub--room--dev", "lead", "run_command", push()),
+        refusal_for_seat(
+            &dir,
+            WORKTREES,
+            "agenthub--room--dev",
+            "lead",
+            "run_command",
+            push()
+        ),
         None,
         "the exported seat key alone admits the lead"
     );
 
-    for session in ["", "agenthub--room--dev", "agenthub--room--lead-dev", "room-lead2@room"] {
+    for session in [
+        "",
+        "agenthub--room--dev",
+        "agenthub--room--lead-dev",
+        "room-lead2@room",
+    ] {
         let verdict = refusal_as(&dir, WORKTREES, session, "run_command", push());
         assert!(
-            verdict.as_deref().is_some_and(|reason| reason.contains("(push)")),
+            verdict
+                .as_deref()
+                .is_some_and(|reason| reason.contains("(push)")),
             "{session}: want the push rule, got {verdict:?}"
         );
     }
 
     // The rest of the lead's guards stand: a force push is destructive git for every seat.
     for session in ["agenthub--room--lead", "agenthub--room--dev"] {
-        let verdict = refusal_as(&dir, WORKTREES, session, "run_command", serde_json::json!({ "CommandLine": "git push --force origin main" }));
+        let verdict = refusal_as(
+            &dir,
+            WORKTREES,
+            session,
+            "run_command",
+            serde_json::json!({ "CommandLine": "git push --force origin main" }),
+        );
         assert!(
-            verdict.as_deref().is_some_and(|reason| reason.contains("(git-destructive)")),
+            verdict
+                .as_deref()
+                .is_some_and(|reason| reason.contains("(git-destructive)")),
             "{session}: want the destructive-git rule, got {verdict:?}"
         );
     }
@@ -237,7 +298,11 @@ fn a_seat_cannot_bypass_the_hooks() {
             "git config core.hooksPath /tmp/none",
         ],
     );
-    allowed(&["git commit -m \"use --no-verify never\" -- a.go", "env -u TMUX tmux -L s ls", "git merge -n topic"]);
+    allowed(&[
+        "git commit -m \"use --no-verify never\" -- a.go",
+        "env -u TMUX tmux -L s ls",
+        "git merge -n topic",
+    ]);
 }
 
 #[test]
@@ -257,14 +322,27 @@ fn a_seat_cannot_run_destructive_git() {
             "git stash drop",
         ],
     );
-    allowed(&["git reset --soft HEAD~1", "git clean -n", "git checkout -- a.go", "git add -- a.go", "git commit -m x -- a.go"]);
+    allowed(&[
+        "git reset --soft HEAD~1",
+        "git clean -n",
+        "git checkout -- a.go",
+        "git add -- a.go",
+        "git commit -m x -- a.go",
+    ]);
 }
 
 #[test]
 fn a_seat_cannot_kill_by_pattern_or_kill_pids_it_does_not_own() {
     refused(
         "process-kill",
-        &["pkill omp", "killall node", "pgrep -f omp", "kill $(pgrep omp)", "kill 1", "ps | xargs kill"],
+        &[
+            "pkill omp",
+            "killall node",
+            "pgrep -f omp",
+            "kill $(pgrep omp)",
+            "kill 1",
+            "ps | xargs kill",
+        ],
     );
     // The test process is the guard's parent, which the guard treats as the seat's own agent.
     let own = format!("kill -9 {}", std::process::id());
@@ -276,16 +354,49 @@ fn a_seat_writes_only_inside_its_worktree_and_not_to_frozen_or_protected_paths()
     assert_eq!(write("/work/wt/dev/a.go"), None);
     assert_eq!(write("a.go"), None, "a relative path is the worktree's");
     assert_eq!(write("/tmp/scratch.txt"), None);
-    assert_eq!(write("/home/other/main/a.go").as_deref(), Some("worktree-scope"));
-    assert_eq!(write("/work/wt/dev/NEXT-GEN2.md").as_deref(), Some("frozen-paths"));
-    assert_eq!(write("/work/wt/dev/ai_docs/reports-status/x.md").as_deref(), Some("frozen-paths"));
-    assert_eq!(write("/work/wt/dev/GATE-7.md").as_deref(), Some("frozen-paths"));
-    assert_eq!(write("/work/wt/dev/scripts/git-hooks/pre-commit").as_deref(), Some("protected-paths"));
-    assert_eq!(write("/work/wt/dev/rust/assets/seat-guard.ts").as_deref(), Some("protected-paths"));
-    refused("worktree-scope", &["echo x > /home/other/main/a.go", "cp a.go /home/other/main/", "echo x | tee /home/other/b"]);
+    assert_eq!(
+        write("/home/other/main/a.go").as_deref(),
+        Some("worktree-scope")
+    );
+    assert_eq!(
+        write("/work/wt/dev/NEXT-GEN2.md").as_deref(),
+        Some("frozen-paths")
+    );
+    assert_eq!(
+        write("/work/wt/dev/ai_docs/reports-status/x.md").as_deref(),
+        Some("frozen-paths")
+    );
+    assert_eq!(
+        write("/work/wt/dev/GATE-7.md").as_deref(),
+        Some("frozen-paths")
+    );
+    assert_eq!(
+        write("/work/wt/dev/scripts/git-hooks/pre-commit").as_deref(),
+        Some("protected-paths")
+    );
+    assert_eq!(
+        write("/work/wt/dev/rust/assets/seat-guard.ts").as_deref(),
+        Some("protected-paths")
+    );
+    refused(
+        "worktree-scope",
+        &[
+            "echo x > /home/other/main/a.go",
+            "cp a.go /home/other/main/",
+            "echo x | tee /home/other/b",
+        ],
+    );
     refused("frozen-paths", &["echo x >> NEXT-GEN2.md"]);
-    refused("protected-paths", &["echo x > scripts/git-hooks/pre-commit"]);
-    allowed(&["echo x > a.go", "make 2>&1 | tail", "echo x > /dev/null", "cp a.go b.go"]);
+    refused(
+        "protected-paths",
+        &["echo x > scripts/git-hooks/pre-commit"],
+    );
+    allowed(&[
+        "echo x > a.go",
+        "make 2>&1 | tail",
+        "echo x > /dev/null",
+        "cp a.go b.go",
+    ]);
 }
 
 /// The guard rides two files that live in the seat's OWN directory, which worktree-scope allows the seat to write:
@@ -295,19 +406,39 @@ fn a_seat_writes_only_inside_its_worktree_and_not_to_frozen_or_protected_paths()
 fn a_seat_cannot_edit_the_config_or_the_log_the_guard_rests_on() {
     let seat = fresh_dir("seat");
     let in_seat = |name: &str| seat.join(name).display().to_string();
-    let write_to = |path: &str| verdict_in(&seat, "write_to_file", serde_json::json!({ "TargetFile": path }));
+    let write_to = |path: &str| {
+        verdict_in(
+            &seat,
+            "write_to_file",
+            serde_json::json!({ "TargetFile": path }),
+        )
+    };
 
-    assert_eq!(write_to(&in_seat("config.yml")).as_deref(), Some("protected-paths"));
-    assert_eq!(write_to(&in_seat("tool-calls.jsonl")).as_deref(), Some("protected-paths"));
-    // The other two faces of a write reach the same rule: a shell that outlives the tool, and a copy over it.
     assert_eq!(
-        verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": format!("echo x > {}", in_seat("config.yml")) }))
-            .as_deref(),
+        write_to(&in_seat("config.yml")).as_deref(),
         Some("protected-paths")
     );
     assert_eq!(
-        verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": format!("cp evil.yml {}", in_seat("config.yml")) }))
-            .as_deref(),
+        write_to(&in_seat("tool-calls.jsonl")).as_deref(),
+        Some("protected-paths")
+    );
+    // The other two faces of a write reach the same rule: a shell that outlives the tool, and a copy over it.
+    assert_eq!(
+        verdict_in(
+            &seat,
+            "run_command",
+            serde_json::json!({ "CommandLine": format!("echo x > {}", in_seat("config.yml")) })
+        )
+        .as_deref(),
+        Some("protected-paths")
+    );
+    assert_eq!(
+        verdict_in(
+            &seat,
+            "run_command",
+            serde_json::json!({ "CommandLine": format!("cp evil.yml {}", in_seat("config.yml")) })
+        )
+        .as_deref(),
         Some("protected-paths")
     );
     // The rule names the seat's own directory, not the file names: a project's own config.yml stays the seat's to edit.
@@ -327,7 +458,13 @@ fn a_seat_cannot_delete_or_rewrite_the_files_the_rules_rest_on() {
     std::fs::create_dir_all(seat.parent().unwrap()).unwrap();
     let room = seat.parent().unwrap().parent().unwrap();
     let seat_file = |name: &str| seat.join(name).display().to_string();
-    let run = |cmd: String| verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+    let run = |cmd: String| {
+        verdict_in(
+            &seat,
+            "run_command",
+            serde_json::json!({ "CommandLine": cmd }),
+        )
+    };
 
     let cases = vec![
         format!("rm {}", seat_file("config.yml")),
@@ -342,14 +479,28 @@ fn a_seat_cannot_delete_or_rewrite_the_files_the_rules_rest_on() {
         format!("rm {}", room.join("limits.json").display()),
     ];
     for cmd in cases {
-        assert_eq!(run(cmd.clone()).as_deref(), Some("protected-paths"), "{cmd}");
+        assert_eq!(
+            run(cmd.clone()).as_deref(),
+            Some("protected-paths"),
+            "{cmd}"
+        );
     }
     assert_eq!(
-        verdict_in(&seat, "write_to_file", serde_json::json!({ "TargetFile": seat_file("parked.json") })).as_deref(),
+        verdict_in(
+            &seat,
+            "write_to_file",
+            serde_json::json!({ "TargetFile": seat_file("parked.json") })
+        )
+        .as_deref(),
         Some("protected-paths")
     );
     assert_eq!(
-        verdict_in(&seat, "write_to_file", serde_json::json!({ "TargetFile": room.join("limits.json") })).as_deref(),
+        verdict_in(
+            &seat,
+            "write_to_file",
+            serde_json::json!({ "TargetFile": room.join("limits.json") })
+        )
+        .as_deref(),
         Some("protected-paths")
     );
 }
@@ -359,7 +510,13 @@ fn a_seat_cannot_delete_or_rewrite_the_files_the_rules_rest_on() {
 #[test]
 fn an_ordinary_deletion_still_stays_the_seat_s_own() {
     let seat = fresh_dir("seat");
-    let run = |cmd: String| verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+    let run = |cmd: String| {
+        verdict_in(
+            &seat,
+            "run_command",
+            serde_json::json!({ "CommandLine": cmd }),
+        )
+    };
     for cmd in [
         format!("rm -rf {WORKTREE}/dist"),
         "rm /tmp/scratch".to_string(),
@@ -379,12 +536,25 @@ fn an_ordinary_deletion_still_stays_the_seat_s_own() {
 fn the_scope_is_the_list_the_launcher_names_and_nothing_else() {
     let seat = fresh_dir("scope");
     let write_in = |worktrees: &str, path: String| {
-        verdict_with(&seat, worktrees, "write_to_file", serde_json::json!({ "TargetFile": path }))
+        verdict_with(
+            &seat,
+            worktrees,
+            "write_to_file",
+            serde_json::json!({ "TargetFile": path }),
+        )
     };
     let list = "/work/wt/dev:/work/wt/dev-client";
     assert_eq!(write_in(list, "/work/wt/dev/a.go".into()), None);
-    assert_eq!(write_in(list, "/work/wt/dev-client/rust/x.rs".into()), None, "a seat's second worktree is its own");
-    assert_eq!(write_in(list, "a.go".into()), None, "a relative path is the first directory's");
+    assert_eq!(
+        write_in(list, "/work/wt/dev-client/rust/x.rs".into()),
+        None,
+        "a seat's second worktree is its own"
+    );
+    assert_eq!(
+        write_in(list, "a.go".into()),
+        None,
+        "a relative path is the first directory's"
+    );
     assert_eq!(write_in(list, "/tmp/scratch.txt".into()), None);
     assert_eq!(
         write_in(list, "/work/wt/other/a.go".into()).as_deref(),
@@ -392,16 +562,28 @@ fn the_scope_is_the_list_the_launcher_names_and_nothing_else() {
         "another seat's worktree is not named, so it is not in scope"
     );
     assert_eq!(
-        write_in(list, "/home/daihu/__projects__/4genthub/agenthub-frontend/e2e/x.ts".into()).as_deref(),
+        write_in(
+            list,
+            "/home/daihu/__projects__/4genthub/agenthub-frontend/e2e/x.ts".into()
+        )
+        .as_deref(),
         Some("worktree-scope"),
         "the checkout every seat on this host shares is not named either"
     );
 
     // The refusal says where the seat may write, because the directories are the launcher's to name and the seat's
     // to read: a refusal that named only one of them sent a seat to the wrong half of its own work.
-    let reason = refusal(&seat, list, "write_to_file", serde_json::json!({ "TargetFile": "/work/wt/other/a.go" }))
-        .expect("a path outside the list is refused");
-    assert!(reason.contains("/work/wt/dev-client"), "the reason names the whole list: {reason}");
+    let reason = refusal(
+        &seat,
+        list,
+        "write_to_file",
+        serde_json::json!({ "TargetFile": "/work/wt/other/a.go" }),
+    )
+    .expect("a path outside the list is refused");
+    assert!(
+        reason.contains("/work/wt/dev-client"),
+        "the reason names the whole list: {reason}"
+    );
 }
 
 /// A guard whose launcher named no directory allows the seat's own directory and the temp dir and nothing else. The
@@ -412,14 +594,29 @@ fn the_scope_is_the_list_the_launcher_names_and_nothing_else() {
 fn a_guard_with_no_list_allows_only_the_seat_directory_and_the_temp_dir() {
     let seat = fresh_dir("no-list");
     let write_with = |worktrees: &str, path: String| {
-        verdict_with(&seat, worktrees, "write_to_file", serde_json::json!({ "TargetFile": path }))
+        verdict_with(
+            &seat,
+            worktrees,
+            "write_to_file",
+            serde_json::json!({ "TargetFile": path }),
+        )
     };
     assert_eq!(
-        write_with("", "/home/daihu/__projects__/4genthub/agenthub-frontend/e2e/x.ts".into()).as_deref(),
+        write_with(
+            "",
+            "/home/daihu/__projects__/4genthub/agenthub-frontend/e2e/x.ts".into()
+        )
+        .as_deref(),
         Some("worktree-scope")
     );
-    assert_eq!(write_with("", "/work/wt/dev/a.go".into()).as_deref(), Some("worktree-scope"));
-    assert_eq!(write_with("", seat.join("sessions/x.jsonl").display().to_string()), None);
+    assert_eq!(
+        write_with("", "/work/wt/dev/a.go".into()).as_deref(),
+        Some("worktree-scope")
+    );
+    assert_eq!(
+        write_with("", seat.join("sessions/x.jsonl").display().to_string()),
+        None
+    );
     assert_eq!(write_with("", "/tmp/scratch.txt".into()), None);
     // A relative path is still judged, against the seat's own directory - which a seat may always write.
     assert_eq!(
@@ -442,7 +639,13 @@ fn a_seat_cannot_touch_or_mkdir_a_path_no_rule_would_see() {
     let seat = root.join("rooms/r/seats/dev");
     std::fs::create_dir_all(seat.parent().unwrap()).unwrap();
     let room = seat.parent().unwrap().parent().unwrap();
-    let run = |cmd: String| verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+    let run = |cmd: String| {
+        verdict_in(
+            &seat,
+            "run_command",
+            serde_json::json!({ "CommandLine": cmd }),
+        )
+    };
 
     // The paths the guard rests on, built with no byte written: the seat's own config, the directory the guard is
     // installed in, and the room's budget file.
@@ -452,7 +655,11 @@ fn a_seat_cannot_touch_or_mkdir_a_path_no_rule_would_see() {
         format!("rmdir {}/hooks/pre", seat.display()),
         format!("touch {}", room.join("limits.json").display()),
     ] {
-        assert_eq!(run(cmd.clone()).as_deref(), Some("protected-paths"), "{cmd}");
+        assert_eq!(
+            run(cmd.clone()).as_deref(),
+            Some("protected-paths"),
+            "{cmd}"
+        );
     }
     // The protected DIRECTORIES themselves, which a trailing slash never matched: the seat's worktree is in scope,
     // so removing its copy of the hooks, or making the directory they live in, had no rule at all.
@@ -460,7 +667,11 @@ fn a_seat_cannot_touch_or_mkdir_a_path_no_rule_would_see() {
         format!("rm -rf {WORKTREE}/scripts/git-hooks"),
         format!("mkdir -p {WORKTREE}/.git/hooks"),
     ] {
-        assert_eq!(run(cmd.clone()).as_deref(), Some("protected-paths"), "{cmd}");
+        assert_eq!(
+            run(cmd.clone()).as_deref(),
+            Some("protected-paths"),
+            "{cmd}"
+        );
     }
     // A directory entry outside every directory the launcher named for this seat.
     for cmd in [
@@ -478,7 +689,13 @@ fn a_seat_cannot_touch_or_mkdir_a_path_no_rule_would_see() {
 #[test]
 fn an_ordinary_touch_or_mkdir_stays_the_seat_s_own() {
     let seat = fresh_dir("seat");
-    let run = |cmd: String| verdict_in(&seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+    let run = |cmd: String| {
+        verdict_in(
+            &seat,
+            "run_command",
+            serde_json::json!({ "CommandLine": cmd }),
+        )
+    };
     for cmd in [
         format!("touch {WORKTREE}/new.go"),
         format!("mkdir -p {WORKTREE}/build/probe"),
@@ -530,8 +747,14 @@ fn an_empty_value_in_a_prefix_is_still_a_prefix() {
     for (rule, cmd) in [
         ("push", "git push origin main"),
         ("protected-paths", "rm scripts/git-hooks/pre-commit"),
-        ("protected-paths", "sed -i s/x/y/ scripts/git-hooks/pre-commit"),
-        ("budget-ceiling", "4genteam room limits 4genthub-min --usd 999"),
+        (
+            "protected-paths",
+            "sed -i s/x/y/ scripts/git-hooks/pre-commit",
+        ),
+        (
+            "budget-ceiling",
+            "4genteam room limits 4genthub-min --usd 999",
+        ),
     ] {
         assert_eq!(bash(cmd).as_deref(), Some(rule), "{cmd}");
         for head in ["FOO=", "AGENTHUB_SESSION_NAME=", "env FOO=", "FOO=1"] {
@@ -540,7 +763,11 @@ fn an_empty_value_in_a_prefix_is_still_a_prefix() {
         }
     }
     // The prefix is noise and not a rule of its own: what the command IS stays what is judged.
-    allowed(&["FOO= git status", "AGENTHUB_SESSION_NAME= git status", "env FOO= ls -la"]);
+    allowed(&[
+        "FOO= git status",
+        "AGENTHUB_SESSION_NAME= git status",
+        "env FOO= ls -la",
+    ]);
 }
 
 // ---- queue-coalesce ------------------------------------------------------------------------------------------
@@ -600,13 +827,41 @@ fn create_verdict(seat: &Path, extra: &str) -> Option<String> {
 #[test]
 fn a_second_pending_row_to_the_same_destination_and_tag_is_refused_by_name() {
     let id = "qitem-20261017070000-aaaaaaaaaaaa";
-    let seat = room_with_rows("coalesce", &[(id, "pending", COALESCE_SEAT, COALESCE_LEAD, "[\"finding\"]", 60)]);
+    let seat = room_with_rows(
+        "coalesce",
+        &[(
+            id,
+            "pending",
+            COALESCE_SEAT,
+            COALESCE_LEAD,
+            "[\"finding\"]",
+            60,
+        )],
+    );
     let reason = create_verdict(&seat, "--tag finding").expect("a repeat is refused");
-    assert!(reason.contains("queue-coalesce"), "the rule is named: {reason}");
-    assert!(reason.contains(id), "the refusal names the row it would duplicate: {reason}");
+    assert!(
+        reason.contains("queue-coalesce"),
+        "the rule is named: {reason}"
+    );
+    assert!(
+        reason.contains(id),
+        "the refusal names the row it would duplicate: {reason}"
+    );
     // A shared tag among several is enough, and the comma list is parsed as the client parses it.
-    let shared = room_with_rows("coalesce-shared", &[(id, "pending", COALESCE_SEAT, COALESCE_LEAD, "[\"gate\",\"finding\"]", 60)]);
-    assert!(create_verdict(&shared, "--tag other,finding").expect("a shared tag refuses").contains(id));
+    let shared = room_with_rows(
+        "coalesce-shared",
+        &[(
+            id,
+            "pending",
+            COALESCE_SEAT,
+            COALESCE_LEAD,
+            "[\"gate\",\"finding\"]",
+            60,
+        )],
+    );
+    assert!(create_verdict(&shared, "--tag other,finding")
+        .expect("a shared tag refuses")
+        .contains(id));
 }
 
 /// The predicate and its window, each edge pinned so the rule cannot buy the refusal by refusing everything: the
@@ -617,16 +872,67 @@ fn a_second_pending_row_to_the_same_destination_and_tag_is_refused_by_name() {
 #[test]
 fn the_coalesce_rule_reads_the_store_s_state_source_destination_tag_and_window() {
     let id = "qitem-20261017070000-bbbbbbbbbbbb";
-    let pending = |tag: &str, age: u64| room_with_rows(tag, &[(id, "pending", COALESCE_SEAT, COALESCE_LEAD, "[\"finding\"]", age)]);
-    assert!(create_verdict(&pending("inside", 540), "--tag finding").is_some(), "nine minutes inside the window refuses");
-    assert_eq!(create_verdict(&pending("outside", 660), "--tag finding"), None, "eleven minutes outside does not");
-    let other = |tag: &str, state: &str, source: &str, destination: &str| {
-        room_with_rows(tag, &[(id, state, source, destination, "[\"finding\"]", 60)])
+    let pending = |tag: &str, age: u64| {
+        room_with_rows(
+            tag,
+            &[(
+                id,
+                "pending",
+                COALESCE_SEAT,
+                COALESCE_LEAD,
+                "[\"finding\"]",
+                age,
+            )],
+        )
     };
-    assert_eq!(create_verdict(&other("state", "in-progress", COALESCE_SEAT, COALESCE_LEAD), "--tag finding"), None);
-    assert_eq!(create_verdict(&other("destination", "pending", COALESCE_SEAT, "agenthub--rig--reviewer"), "--tag finding"), None);
-    assert_eq!(create_verdict(&other("tag", "pending", COALESCE_SEAT, COALESCE_LEAD), "--tag gate"), None);
-    assert_eq!(create_verdict(&other("source", "pending", "agenthub--rig--fe-dev", COALESCE_LEAD), "--tag finding"), None);
+    assert!(
+        create_verdict(&pending("inside", 540), "--tag finding").is_some(),
+        "nine minutes inside the window refuses"
+    );
+    assert_eq!(
+        create_verdict(&pending("outside", 660), "--tag finding"),
+        None,
+        "eleven minutes outside does not"
+    );
+    let other = |tag: &str, state: &str, source: &str, destination: &str| {
+        room_with_rows(
+            tag,
+            &[(id, state, source, destination, "[\"finding\"]", 60)],
+        )
+    };
+    assert_eq!(
+        create_verdict(
+            &other("state", "in-progress", COALESCE_SEAT, COALESCE_LEAD),
+            "--tag finding"
+        ),
+        None
+    );
+    assert_eq!(
+        create_verdict(
+            &other(
+                "destination",
+                "pending",
+                COALESCE_SEAT,
+                "agenthub--rig--reviewer"
+            ),
+            "--tag finding"
+        ),
+        None
+    );
+    assert_eq!(
+        create_verdict(
+            &other("tag", "pending", COALESCE_SEAT, COALESCE_LEAD),
+            "--tag gate"
+        ),
+        None
+    );
+    assert_eq!(
+        create_verdict(
+            &other("source", "pending", "agenthub--rig--fe-dev", COALESCE_LEAD),
+            "--tag finding"
+        ),
+        None
+    );
     // A seat that names no tag, or only other queue verbs, is not judged: the rule reads creates and tags.
     assert_eq!(create_verdict(&pending("untagged", 60), ""), None);
     let seat = pending("verb", 60);
@@ -634,10 +940,17 @@ fn the_coalesce_rule_reads_the_store_s_state_source_destination_tag_and_window()
         "4genteam room queue list rig".to_string(),
         format!("4genteam room queue show rig {id}"),
         format!("4genteam room queue update rig {id} --note still owed"),
-        "4genteam room queue close rig qitem-20261017070000-cccccccccccc --reason no-follow-on".to_string(),
+        "4genteam room queue close rig qitem-20261017070000-cccccccccccc --reason no-follow-on"
+            .to_string(),
     ] {
         assert_eq!(
-            refusal_as(&seat, WORKTREES, COALESCE_SEAT, "run_command", serde_json::json!({ "CommandLine": cmd })),
+            refusal_as(
+                &seat,
+                WORKTREES,
+                COALESCE_SEAT,
+                "run_command",
+                serde_json::json!({ "CommandLine": cmd })
+            ),
             None,
             "{cmd}"
         );
@@ -665,7 +978,12 @@ fn a_seat_cannot_run_a_local_frontend_build() {
             "npm run build:prod",
         ],
     );
-    allowed(&["npx tsc --noEmit", "vite --version", "npm run lint", "npx vitest run"]);
+    allowed(&[
+        "npx tsc --noEmit",
+        "vite --version",
+        "npm run lint",
+        "npx vitest run",
+    ]);
 }
 
 // ---- the lane ------------------------------------------------------------------------------------------------
@@ -679,8 +997,13 @@ fn a_seat_cannot_run_a_local_frontend_build() {
 fn a_lane_is_admitted_by_the_seat_key_and_only_that_prefix() {
     let dir = fresh_dir("lane");
     let rule = |lanes: &str, path: &str| {
-        refusal_lanes(&dir, lanes, "write_to_file", serde_json::json!({ "TargetFile": path }))
-            .map(|r| r.split(['(', ')']).nth(1).unwrap_or_default().to_owned())
+        refusal_lanes(
+            &dir,
+            lanes,
+            "write_to_file",
+            serde_json::json!({ "TargetFile": path }),
+        )
+        .map(|r| r.split(['(', ')']).nth(1).unwrap_or_default().to_owned())
     };
 
     assert_eq!(
@@ -688,7 +1011,11 @@ fn a_lane_is_admitted_by_the_seat_key_and_only_that_prefix() {
         None,
         "a lane named by the seat key is the seat's own"
     );
-    assert_eq!(rule("/work/wt", "/work/wt/dev/x.go"), None, "the seat's own directory stays inside");
+    assert_eq!(
+        rule("/work/wt", "/work/wt/dev/x.go"),
+        None,
+        "the seat's own directory stays inside"
+    );
     assert_eq!(
         rule("/work/wt", "/work/wt/devv/x.go").as_deref(),
         Some("worktree-scope"),
@@ -705,8 +1032,13 @@ fn a_lane_is_admitted_by_the_seat_key_and_only_that_prefix() {
         "the room root itself is not a lane"
     );
 
-    let refusal = refusal_lanes(&dir, "", "write_to_file", serde_json::json!({ "TargetFile": "/work/wt/dev-lane6/src/x.go" }))
-        .expect("without a lane root no lane is admitted");
+    let refusal = refusal_lanes(
+        &dir,
+        "",
+        "write_to_file",
+        serde_json::json!({ "TargetFile": "/work/wt/dev-lane6/src/x.go" }),
+    )
+    .expect("without a lane root no lane is admitted");
     assert_eq!(
         refusal,
         "blocked by seat guard (worktree-scope): /work/wt/dev-lane6/src/x.go is outside your worktrees /work/wt/dev, /work/wt/dev-client; edit inside them and report the commit to the lead",

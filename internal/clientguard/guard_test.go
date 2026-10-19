@@ -92,7 +92,7 @@ func TestTheLeadsCommitInTheSharedCheckoutIsNotRefused(t *testing.T) {
 // The canonical session name the 4genthub runtime sets names the same room and seat as the OpenRig one.
 func TestTheCanonicalSessionNameIsRead(t *testing.T) {
 	for name, want := range map[string]Session{
-		"agenthub--4genthub-min--lead": {Room: "4genthub-min", Seat: "lead"},
+		"agenthub--4genthub-min--lead":   {Room: "4genthub-min", Seat: "lead"},
 		"4genthub-min-lead@4genthub-min": {Room: "4genthub-min", Seat: "lead"},
 	} {
 		session, ok := SessionFromEnv(func(key string) string {

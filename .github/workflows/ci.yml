@@ -5,6 +5,9 @@ name: CI
 #   go   - the CLI and its packages (module root)
 #   rust - the runtime crate under rust/agenthub-runtime
 #
+# Each job gates formatting and lints before the suite: a format drift or a new clippy finding is a
+# finding the author fixes, not something a later reader inherits.
+#
 # `--locked`, not `--offline`: the runner starts with an empty cargo cache, and `--offline` with no
 # cached registry fails before it compiles anything. The lockfile is committed, so `--locked` makes
 # the build the same everywhere and still fetches from crates.io on a cold runner. Locally the seat
@@ -24,6 +27,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      # `gofmt -l` prints every file it would rewrite; an empty list is the pass.
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt wants to rewrite:"
+            echo "$out"
+            exit 1
+          fi
       - run: go vet ./...
       - run: go test ./...
 
@@ -35,7 +47,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust/agenthub-runtime
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked

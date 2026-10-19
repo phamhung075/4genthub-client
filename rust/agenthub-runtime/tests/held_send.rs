@@ -115,7 +115,11 @@ fn write_room(state: &Path, seat_dir: &Path) -> PathBuf {
         "overlays": {},
     });
     let spec_file = room_dir.join("spec.json");
-    fs::write(&spec_file, serde_json::to_string_pretty(&spec).expect("spec")).expect("spec file");
+    fs::write(
+        &spec_file,
+        serde_json::to_string_pretty(&spec).expect("spec"),
+    )
+    .expect("spec file");
     room_dir
 }
 
@@ -150,7 +154,12 @@ fn wait_for_line(path: &Path, needle: &str, seconds: u64) -> Option<String> {
 /// Wait until the runner's own state file reads `want` AND its classification contains `needle`, or give up.
 /// That file is the surface an operator reads (`4genteam ps`, the daemon's `status`), so waiting on it proves
 /// what the RUNNER published, which is a different fact from what the agent received.
-fn wait_for_state(path: &Path, want: &str, needle: &str, seconds: u64) -> Option<serde_json::Value> {
+fn wait_for_state(
+    path: &Path,
+    want: &str,
+    needle: &str,
+    seconds: u64,
+) -> Option<serde_json::Value> {
     let deadline = Instant::now() + Duration::from_secs(seconds);
     while Instant::now() < deadline {
         if let Ok(text) = fs::read_to_string(path) {
@@ -170,7 +179,8 @@ fn wait_for_state(path: &Path, want: &str, needle: &str, seconds: u64) -> Option
 /// the frame carries a `replyTo` socket the runner answers on, because "a local write succeeded" is not the
 /// fact "the frame was relayed".
 fn send_text_frame(mailbox: &Path, id: &str, from: &str, text: &str) -> serde_json::Value {
-    let reply_dir = std::env::temp_dir().join(format!("agenthub-held-reply-{}", std::process::id()));
+    let reply_dir =
+        std::env::temp_dir().join(format!("agenthub-held-reply-{}", std::process::id()));
     let _ = fs::create_dir_all(&reply_dir);
     let reply_path = reply_dir.join(format!("{id}.sock"));
     let _ = fs::remove_file(&reply_path);
@@ -192,7 +202,9 @@ fn send_text_frame(mailbox: &Path, id: &str, from: &str, text: &str) -> serde_js
 
     let (mut answer_stream, _) = listener.accept().expect("the runner's answer");
     let mut line = String::new();
-    BufReader::new(&mut answer_stream).read_line(&mut line).expect("read the answer");
+    BufReader::new(&mut answer_stream)
+        .read_line(&mut line)
+        .expect("read the answer");
     stream.shutdown(std::net::Shutdown::Both).ok();
     let _ = fs::remove_file(&reply_path);
     serde_json::from_str(line.trim()).expect("the answer is a frame")
@@ -215,12 +227,25 @@ fn a_text_sent_to_a_seat_that_is_mid_turn_is_delivered_when_the_turn_ends() {
     let marker = root.join("end-turn");
     let shim = bin.join("omp");
     fs::write(&shim, FAKE_AGENT).expect("fake agent");
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("fake agent is executable");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))
+        .expect("fake agent is executable");
 
     write_room(&state, &seat_dir);
-    let mailbox = state.join("rooms").join("demo").join("run").join("dev.sock");
-    let seat_log = state.join("rooms").join("demo").join("logs").join("dev.jsonl");
-    let state_file = state.join("rooms").join("demo").join("run").join("dev.state.json");
+    let mailbox = state
+        .join("rooms")
+        .join("demo")
+        .join("run")
+        .join("dev.sock");
+    let seat_log = state
+        .join("rooms")
+        .join("demo")
+        .join("logs")
+        .join("dev.jsonl");
+    let state_file = state
+        .join("rooms")
+        .join("demo")
+        .join("run")
+        .join("dev.state.json");
 
     let path = format!(
         "{}:{}",
@@ -328,23 +353,31 @@ fn a_text_sent_to_a_seat_that_is_mid_turn_is_delivered_when_the_turn_ends() {
         "the text that comes back is the one that was held: {received}"
     );
     assert!(
-        received["id"].as_str().unwrap_or_default().starts_with("runner-held-"),
+        received["id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("runner-held-"),
         "the delivery is the runner's held prompt, not a second copy of the original: {received}"
     );
 
     // ... AND THE PATH SAYS WHO IT WAS FOR. The delivery line names the sender's session and the verb that
     // carried the text, which is what a reader needs when the hand-back is what happened instead.
-    let mirror = wait_for_line(&seat_log, "delivering the text", 10).expect("the delivery is published");
+    let mirror =
+        wait_for_line(&seat_log, "delivering the text", 10).expect("the delivery is published");
     assert!(
         mirror.contains("agenthub--demo--lead (send)"),
         "the delivery names the text's origin: {mirror}"
     );
     let published: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&state_file).expect("the runner's state")).expect("state");
+        serde_json::from_str(&fs::read_to_string(&state_file).expect("the runner's state"))
+            .expect("state");
     // A delivered text leaves a seat that is healthy: `working` while the delivery's own prompt is answered,
     // `idle` once the agent took it - never `blocked`, which is the runner saying it could not keep the text.
     assert!(
-        matches!(published["state"].as_str().unwrap_or_default(), "idle" | "working"),
+        matches!(
+            published["state"].as_str().unwrap_or_default(),
+            "idle" | "working"
+        ),
         "a delivered text leaves a healthy seat, not a blocked one: {published}"
     );
 

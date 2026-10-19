@@ -694,10 +694,7 @@ impl QueueStore {
             clauses.push(format!("state IN ({})", holders.join(", ")));
         }
         if filter.active_only {
-            let holders: Vec<String> = ACTIVE_STATES
-                .iter()
-                .map(|s| format!("'{}'", s))
-                .collect();
+            let holders: Vec<String> = ACTIVE_STATES.iter().map(|s| format!("'{}'", s)).collect();
             clauses.push(format!("state IN ({})", holders.join(", ")));
         }
         if !clauses.is_empty() {
@@ -777,9 +774,11 @@ impl QueueStore {
         if effective_reason.as_deref() == Some("handed_off_to")
             && effective_target
                 .as_deref()
-                .map_or(true, |target| target.trim().is_empty())
+                .is_none_or(|target| target.trim().is_empty())
         {
-            return Err("closure_reason 'handed_off_to' requires a non-empty closure_target".into());
+            return Err(
+                "closure_reason 'handed_off_to' requires a non-empty closure_target".into(),
+            );
         }
 
         if let Some(summary) = &input.summary {
@@ -895,7 +894,9 @@ impl QueueStore {
             .clone()
             .filter(|t| !t.trim().is_empty());
         if reason == "handed_off_to" && target.is_none() {
-            return Err("closure_reason 'handed_off_to' requires a non-empty closure_target".into());
+            return Err(
+                "closure_reason 'handed_off_to' requires a non-empty closure_target".into(),
+            );
         }
 
         let note = if input.transition_note.trim().is_empty() {
@@ -974,7 +975,9 @@ impl QueueStore {
                     rusqlite::params![&chain_json],
                     |r| r.get(0),
                 )
-                .map_err(|e| format!("cannot count the successors of '{}': {}", input.qitem_id, e))?;
+                .map_err(|e| {
+                    format!("cannot count the successors of '{}': {}", input.qitem_id, e)
+                })?;
             if emitted > 0 {
                 return Err(format!(
                     "queue row '{}' already emitted its handoff successor: one handoff is one row, and \
@@ -1163,7 +1166,13 @@ mod tests {
         let trail: Vec<(Option<String>, String, String)> = reread
             .transitions
             .iter()
-            .map(|t| (t.from_state.clone(), t.state.clone(), t.actor_session.clone()))
+            .map(|t| {
+                (
+                    t.from_state.clone(),
+                    t.state.clone(),
+                    t.actor_session.clone(),
+                )
+            })
             .collect();
         assert_eq!(
             trail,
@@ -1193,7 +1202,11 @@ mod tests {
                 ..Default::default()
             })
             .expect("list for the target");
-        assert_eq!(successors.len(), 1, "one successor for the target: {successors:?}");
+        assert_eq!(
+            successors.len(),
+            1,
+            "one successor for the target: {successors:?}"
+        );
         let successor = &successors[0];
         assert_ne!(successor.qitem_id, row.qitem_id);
         assert_eq!(successor.state, "pending");
@@ -1234,7 +1247,10 @@ mod tests {
         assert_eq!(done.state, "done");
         assert_eq!(done.transitions.len(), 2);
         assert_eq!(
-            (done.transitions[1].from_state.as_deref(), done.transitions[1].state.as_str()),
+            (
+                done.transitions[1].from_state.as_deref(),
+                done.transitions[1].state.as_str()
+            ),
             (Some("pending"), "done")
         );
     }
@@ -1255,7 +1271,11 @@ mod tests {
                 ..Default::default()
             })
             .expect("list for the target");
-        assert_eq!(successors.len(), 1, "one successor for the target: {successors:?}");
+        assert_eq!(
+            successors.len(),
+            1,
+            "one successor for the target: {successors:?}"
+        );
         assert_eq!(successors[0].body, schema_body());
     }
 
@@ -1277,7 +1297,8 @@ mod tests {
                     let dir = dir.clone();
                     let qitem_id = row.qitem_id.clone();
                     scope.spawn(move || {
-                        let store = QueueStore::open(&dir).expect("the room's store, as a request opens it");
+                        let store = QueueStore::open(&dir)
+                            .expect("the room's store, as a request opens it");
                         start.wait();
                         store.close(CloseInput {
                             qitem_id,
@@ -1311,7 +1332,10 @@ mod tests {
             1,
             "one source row emits one successor, not two: {successors:?}"
         );
-        assert_eq!(successors[0].reply_to.as_deref(), Some(row.qitem_id.as_str()));
+        assert_eq!(
+            successors[0].reply_to.as_deref(),
+            Some(row.qitem_id.as_str())
+        );
         let source = store.show(&row.qitem_id).expect("show the source");
         assert_eq!(source.state, "handed-off");
         assert_eq!(source.transitions.len(), 3, "the loser wrote no transition");
@@ -1540,7 +1564,11 @@ mod tests {
             let still = store.show(&row.qitem_id).expect("show");
             assert_eq!(still.state, "blocked", "{label} must not wake");
             assert_eq!(
-                still.transitions.iter().filter(|t| t.state == "pending").count(),
+                still
+                    .transitions
+                    .iter()
+                    .filter(|t| t.state == "pending")
+                    .count(),
                 1,
                 "{label}: only the create's pending, no wake"
             );
@@ -1615,10 +1643,7 @@ mod tests {
         let (_dir, store) = temp_store();
         let row = new_row(&store, "seat-a", "seat-b", "x");
 
-        let rest = row
-            .qitem_id
-            .strip_prefix("qitem-")
-            .expect("qitem- prefix");
+        let rest = row.qitem_id.strip_prefix("qitem-").expect("qitem- prefix");
         let (stamp, hex) = rest.split_once('-').expect("stamp-hex split");
         assert_eq!(stamp.len(), 14, "{}", row.qitem_id);
         assert!(stamp.chars().all(|c| c.is_ascii_digit()));
@@ -1826,14 +1851,17 @@ mod tests {
         let (_dir, store) = temp_store();
         let body = schema_body();
         let three_lines = body.rsplit_once('\n').expect("four lines").0;
-        let err = store.create(typed(None, &["gate"], "s", three_lines)).unwrap_err();
+        let err = store
+            .create(typed(None, &["gate"], "s", three_lines))
+            .unwrap_err();
         assert_eq!(err, "body schema: field 'next' is missing", "{err}");
 
         let two_lines = three_lines.rsplit_once('\n').expect("three lines").0;
-        let err = store.create(typed(None, &["gate"], "s", two_lines)).unwrap_err();
+        let err = store
+            .create(typed(None, &["gate"], "s", two_lines))
+            .unwrap_err();
         assert_eq!(
-            err,
-            "body schema: field 'decision' is missing\nbody schema: field 'next' is missing",
+            err, "body schema: field 'decision' is missing\nbody schema: field 'next' is missing",
             "{err}"
         );
 
@@ -1899,21 +1927,20 @@ mod tests {
             "f".repeat(281),
             "n".repeat(78)
         );
-        let err = store.create(typed(None, &["gate"], "s", &body)).unwrap_err();
+        let err = store
+            .create(typed(None, &["gate"], "s", &body))
+            .unwrap_err();
         assert_eq!(
-            err,
-            "body field 'facts' cap: 281 chars exceeds the 280-char cap",
+            err, "body field 'facts' cap: 281 chars exceeds the 280-char cap",
             "{err}"
         );
 
-        let body = format!(
-            "facts: f\nrule: r\ndecision: d\nnext: {}",
-            "n".repeat(79)
-        );
-        let err = store.create(typed(None, &["gate"], "s", &body)).unwrap_err();
+        let body = format!("facts: f\nrule: r\ndecision: d\nnext: {}", "n".repeat(79));
+        let err = store
+            .create(typed(None, &["gate"], "s", &body))
+            .unwrap_err();
         assert_eq!(
-            err,
-            "body field 'next' cap: 79 chars exceeds the 78-char cap",
+            err, "body field 'next' cap: 79 chars exceeds the 78-char cap",
             "{err}"
         );
     }
@@ -1921,22 +1948,34 @@ mod tests {
     #[test]
     fn a_create_with_no_tags_is_refused() {
         let (_dir, store) = temp_store();
-        let err = store.create(typed(None, &[], "s", &schema_body())).unwrap_err();
-        assert_eq!(err, "tag rule: a create carries at least one allowed tag", "{err}");
+        let err = store
+            .create(typed(None, &[], "s", &schema_body()))
+            .unwrap_err();
+        assert_eq!(
+            err, "tag rule: a create carries at least one allowed tag",
+            "{err}"
+        );
     }
 
     #[test]
     fn priority_outside_the_enum_is_refused_naming_the_rule() {
         let (_dir, store) = temp_store();
-        let err = store.create(typed(Some("urgent"), &["gate"], "s", &schema_body())).unwrap_err();
-        assert!(err.contains("priority rule") && err.contains("low, normal, high"), "{err}");
+        let err = store
+            .create(typed(Some("urgent"), &["gate"], "s", &schema_body()))
+            .unwrap_err();
+        assert!(
+            err.contains("priority rule") && err.contains("low, normal, high"),
+            "{err}"
+        );
         assert!(store.list(&ListFilter::default()).unwrap().is_empty());
     }
 
     #[test]
     fn high_requires_the_prod_break_tag() {
         let (_dir, store) = temp_store();
-        let err = store.create(typed(Some("high"), &["finding"], "s", &schema_body())).unwrap_err();
+        let err = store
+            .create(typed(Some("high"), &["finding"], "s", &schema_body()))
+            .unwrap_err();
         assert!(err.contains("'high' requires tag 'prod-break'"), "{err}");
         let row = store
             .create(typed(Some("high"), &["prod-break"], "s", &schema_body()))
@@ -1947,8 +1986,12 @@ mod tests {
     #[test]
     fn summary_over_120_chars_is_refused() {
         let (_dir, store) = temp_store();
-        store.create(typed(None, &["gate"], &"a".repeat(120), &schema_body())).expect("120 fits");
-        let err = store.create(typed(None, &["gate"], &"a".repeat(121), &schema_body())).unwrap_err();
+        store
+            .create(typed(None, &["gate"], &"a".repeat(120), &schema_body()))
+            .expect("120 fits");
+        let err = store
+            .create(typed(None, &["gate"], &"a".repeat(121), &schema_body()))
+            .unwrap_err();
         assert!(err.contains("summary cap") && err.contains("120"), "{err}");
     }
 
@@ -1971,10 +2014,19 @@ mod tests {
     fn tags_outside_the_allowed_kebab_set_are_refused() {
         let (_dir, store) = temp_store();
         for bad in ["urgent", "GATE", "Owner_Decision"] {
-            let err = store.create(typed(None, &[bad], "s", &schema_body())).unwrap_err();
+            let err = store
+                .create(typed(None, &[bad], "s", &schema_body()))
+                .unwrap_err();
             assert!(err.contains("tag rule") && err.contains(bad), "{err}");
         }
-        store.create(typed(None, &["gate", "owner-decision"], "s", &schema_body())).expect("allowed tags");
+        store
+            .create(typed(
+                None,
+                &["gate", "owner-decision"],
+                "s",
+                &schema_body(),
+            ))
+            .expect("allowed tags");
     }
 
     /// The four low-value tags are RETIRED: a create naming one is refused BY NAME, and the refusal carries
@@ -1983,11 +2035,22 @@ mod tests {
     fn the_retired_low_value_tags_are_refused_by_name() {
         let (_dir, store) = temp_store();
         for retired in ["status", "ack", "checkpoint", "report"] {
-            let err = store.create(typed(None, &[retired], "s", &schema_body())).unwrap_err();
+            let err = store
+                .create(typed(None, &[retired], "s", &schema_body()))
+                .unwrap_err();
             assert!(err.contains("tag rule"), "{retired}: {err}");
-            assert!(err.contains(retired), "{retired}: the refusal does not name it: {err}");
-            assert!(err.contains("allowed (lowercase kebab)"), "{retired}: {err}");
-            assert!(!ALLOWED_TAGS.contains(&retired), "{retired} is still in ALLOWED_TAGS");
+            assert!(
+                err.contains(retired),
+                "{retired}: the refusal does not name it: {err}"
+            );
+            assert!(
+                err.contains("allowed (lowercase kebab)"),
+                "{retired}: {err}"
+            );
+            assert!(
+                !ALLOWED_TAGS.contains(&retired),
+                "{retired} is still in ALLOWED_TAGS"
+            );
         }
         assert_eq!(ALLOWED_TAGS.len(), 14);
     }
@@ -2020,16 +2083,38 @@ mod tests {
         let (_dir, store) = temp_store();
         let first = new_row(&store, "seat-a", "seat-b", "one");
         let filter = ListFilter::default();
-        assert_eq!(store.list_rate_limited_at("seat-x", &filter, 1000).unwrap().len(), 1);
-        let err = store.list_rate_limited_at("seat-x", &filter, 1100).unwrap_err();
-        assert!(err.contains(&format!("no change since {}", first.qitem_id)), "{err}");
+        assert_eq!(
+            store
+                .list_rate_limited_at("seat-x", &filter, 1000)
+                .unwrap()
+                .len(),
+            1
+        );
+        let err = store
+            .list_rate_limited_at("seat-x", &filter, 1100)
+            .unwrap_err();
+        assert!(
+            err.contains(&format!("no change since {}", first.qitem_id)),
+            "{err}"
+        );
         // another session, another filter, and a later window are each answered in full
         assert!(store.list_rate_limited_at("seat-y", &filter, 1100).is_ok());
-        let other = ListFilter { active_only: true, ..Default::default() };
+        let other = ListFilter {
+            active_only: true,
+            ..Default::default()
+        };
         assert!(store.list_rate_limited_at("seat-x", &other, 1100).is_ok());
-        assert!(store.list_rate_limited_at("seat-x", &filter, 1000 + LIST_REPEAT_WINDOW_SECS).is_ok());
+        assert!(store
+            .list_rate_limited_at("seat-x", &filter, 1000 + LIST_REPEAT_WINDOW_SECS)
+            .is_ok());
         // a new row ends the limit
         new_row(&store, "seat-a", "seat-b", "two");
-        assert_eq!(store.list_rate_limited_at("seat-x", &filter, 1400).unwrap().len(), 2);
+        assert_eq!(
+            store
+                .list_rate_limited_at("seat-x", &filter, 1400)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

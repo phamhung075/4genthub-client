@@ -44,11 +44,12 @@ impl SkillResolver {
 
     /// Parse frontmatter and markdown body from SKILL.md.
     pub fn parse_skill_file(path: &Path) -> Result<(Option<SkillMetadata>, String), String> {
-        let content = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-        if content.starts_with("---") {
-            if let Some(end_idx) = content[3..].find("---") {
-                let yaml_str = &content[3..3 + end_idx];
-                let body = content[3 + end_idx + 3..].trim().to_string();
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        if let Some(rest) = content.strip_prefix("---") {
+            if let Some(end_idx) = rest.find("---") {
+                let yaml_str = &rest[..end_idx];
+                let body = rest[end_idx + 3..].trim().to_string();
                 let meta: Option<SkillMetadata> = serde_yaml::from_str(yaml_str)
                     .map_err(|e| format!("{}: frontmatter does not parse: {e}", path.display()))?;
                 return Ok((meta, body));
@@ -105,7 +106,9 @@ impl SkillResolver {
         if !dir.is_dir() {
             return Ok(());
         }
-        let Ok(entries) = fs::read_dir(dir) else { return Ok(()) };
+        let Ok(entries) = fs::read_dir(dir) else {
+            return Ok(());
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -163,18 +166,46 @@ mod tests {
     /// absence for free.
     #[test]
     fn a_seat_resolves_its_own_role_skill_and_no_other_seats() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("skills");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("skills");
         let resolver = SkillResolver::new(root);
         // (seat, a landmark from the type's role text, a landmark from its rules)
         // (seat, a landmark from the type's role text, a landmark from its rules, the version its text
         // was ported at) - the reviewer's copy moved to 1.4.19 with the decision check, the other four
         // are still the 1.4.12 copy.
         let cases = [
-            ("lead", "You are the lead seat", "One task per assignment", "1.4.12"),
-            ("architect", "You are the architect seat", "Options and trade-offs", "1.4.12"),
-            ("go-dev", "You own implementation", "Smallest safe change", "1.4.12"),
-            ("fe-dev", "You own implementation", "Smallest safe change", "1.4.12"),
-            ("reviewer", "You are the reviewer seat", "Review against the task", "1.4.19"),
+            (
+                "lead",
+                "You are the lead seat",
+                "One task per assignment",
+                "1.4.12",
+            ),
+            (
+                "architect",
+                "You are the architect seat",
+                "Options and trade-offs",
+                "1.4.12",
+            ),
+            (
+                "go-dev",
+                "You own implementation",
+                "Smallest safe change",
+                "1.4.12",
+            ),
+            (
+                "fe-dev",
+                "You own implementation",
+                "Smallest safe change",
+                "1.4.12",
+            ),
+            (
+                "reviewer",
+                "You are the reviewer seat",
+                "Review against the task",
+                "1.4.19",
+            ),
         ];
         let seats: Vec<&str> = cases.iter().map(|(seat, _, _, _)| *seat).collect();
 
@@ -201,11 +232,15 @@ mod tests {
                             .collect::<Vec<_>>()
                     )
                 });
-            assert_eq!(role.tier, SkillTier::Seat, "{seat}: {want_name} resolved outside the seat tier");
+            assert_eq!(
+                role.tier,
+                SkillTier::Seat,
+                "{seat}: {want_name} resolved outside the seat tier"
+            );
             assert!(
-                role.path.to_string_lossy().ends_with(&format!(
-                    "rooms/4genthub-min/{seat}/{want_name}/SKILL.md"
-                )),
+                role.path
+                    .to_string_lossy()
+                    .ends_with(&format!("rooms/4genthub-min/{seat}/{want_name}/SKILL.md")),
                 "{seat}: {want_name} came from {}",
                 role.path.display()
             );
@@ -214,7 +249,10 @@ mod tests {
                 .as_ref()
                 .unwrap_or_else(|| panic!("{seat}: {want_name} carries no frontmatter"));
             assert_eq!(meta.name, want_name);
-            assert!(!meta.description.trim().is_empty(), "{seat}: {want_name} has no description");
+            assert!(
+                !meta.description.trim().is_empty(),
+                "{seat}: {want_name} has no description"
+            );
             assert_eq!(
                 meta.extra.get("seat-type-version").and_then(|v| v.as_str()),
                 Some(seat_type_version),
@@ -247,7 +285,9 @@ mod tests {
         let fe = resolver
             .resolve_for_seat("4genthub-min", "fe-dev")
             .expect("the skill tree resolves for fe-dev");
-        assert!(fe.iter().any(|s| s.name == "taste-skill" && s.tier == SkillTier::Seat));
+        assert!(fe
+            .iter()
+            .any(|s| s.name == "taste-skill" && s.tier == SkillTier::Seat));
         let go = resolver
             .resolve_for_seat("4genthub-min", "go-dev")
             .expect("the skill tree resolves for go-dev");
@@ -273,7 +313,10 @@ mod tests {
         let err = SkillResolver::new(&root)
             .resolve_for_seat("demo", "nobody")
             .expect_err("a malformed frontmatter must refuse resolution, not resolve the skill");
-        assert!(err.contains("SKILL.md"), "the refusal names the file: {err}");
+        assert!(
+            err.contains("SKILL.md"),
+            "the refusal names the file: {err}"
+        );
         assert!(
             err.contains("frontmatter does not parse"),
             "the refusal names the problem: {err}"
@@ -289,7 +332,11 @@ mod tests {
         let root = std::env::temp_dir().join(format!("skill_no_fm_{}", std::process::id()));
         let skill_dir = root.join("share").join("plain");
         fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.md"), "# Plain skill\nno frontmatter here\n").unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "# Plain skill\nno frontmatter here\n",
+        )
+        .unwrap();
 
         let resolved = SkillResolver::new(&root)
             .resolve_for_seat("demo", "nobody")

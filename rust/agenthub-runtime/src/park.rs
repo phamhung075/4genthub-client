@@ -24,8 +24,6 @@ pub const PARKED_FILE: &str = "parked.json";
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Parked {
     #[serde(default)]
-    pub seat: String,
-    #[serde(default)]
     pub reason: String,
     #[serde(default)]
     pub at: String,
@@ -92,7 +90,8 @@ mod tests {
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("agenthub-park-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("rooms").join("lab").join("seats").join("dev")).expect("scratch dir");
+        std::fs::create_dir_all(dir.join("rooms").join("lab").join("seats").join("dev"))
+            .expect("scratch dir");
         dir
     }
 
@@ -131,7 +130,8 @@ mod tests {
         let dir = scratch("garbled");
         std::fs::write(parked_path(&dir, "lab", "dev"), "{not json").expect("record");
 
-        let err = refuse(&dir, "lab", "dev", "nothing was sent").expect_err("an unreadable record is a park");
+        let err = refuse(&dir, "lab", "dev", "nothing was sent")
+            .expect_err("an unreadable record is a park");
         assert!(
             err.contains("PARKED") && err.contains("reason could not be read"),
             "an unreadable record must refuse and say which half is missing: {err}"

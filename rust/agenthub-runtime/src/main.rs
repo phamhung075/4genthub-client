@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{error, info, Level};
+use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod frame;
@@ -187,10 +187,7 @@ enum Commands {
         json: bool,
     },
     /// Send input to a seat session
-    Send {
-        session: String,
-        text: String,
-    },
+    Send { session: String, text: String },
     /// Show status of a room
     Status {
         room: String,
@@ -198,9 +195,7 @@ enum Commands {
         json: bool,
     },
     /// Force active compaction on an omp seat
-    Compact {
-        session: String,
-    },
+    Compact { session: String },
     /// Be a seat's foreground process: spawn its agent, own its channel, proxy its pane
     Runner {
         /// <room>/<seat>, as `4genteam ps` names a seat
@@ -227,7 +222,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // through an already-scrubbed client. See `own_tmux_root` for the measurement that made it necessary.
     match own_tmux_root(&state_path) {
         Ok(root) => info!("tmux root owned by this runtime: {}", root.display()),
-        Err(e) => tracing::warn!("could not own a tmux root under {}: {e}; sessions will use the host's server", state_path.display()),
+        Err(e) => tracing::warn!(
+            "could not own a tmux root under {}: {e}; sessions will use the host's server",
+            state_path.display()
+        ),
     }
 
     let hook_bus = HookBus::new(state_path.join("audit"), 1024);
@@ -284,24 +282,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
 
-        Commands::Status { room, json } => {
-            match supervisor.get_room_status(&room) {
-                Ok(statuses) => {
-                    if json {
-                        println!("{}", serde_json::to_string_pretty(&statuses)?);
-                    } else {
-                        for s in statuses {
-                            println!("{:15} {:12} {:?}", s.seat, s.runtime, s.state);
-                        }
+        Commands::Status { room, json } => match supervisor.get_room_status(&room) {
+            Ok(statuses) => {
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&statuses)?);
+                } else {
+                    for s in statuses {
+                        println!("{:15} {:12} {:?}", s.seat, s.runtime, s.state);
                     }
-                    Ok(())
                 }
-                Err(e) => {
-                    eprintln!("status error: {e}");
-                    std::process::exit(1);
-                }
+                Ok(())
             }
-        }
+            Err(e) => {
+                eprintln!("status error: {e}");
+                std::process::exit(1);
+            }
+        },
 
         Commands::Runner { target } => match runner::run(&state_path, &target) {
             Ok(()) => Ok(()),
@@ -311,18 +307,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         },
 
-        Commands::Compact { session } => {
-            match runner::request_compact(&state_path, &session) {
-                Ok(res) => {
-                    println!("{res}");
-                    Ok(())
-                }
-                Err(e) => {
-                    eprintln!("compact error: {e}");
-                    std::process::exit(1);
-                }
+        Commands::Compact { session } => match runner::request_compact(&state_path, &session) {
+            Ok(res) => {
+                println!("{res}");
+                Ok(())
             }
-        }
+            Err(e) => {
+                eprintln!("compact error: {e}");
+                std::process::exit(1);
+            }
+        },
     }
 }
 
@@ -406,7 +400,11 @@ mod tests {
             None,
             "a shell that is not a seat has no session to name"
         );
-        assert_eq!(send_origin_from(Some("   ")).from, None, "a blank name is no session");
+        assert_eq!(
+            send_origin_from(Some("   ")).from,
+            None,
+            "a blank name is no session"
+        );
     }
 
     /// The rule the client's own receipt was cured of, applied to the runtime's second consumer of the same
@@ -453,7 +451,10 @@ mod tests {
             "OPENRIG_URL",
             "OPENRIG_ACTIVITY_HOOK_TOKEN",
         ] {
-            assert!(env_is_denied(denied), "{denied} addresses a rig and must be denied");
+            assert!(
+                env_is_denied(denied),
+                "{denied} addresses a rig and must be denied"
+            );
         }
         for kept in [
             "AGENTHUB_ROOM",
@@ -500,12 +501,18 @@ mod tests {
         std::env::remove_var("AGENTHUB_CONNECTOR_TOKEN");
         std::env::remove_var("RIGGED_TESTONLY_CLASS");
 
-        assert!(named.contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()), "{named:?}");
+        assert!(
+            named.contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()),
+            "{named:?}"
+        );
         assert!(
             !wrapped.contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()),
             "the credential would be named on every pane's command line: {wrapped:?}"
         );
-        assert!(wrapped.contains(&"RIGGED_TESTONLY_CLASS".to_string()), "{wrapped:?}");
+        assert!(
+            wrapped.contains(&"RIGGED_TESTONLY_CLASS".to_string()),
+            "{wrapped:?}"
+        );
     }
 
     /// The mechanism rather than the list: a denied variable is REMOVED from the child's environment, and a
@@ -532,12 +539,11 @@ mod tests {
         std::env::remove_var("RIGGED_TESTONLY_SCRUB");
         std::env::remove_var("NOT_OURS_TESTONLY_SCRUB");
 
-        for denied in ["RIGGED_TESTONLY_SCRUB"] {
-            assert!(
-                envs.iter().any(|(k, v)| k == denied && v.is_none()),
-                "{denied} must arrive at the child as an explicit removal, not as an absent variable"
-            );
-        }
+        let denied = "RIGGED_TESTONLY_SCRUB";
+        assert!(
+            envs.iter().any(|(k, v)| k == denied && v.is_none()),
+            "{denied} must arrive at the child as an explicit removal, not as an absent variable"
+        );
         assert!(
             !envs.iter().any(|(k, _)| k == "NOT_OURS_TESTONLY_SCRUB"),
             "a variable that is not denied must not be touched by the scrub"
@@ -559,7 +565,11 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("scratch state dir");
 
         let root = tmux_root_for(&dir);
-        assert_eq!(root, dir.join("tmux"), "the name is derived, not configured");
+        assert_eq!(
+            root,
+            dir.join("tmux"),
+            "the name is derived, not configured"
+        );
         assert!(!root.exists(), "deriving the path creates nothing");
 
         let returned = own_tmux_root(&dir).expect("owning the root");
@@ -573,7 +583,11 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&root).expect("root exists").permissions().mode() & 0o777;
+            let mode = std::fs::metadata(&root)
+                .expect("root exists")
+                .permissions()
+                .mode()
+                & 0o777;
             assert_eq!(mode, 0o700, "one runtime's panes are nobody else's to read");
         }
 

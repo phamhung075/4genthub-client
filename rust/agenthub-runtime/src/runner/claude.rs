@@ -45,7 +45,7 @@ pub struct Bridge {
 
 impl Bridge {
     /// The runner's frame, in the agent's dialect.
-    pub fn from_runner(&self, frame: &Value) -> Outbound {
+    pub fn translate_runner_frame(&self, frame: &Value) -> Outbound {
         let id = frame.get("id").and_then(|v| v.as_str()).unwrap_or("?");
         let mut out = Outbound::default();
         match frame.get("type").and_then(|v| v.as_str()) {
@@ -84,7 +84,7 @@ impl Bridge {
 
     /// One frame from the agent, as the runner's reader expects it. Frames the runner has no use for
     /// (hooks, status, rate-limit notices, tool traffic) produce nothing.
-    pub fn from_agent(&self, record: &Value) -> Vec<Value> {
+    pub fn translate_agent_record(&self, record: &Value) -> Vec<Value> {
         let mut frames = Vec::new();
         let mut turns = self.turns.lock();
         match record.get("type").and_then(|v| v.as_str()) {
@@ -95,13 +95,17 @@ impl Bridge {
                 }
                 let delta = record
                     .get("event")
-                    .filter(|e| e.get("type").and_then(|t| t.as_str()) == Some("content_block_delta"))
+                    .filter(|e| {
+                        e.get("type").and_then(|t| t.as_str()) == Some("content_block_delta")
+                    })
                     .and_then(|e| e.get("delta"))
                     .filter(|d| d.get("type").and_then(|t| t.as_str()) == Some("text_delta"))
                     .and_then(|d| d.get("text"))
                     .and_then(|t| t.as_str());
                 if let Some(text) = delta {
-                    frames.push(json!({"type": "message_update", "assistantMessageEvent": {"delta": text}}));
+                    frames.push(
+                        json!({"type": "message_update", "assistantMessageEvent": {"delta": text}}),
+                    );
                 }
             }
             Some("result") => {
@@ -127,7 +131,10 @@ fn user_message(text: &str) -> Value {
 /// operator asked for it to stop, and a failure would start the retry ladder on a turn that was cancelled.
 fn response_for(result: &Value, id: &str, interrupted: bool) -> Value {
     let subtype = result.get("subtype").and_then(|v| v.as_str()).unwrap_or("");
-    let is_error = result.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_error = result
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if interrupted && subtype == "error_during_execution" {
         return json!({"type": "response", "id": id, "success": true});
     }
@@ -155,14 +162,18 @@ mod tests {
     #[test]
     fn a_prompt_becomes_one_user_message_and_is_owed_a_result() {
         let bridge = Bridge::default();
-        let out = bridge.from_runner(&prompt("p1", "hello"));
-        assert_eq!(out.to_agent, vec![json!({"type": "user", "message": {"role": "user", "content": "hello"}})]);
+        let out = bridge.translate_runner_frame(&prompt("p1", "hello"));
+        assert_eq!(
+            out.to_agent,
+            vec![json!({"type": "user", "message": {"role": "user", "content": "hello"}})]
+        );
         assert!(out.to_reader.is_empty());
     }
 
     #[test]
     fn get_state_is_answered_locally_because_claude_has_no_such_request() {
-        let out = Bridge::default().from_runner(&json!({"id": "runner-get-state", "type": "get_state"}));
+        let out = Bridge::default()
+            .translate_runner_frame(&json!({"id": "runner-get-state", "type": "get_state"}));
         assert!(out.to_agent.is_empty());
         assert_eq!(out.to_reader[0]["id"], "runner-get-state");
         assert_eq!(out.to_reader[0]["success"], true);
@@ -171,24 +182,31 @@ mod tests {
     #[test]
     fn compact_is_the_slash_command_and_its_result_answers_the_compact_id() {
         let bridge = Bridge::default();
-        let out = bridge.from_runner(&json!({"id": "c1", "type": "compact"}));
+        let out = bridge.translate_runner_frame(&json!({"id": "c1", "type": "compact"}));
         assert_eq!(out.to_agent[0]["message"]["content"], "/compact");
-        let frames = bridge.from_agent(&json!({"type": "result", "subtype": "success", "is_error": false}));
-        assert_eq!(frames.last().unwrap(), &json!({"type": "response", "id": "c1", "success": true}));
+        let frames = bridge.translate_agent_record(
+            &json!({"type": "result", "subtype": "success", "is_error": false}),
+        );
+        assert_eq!(
+            frames.last().unwrap(),
+            &json!({"type": "response", "id": "c1", "success": true})
+        );
     }
 
     #[test]
     fn a_turn_streams_start_text_end_and_a_matching_response() {
         let bridge = Bridge::default();
-        bridge.from_runner(&prompt("p1", "x"));
+        bridge.translate_runner_frame(&prompt("p1", "x"));
         let delta = json!({"type": "stream_event", "event": {"type": "content_block_delta",
             "delta": {"type": "text_delta", "text": "PONG"}}});
-        let first = bridge.from_agent(&delta);
+        let first = bridge.translate_agent_record(&delta);
         assert_eq!(first[0]["type"], "turn_start");
         assert_eq!(first[1]["assistantMessageEvent"]["delta"], "PONG");
         // The turn is already open: no second turn_start.
-        assert_eq!(bridge.from_agent(&delta).len(), 1);
-        let end = bridge.from_agent(&json!({"type": "result", "subtype": "success", "is_error": false}));
+        assert_eq!(bridge.translate_agent_record(&delta).len(), 1);
+        let end = bridge.translate_agent_record(
+            &json!({"type": "result", "subtype": "success", "is_error": false}),
+        );
         let kinds: Vec<_> = end.iter().map(|f| f["type"].as_str().unwrap()).collect();
         assert_eq!(kinds, ["turn_end", "agent_end", "response"]);
         assert_eq!(end[2]["id"], "p1");
@@ -198,9 +216,11 @@ mod tests {
     #[test]
     fn an_error_result_is_a_failed_response_carrying_the_agents_own_words() {
         let bridge = Bridge::default();
-        bridge.from_runner(&prompt("p1", "x"));
-        let end = bridge.from_agent(&json!({"type": "result", "subtype": "error_during_execution",
-            "is_error": true, "result": "API Error: 529 overloaded"}));
+        bridge.translate_runner_frame(&prompt("p1", "x"));
+        let end = bridge.translate_agent_record(
+            &json!({"type": "result", "subtype": "error_during_execution",
+            "is_error": true, "result": "API Error: 529 overloaded"}),
+        );
         assert_eq!(end[2]["success"], false);
         assert_eq!(end[2]["error"], "API Error: 529 overloaded");
     }
@@ -208,32 +228,43 @@ mod tests {
     #[test]
     fn an_interrupted_turn_answers_success_so_a_cancel_never_starts_the_retry_ladder() {
         let bridge = Bridge::default();
-        bridge.from_runner(&prompt("p1", "x"));
-        bridge.from_agent(&json!({"type": "assistant", "message": {}}));
-        let abort = bridge.from_runner(&json!({"id": "a1", "type": "abort"}));
+        bridge.translate_runner_frame(&prompt("p1", "x"));
+        bridge.translate_agent_record(&json!({"type": "assistant", "message": {}}));
+        let abort = bridge.translate_runner_frame(&json!({"id": "a1", "type": "abort"}));
         assert_eq!(abort.to_agent[0]["request"]["subtype"], "interrupt");
-        let end = bridge.from_agent(&json!({"type": "result", "subtype": "error_during_execution", "is_error": true}));
+        let end = bridge.translate_agent_record(
+            &json!({"type": "result", "subtype": "error_during_execution", "is_error": true}),
+        );
         assert_eq!(end[2]["success"], true);
     }
 
     #[test]
     fn an_abort_with_no_turn_running_sends_nothing() {
-        let out = Bridge::default().from_runner(&json!({"id": "a1", "type": "abort"}));
+        let out = Bridge::default().translate_runner_frame(&json!({"id": "a1", "type": "abort"}));
         assert_eq!(out, Outbound::default());
     }
 
     #[test]
     fn a_request_the_channel_cannot_serve_is_refused_by_name() {
-        let out = Bridge::default().from_runner(&json!({"id": "x", "type": "set_model"}));
+        let out =
+            Bridge::default().translate_runner_frame(&json!({"id": "x", "type": "set_model"}));
         assert_eq!(out.to_reader[0]["success"], false);
-        assert!(out.to_reader[0]["error"].as_str().unwrap().contains("set_model"));
+        assert!(out.to_reader[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("set_model"));
     }
 
     #[test]
     fn frames_the_runner_has_no_use_for_produce_nothing() {
         let bridge = Bridge::default();
         for t in ["system", "rate_limit_event", "control_response", "user"] {
-            assert!(bridge.from_agent(&json!({"type": t})).is_empty(), "{t}");
+            assert!(
+                bridge
+                    .translate_agent_record(&json!({"type": t}))
+                    .is_empty(),
+                "{t}"
+            );
         }
     }
 }
