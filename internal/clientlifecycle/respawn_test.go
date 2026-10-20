@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,9 @@ func TestTheDaemonPatternNamesOnlyTheRootItServes(t *testing.T) {
 func TestUpRespawnStopsTheSupervisionThenTheDaemonBeforeTheRoomStarts(t *testing.T) {
 	restoreAll(t)
 	steps := stubDaemons(t, []int{4242})
+	// This is the DETACHED run: the calling process has already re-exec'd itself (respawn.go), so this
+	// side is the one that stops agent and the daemon.
+	t.Setenv(respawnDetachedEnv, "1")
 	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
 	t.Setenv("AGENTHUB_TOKEN", "not-a-real-token")
 	t.Setenv("AGENTHUB_CONNECTOR_TOKEN", "not-a-real-token")
@@ -118,6 +122,7 @@ func TestUpRespawnRefusesToStartASecondDaemon(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			restoreAll(t)
+			t.Setenv(respawnDetachedEnv, "1")
 			steps := stubDaemons(t, []int{4242})
 			if c.signals {
 				// Signalled, but still there when the window runs out.
@@ -171,6 +176,113 @@ func TestUpWithoutRespawnLeavesTheDaemonAlone(t *testing.T) {
 			t.Errorf("a plain up touched the daemon: steps %v", *steps)
 			break
 		}
+	}
+}
+
+// TestUpRespawnReExecsItselfBeforeItStopsAnything is the 2026-10-20 defect: a seat ran the verb, the agent
+// stop took the seat with it, and the seats and agent the run was about to start never were. The calling
+// process must detach FIRST - before it signals agent or the daemon - name the detached run's log, and
+// return with nothing started or stopped by itself.
+func TestUpRespawnReExecsItselfBeforeItStopsAnything(t *testing.T) {
+	restoreAll(t)
+	steps := stubDaemons(t, []int{4242})
+	t.Setenv(respawnDetachedEnv, "")
+	stateDir := filepath.Join(t.TempDir(), "state")
+	teamDir := writeRoomDefinition(t, "my-rig")
+	var detachedRoot string
+	var argv []string
+	detachRespawn = func(root string, a []string) (string, error) {
+		detachedRoot, argv = root, a
+		return respawnLogPath(root), nil
+	}
+	ensureDaemon = func(string, io.Writer) (string, error) {
+		t.Error("the calling process started the daemon")
+		return "", nil
+	}
+	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		t.Error("the calling process started a seat")
+		return clientcmd.ExitOK
+	}
+	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
+		t.Error("the calling process ran the worktrees step")
+		return clientcmd.ExitOK
+	}
+
+	var out, errOut bytes.Buffer
+	code := (upCommand{}).Run(context.Background(),
+		[]string{"my-rig", "--team", teamDir, "--state-root", stateDir, "--room-only", "--respawn"}, &out, &errOut)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d (stdout %q, stderr %q)", code, out.String(), errOut.String())
+	}
+	want := []string{"up", "my-rig", "--team", teamDir, "--state-root", stateDir, "--room-only", "--respawn"}
+	if strings.Join(argv, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("the detached run's argv = %q, want %q", argv, want)
+	}
+	if detachedRoot != stateDir {
+		t.Errorf("the detached run got state dir %q, want %q", detachedRoot, stateDir)
+	}
+	if len(*steps) != 0 {
+		t.Errorf("the calling process signalled something before detaching: %v", *steps)
+	}
+	if !strings.Contains(out.String(), respawnLogPath(stateDir)) {
+		t.Errorf("the caller was not given the log path: %q", out.String())
+	}
+}
+
+// TestTheDetachedRespawnIsItsOwnSession runs the real detach against a shell: the restart must be in a NEW
+// session (so the caller's death, or a signal to its group, does not take it), its output must land on the
+// log the caller was given, and the call must not wait for it.
+func TestTheDetachedRespawnIsItsOwnSession(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh is not on this machine")
+	}
+	ps, err := exec.LookPath("ps")
+	if err != nil {
+		t.Skip("ps is not on this machine")
+	}
+	restoreAll(t)
+	respawnExecutable = func() (string, error) { return sh, nil }
+	sid := func(pid string) string {
+		out, err := exec.Command(ps, "-o", "sid=", "-p", pid).Output()
+		if err != nil {
+			t.Fatalf("ps -o sid= -p %s: %v", pid, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	caller := sid(strconv.Itoa(os.Getpid()))
+	stateDir := t.TempDir()
+
+	started := time.Now()
+	logPath, err := detachRespawnImpl(stateDir, []string{"-c", "echo \"sid=$(ps -o sid= -p $$)\"; sleep 3; echo done"})
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("detach refused: %v", err)
+	}
+	if !strings.HasSuffix(logPath, "up-respawn.log") {
+		t.Errorf("log path = %q, want the state root's up-respawn.log", logPath)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("the detach waited on its child: %s", elapsed)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var log string
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(logPath); err == nil && strings.Contains(string(b), "sid=") {
+			log = string(b)
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if log == "" {
+		t.Fatalf("the detached run wrote nothing to %s", logPath)
+	}
+	got := strings.TrimPrefix(strings.SplitN(strings.TrimSpace(log), "\n", 2)[0], "sid=")
+	if got == "" || got == caller {
+		t.Errorf("the restart's session id = %q, want its own session rather than the caller's %q (log %q)", got, caller, log)
+	}
+	if strings.Contains(log, "done") {
+		t.Errorf("the detach waited for the child to finish: %q", log)
 	}
 }
 

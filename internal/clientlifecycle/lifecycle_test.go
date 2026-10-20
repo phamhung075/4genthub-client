@@ -83,6 +83,7 @@ func restoreAll(t *testing.T) {
 	stop, nodes := stopPattern, rigNodes
 	rows, authorityUp := rowsFor, agentRunning
 	clone, hooks := cloneRowFor, hooksRowFor
+	detach, executable := detachRespawn, respawnExecutable
 	t.Cleanup(func() {
 		ensureDaemon, ensureWorktrees, ensureRig = daemon, worktrees, rigStep
 		recordRigFor = record
@@ -92,6 +93,7 @@ func restoreAll(t *testing.T) {
 		stopPattern, rigNodes = stop, nodes
 		rowsFor, agentRunning = rows, authorityUp
 		cloneRowFor, hooksRowFor = clone, hooks
+		detachRespawn, respawnExecutable = detach, executable
 	})
 	// The clone and hooks rows read the checkout this binary was built in, so every case that is not ABOUT
 	// them starts from a clean checkout, like the worktrees step above: a lifecycle assertion must not depend

@@ -334,7 +334,21 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	// daemon is nobody's child and keeps running the binary it was started with, so a build that renamed a
 	// new one into place changes nothing until the old process is gone. Agent goes first because it is the
 	// restart authority: a watchdog left running would restore the seats of the room being cycled.
+	//
+	// AND IT RUNS DETACHED (respawn.go): the caller is a seat inside agent, so stopping agent is the
+	// caller's own death - measured 2026-10-20 17:29:38Z, when the daemon was replaced and the seats and
+	// agent the run was about to start never were. The re-exec happens BEFORE the first signal; this
+	// process then answers with the log's path and returns, and the restart continues in its own session.
 	if respawn {
+		if os.Getenv(respawnDetachedEnv) == "" {
+			logPath, err := detachRespawn(stateDir, respawnArgv(name, teamDir, stateDir, allowPeak, roomOnly))
+			if err != nil {
+				fmt.Fprintf(stderr, "4genteam up: --respawn was not started, and nothing was stopped: %v\n", err)
+				return clientcmd.ExitUnavailable
+			}
+			fmt.Fprintf(stdout, "respawn: the restart runs in its own session; log: %s\n", logPath)
+			return clientcmd.ExitOK
+		}
 		if code := stopAgent("up", name, stdout, stderr); code != clientcmd.ExitOK {
 			return code
 		}
