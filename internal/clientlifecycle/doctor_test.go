@@ -544,7 +544,7 @@ func TestDoctorIsReadOnly(t *testing.T) {
 	// A NODE READ IS NOT AN ACTION, and the identity row makes one: the recorder names it so the assertion
 	// below can tell the two apart, rather than forbidding the read the report has to make.
 	reads := 0
-	roomNodes = func(string) ([]map[string]any, bool, error) {
+	roomNodes = func(string, string) ([]map[string]any, bool, error) {
 		reads++
 		return nil, false, nil
 	}

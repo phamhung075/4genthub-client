@@ -282,8 +282,9 @@ func TestRoomReseatWritesStopSeatThenRestartSeat(t *testing.T) {
 	t.Setenv("AGENTHUB_TOKEN", "tok")
 
 	daemon := newFakeDaemon(t, map[string]string{
-		"StopSeat":    okData("null"),
-		"RestartSeat": okData(seatJSON("lead", "omp", "running")),
+		"GetRoomStatus": okData("[" + seatJSON("lead", "omp", "running") + "]"),
+		"StopSeat":      okData("null"),
+		"RestartSeat":   okData(seatJSON("lead", "omp", "running")),
 	})
 
 	code, stdout, stderr := runRoom(t, daemon.args("reseat", testRoom, "lead")...)
@@ -291,6 +292,7 @@ func TestRoomReseatWritesStopSeatThenRestartSeat(t *testing.T) {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
 	}
 	assertRequests(t, daemon,
+		`{"action":"GetRoomStatus","payload":{"room":"room-a"}}`,
 		`{"action":"StopSeat","payload":{"room":"room-a","seat":"lead"}}`,
 		`{"action":"RestartSeat","payload":{"room":"room-a","seat":"lead"}}`)
 	if !strings.Contains(stdout, "lead omp running agenthub--room-a--lead\n") {
@@ -326,8 +328,9 @@ func TestRoomReseatCarriesTheHubsPolicyDocument(t *testing.T) {
 	t.Setenv("AGENTHUB_TOKEN", "tok")
 
 	daemon := newFakeDaemon(t, map[string]string{
-		"StopSeat":    okData("null"),
-		"RestartSeat": okData(seatJSON("lead", "omp", "running")),
+		"GetRoomStatus": okData("[" + seatJSON("lead", "omp", "running") + "]"),
+		"StopSeat":      okData("null"),
+		"RestartSeat":   okData(seatJSON("lead", "omp", "running")),
 	})
 
 	code, _, stderr := runRoom(t, daemon.args("reseat", testRoom, "lead")...)
@@ -339,6 +342,7 @@ func TestRoomReseatCarriesTheHubsPolicyDocument(t *testing.T) {
 		t.Fatalf("marshal the document the seat is installed with: %v", err)
 	}
 	assertRequests(t, daemon,
+		`{"action":"GetRoomStatus","payload":{"room":"room-a"}}`,
 		`{"action":"StopSeat","payload":{"room":"room-a","seat":"lead"}}`,
 		`{"action":"RestartSeat","payload":{"policy_document":`+string(installed)+`,"room":"room-a","seat":"lead"}}`)
 }
@@ -357,10 +361,8 @@ func TestRoomReseatRefusesAtPeakBeforeTheSeatIsStopped(t *testing.T) {
 		"StopSeat":      okData("null"),
 		"RestartSeat":   okData(seatJSON("lead", "omp", "running")),
 	})
-	// THE GATE'S OWN READING IS THE DEFAULT CLIENT, whose socket is the environment's, not this verb's flag:
-	// without this line the decision would be taken over the machine's daemon instead of the fake.
-	t.Setenv(clientruntime.RuntimeSocketEnv, daemon.socket)
-
+	// NO ENVIRONMENT SOCKET: the verb's own `--socket` (daemon.args) is what the gate must read, and this
+	// test runs without one in the environment - the configuration CI has, and the one that was red.
 	code, stdout, stderr := runRoom(t, daemon.args("reseat", testRoom, "lead")...)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, stderr)
@@ -391,8 +393,8 @@ func TestRoomReseatProceedsAtPeakWithTheFlag(t *testing.T) {
 		"StopSeat":      okData("null"),
 		"RestartSeat":   okData(seatJSON("lead", "omp", "running")),
 	})
-	t.Setenv(clientruntime.RuntimeSocketEnv, daemon.socket)
-
+	// NO ENVIRONMENT SOCKET, as above: the flag is the only socket this run was given, so a pass here is the
+	// gate having read the daemon the flag names.
 	args := append(daemon.args("reseat", testRoom, "lead"), clientoffpeak.FlagAllowPeak)
 	code, _, stderr := runRoom(t, args...)
 	if code != clientcmd.ExitOK {
@@ -402,6 +404,41 @@ func TestRoomReseatProceedsAtPeakWithTheFlag(t *testing.T) {
 		`{"action":"GetRoomStatus","payload":{"room":"room-a"}}`,
 		`{"action":"StopSeat","payload":{"room":"room-a","seat":"lead"}}`,
 		`{"action":"RestartSeat","payload":{"room":"room-a","seat":"lead"}}`)
+}
+
+// TestRoomReseatGatesTheDaemonTheSocketFlagNames is the defect itself, with two daemons answering
+// differently: the one `--socket` names hosts a DeepSeek seat, and the machine's default (the environment's)
+// hosts an omp seat. At peak the gate must refuse ON THE FLAG'S DAEMON - and the default must not be asked at
+// all, which is what its empty request log proves. A gate reading the default would pass this room silently.
+//
+// The environment daemon registers no answers on purpose: a read of it would be recorded as a test failure by
+// fakeDaemon.serve, so "never asked" is asserted rather than assumed.
+func TestRoomReseatGatesTheDaemonTheSocketFlagNames(t *testing.T) {
+	t.Setenv(clientoffpeak.HolidaysEnv, "")
+	t.Setenv(clientoffpeak.PinEnv, "2026-10-09 02:00")
+	t.Setenv(clientoffpeak.ModeEnv, "")
+
+	flagDaemon := newFakeDaemon(t, map[string]string{
+		"GetRoomStatus": okData("[" + deepSeekSeatJSON("lead") + "]"),
+		"StopSeat":      okData("null"),
+		"RestartSeat":   okData(seatJSON("lead", "omp", "running")),
+	})
+	defaultDaemon := newFakeDaemon(t, map[string]string{
+		"GetRoomStatus": okData("[" + seatJSON("lead", "omp", "running") + "]"),
+	})
+	t.Setenv(clientruntime.RuntimeSocketEnv, defaultDaemon.socket)
+
+	code, _, stderr := runRoom(t, flagDaemon.args("reseat", testRoom, "lead")...)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, stderr)
+	}
+	if !strings.Contains(stderr, "lead: deepseek/deepseek-flash") {
+		t.Errorf("the refusal does not name the flag daemon's DeepSeek seat:\n%s", stderr)
+	}
+	assertRequests(t, flagDaemon, `{"action":"GetRoomStatus","payload":{"room":"room-a"}}`)
+	if got := defaultDaemon.requests(); len(got) != 0 {
+		t.Errorf("the default daemon was asked %q: the gate read the environment's socket, not the flag's", got)
+	}
 }
 
 // deepSeekSeatJSON is one seat whose model is DeepSeek's, the shape the gate reads the model out of.
@@ -414,8 +451,9 @@ func deepSeekSeatJSON(seat string) string {
 // running, and the verdict is 2 with the seat named - never a bare 0.
 func TestRoomReseatReportsASeatThatDidNotComeBack(t *testing.T) {
 	daemon := newFakeDaemon(t, map[string]string{
-		"StopSeat":    okData("null"),
-		"RestartSeat": okData(seatJSON("lead", "omp", "stopped")),
+		"GetRoomStatus": okData("[" + seatJSON("lead", "omp", "running") + "]"),
+		"StopSeat":      okData("null"),
+		"RestartSeat":   okData(seatJSON("lead", "omp", "stopped")),
 	})
 
 	code, stdout, stderr := runRoom(t, daemon.args("reseat", testRoom, "lead")...)

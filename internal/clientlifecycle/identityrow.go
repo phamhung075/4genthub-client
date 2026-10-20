@@ -184,7 +184,7 @@ func nodeField(node map[string]any, key string) string {
 // FAILED is the empty list here, because this row reports rather than refuses: the note says the row could not
 // observe the room, and the failure itself is named by the verbs that act.
 var identityNodes = func(name string) []map[string]any {
-	nodes, _, err := roomNodes(name)
+	nodes, _, err := roomNodes("", name)
 	if err != nil {
 		return nil
 	}

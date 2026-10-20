@@ -206,7 +206,7 @@ func TestAProbeErrorRefusesTheHeal(t *testing.T) {
 }
 
 // stubGate replaces the gate heal asks, and puts the real one back when the test ends.
-func stubGate(t *testing.T, gate func(name, verb string, allowPeak bool, stderr io.Writer) int) {
+func stubGate(t *testing.T, gate func(socket, name, verb string, allowPeak bool, stderr io.Writer) int) {
 	t.Helper()
 	real := peakGate
 	peakGate = gate
@@ -218,8 +218,8 @@ func stubGate(t *testing.T, gate func(name, verb string, allowPeak bool, stderr 
 // refusal that comes back instead is the gate's, and the socket path is absent from it - the stop never ran.
 func TestHealsGateRefusesBeforeTheStop(t *testing.T) {
 	var asked []string
-	stubGate(t, func(name, verb string, allowPeak bool, stderr io.Writer) int {
-		asked = append(asked, name+"|"+verb+"|"+strconv.FormatBool(allowPeak))
+	stubGate(t, func(socket, name, verb string, allowPeak bool, stderr io.Writer) int {
+		asked = append(asked, socket+"|"+name+"|"+verb+"|"+strconv.FormatBool(allowPeak))
 		fmt.Fprintf(stderr, "4genteam %s: PEAK right now\n", verb)
 		return clientcmd.ExitUnavailable
 	})
@@ -236,8 +236,8 @@ func TestHealsGateRefusesBeforeTheStop(t *testing.T) {
 	if contains(err.Error(), socket) {
 		t.Errorf("error = %q names the socket: the stop ran before the gate refused", err)
 	}
-	if len(asked) != 1 || asked[0] != "room-a|heal|false" {
-		t.Errorf("the gate was asked %v, want one room-a/heal with the flag off", asked)
+	if len(asked) != 1 || asked[0] != socket+"|room-a|heal|false" {
+		t.Errorf("the gate was asked %v, want one room-a/heal at the socket the verb resolved, flag off", asked)
 	}
 }
 
@@ -245,8 +245,8 @@ func TestHealsGateRefusesBeforeTheStop(t *testing.T) {
 // the stop, which is what the absent-socket error below proves - the run moved PAST the gate.
 func TestTheFlagIsWhatHealsGateSees(t *testing.T) {
 	var asked []string
-	stubGate(t, func(name, verb string, allowPeak bool, stderr io.Writer) int {
-		asked = append(asked, name+"|"+verb+"|"+strconv.FormatBool(allowPeak))
+	stubGate(t, func(socket, name, verb string, allowPeak bool, stderr io.Writer) int {
+		asked = append(asked, socket+"|"+name+"|"+verb+"|"+strconv.FormatBool(allowPeak))
 		return clientcmd.ExitOK
 	})
 	socket := filepath.Join(t.TempDir(), "absent.sock")
@@ -256,8 +256,8 @@ func TestTheFlagIsWhatHealsGateSees(t *testing.T) {
 	if err == nil || !contains(err.Error(), socket) {
 		t.Fatalf("error = %v, want the stop's dial refusal at %s (the gate passed)", err, socket)
 	}
-	if len(asked) != 1 || asked[0] != "room-a|heal|true" {
-		t.Errorf("the gate was asked %v, want one room-a/heal with the flag ON", asked)
+	if len(asked) != 1 || asked[0] != socket+"|room-a|heal|true" {
+		t.Errorf("the gate was asked %v, want one room-a/heal at the socket the verb resolved, flag ON", asked)
 	}
 }
 

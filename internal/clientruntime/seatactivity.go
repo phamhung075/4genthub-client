@@ -70,7 +70,17 @@ func ReadSeatActivity(room, seat string) SeatActivity {
 //     table. A caller that needs the reading refuses in these words rather than proceeding as if the room
 //     had no seats.
 func RoomNodes(room string) ([]map[string]any, bool, error) {
-	seats, err := NewClient("").GetRoomStatus(room)
+	return RoomNodesAt("", room)
+}
+
+// RoomNodesAt is RoomNodes against the daemon at socket, and it exists because a verb given `--socket PATH`
+// must read the daemon it is ABOUT TO RESTART, not whatever this machine's default is: the two are different
+// daemons on a machine running more than one, and the gate's answer decides whether a DeepSeek seat launches.
+// An empty socket is the default, which is what RoomNodes is and what an in-process agent or watchdog wants.
+//
+// The three answers are RoomNodes' own, unchanged.
+func RoomNodesAt(socket, room string) ([]map[string]any, bool, error) {
+	seats, err := NewClient(socket).GetRoomStatus(room)
 	if IsUnknownRoom(err) {
 		return nil, false, nil
 	}

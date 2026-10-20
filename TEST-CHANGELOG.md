@@ -9,6 +9,26 @@ uses (room dir, queue create, the fixture's own paths) take the new value.
 
 Track test suite changes, fixes, and improvements for the client.
 
+## 2026-10-21 - the peak gate's tests read the daemon the socket flag names (branch 4genthub-min/peakgate-socket)
+
+- `internal/clientroom/room_test.go`: `TestRoomReseatGatesTheDaemonTheSocketFlagNames` is new - two fake
+  daemons, the `--socket` one hosting a DeepSeek seat and the environment's an omp seat; at a pinned peak the
+  refusal names the DeepSeek seat and the environment daemon records no request. RED on `origin/main`
+  (`exit 0, want 3`), green after the fix.
+- `TestRoomReseatRefusesAtPeakBeforeTheSeatIsStopped` and `TestRoomReseatProceedsAtPeakWithTheFlag` drop the
+  `t.Setenv(clientruntime.RuntimeSocketEnv, daemon.socket)` line that used to compensate for the gate reading
+  the default socket, so each now proves the flag reached the gate on its own.
+- The three reseat tests the client's CI was red on register the `GetRoomStatus` frame the gate sends and
+  assert it first in their request sequence (`TestRoomReseatWritesStopSeatThenRestartSeat`,
+  `TestRoomReseatCarriesTheHubsPolicyDocument`, `TestRoomReseatReportsASeatThatDidNotComeBack`).
+- `internal/clientheal/heal_test.go`: `stubGate` takes the socket, and the two gate tests assert the recorded
+  call names the socket `machineDeps` was built with.
+- `internal/clientlifecycle`'s test seams follow the new `roomNodes(socket, name)` signature (no assertion
+  moved).
+
+Run: `env -u AGENTHUB_RUNTIME_SOCKET XDG_RUNTIME_DIR=/tmp/nosock go test ./... -count=1` - ok; the same suite
+with the machine's own daemon - ok.
+
 ## 2026-10-20 - a path-only criterion is a refusal, not a warning (branch 4genthub-min/int03-cascades)
 
 - `internal/clientcomplete/complete_test.go`: `TestAPathOnlyCriterionIsWarnedAndStillJudged` is deleted with

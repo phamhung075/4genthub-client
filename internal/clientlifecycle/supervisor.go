@@ -123,7 +123,7 @@ func New(room string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 	supervisor.Nodes = func(room string) ([]map[string]any, bool, error) {
 		// roomNodes is read at CALL time rather than captured at wiring time, so a test that replaces the
 		// reading after the supervisor is built still reaches the gate.
-		return roomNodes(room)
+		return roomNodes("", room)
 	}
 	supervisor.Getenv = os.Getenv
 	supervisor.Log = func(text string) {

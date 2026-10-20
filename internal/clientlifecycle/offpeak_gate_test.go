@@ -79,7 +79,7 @@ func stubWholeUp(t *testing.T) *[]string {
 func TestUpRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -128,7 +128,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			restoreAll(t)
 			ran := stubWholeUp(t)
-			roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+			roomNodes = func(string, string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 			t.Setenv(clientoffpeak.HolidaysEnv, "")
 			t.Setenv(clientoffpeak.PinEnv, c.pin)
 			t.Setenv(clientoffpeak.ModeEnv, c.modeEnv)
@@ -155,7 +155,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 // but a seat did not (design §2.5) - so the two numbers must not mean the same thing.
 func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 	restoreAll(t)
-	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	for _, args := range [][]string{
@@ -179,7 +179,7 @@ func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 func TestUpTakesTheOneFlagTwice(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -202,7 +202,7 @@ func TestCompactRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 		return diedChild{}, nil
 	}
 	SupervisorStartGrace = time.Millisecond
-	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -245,7 +245,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 			rowsFor = func(string, string) ([]clientservices.Health, error) {
 				return []clientservices.Health{{Room: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}, nil
 			}
-			roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+			roomNodes = func(string, string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 			gateEnv(t, c.pin)
 
 			args := append([]string{"room-alpha"}, c.extra...)
@@ -268,7 +268,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 func TestTheGateDecidesAFirstStartOnTheDefinition(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	roomNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return nil, false, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -290,7 +290,7 @@ func TestTheGateDecidesAFirstStartOnTheDefinition(t *testing.T) {
 func TestAFailedNodeReadRefusesAtTheGate(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	roomNodes = func(string) ([]map[string]any, bool, error) {
+	roomNodes = func(string, string) ([]map[string]any, bool, error) {
 		return nil, false, errors.New("the node read asked /api/ps and got HTTP 500")
 	}
 	gateEnv(t, "2026-10-09 02:00")
@@ -315,7 +315,7 @@ func TestAFailedNodeReadRefusesAtTheGate(t *testing.T) {
 func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 	restoreAll(t)
 	stubWholeUp(t)
-	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "whenever")
 
 	var out, errOut bytes.Buffer
@@ -334,7 +334,7 @@ func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 func TestUpRefusesAtPeakAFirstStartWhoseDefinitionDeclaresADeepSeekSeat(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	roomNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return nil, false, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	directory := t.TempDir()

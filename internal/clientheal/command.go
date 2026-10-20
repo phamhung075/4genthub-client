@@ -23,8 +23,9 @@ import (
 const usage = "usage: 4genteam heal ROOM [--check] [--json] " + clientoffpeak.ModeFlagUsage + " [--state-root DIR] [--socket PATH]"
 
 // peakGate is the DeepSeek peak gate heal asks before it restarts a seat; a var so the suite can date the
-// run without waiting for a real peak window.
-var peakGate = clientlifecycle.PeakGate
+// run without waiting for a real peak window. The SOCKET-AWARE one: heal's gate reads the daemon its
+// `--socket` resolved, which is the daemon it is about to stop and restart.
+var peakGate = clientlifecycle.PeakGateAt
 
 // Commands registers the verb.
 func Commands() []clientcmd.Command { return []clientcmd.Command{healCommand{}} }
@@ -128,7 +129,7 @@ func machineDeps(root string, client *clientruntime.Client, fix, allowPeak bool,
 			// THE GATE BEFORE THE STOP: heal's repair is a stop and a restart, and a restart is a launch that
 			// bills at peak. A refusal returns before StopSeat, so the seat is left exactly as the run found it,
 			// and the error is what the finding carries - by seat name, as "unfixed", which is the exit-3 path.
-			if err := gateRestart(room, allowPeak, stderr); err != nil {
+			if err := gateRestart(client.SocketPath, room, allowPeak, stderr); err != nil {
 				return err
 			}
 			if err := client.StopSeat(room, seat); err != nil {
@@ -176,9 +177,9 @@ func machineDeps(root string, client *clientruntime.Client, fix, allowPeak bool,
 // It writes the refusal to the caller's stderr AND returns it as an error: the stderr line is what an
 // operator watching the run sees, and the error is what the finding carries - so the seat is named, the
 // finding reads "unfixed", and the verb exits 3 rather than reporting a repair it did not make.
-func gateRestart(room string, allowPeak bool, stderr io.Writer) error {
+func gateRestart(socket, room string, allowPeak bool, stderr io.Writer) error {
 	var refusal strings.Builder
-	if code := peakGate(room, "heal", allowPeak, io.MultiWriter(stderr, &refusal)); code != clientcmd.ExitOK {
+	if code := peakGate(socket, room, "heal", allowPeak, io.MultiWriter(stderr, &refusal)); code != clientcmd.ExitOK {
 		if text := strings.TrimSpace(refusal.String()); text != "" {
 			return errors.New(text)
 		}

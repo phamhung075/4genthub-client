@@ -103,7 +103,7 @@ func restoreAll(t *testing.T) {
 	// A test in this package runs with the peak gate reading NO nodes: the gate then has nothing to
 	// decide, and no test here reaches the machine's own daemon, room or clock. A test about the gate
 	// replaces roomNodes with the reading it wants to be judged on.
-	roomNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return nil, false, nil }
 	// NO TEST WRITES agent.json. The seams that would - recording the room and starting the authority -
 	// are replaced with recorders here, so a `up` test can assert the ORDER without touching the machine's
 	// own state file.
@@ -794,7 +794,7 @@ func TestATransportFailureRefusesInsteadOfStartingTheRoom(t *testing.T) {
 // the line on its own.
 func TestPeakGateSaysWhenItDidNotRunForARoomItHasNoRecordsOf(t *testing.T) {
 	restoreAll(t)
-	roomNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	roomNodes = func(string, string) ([]map[string]any, bool, error) { return nil, false, nil }
 	// The clock is pinned inside the peak window on a DeepSeek-heavy Friday, so the case cannot pass
 	// merely because the schedule had nothing to refuse.
 	gateEnv(t, "2026-10-09 02:00")

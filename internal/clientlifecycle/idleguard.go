@@ -93,7 +93,7 @@ func NewIdleGuard(room, lead string, quiet, stall int, stateRoot string, out io.
 	}
 	g.Ask = askJev
 	g.Wake = func(room string) (bool, string) {
-		nodes, ok, err := roomNodes(room)
+		nodes, ok, err := roomNodes("", room)
 		if err != nil {
 			return false, "the room's node records could not be read: " + err.Error()
 		}
