@@ -772,7 +772,7 @@ fn an_empty_value_in_a_prefix_is_still_a_prefix() {
 
 // ---- queue-coalesce ------------------------------------------------------------------------------------------
 
-const COALESCE_ROOM: &str = "rig";
+const COALESCE_ROOM: &str = "demo-room";
 const COALESCE_LEAD: &str = "agenthub--room--lead";
 const COALESCE_SEAT: &str = "agenthub--room--dev";
 

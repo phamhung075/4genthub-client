@@ -1,3 +1,10 @@
+## 2026-10-20 - the queue-coalesce fixture's room is not named after the retired unit (go-dev)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`: `COALESCE_ROOM` is `demo-room`, not `rig`. The constant is the
+fixture's room name - a directory segment and a `4genteam room queue create <room>` argument - so the
+name was never the unit's word; it goes with the rest of slice A's tree. No assertion moved; the three
+uses (room dir, queue create, the fixture's own paths) take the new value.
+
 # Test Suite Changelog
 
 Track test suite changes, fixes, and improvements for the client.
