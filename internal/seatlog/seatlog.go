@@ -66,19 +66,19 @@ func Kilo(tokens int) string {
 // SeatLog is seat_log: (the seat's newest session log, its runtime), the newer of the omp session and
 // the agy transcript, with the Claude Code log as the fallback. A seat that switched runtime keeps the
 // old runtime's log, so existence alone does not say which one is live. An omp state directory with no
-// session in it (the rig orchestrator writes one for a Claude Code seat too, holding only its guide)
+// session in it (the room orchestrator writes one for a Claude Code seat too, holding only its guide)
 // does not count as an omp seat. An empty path means the seat has no log this machine can read, which
 // the caller skips rather than guessing at.
-func SeatLog(stateRoot, rig, seat string) (string, string) {
-	omp := NewestSession(clientruntime.SeatDir(stateRoot, rig, seat))
-	agy := AgyTranscript(stateRoot, rig, seat)
+func SeatLog(stateRoot, room, seat string) (string, string) {
+	omp := NewestSession(clientruntime.SeatDir(stateRoot, room, seat))
+	agy := AgyTranscript(stateRoot, room, seat)
 	switch {
 	case agy != "" && (omp == "" || newest([]string{omp, agy}) == agy):
 		return agy, "agy"
 	case omp != "":
 		return omp, "omp"
 	}
-	path := claudeLog(rig, seat)
+	path := claudeLog(room, seat)
 	if path == "" {
 		return "", ""
 	}
@@ -89,8 +89,8 @@ func SeatLog(stateRoot, rig, seat string) (string, string) {
 // seat has none: agy names its conversation in <seat dir>/agy-conversation and keeps the log under the
 // operator's home. Without it an agy seat whose directory still holds an omp-era session file reads as
 // silent, which is the false alarm the idle guard raised three times on 2026-10-17.
-func AgyTranscript(stateRoot, rig, seat string) string {
-	id, err := os.ReadFile(filepath.Join(clientruntime.SeatDir(stateRoot, rig, seat), "agy-conversation"))
+func AgyTranscript(stateRoot, room, seat string) string {
+	id, err := os.ReadFile(filepath.Join(clientruntime.SeatDir(stateRoot, room, seat), "agy-conversation"))
 	home, homeErr := os.UserHomeDir()
 	if err != nil || homeErr != nil || strings.TrimSpace(string(id)) == "" {
 		return ""
@@ -122,11 +122,11 @@ var sessionIDPattern = regexp.MustCompile(`--(?:session-id|resume) ([0-9a-f-]{36
 
 // claudeLog is claude_log: the session log of a Claude Code seat, found from the --session-id of its
 // process and matched against the configured projects directory.
-func claudeLog(rig, seat string) string {
+func claudeLog(room, seat string) string {
 	if ClaudeProjectsDir == "" {
 		return ""
 	}
-	out, err := exec.Command("pgrep", "-af", "claude .*--name "+clientruntime.SeatSessionName(rig, seat)).Output()
+	out, err := exec.Command("pgrep", "-af", "claude .*--name "+clientruntime.SeatSessionName(room, seat)).Output()
 	if err != nil {
 		return ""
 	}
@@ -198,9 +198,9 @@ func number(value any) (int, bool) {
 	return 0, false
 }
 
-// RigSeats is rig_seats: the seats of a rig that have a live tmux session, sorted. The omp state
+// RoomSeats is room_seats: the seats of a room that have a live tmux session, sorted. The omp state
 // directories outlive removed seats, so the tmux session list is what says a seat is really there.
-func RigSeats(root, rig string) []string {
+func RoomSeats(root, room string) []string {
 	cmd, err := clientenv.TmuxCommandAt(root, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		return nil
@@ -211,7 +211,7 @@ func RigSeats(root, rig string) []string {
 	}
 	var seats []string
 	for _, name := range strings.Fields(string(out)) {
-		if room, seat, ok := clientruntime.ParseSeatSessionName(name); ok && room == rig {
+		if sessionRoom, seat, ok := clientruntime.ParseSeatSessionName(name); ok && sessionRoom == room {
 			seats = append(seats, seat)
 		}
 	}

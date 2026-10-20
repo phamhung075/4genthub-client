@@ -53,8 +53,8 @@ const (
 	leadRowsRatio  = 0.8
 )
 
-// rigSeats is the seats with a live tmux session; the omp state dirs outlive removed seats.
-func rigSeats(ctx context.Context, root, rig string) ([]string, error) {
+// roomSeats is the seats with a live tmux session; the omp state dirs outlive removed seats.
+func roomSeats(ctx context.Context, root, room string) ([]string, error) {
 	argv, err := clientenv.TmuxArgvAt(root, "list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		return nil, err
@@ -72,7 +72,7 @@ func rigSeats(ctx context.Context, root, rig string) ([]string, error) {
 	}
 	seats := []string{}
 	for _, name := range strings.Fields(out) {
-		if room, seat, ok := clientruntime.ParseSeatSessionName(name); ok && room == rig {
+		if sessionRoom, seat, ok := clientruntime.ParseSeatSessionName(name); ok && sessionRoom == room {
 			seats = append(seats, seat)
 		}
 	}
@@ -81,8 +81,8 @@ func rigSeats(ctx context.Context, root, rig string) ([]string, error) {
 }
 
 // seatCommand is the line a grid pane runs: this seat's own feed.
-func seatCommand(rig, seat, feedArgs string) string {
-	return fmt.Sprintf("feed --room %s --seat %s %s", rig, seat, feedArgs)
+func seatCommand(room, seat, feedArgs string) string {
+	return fmt.Sprintf("feed --room %s --seat %s %s", room, seat, feedArgs)
 }
 
 // closeWorkspaces closes every workspace with this label, so a relaunch leaves one wall, not a stack.
@@ -102,14 +102,14 @@ func closeWorkspaces(ctx context.Context, label string) error {
 	return nil
 }
 
-// CloseRigWorkspaces closes the grid and lead workspaces of a rig. Their panes run the `feed` and `input`
+// CloseRoomWorkspaces closes the grid and lead workspaces of a room. Their panes run the `feed` and `input`
 // helpers, which poll forever, so a stop that leaves the workspaces open leaves those helpers running. A
 // machine without herdr has no such workspaces.
-func CloseRigWorkspaces(ctx context.Context, rig string) error {
+func CloseRoomWorkspaces(ctx context.Context, room string) error {
 	if requireHerdr() != nil {
 		return nil
 	}
-	for _, label := range []string{rig + " grid", rig + " lead"} {
+	for _, label := range []string{room + " grid", room + " lead"} {
 		if err := closeWorkspaces(ctx, label); err != nil {
 			return err
 		}
@@ -247,14 +247,14 @@ func gridPlan(seats int) gridLayout {
 // gridPlan; an explicitly requested column count keeps the equal-columns grid, columns first and then
 // equal rows.
 func runGrid(ctx context.Context, s shared, out io.Writer) error {
-	seats, err := rigSeats(ctx, s.stateRoot, s.rig)
+	seats, err := roomSeats(ctx, s.stateRoot, s.room)
 	if err != nil {
 		return err
 	}
-	if err := closeWorkspaces(ctx, s.rig+" grid"); err != nil {
+	if err := closeWorkspaces(ctx, s.room+" grid"); err != nil {
 		return err
 	}
-	created, err := herdr(ctx, "workspace", "create", "--cwd", s.workingDir(), "--label", s.rig+" grid")
+	created, err := herdr(ctx, "workspace", "create", "--cwd", s.workingDir(), "--label", s.room+" grid")
 	if err != nil {
 		return err
 	}
@@ -327,7 +327,7 @@ func runGrid(ctx context.Context, s shared, out io.Writer) error {
 		if _, err := herdr(ctx, "pane", "rename", pane, seat); err != nil {
 			return err
 		}
-		command, err := paneCommand(seatCommand(s.rig, seat, s.gridCommandArgs()))
+		command, err := paneCommand(seatCommand(s.room, seat, s.gridCommandArgs()))
 		if err != nil {
 			return err
 		}
@@ -349,26 +349,26 @@ func runGrid(ctx context.Context, s shared, out io.Writer) error {
 	return nil
 }
 
-// gridWorkspace is the id of the newest "<rig> grid" workspace.
-func gridWorkspace(ctx context.Context, rig string) (string, error) {
+// gridWorkspace is the id of the newest "<room> grid" workspace.
+func gridWorkspace(ctx context.Context, room string) (string, error) {
 	result, err := herdr(ctx, "workspace", "list")
 	if err != nil {
 		return "", err
 	}
 	found := ""
 	for _, entry := range objectList(result, "workspaces") {
-		if textOf(entry, "label") == rig+" grid" {
+		if textOf(entry, "label") == room+" grid" {
 			found = textOf(entry, "workspace_id")
 		}
 	}
 	if found == "" {
-		return "", unavailableError(fmt.Sprintf("no '%s grid' workspace: run grid first", rig))
+		return "", unavailableError(fmt.Sprintf("no '%s grid' workspace: run grid first", room))
 	}
 	return found, nil
 }
 
-func gridPanes(ctx context.Context, rig string) ([]map[string]any, error) {
-	workspace, err := gridWorkspace(ctx, rig)
+func gridPanes(ctx context.Context, room string) ([]map[string]any, error) {
+	workspace, err := gridWorkspace(ctx, room)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +387,7 @@ func gridPanes(ctx context.Context, rig string) ([]map[string]any, error) {
 
 // runInputs opens or hides the input pane under every seat pane of the grid.
 func runInputs(ctx context.Context, s shared, action string, out io.Writer) error {
-	panes, err := gridPanes(ctx, s.rig)
+	panes, err := gridPanes(ctx, s.room)
 	if err != nil {
 		return err
 	}
@@ -397,7 +397,7 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 			seats[seat] = true
 		}
 	} else {
-		live, err := rigSeats(ctx, s.stateRoot, s.rig)
+		live, err := roomSeats(ctx, s.stateRoot, s.room)
 		if err != nil {
 			return err
 		}
@@ -440,7 +440,7 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 		if _, err := herdr(ctx, "pane", "rename", created, seat+inputSuffix); err != nil {
 			return err
 		}
-		command, err := paneCommand(fmt.Sprintf("input --room %s --seat %s", s.rig, seat))
+		command, err := paneCommand(fmt.Sprintf("input --room %s --seat %s", s.room, seat))
 		if err != nil {
 			return err
 		}
@@ -467,8 +467,8 @@ func runInputs(ctx context.Context, s shared, action string, out io.Writer) erro
 // `saySender` comment in clientlifecycle names as the moment to consolidate it into the runtime client.
 // Consolidating means touching the gated send path, so it is left to its own unit rather than smuggled in
 // here.
-var sendLine = func(ctx context.Context, rig, seat, text string) error {
-	address, err := clientruntime.ResolveSeatAddress(rig, seat)
+var sendLine = func(ctx context.Context, room, seat, text string) error {
+	address, err := clientruntime.ResolveSeatAddress(room, seat)
 	if err != nil {
 		return err
 	}
@@ -478,7 +478,7 @@ var sendLine = func(ctx context.Context, rig, seat, text string) error {
 
 // runInputLoop reads lines and sends each to its seat, the same route any other message takes. An empty
 // line skips; Ctrl-D or /hide leaves.
-func runInputLoop(ctx context.Context, rig, seat string, in io.Reader, out io.Writer) error {
+func runInputLoop(ctx context.Context, room, seat string, in io.Reader, out io.Writer) error {
 	scanner := bufio.NewScanner(in)
 	for {
 		fmt.Fprintf(out, "%s > ", seat)
@@ -492,7 +492,7 @@ func runInputLoop(ctx context.Context, rig, seat string, in io.Reader, out io.Wr
 		if line == "" {
 			continue
 		}
-		if err := sendLine(ctx, rig, seat, line); err != nil {
+		if err := sendLine(ctx, room, seat, line); err != nil {
 			message := err.Error()
 			if len(message) > 200 {
 				message = message[:200]
@@ -506,11 +506,11 @@ func runInputLoop(ctx context.Context, rig, seat string, in io.Reader, out io.Wr
 
 // runLeadWindow opens a workspace for the lead alone: its detailed feed on top, an input pane under it.
 func runLeadWindow(ctx context.Context, s shared) error {
-	if err := closeWorkspaces(ctx, s.rig+" lead"); err != nil {
+	if err := closeWorkspaces(ctx, s.room+" lead"); err != nil {
 		return err
 	}
 	created, err := herdr(ctx, "workspace", "create", "--cwd", s.workingDir(),
-		"--label", s.rig+" lead", "--no-focus")
+		"--label", s.room+" lead", "--no-focus")
 	if err != nil {
 		return err
 	}
@@ -528,8 +528,8 @@ func runLeadWindow(ctx context.Context, s shared) error {
 		pane string
 		verb string
 	}{
-		{root, fmt.Sprintf("feed --room %s --seat lead --back 40 --width 0 --lines 25 --detail", s.rig)},
-		{below, fmt.Sprintf("input --room %s --seat lead", s.rig)},
+		{root, fmt.Sprintf("feed --room %s --seat lead --back 40 --width 0 --lines 25 --detail", s.room)},
+		{below, fmt.Sprintf("input --room %s --seat lead", s.room)},
 	}
 	for _, entry := range commands {
 		command, err := paneCommand(entry.verb)
@@ -546,7 +546,7 @@ func runLeadWindow(ctx context.Context, s shared) error {
 	return nil
 }
 
-// runWatch is everything needed to watch a rig work: the seat grid and the lead window.
+// runWatch is everything needed to watch a room work: the seat grid and the lead window.
 func runWatch(ctx context.Context, s shared, out io.Writer) error {
 	if err := runGrid(ctx, s, out); err != nil {
 		return err

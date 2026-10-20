@@ -9,7 +9,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
-type guardRig struct {
+type guardRoom struct {
 	guard    *IdleGuard
 	said     []string
 	asked    int
@@ -17,10 +17,10 @@ type guardRig struct {
 	modified map[string]float64
 }
 
-func newGuardRig(t *testing.T, idle map[string]bool, pick clientjev.Selection) *guardRig {
+func newGuardRoom(t *testing.T, idle map[string]bool, pick clientjev.Selection) *guardRoom {
 	t.Helper()
-	r := &guardRig{now: 10000}
-	r.guard = &IdleGuard{Rig: "demo", Lead: "lead", Quiet: 300, Stall: 900, State: map[string]*stallState{}}
+	r := &guardRoom{now: 10000}
+	r.guard = &IdleGuard{Room: "demo", Lead: "lead", Quiet: 300, Stall: 900, State: map[string]*stallState{}}
 	r.guard.Now = func() float64 { return r.now }
 	r.guard.Seats = func(string) []string { return []string{"lead", "go-dev"} }
 	r.guard.SeatLog = func(_, seat string) (string, string) { return "/log/" + seat, "omp" }
@@ -42,7 +42,7 @@ func newGuardRig(t *testing.T, idle map[string]bool, pick clientjev.Selection) *
 }
 
 func TestAnIdleRoomIsAskedOnceAndTheLeadToldToContinue(t *testing.T) {
-	r := newGuardRig(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.9})
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.9})
 	r.guard.Step(context.Background())
 	r.guard.Step(context.Background())
 	if r.asked != 1 {
@@ -54,7 +54,7 @@ func TestAnIdleRoomIsAskedOnceAndTheLeadToldToContinue(t *testing.T) {
 }
 
 func TestALowConfidenceAnswerSendsTheLeadToTheOwner(t *testing.T) {
-	r := newGuardRig(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.5})
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.5})
 	r.guard.Step(context.Background())
 	if len(r.said) != 1 || !strings.Contains(r.said[0], "ask the owner") {
 		t.Errorf("said = %q", r.said)
@@ -62,7 +62,7 @@ func TestALowConfidenceAnswerSendsTheLeadToTheOwner(t *testing.T) {
 }
 
 func TestTheSameOpenRailIsNotAskedAgainWhenTheLeadsOwnReplyMakesANewQuiet(t *testing.T) {
-	r := newGuardRig(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.5})
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.5})
 	r.guard.Step(context.Background())
 	r.modified["/log/lead"] = 9500 // the lead answered the message: a later log time, so a new quiet
 	r.now = 10000
@@ -81,7 +81,7 @@ func TestTheSameOpenRailIsNotAskedAgainWhenTheLeadsOwnReplyMakesANewQuiet(t *tes
 }
 
 func TestAWorkingSeatMeansTheRoomIsNotAsked(t *testing.T) {
-	r := newGuardRig(t, map[string]bool{"lead": true, "go-dev": false}, clientjev.Selection{OptionID: "stop", Confidence: 0.9})
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": false}, clientjev.Selection{OptionID: "stop", Confidence: 0.9})
 	r.modified["/log/go-dev"] = 9900
 	r.guard.Step(context.Background())
 	if r.asked != 0 || len(r.said) != 0 {
@@ -90,7 +90,7 @@ func TestAWorkingSeatMeansTheRoomIsNotAsked(t *testing.T) {
 }
 
 func TestAStuckSeatIsToldToContinueThenTheLead(t *testing.T) {
-	r := newGuardRig(t, map[string]bool{"lead": true, "go-dev": false}, clientjev.Selection{})
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": false}, clientjev.Selection{})
 	for range stallNudges + 2 {
 		r.guard.Step(context.Background())
 		r.now += 1000

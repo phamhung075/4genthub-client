@@ -16,7 +16,7 @@
 //   - the tests replace the httpClient seam with a fake transport, so no test opens a socket - the
 //     Python tests ran a loopback HTTP server instead;
 //   - an owner-specific value is never a default: --team, --inventory and (for publish-skills) the
-//     library root are required, so a repository name, a rig or an owner's path cannot leak in.
+//     library root are required, so a repository name, a room or an owner's path cannot leak in.
 package clientteam
 
 import (
@@ -91,7 +91,7 @@ func (teamCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 func printTeamUsage(w io.Writer) {
 	fmt.Fprint(w, `usage: 4genteam team <verb> [options]
 
-Create the cloud room a rig runs: its modules, seats, links and overlays.
+Create the cloud room a room runs: its modules, seats, links and overlays.
 
 verbs:
   apply           create modules, room, seats, links, overlays (--team DIR)

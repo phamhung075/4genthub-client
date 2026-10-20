@@ -13,12 +13,12 @@ Measures whether the seats work or talk. Read-only: it reads each seat's `tool-c
 From the hub root:
 
 ```bash
-python3 agenthub_client/skills/client/team-benchmark/scripts/benchmark.py <RIG> [--hours 24]
+python3 agenthub_client/skills/client/team-benchmark/scripts/benchmark.py <ROOM> [--hours 24]
 ```
 
 It prints one line per seat (share of calls: `chat` = queue/send, `board` = `manage_task`, `git`,
 `write` = edit/write, `test`, `read`, `shell`) and one line per repo (commits and added lines by
-kind). Each run appends one JSON line to `<state-root>/benchmarks/<RIG>.jsonl`; the next run prints
+kind). Each run appends one JSON line to `<state-root>/benchmarks/<ROOM>.jsonl`; the next run prints
 the previous chat and write share beside the new one.
 
 ## Read it

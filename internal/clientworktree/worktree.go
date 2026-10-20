@@ -279,7 +279,7 @@ func canonicalPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// Ensure is the ruling's Start, over clientservices.DerivedWorktrees(roomDir, rig, seats): the room's
+// Ensure is the ruling's Start, over clientservices.DerivedWorktrees(roomDir, room, seats): the room's
 // seats in their own order, then the room's integration worktree when the room has a lead.
 //
 // For each derived worktree it creates the path when it is missing, adds the two submodule worktrees,
@@ -293,7 +293,7 @@ func canonicalPath(path string) string {
 //
 // Before any of that it clears the pre-derivation client worktree a hand-made room left behind - the
 // migration, and the only thing this step removes (clearStaleClientWorktrees).
-func Ensure(mainRoot, roomDir, rig string, seats []clientservices.SeatType, out io.Writer) error {
+func Ensure(mainRoot, roomDir, room string, seats []clientservices.SeatType, out io.Writer) error {
 	entries, err := Read(mainRoot)
 	if err != nil {
 		return err
@@ -302,7 +302,7 @@ func Ensure(mainRoot, roomDir, rig string, seats []clientservices.SeatType, out 
 	for _, entry := range entries {
 		registered[canonicalPath(entry.Path)] = entry
 	}
-	derived := clientservices.DerivedWorktrees(roomDir, rig, seats)
+	derived := clientservices.DerivedWorktrees(roomDir, room, seats)
 	legacy, err := clearStaleClientWorktrees(mainRoot, roomDir, derived, out)
 	if err != nil {
 		return err

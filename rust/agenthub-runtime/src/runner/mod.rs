@@ -9,7 +9,7 @@
 //! ```
 //!
 //! Two measured facts shape this port (references are `pi-runner.js`, **P**, and
-//! `pi-runner-protocol.js`, **PR**, in `the rig CLI package/daemon/dist/adapters`):
+//! `pi-runner-protocol.js`, **PR**, in `the room CLI package/daemon/dist/adapters`):
 //!
 //! * the reference child's channel is a pair of **pipes** on fd 0/1/2, not a socketpair
 //!   (`P:818-822`); the design calls it a socketpair. Ownership is what matters — nobody else holds
@@ -248,7 +248,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit()); // the pane: the human sees omp's own errors
-                                   // Default deny, before anything is spawned: the agent must not inherit the live rig's addressing, which
+                                   // Default deny, before anything is spawned: the agent must not inherit the live room's addressing, which
                                    // the daemon's own environment would otherwise hand it (`crate::scrub_env` states the measurement).
     crate::scrub_env(&mut launch);
     let mut child = launch
@@ -1268,15 +1268,15 @@ pub fn request_compact(state_dir: &Path, session_or_target: &str) -> Result<Stri
 ///
 /// The vocabulary is the operator's own (`docs/AGENT-SETUP.md:389`: `locked|standard|open|yolo|none`, where
 /// "`yolo` means the seat runs unattended with no approval prompts"), and the value the client actually
-/// materialises is `builtin:yolo` (`internal/clientsync/rigverb.go:62`), whose comment gives the reason:
+/// materialises is `builtin:yolo` (`internal/clientsync/roomverb.go:62`), whose comment gives the reason:
 /// without a full-bypass launch "omp's always-ask floor cancels approvals headlessly and the seat parks".
-/// `internal/clientpolicy/policy.go` states the same shape from the runner's side: "the rig orchestrator launches an omp
+/// `internal/clientpolicy/policy.go` states the same shape from the runner's side: "the room orchestrator launches an omp
 /// seat in exactly one of two postures - yolo, or always-ask which the managed runner auto-cancels".
 ///
 /// So the unattended posture belongs to `yolo`, to the materialised `builtin:yolo`, and to an **omitted**
-/// policy — the last as the documented default, not as a description of the live rig: the reviewer measured
-/// that the live rig's own seat specs carry `permission_policy: builtin:yolo` **explicitly**
-/// (`the room spec directory/rig-*.yaml`). Both spellings map to the same launch posture,
+/// policy — the last as the documented default, not as a description of the live room: the reviewer measured
+/// that the live room's own seat specs carry `permission_policy: builtin:yolo` **explicitly**
+/// (`the room spec directory/room-*.yaml`). Both spellings map to the same launch posture,
 /// and an **empty string is refused by name** above, because a blank field is a config accident far more
 /// often than a stated intent.
 /// The four restrictive words take `always-ask`, whose dialogs this runner does not leave hanging: a dialog
@@ -1322,7 +1322,7 @@ pub fn state_file_path(state_dir: &Path, room: &str, seat: &str) -> PathBuf {
 
 /// What a failure this runner sees *is*, so a dead turn is not mistaken for a prompt.
 ///
-/// The defect this replaces is named and measured: the rig orchestrator activity store maps an omp
+/// The defect this replaces is named and measured: the room orchestrator activity store maps an omp
 /// `Notification`/`runtime_error` to `needs_input` (`agent-activity-store.js:262-265`), and `needs_input`
 /// is the one state that fails closed (`session-transport.ts:1893-1900`) — so a dead turn's own error
 /// report refuses the wakes it needs. Here a runtime error gets its own retryable classification, and
@@ -2389,9 +2389,9 @@ mod tests {
     }
 
     /// The gate finding, as a table: the documented vocabulary (`docs/AGENT-SETUP.md:389`), the value the
-    /// client materialises (`internal/clientsync/rigverb.go:62`), the unspecified case, and a word the repo
+    /// client materialises (`internal/clientsync/roomverb.go:62`), the unspecified case, and a word the repo
     /// does not define. The unattended posture must be what an unspecified policy yields, because that is
-    /// what the live rig's seats carry and an always-ask floor is what parks them.
+    /// what the live room's seats carry and an always-ask floor is what parks them.
     #[test]
     fn every_documented_policy_maps_and_an_unknown_one_is_refused() {
         for policy in ["yolo", "builtin:yolo"] {

@@ -32,7 +32,7 @@ func pythonDuplicateLines(t *testing.T) []string {
 
 // The fixtures are captured from the REFERENCE implementation, not written by hand:
 //
-//	rig_ps.json          - what `rig ps --json --nodes -A` printed when the Python bridge was run
+//	room_ps.json          - what `rig ps --json --nodes -A` printed when the Python bridge was run
 //	python_dump.json     - what `python3 the retired Python bridge script once --print --machine-id test-machine`
 //	                       printed with HOME pointed at a scratch tree carrying ONE pinned seat
 //	builders_reference.json - outputs of the Python builders for inputs the dump cannot exercise
@@ -89,13 +89,13 @@ func TestPayloadParityWithThePythonBridge(t *testing.T) {
 	var dump referenceDump
 	readFixture(t, "python_dump.json", &dump)
 
-	nodesRaw, err := os.ReadFile(filepath.Join("testdata", "rig_ps.json"))
+	nodesRaw, err := os.ReadFile(filepath.Join("testdata", "room_ps.json"))
 	if err != nil {
-		t.Fatalf("read rig_ps.json: %v", err)
+		t.Fatalf("read room_ps.json: %v", err)
 	}
 	nodes, err := parseItems(string(nodesRaw), "rig ps")
 	if err != nil {
-		t.Fatalf("unwrapping testdata/rig_ps.json: %v", err)
+		t.Fatalf("unwrapping testdata/room_ps.json: %v", err)
 	}
 
 	// The one pinned seat the dump carries, placed where the builder reads pins from.

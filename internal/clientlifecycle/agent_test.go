@@ -28,9 +28,9 @@ type childrenFixture struct {
 	logged   []string
 }
 
-func newChildrenFixture(t *testing.T, rigs ...string) *childrenFixture {
+func newChildrenFixture(t *testing.T, rooms ...string) *childrenFixture {
 	t.Helper()
-	fixture := &childrenFixture{healthFixture: newHealthFixture(t, rigs)}
+	fixture := &childrenFixture{healthFixture: newHealthFixture(t, rooms)}
 	fixture.manager = newAgentManager(fixture.root, func(line string) { fixture.logged = append(fixture.logged, line) })
 	// The inherited lifecycle test seams: the spawn is a recorder, the start grace is short, and nothing
 	// signals anything.
@@ -66,7 +66,7 @@ func (f *childrenFixture) advance(d time.Duration) {
 	f.at = f.at.Add(d)
 }
 
-// startsOf counts the starts of one child, because one pass starts every child of every listed rig - the
+// startsOf counts the starts of one child, because one pass starts every child of every listed room - the
 // assertion that matters is about the child whose behaviour the case is driving.
 func (f *childrenFixture) startsOf(needle string) int {
 	count := 0
@@ -111,7 +111,7 @@ func TestEverySupervisionPassWritesAgentOwnHeartbeat(t *testing.T) {
 }
 
 // TestTheChildListIsSevenOne: a compaction supervisor, a watchdog, a seat-message deliverer and the two
-// per-room guards (the idle guard and the budget guard) per listed rig, and ONE bridge per machine, each
+// per-room guards (the idle guard and the budget guard) per listed room, and ONE bridge per machine, each
 // with the arguments and the derived threshold 7.4 gives it.
 func TestTheChildListIsSevenOne(t *testing.T) {
 	const root = "/srv/state"
@@ -169,7 +169,7 @@ func TestAChildThatDiesIsRestartedWithBackoffFromOneSecond(t *testing.T) {
 		t.Errorf("compact starts = %d, want the third start after the doubled wait", got)
 	}
 
-	// Only the children of the ONE listed rig, plus the single bridge: nothing else is ever started.
+	// Only the children of the ONE listed room, plus the single bridge: nothing else is ever started.
 	for _, argv := range f.spawned {
 		joined := strings.Join(argv, " ")
 		if !strings.Contains(joined, "--state-root "+f.root) {
@@ -177,7 +177,7 @@ func TestAChildThatDiesIsRestartedWithBackoffFromOneSecond(t *testing.T) {
 			continue
 		}
 		if !strings.HasPrefix(joined, "bridge run ") && !strings.Contains(joined, "demo") {
-			t.Errorf("spawned %v, which belongs to no listed rig", argv)
+			t.Errorf("spawned %v, which belongs to no listed room", argv)
 		}
 	}
 }
@@ -229,7 +229,7 @@ func TestThreeDeathsInsideTenMinutesIsFailingAndRetriesAtTheCap(t *testing.T) {
 }
 
 // TestALiveChildIsAdoptedNotDuplicated: a detached child can outlive an agent that was killed, and two
-// supervisors on one rig would be worse than none. Liveness is read from the same pgrep the report uses, so
+// supervisors on one room would be worse than none. Liveness is read from the same pgrep the report uses, so
 // agent and `doctor` cannot disagree.
 func TestALiveChildIsAdoptedNotDuplicated(t *testing.T) {
 	f := newChildrenFixture(t, "demo")
@@ -306,12 +306,12 @@ func TestTheSupervisionFactsArePersistedForDoctor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAgentState: %v", err)
 	}
-	if len(stored.Rigs) != 1 || stored.Rigs[0] != "demo" {
-		t.Fatalf("rigs = %v, want the listed room kept", stored.Rigs)
+	if len(stored.Rooms) != 1 || stored.Rooms[0] != "demo" {
+		t.Fatalf("rooms = %v, want the listed room kept", stored.Rooms)
 	}
 	var found bool
 	for _, row := range stored.Safeguards {
-		if row.Safeguard == clientservices.Compact && row.Rig == "demo" {
+		if row.Safeguard == clientservices.Compact && row.Room == "demo" {
 			found = true
 			if row.StartedAt == "" {
 				t.Errorf("row = %+v, want started_at recorded", row)
@@ -347,7 +347,7 @@ func TestEveryStepWritesTheCompactHeartbeat(t *testing.T) {
 	}
 	for _, beat := range *beats {
 		if beat != clientservices.Compact+"/r" {
-			t.Errorf("beat = %q, want the compaction supervisor of the supervised rig", beat)
+			t.Errorf("beat = %q, want the compaction supervisor of the supervised room", beat)
 		}
 	}
 }
@@ -364,11 +364,11 @@ func TestUpRefusesWhenACredentialIsMissingWithoutPrintingItsValue(t *testing.T) 
 		ran = append(ran, "ensureDaemon")
 		return "/tmp/daemon.log", nil
 	}
-	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
-		ran = append(ran, "ensureRig")
+	ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		ran = append(ran, "ensureRoom")
 		return clientcmd.ExitOK
 	}
-	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
+	recordRoomFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	openUI = func(io.Writer) { ran = append(ran, "ui") }
@@ -405,17 +405,17 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 		ran = append(ran, "ensureDaemon")
 		return "/tmp/daemon.log", nil
 	}
-	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
-		ran = append(ran, "ensureRig")
+	ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		ran = append(ran, "ensureRoom")
 		return clientcmd.ExitOK
 	}
-	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
+	recordRoomFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 	waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
 		ran = append(ran, "wait")
 		return []clientservices.Health{
-			{Rig: "demo", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
-			{Rig: "demo", Safeguard: clientservices.Agent, State: clientservices.Running, AgeS: 1},
+			{Room: "demo", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
+			{Room: "demo", Safeguard: clientservices.Agent, State: clientservices.Running, AgeS: 1},
 		}, false, nil
 	}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }

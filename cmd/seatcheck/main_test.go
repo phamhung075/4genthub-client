@@ -74,14 +74,14 @@ func writeFile(t *testing.T, path, content string) string {
 func TestAuditScanFindsBypassAndSkipsKnownWrapper(t *testing.T) {
 	dir := t.TempDir()
 	observed := writeFile(t, filepath.Join(dir, "observed.txt"),
-		"rig send b@r hi\nFOO=1 /usr/bin/rig queue y\nseatcheck send --to b --intent task -- hi\nrig status\n")
+		"tmux send-keys -t s hi Enter\nFOO=1 /usr/bin/tmux paste-buffer -t s\nseatcheck send --to b --intent task -- hi\nroom status\n")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"audit-scan", "--known", "seatcheck", "--file", observed}, &stdout, &stderr)
 	if code != 4 {
 		t.Fatalf("exit = %d, want 4 (stderr %q)", code, stderr.String())
 	}
-	want := "bypass-suspected: rig send b@r hi\nbypass-suspected: FOO=1 /usr/bin/rig queue y\n"
+	want := "bypass-suspected: tmux send-keys -t s hi Enter\nbypass-suspected: FOO=1 /usr/bin/tmux paste-buffer -t s\n"
 	if stdout.String() != want {
 		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
 	}
@@ -89,7 +89,7 @@ func TestAuditScanFindsBypassAndSkipsKnownWrapper(t *testing.T) {
 
 func TestAuditScanCleanExits0(t *testing.T) {
 	dir := t.TempDir()
-	observed := writeFile(t, filepath.Join(dir, "observed.txt"), "seatcheck send --to b --intent task -- hi\nrig status\n")
+	observed := writeFile(t, filepath.Join(dir, "observed.txt"), "seatcheck send --to b --intent task -- hi\nroom status\n")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"audit-scan", "--known", "seatcheck", "--file", observed}, &stdout, &stderr)

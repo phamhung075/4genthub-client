@@ -70,7 +70,7 @@ func seatEnvIdentity() (WhoamiResponse, bool) {
 	return WhoamiResponse{
 		ResolvedBy: "environment",
 		Identity: WhoamiIdentity{
-			RigName:     room,
+			RoomName:    room,
 			MemberId:    seat,
 			Runtime:     runtime,
 			SessionName: session,
@@ -120,7 +120,7 @@ func printWhoami(stdout, stderr io.Writer, resp *WhoamiResponse, asJSON bool) in
 	case string:
 		fmt.Fprintf(stdout, "Task:    %s\n", task)
 	}
-	fmt.Fprintf(stdout, "Rig:     %s\n", resp.Identity.RigName)
+	fmt.Fprintf(stdout, "Room:     %s\n", resp.Identity.RoomName)
 	fmt.Fprintf(stdout, "Seat:    %s\n", resp.Identity.MemberId)
 	fmt.Fprintf(stdout, "Role:    %s\n", resp.Identity.Role)
 	fmt.Fprintf(stdout, "Runtime: %s\n", resp.Identity.Runtime)
@@ -166,10 +166,10 @@ func (captureCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 	}
 
 	// THE PANE IS READ THROUGH THE RUNTIME'S OWN TERMINAL MANAGER - the process that owns the tmux server -
-	// over this client's own transport, which is Client.Capture. This verb used to dial the rig daemon:
+	// over this client's own transport, which is Client.Capture. This verb used to dial the room daemon:
 	// it gated on the daemon URL and port variables, POSTed /api/transport/capture and parsed the document that came
 	// back. That is the rig orchestrator path this cutover removes, and capture is meant to work with `rig` off PATH
-	// and no the rig orchestrator path at all. A runtime that is not there, or one that refuses, is a refusal in words
+	// and no the room orchestrator path at all. A runtime that is not there, or one that refuses, is a refusal in words
 	// (ExitUnavailable) and never an empty pane; nothing falls back to the daemon.
 	answer, err := NewClient("").Capture(name, lines)
 	if err != nil {

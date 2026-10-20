@@ -296,8 +296,8 @@ pub struct PendingNudge {
 /// The four that exist in this tree's world: the session name this runtime derives
 /// (`agenthub--<room>--<seat>`, the same one `SendTextToSeat` and the pane's `AGENTHUB_SESSION_NAME` use),
 /// the bare seat key (what the design's own room recipe named and what a row written by hand usually
-/// says), the rig orchestrator session name the live rig's rows carry (`<rig>-<seat>@<rig>`, where this
-/// runtime's room IS the rig name), and `seat@room` - the spelling the client stored verbatim before
+/// says), the room orchestrator session name the live room's rows carry (`<room>-<seat>@<room>`, where this
+/// runtime's room IS the room name), and `seat@room` - the spelling the client stored verbatim before
 /// `resolve_queue_destination` existed. New rows are written as the session name; the other three are the
 /// backlog this join must still read.
 fn addressed_names(room: &str, session: &str, seat: &str) -> [String; 4] {
@@ -657,7 +657,7 @@ pub(crate) const SEAT_WORKFLOW_FILE: &str = "AGENTS.md";
 /// carry baselines and references beside its SKILL.md).
 ///
 /// THE COPY DECIDES THESE MODES, NOT THE PROCESS'S UMASK: `fs::copy` carries the SOURCE's permission bits
-/// across, so a skill that ships `0644` in the rig landed `0644` in the seat's own tree whatever the umask
+/// across, so a skill that ships `0644` in the room landed `0644` in the seat's own tree whatever the umask
 /// said - measured on a scratch room 2026-10-16, `rooms/<room>/seats/<seat>/skills/**` was the one part of
 /// the state root `restrict_umask` did not reach. The group's and the world's bits are dropped here and the
 /// owner's are kept, so an asset that ships executable stays executable for its owner and nothing more.
@@ -835,7 +835,7 @@ impl RoomSupervisor {
 
     /// The CANONICAL session name of a native seat: `<room>-<seat>@<room>`.
     ///
-    /// The room IS the rig here - `room_dir`, the socket's own rooms and whoami's `rigName` all say so -
+    /// The room IS the room here - `room_dir`, the socket's own rooms and whoami's `roomName` all say so -
     /// which is the same rule the client's `SeatSessionName` doc states from the other side. It is the name
     /// a person passes to `--session`, so it is the first identifier the session list serves.
     pub fn canonical_session_name(room: &str, seat: &str) -> String {
@@ -1721,7 +1721,7 @@ impl RoomSupervisor {
                 out.push(SessionEntry {
                     canonical_session_name: Self::canonical_session_name(&name, &status.seat),
                     session_name: status.session_name.clone(),
-                    rig_name: name.clone(),
+                    room_name: name.clone(),
                     logical_id: Self::logical_id(&name, &status.seat),
                     session_status: match status.state {
                         SeatLifecycleState::Running => "running".to_string(),
@@ -2001,8 +2001,8 @@ impl RoomSupervisor {
     /// of "work waiting for this seat". Its wake is its blocker's close.
     ///
     /// The rail's rows are written by the client's `room queue` verbs, whose `--to` is a free session
-    /// string, and the two spellings in use disagree: the live rig's session name is
-    /// `<rig>-<seat>@<rig>` while this runtime derives `agenthub--<room>--<seat>`, and a row a human wrote
+    /// string, and the two spellings in use disagree: the live room's session name is
+    /// `<room>-<seat>@<room>` while this runtime derives `agenthub--<room>--<seat>`, and a row a human wrote
     /// by hand usually names the bare seat key. All three are matched, because a spelling gap here would
     /// be read as "nothing is waiting" - the one lie this join exists to prevent. The rows are selected
     /// from the room's active set rather than by an equality filter in SQL for that reason; a room's
@@ -2182,7 +2182,7 @@ impl RoomSupervisor {
                                 return Ok(WhoamiResponse {
                                     resolved_by: "session_name".into(),
                                     identity: WhoamiIdentity {
-                                        rig_name: spec.room.clone(),
+                                        room_name: spec.room.clone(),
                                         member_id: seat.seat_key.clone(),
                                         runtime: seat.runtime.clone(),
                                         session_name: session.clone(),
@@ -2219,7 +2219,7 @@ impl RoomSupervisor {
             return Ok(WhoamiResponse {
                 resolved_by: "environment".into(),
                 identity: WhoamiIdentity {
-                    rig_name: r,
+                    room_name: r,
                     member_id: s.clone(),
                     runtime,
                     session_name: session,
@@ -2601,7 +2601,7 @@ mod tests {
     }
 
     /// THE SESSION LIST IS THE CLIENT'S SHAPE, not the runtime's own. Every key the client's one parser
-    /// reads (`clientsync.parseRigPsSessions`) is present and spelled as the CLI spells it - an entry that
+    /// reads (`clientsync.parseRoomPsSessions`) is present and spelled as the CLI spells it - an entry that
     /// parser cannot read is a session the cloud never sees while the runtime still looks healthy.
     #[tokio::test]
     async fn the_session_list_serves_the_keys_the_clients_parser_reads() {
@@ -2625,8 +2625,8 @@ mod tests {
             RoomSupervisor::session_name(room, &seat)
         );
         assert_eq!(
-            entry.rig_name, room,
-            "the room IS the rig for a native room"
+            entry.room_name, room,
+            "the room IS the room for a native room"
         );
         assert_eq!(
             entry.logical_id,
@@ -2653,7 +2653,7 @@ mod tests {
         for key in [
             "canonicalSessionName",
             "sessionName",
-            "rigName",
+            "roomName",
             "logicalId",
             "sessionStatus",
             "agentActivity",
@@ -2685,13 +2685,13 @@ mod tests {
         let all = supervisor.list_sessions(None).expect("every hosted room");
         assert_eq!(all.len(), 2, "one entry per hosted seat: {all:?}");
         assert!(
-            all.iter().any(|e| e.rig_name == room_a) && all.iter().any(|e| e.rig_name == room_b),
+            all.iter().any(|e| e.room_name == room_a) && all.iter().any(|e| e.room_name == room_b),
             "both hosted rooms are listed: {all:?}"
         );
 
         let one = supervisor.list_sessions(Some(room_a)).expect("one room");
         assert_eq!(one.len(), 1, "a named room narrows the list: {one:?}");
-        assert_eq!(one[0].rig_name, room_a);
+        assert_eq!(one[0].room_name, room_a);
 
         let refused = supervisor
             .list_sessions(Some("ghost-room"))
@@ -3815,7 +3815,7 @@ mod tests {
     }
 
     /// The rail's rows have been written with more than one spelling of a seat's name, and the join has to
-    /// see all of them: a row addressed to the native session name, to the rig orchestrator session name, to
+    /// see all of them: a row addressed to the native session name, to the room orchestrator session name, to
     /// the bare seat key, or to `seat@room` all belong to the same seat. A spelling the join missed would
     /// read as "nothing waiting" - the lie the alert exists to prevent.
     #[tokio::test]
@@ -3874,7 +3874,7 @@ mod tests {
     /// A create resolves every accepted spelling to the session name the alert and the nudge pass read, and
     /// REFUSES a value naming no seat of the room by name, with the seats that would have worked.
     ///
-    /// The session name and the rig orchestrator form are what the live rail already carried; the bare seat
+    /// The session name and the room orchestrator form are what the live rail already carried; the bare seat
     /// key and `seat@room` are what a hand-written row and the client's verb wrote before this resolution
     /// existed. `seat@room` is the case the measurement named: a row stored in it nudged nobody while its
     /// session-name twin was nudged in a second. `principal@<room>` is refused with the rest - the room
@@ -5165,7 +5165,7 @@ mod tests {
     }
 
     /// A skill file's mode comes from the COPY, not from this process's umask: the source's bits are decided by
-    /// whoever wrote it in the rig, and a rig that ships `0644` shipped it into every seat's own tree -
+    /// whoever wrote it in the room, and a room that ships `0644` shipped it into every seat's own tree -
     /// measured on a scratch room 2026-10-16, `rooms/<room>/seats/<seat>/skills/**` was the one part of the
     /// state root the umask did not reach. The source's bits are set explicitly here so the case means the same
     /// thing whatever this test process's umask happens to be.
@@ -5204,7 +5204,7 @@ mod tests {
         assert_eq!(
             perm(installed.join("SKILL.md")),
             0o600,
-            "a copied skill's file must not keep the rig's 0644"
+            "a copied skill's file must not keep the room's 0644"
         );
         assert_eq!(
             perm(installed.join("polluter.sh")),

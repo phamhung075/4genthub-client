@@ -33,8 +33,8 @@ func TestTheCloneRowNamesEveryChangedPathAsUnowned(t *testing.T) {
 	if row.Row.State != clientservices.CloneDirty {
 		t.Errorf("state = %q, want %q", row.Row.State, clientservices.CloneDirty)
 	}
-	if row.Row.Rig != "" {
-		t.Errorf("rig = %q, want the machine's row to carry no rig", row.Row.Rig)
+	if row.Row.Room != "" {
+		t.Errorf("room = %q, want the machine's row to carry no room", row.Row.Room)
 	}
 	lines := cloneLines(row)
 	if len(lines) != 2 {

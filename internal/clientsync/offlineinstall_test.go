@@ -12,12 +12,12 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-// bundleFor writes a materialized bundle: a rig spec, and one agent directory per agent reference
+// bundleFor writes a materialized bundle: a room spec, and one agent directory per agent reference
 // carrying the pinned policy that travels with it.
 func bundleFor(t *testing.T, spec string, agents map[string]string) string {
 	t.Helper()
 	target := t.TempDir()
-	if err := os.WriteFile(filepath.Join(target, "rig.yaml"), []byte(spec), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(target, "room.yaml"), []byte(spec), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for agent, policy := range agents {

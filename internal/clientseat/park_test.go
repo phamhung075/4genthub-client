@@ -35,7 +35,7 @@ func TestSendRefusesAParkedSeatAndDeliversNothing(t *testing.T) {
 
 	sock, requests := fakeRuntime(t, func(line string) string {
 		if strings.Contains(line, `"Whoami"`) {
-			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+			return `{"ok":true,"data":{"identity":{"roomName":"4genthub-min","memberId":"go-dev",` +
 				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
 		}
 		if strings.Contains(line, `"GetRoomLinks"`) {

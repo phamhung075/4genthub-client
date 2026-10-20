@@ -46,9 +46,9 @@ func newReportFixture(t *testing.T) *reportFixture {
 }
 
 // beat writes one heartbeat file with a chosen pid and age.
-func (f *reportFixture) beat(safeguard, rig string, age time.Duration, pid int) {
+func (f *reportFixture) beat(safeguard, room string, age time.Duration, pid int) {
 	f.t.Helper()
-	path := HeartbeatPath(f.root, safeguard, rig)
+	path := HeartbeatPath(f.root, safeguard, room)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		f.t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func (f *reportFixture) beat(safeguard, rig string, age time.Duration, pid int) 
 	}
 }
 
-func (f *reportFixture) row(safeguard, rig string, env Env) Health {
+func (f *reportFixture) row(safeguard, room string, env Env) Health {
 	f.t.Helper()
 	env.Root = f.root
 	rows, err := Verify(context.Background(), env)
@@ -69,11 +69,11 @@ func (f *reportFixture) row(safeguard, rig string, env Env) Health {
 		f.t.Fatalf("Verify refused: %v", err)
 	}
 	for _, row := range rows {
-		if row.Safeguard == safeguard && row.Rig == rig {
+		if row.Safeguard == safeguard && row.Room == room {
 			return row
 		}
 	}
-	f.t.Fatalf("no row for %s/%s", safeguard, rig)
+	f.t.Fatalf("no row for %s/%s", safeguard, room)
 	return Health{}
 }
 
@@ -104,7 +104,7 @@ func TestTheSilenceThresholdsAreSevenFour(t *testing.T) {
 // stopped whatever its heartbeat says, and a live process whose beat is missing or stale or names another
 // pid is silent.
 func TestTheProcessDecidesRunningAgainstStopped(t *testing.T) {
-	env := Env{Rigs: []string{"demo"}}
+	env := Env{Rooms: []string{"demo"}}
 
 	t.Run("live with a fresh beat", func(t *testing.T) {
 		f := newReportFixture(t)
@@ -172,7 +172,7 @@ func TestTheProcessDecidesRunningAgainstStopped(t *testing.T) {
 // TestSilentIsStrictlyPastTheThreshold: the boundary is `age > threshold`, so a beat exactly at the
 // threshold is still running and a moment past it is not.
 func TestSilentIsStrictlyPastTheThreshold(t *testing.T) {
-	env := Env{Rigs: []string{"demo"}}
+	env := Env{Rooms: []string{"demo"}}
 
 	f := newReportFixture(t)
 	f.live[Pattern(Compact, "demo")] = []int{77}
@@ -194,11 +194,11 @@ func TestAgentComputesTheThresholdFromTheFlagsItLaunchedWith(t *testing.T) {
 	f.live[Pattern(Compact, "demo")] = []int{77}
 	f.beat(Compact, "demo", 60*time.Second, 77)
 
-	slow := Env{Rigs: []string{"demo"}, Thresholds: map[string]time.Duration{Compact: SilentAfter(60 * time.Second)}}
+	slow := Env{Rooms: []string{"demo"}, Thresholds: map[string]time.Duration{Compact: SilentAfter(60 * time.Second)}}
 	if got := f.row(Compact, "demo", slow); got.State != Running {
 		t.Errorf("row = %+v, want running: agent launched it with a 60 s pass", got)
 	}
-	if got := f.row(Compact, "demo", Env{Rigs: []string{"demo"}}); got.State != Silent {
+	if got := f.row(Compact, "demo", Env{Rooms: []string{"demo"}}); got.State != Silent {
 		t.Errorf("row = %+v, want silent under the 30 s default", got)
 	}
 }
@@ -208,9 +208,9 @@ func TestAgentComputesTheThresholdFromTheFlagsItLaunchedWith(t *testing.T) {
 func TestFailingIsDecidableOnlyByAgent(t *testing.T) {
 	f := newReportFixture(t)
 	env := Env{
-		Rigs: []string{"demo"},
+		Rooms: []string{"demo"},
 		Supervised: []Health{{
-			Rig: "demo", Safeguard: Compact, State: Failing, Restarts: 3,
+			Room: "demo", Safeguard: Compact, State: Failing, Restarts: 3,
 			StartedAt: "2026-10-11T11:00:00Z",
 		}},
 	}
@@ -236,7 +236,7 @@ func TestFailingIsDecidableOnlyByAgent(t *testing.T) {
 	}
 }
 
-// TestTheHeartbeatFileLayoutIsSevenTwo: <LogDir>/heartbeat/<safeguard>-<rig>.json, and `agent.json` for the
+// TestTheHeartbeatFileLayoutIsSevenTwo: <LogDir>/heartbeat/<safeguard>-<room>.json, and `agent.json` for the
 // machine-scoped writer, holding {pid, at} and nothing else.
 func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	f := newReportFixture(t)
@@ -247,13 +247,13 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rigScoped := filepath.Join(f.dir, "heartbeat", "compact-demo.json")
-	if _, err := os.Stat(rigScoped); err != nil {
-		t.Errorf("the rig-scoped beat is not at %s: %v", rigScoped, err)
+	roomScoped := filepath.Join(f.dir, "heartbeat", "compact-demo.json")
+	if _, err := os.Stat(roomScoped); err != nil {
+		t.Errorf("the room-scoped beat is not at %s: %v", roomScoped, err)
 	}
 	// The beat is state under the state root, and an explicit mode is what a process umask cannot clamp: this
 	// was 0644 - readable by every local user - until the room's whole tree went private.
-	if info, err := os.Stat(rigScoped); err == nil && info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(roomScoped); err == nil && info.Mode().Perm() != 0o600 {
 		t.Errorf("the heartbeat's mode = %v, want 0600", info.Mode().Perm())
 	}
 	machine := filepath.Join(f.dir, "heartbeat", "agent.json")
@@ -267,7 +267,7 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 		t.Errorf("the bridge is one per machine, so its beat is bridge.json: %v", err)
 	}
 
-	raw, err := os.ReadFile(rigScoped)
+	raw, err := os.ReadFile(roomScoped)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,14 +296,14 @@ func TestTheHeartbeatFileLayoutIsSevenTwo(t *testing.T) {
 	}
 }
 
-// TestAgentStateIsPrivateAndAddsARigOnce is 7.1's `rigs` list and 3.2's mode: the file is a consent file in a
+// TestAgentStateIsPrivateAndAddsARoomOnce is 7.1's `rooms` list and 3.2's mode: the file is a consent file in a
 // later phase, so it is 0600, and `up` may run twice.
-func TestAgentStateIsPrivateAndAddsARigOnce(t *testing.T) {
+func TestAgentStateIsPrivateAndAddsARoomOnce(t *testing.T) {
 	newReportFixture(t)
-	state := AddRig(AddRig(AgentState{}, "demo"), "demo")
-	state = AddRig(state, "other")
-	if strings.Join(state.Rigs, ",") != "demo,other" {
-		t.Fatalf("rigs = %v, want the name added once", state.Rigs)
+	state := AddRoom(AddRoom(AgentState{}, "demo"), "demo")
+	state = AddRoom(state, "other")
+	if strings.Join(state.Rooms, ",") != "demo,other" {
+		t.Fatalf("rooms = %v, want the name added once", state.Rooms)
 	}
 	if err := WriteAgentState(state); err != nil {
 		t.Fatal(err)
@@ -324,11 +324,11 @@ func TestAgentStateIsPrivateAndAddsARigOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAgentState: %v", err)
 	}
-	if strings.Join(read.Rigs, ",") != "demo,other" {
-		t.Errorf("ReadAgentState = %+v, want the two rigs", read)
+	if strings.Join(read.Rooms, ",") != "demo,other" {
+		t.Errorf("ReadAgentState = %+v, want the two rooms", read)
 	}
-	if got := RemoveRig(read, "demo"); strings.Join(got.Rigs, ",") != "other" {
-		t.Errorf("RemoveRig = %+v, want demo gone", got.Rigs)
+	if got := RemoveRoom(read, "demo"); strings.Join(got.Rooms, ",") != "other" {
+		t.Errorf("RemoveRoom = %+v, want demo gone", got.Rooms)
 	}
 	if err := os.WriteFile(path, []byte("not json{"), 0o600); err != nil {
 		t.Fatal(err)
@@ -342,7 +342,7 @@ func TestAgentStateIsPrivateAndAddsARigOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A MISSING FILE IS NOT AN ERROR: a machine whose agent has never run has no rooms to name.
-	if got, err := ReadAgentState(); err != nil || len(got.Rigs) != 0 {
+	if got, err := ReadAgentState(); err != nil || len(got.Rooms) != 0 {
 		t.Errorf("a missing state file answered %+v (err %v), want the empty state and no error", got, err)
 	}
 }
@@ -366,18 +366,18 @@ func TestAlertsLogKeepsTheTransitionsAndTheTail(t *testing.T) {
 	}
 }
 
-// TestStateLineIsTheLineSevenFiveRequires: `<rig> <safeguard>: <state>, age <n>s`, with the machine-scoped
-// rows carrying no rig and a row with no beat saying so rather than claiming an age of zero.
+// TestStateLineIsTheLineSevenFiveRequires: `<room> <safeguard>: <state>, age <n>s`, with the machine-scoped
+// rows carrying no room and a row with no beat saying so rather than claiming an age of zero.
 func TestStateLineIsTheLineSevenFiveRequires(t *testing.T) {
 	cases := []struct {
 		row  Health
 		want string
 	}{
-		{Health{Rig: "demo", Safeguard: Compact, State: Stopped, AgeS: 31}, "demo compact: stopped, age 31s"},
-		{Health{Rig: "demo", Safeguard: Watchdog, State: Silent, AgeS: 400}, "demo watchdog: silent, age 400s"},
-		{Health{Rig: "", Safeguard: Bridge, State: Stopped, AgeS: 0}, "bridge: stopped, age 0s"},
-		{Health{Rig: "", Safeguard: Agent, State: Running, AgeS: 1}, "agent: running, age 1s"},
-		{Health{Rig: "demo", Safeguard: Compact, State: Stopped, AgeS: UnknownAge}, "demo compact: stopped, age unknown"},
+		{Health{Room: "demo", Safeguard: Compact, State: Stopped, AgeS: 31}, "demo compact: stopped, age 31s"},
+		{Health{Room: "demo", Safeguard: Watchdog, State: Silent, AgeS: 400}, "demo watchdog: silent, age 400s"},
+		{Health{Room: "", Safeguard: Bridge, State: Stopped, AgeS: 0}, "bridge: stopped, age 0s"},
+		{Health{Room: "", Safeguard: Agent, State: Running, AgeS: 1}, "agent: running, age 1s"},
+		{Health{Room: "demo", Safeguard: Compact, State: Stopped, AgeS: UnknownAge}, "demo compact: stopped, age unknown"},
 	}
 	for _, c := range cases {
 		if got := StateLine(c.row); got != c.want {
@@ -386,17 +386,17 @@ func TestStateLineIsTheLineSevenFiveRequires(t *testing.T) {
 	}
 }
 
-// TestTheReportWalksTheListedRigsAndTheTwoMachineRows: one supervisor, one watchdog and one seat
-// deliverer per listed rig, and exactly one bridge and one agent, in a stable order.
-func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
+// TestTheReportWalksTheListedRoomsAndTheTwoMachineRows: one supervisor, one watchdog and one seat
+// deliverer per listed room, and exactly one bridge and one agent, in a stable order.
+func TestTheReportWalksTheListedRoomsAndTheTwoMachineRows(t *testing.T) {
 	f := newReportFixture(t)
-	rows, err := Verify(context.Background(), Env{Root: f.root, Rigs: []string{"demo", "other"}})
+	rows, err := Verify(context.Background(), Env{Root: f.root, Rooms: []string{"demo", "other"}})
 	if err != nil {
 		t.Fatalf("Verify refused: %v", err)
 	}
 	var order []string
 	for _, row := range rows {
-		order = append(order, strings.TrimSpace(row.Rig+" "+row.Safeguard))
+		order = append(order, strings.TrimSpace(row.Room+" "+row.Safeguard))
 	}
 	want := "demo compact,demo watchdog,demo messages,demo roomguard,demo budget,other compact,other watchdog,other messages,other roomguard,other budget,bridge,agent"
 	if strings.Join(order, ",") != want {
@@ -411,8 +411,8 @@ func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 }
 
 // TestTheObligatoryTableAgreesWithTheScopeRule holds 7.8's table against the predicate the heartbeat file's
-// name and the row's rig are both decided by. Two answers to "does this run once per rig" is exactly how a
-// per-rig service ends up writing a machine-wide heartbeat, and then `doctor` reads one seat's beat for
+// name and the row's room are both decided by. Two answers to "does this run once per room" is exactly how a
+// per-room service ends up writing a machine-wide heartbeat, and then `doctor` reads one seat's beat for
 // every room.
 func TestTheObligatoryTableAgreesWithTheScopeRule(t *testing.T) {
 	seen := map[string]bool{}
@@ -424,8 +424,8 @@ func TestTheObligatoryTableAgreesWithTheScopeRule(t *testing.T) {
 		if service.Check == nil {
 			t.Errorf("%s has no Check: a row the report cannot compute is not a row", service.Name)
 		}
-		if wantRig := service.Scope == Rig; wantRig != RigScoped(service.Name) {
-			t.Errorf("%s: table says scope %q, RigScoped says %v", service.Name, service.Scope, RigScoped(service.Name))
+		if wantRoom := service.Scope == Room; wantRoom != RoomScoped(service.Name) {
+			t.Errorf("%s: table says scope %q, RoomScoped says %v", service.Name, service.Scope, RoomScoped(service.Name))
 		}
 	}
 	for _, name := range Safeguards() {
@@ -446,7 +446,7 @@ func TestVerifyRefusesWhenTheProcessProbeCannotRun(t *testing.T) {
 	Live = func(string) ([]int, error) { return nil, errors.New("pgrep: not found") }
 	t.Cleanup(func() { Live = previous })
 
-	rows, err := Verify(context.Background(), Env{Root: t.TempDir(), Rigs: []string{"demo"}})
+	rows, err := Verify(context.Background(), Env{Root: t.TempDir(), Rooms: []string{"demo"}})
 	if err == nil {
 		t.Fatalf("Verify decided %d row(s) from a probe that could not run", len(rows))
 	}

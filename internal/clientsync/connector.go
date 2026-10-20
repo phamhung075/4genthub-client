@@ -497,7 +497,7 @@ type SessionAck struct {
 
 // RegisterSession declares one local session and returns what the cloud assigned it.
 //
-// room and seat are the seat identity the connector observed: the rig that runs the session, and the
+// room and seat are the seat identity the connector observed: the room that runs the session, and the
 // member inside it. THEY TRAVEL AS A PAIR OR NOT AT ALL - a frame naming a room without a seat, or a
 // seat without a room, is one the server would have to refuse or guess about, so the pair is sent
 // whole or omitted whole, and a session from a machine that cannot name its seat is still a session.

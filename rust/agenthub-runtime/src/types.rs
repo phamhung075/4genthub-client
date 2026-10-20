@@ -255,8 +255,8 @@ pub struct WhoamiResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhoamiIdentity {
-    #[serde(rename = "rigName")]
-    pub rig_name: String,
+    #[serde(rename = "roomName")]
+    pub room_name: String,
     #[serde(rename = "memberId")]
     pub member_id: String,
     pub runtime: String,
@@ -308,22 +308,22 @@ pub struct WhoamiTranscript {
 /// One entry of the session list (`ListSessions`): one seat of one hosted room, in the CLI's OWN
 /// camelCase spellings so the client's existing session-list parser reads either source unchanged.
 ///
-/// THE FIELD NAMES ARE THE CONTRACT, not a preference. `clientsync.parseRigPsSessions` reads
-/// `canonicalSessionName` FIRST - the name a person passes to `--session` - then `rigName` and
+/// THE FIELD NAMES ARE THE CONTRACT, not a preference. `clientsync.parseRoomPsSessions` reads
+/// `canonicalSessionName` FIRST - the name a person passes to `--session` - then `roomName` and
 /// `logicalId` (whose member after the FIRST dot is the seat key) and `sessionStatus`, and it SKIPS an
 /// entry with no usable name. Serving `SeatStatus`'s snake_case keys here instead would make every native
 /// session invisible to that parser while looking like a working answer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionEntry {
-    /// `<room>-<seat>@<room>`: the room IS the rig for a native room, the rule the client's own
+    /// `<room>-<seat>@<room>`: the room IS the room for a native room, the rule the client's own
     /// `SeatSessionName` doc states, and the name a person addresses a seat by.
     #[serde(rename = "canonicalSessionName")]
     pub canonical_session_name: String,
     /// The runtime's own session name (`agenthub--<room>--<seat>`): what tmux is addressed by.
     #[serde(rename = "sessionName")]
     pub session_name: String,
-    #[serde(rename = "rigName")]
-    pub rig_name: String,
+    #[serde(rename = "roomName")]
+    pub room_name: String,
     /// `<room>.<seat>`: the client recovers the seat key from the member after the first dot, and a bare
     /// seat key names no member to that reader.
     #[serde(rename = "logicalId")]

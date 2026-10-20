@@ -12,7 +12,7 @@ import (
 // teeLog is the shell pair's log(): every line is appended to the verb's own log file AND printed, so a
 // foreground run is readable and a redirected one is still capturable. `up`'s supervisor logs are
 // separate files under the client's state root; these two verbs write
-// ~/.config/4genthub/logs/rig-continue.log and rig-watchdog.log.
+// ~/.config/4genthub/logs/room-continue.log and room-watchdog.log.
 type teeLog struct {
 	out  io.Writer
 	file *os.File

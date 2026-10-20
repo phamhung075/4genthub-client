@@ -39,23 +39,23 @@ func sessionNames(root string) []string {
 	return names
 }
 
-// rigSessions is the sessions that belong to one rig. A native seat's session is `agenthub--<room>--<seat>`; a
-// name with the rig's name elsewhere in it is another room's seat and is not counted.
-func rigSessions(rig string, names []string) []string {
+// roomSessions is the sessions that belong to one room. A native seat's session is `agenthub--<room>--<seat>`; a
+// name with the room's name elsewhere in it is another room's seat and is not counted.
+func roomSessions(room string, names []string) []string {
 	var sessions []string
 	for _, name := range names {
-		if room, _, ok := clientruntime.ParseSeatSessionName(name); ok && room == rig {
+		if sessionRoom, _, ok := clientruntime.ParseSeatSessionName(name); ok && sessionRoom == room {
 			sessions = append(sessions, name)
 		}
 	}
 	return sessions
 }
 
-// rigSeats is those sessions' seat names, sorted: the shell sorted them before it briefed, so the order
+// roomSeats is those sessions' seat names, sorted: the shell sorted them before it briefed, so the order
 // the log reports is the order the briefs went out.
-func rigSeats(rig string, names []string) []string {
+func roomSeats(room string, names []string) []string {
 	seats := make([]string, 0, len(names))
-	for _, session := range rigSessions(rig, names) {
+	for _, session := range roomSessions(room, names) {
 		_, seat, _ := clientruntime.ParseSeatSessionName(session)
 		seats = append(seats, seat)
 	}

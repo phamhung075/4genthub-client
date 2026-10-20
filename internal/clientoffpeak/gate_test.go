@@ -107,7 +107,7 @@ func TestModeFromFlagsTakesTheFlagAnywhereAndLeavesTheRest(t *testing.T) {
 
 // TestTheOldFlagNameIsNotAFlag: `--any-time` was this package's own invention and the order fixed the
 // name `--allow-peak`, so the old spelling must not be swallowed - it is handed to the verb, which
-// refuses it as an unknown argument rather than reading it as a rig name.
+// refuses it as an unknown argument rather than reading it as a room name.
 func TestTheOldFlagNameIsNotAFlag(t *testing.T) {
 	allowPeak, rest := ModeFromFlags([]string{"--any-time", "my-room"})
 	if allowPeak {

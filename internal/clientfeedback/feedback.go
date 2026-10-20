@@ -64,7 +64,7 @@ the same payload the MCP tool ` + "`submit_feedback`" + ` sends. The owner reads
 
   --layer    REQUIRED. One of: runtime, client, cloud, seat-context, workspace, other
   --text     REQUIRED. What happened, and what you expected instead.
-  --room     Optional. Defaults to the rig name this seat's identity chain resolves.
+  --room     Optional. Defaults to the room name this seat's identity chain resolves.
   --seat     Optional. Defaults to the member id this seat's identity chain resolves.
   --session  Optional. Defaults to the session name this seat's identity chain resolves.
   --url      Optional. Defaults to $AGENTHUB_URL. The route path is appended.
@@ -77,7 +77,7 @@ Exit: 0 stored, 1 the request failed or the answer refused it, 2 usage or a miss
 // tried and the three flags that make it unnecessary. The chain is the client's own - the runtime socket,
 // then an rig daemon, then this shell's seat environment - so the message no longer names a `rig`
 // command, which is not on that chain.
-const identityMessage = "cannot read the seat identity (no runtime, no rig daemon and no seat environment names this seat); pass --room, --seat and --session"
+const identityMessage = "cannot read the seat identity (no runtime, no room daemon and no seat environment names this seat); pass --room, --seat and --session"
 
 // feedbackBody is the wire payload. Its field order is the script's dict order so the bytes on the
 // wire are the same ones json.dumps would have produced.
@@ -99,7 +99,7 @@ type feedbackOptions struct {
 	url     string
 }
 
-// complete reports whether every identity field was given, in which case rig is never consulted.
+// complete reports whether every identity field was given, in which case room is never consulted.
 func (o feedbackOptions) complete() bool {
 	return o.room != "" && o.seat != "" && o.session != ""
 }
@@ -216,7 +216,7 @@ func validLayer(layer string) bool {
 // then this shell's own seat environment. That is the chain `whoami --json` prints and the chain the send
 // path (internal/clientseat) asks.
 //
-// The failure keeps the same shape it had when rig supplied the answer: the chain's own refusal, which
+// The failure keeps the same shape it had when room supplied the answer: the chain's own refusal, which
 // the caller turns into its usage error. An identity the chain resolves to empty fields is the script's
 // `who.get("identity") or {}` - empty defaults, not a failure.
 func readIdentity() (room, seat, session string, err error) {
@@ -225,7 +225,7 @@ func readIdentity() (room, seat, session string, err error) {
 		return "", "", "", err
 	}
 	identity := resolved.Identity
-	return identity.RigName, identity.MemberId, identity.SessionName, nil
+	return identity.RoomName, identity.MemberId, identity.SessionName, nil
 }
 
 // postFeedback sends the report and relays the answer: the raw body goes to stdout and a non-2xx goes

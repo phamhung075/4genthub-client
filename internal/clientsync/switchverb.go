@@ -174,7 +174,7 @@ func switchParseArgs(args []string) (switchArgs, error) {
 }
 
 // switchExecute ports cmd_switch: validate, read the current occupant, PUT the new one, then decide
-// whether the rig orchestrator can apply it and how.
+// whether the room orchestrator can apply it and how.
 func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Writer) int {
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "4genteam sync switch: %v\n", err)
@@ -272,33 +272,33 @@ func switchExecute(ctx context.Context, parsed switchArgs, stdout, stderr io.Wri
 	applied := "none"
 	if mode != "none" && runtimeChanged {
 		applied = "manual"
-		// NOTHING IN THIS BRANCH IS A PROCEDURE ANY MORE. The three lines it printed were the rig orchestrator
+		// NOTHING IN THIS BRANCH IS A PROCEDURE ANY MORE. The three lines it printed were the room orchestrator
 		// CLI's own sequence; the middle one was measured on this box to stop the MACHINE's safeguards
-		// rather than the room's (agent reaped with its children, for every rig), and the last could not
+		// rather than the room's (agent reaped with its children, for every room), and the last could not
 		// run at all (`--team DIR is required`), so a reader who followed it took the supervisors down
 		// and could not start the room again from it. A reader cannot tell those two vocabularies apart
 		// by name, so the branch names only what this client itself owns and documents, and prints no
-		// rig CLI verb. It runs neither: both write, and a restart is peak-gated. Whether a restart
+		// room CLI verb. It runs neither: both write, and a restart is peak-gated. Whether a restart
 		// carries a changed RUNTIME is not established here, and saying so IS the finding - the printed
 		// text is pinned by TestSwitchRuntimeChangePrintsNoMachineWideVerb.
 		fmt.Fprintf(stderr,
-			"runtime changed: the rig orchestrator cannot switch a runtime in place, and this client prints no "+
+			"runtime changed: the room orchestrator cannot switch a runtime in place, and this client prints no "+
 				"sequence that completes the switch (it has none that can be run):\n"+
 				"  the room's definition and each seat's files are written by the launcher "+
 				"(`4genteam up %s --team <dir>`); the `sync room` verb that rewrote them from the "+
 				"cloud is gone (2026-10-15).\n"+
-				"  4genteam seat reseat <rig> --seat <name> stops and restarts a seat so it loads the "+
+				"  4genteam seat reseat <room> --seat <name> stops and restarts a seat so it loads the "+
 				"configuration it now has.\n"+
 				"  Neither is run here (both write; a restart is peak-gated for a deepseek seat), and "+
 				"whether a restart carries a changed RUNTIME is not established. The switch is the "+
 				"owner's call.\n",
 			room)
 	} else if mode != "none" {
-		modelForRig := ""
+		modelForRoom := ""
 		if modelChanged {
-			modelForRig = model
+			modelForRoom = model
 		}
-		applied, err = switchApplyToRuntime(room, seat, modelForRig, mode == "restart", stderr)
+		applied, err = switchApplyToRuntime(room, seat, modelForRoom, mode == "restart", stderr)
 		if err != nil {
 			return fail(err)
 		}

@@ -25,7 +25,7 @@ type SeatAddress struct {
 	Source string
 }
 
-// CanonicalRigSeat splits the canonical session form `<room>-<seat>@<room>` - the string every seat's own
+// CanonicalRoomSeat splits the canonical session form `<room>-<seat>@<room>` - the string every seat's own
 // session name carries, the form this client's help documents and the form the envelope's reply hint tells a
 // recipient to use - into the room and the seat.
 //
@@ -34,7 +34,7 @@ type SeatAddress struct {
 // part after the LAST `@` and must also be the prefix of the part before it, because a room name may itself
 // contain a dash: `4genthub-min-lead@4genthub-min` is room `4genthub-min`, seat `lead`. A string that carries
 // an `@` without that agreement is nobody's canonical name and is left alone rather than guessed at.
-func CanonicalRigSeat(session string) (rig, seat string, ok bool) {
+func CanonicalRoomSeat(session string) (room, seat string, ok bool) {
 	at := strings.LastIndex(session, "@")
 	if at <= 0 || at == len(session)-1 {
 		return "", "", false
@@ -48,12 +48,12 @@ func CanonicalRigSeat(session string) (rig, seat string, ok bool) {
 }
 
 // ResolveSeatAddress reads the record from the socket this shell's environment resolves.
-func ResolveSeatAddress(rig, seat string) (SeatAddress, error) {
-	return ResolveSeatAddressOn("", rig, seat)
+func ResolveSeatAddress(room, seat string) (SeatAddress, error) {
+	return ResolveSeatAddressOn("", room, seat)
 }
 
 // ResolveSeatAddressOn reads the session name a seat's pane actually carries from the room's runtime on a NAMED
-// socket. The name is READ, never composed - a convention is what produced `agenthub--RIG--SEAT`, a string no
+// socket. The name is READ, never composed - a convention is what produced `agenthub--ROOM--SEAT`, a string no
 // seat carries - so a seat the runtime does not list is a refusal that names it, not a name built from the
 // caller's two arguments. The socket is named because a verb that can be pointed at another daemon has to ask
 // THAT daemon: a record read from one runtime while the send goes to another is a pair that can only be right
@@ -65,12 +65,12 @@ func ResolveSeatAddress(rig, seat string) (SeatAddress, error) {
 // /mnt/wslg/runtime-dir/agenthub.sock: ... no such file or directory`. The two send an operator to different
 // places - a room definition versus a dead socket - and this file's own rule is that an unreadable record is
 // not an answer about the room. So the read answers three things and each is reported as itself.
-func ResolveSeatAddressOn(socket, rig, seat string) (SeatAddress, error) {
-	session, found, err := seatAddressFromRuntime(socket, rig, seat)
+func ResolveSeatAddressOn(socket, room, seat string) (SeatAddress, error) {
+	session, found, err := seatAddressFromRuntime(socket, room, seat)
 	switch {
 	case err != nil:
 		return SeatAddress{}, &clientcmd.CodedError{
-			Message: fmt.Sprintf("the session name of %s/%s could not be read: %v", rig, seat, err),
+			Message: fmt.Sprintf("the session name of %s/%s could not be read: %v", room, seat, err),
 			Code:    clientcmd.ExitUnavailable,
 		}
 	case found:
@@ -78,7 +78,7 @@ func ResolveSeatAddressOn(socket, rig, seat string) (SeatAddress, error) {
 	}
 	return SeatAddress{}, &clientcmd.CodedError{
 		Message: fmt.Sprintf("no record of %s/%s: the room's runtime does not list that seat; no name was composed - "+
-			"a seat's session name is read from the record that owns its pane, never built from a convention", rig, seat),
+			"a seat's session name is read from the record that owns its pane, never built from a convention", room, seat),
 		Code: clientcmd.ExitUnavailable,
 	}
 }
@@ -98,15 +98,15 @@ var seatStatuses = func(socket, room string) ([]SeatStatus, error) {
 // The room is `AGENTHUB_ROOM` when this shell is a native seat - the launcher that hosts a seat states the
 // room as a field, and the native shape's first positional argument names the same room. A runtime that has
 // no such room answers nothing.
-func seatAddressFromRuntime(socket, rig, seat string) (string, bool, error) {
+func seatAddressFromRuntime(socket, room, seat string) (string, bool, error) {
 	if seat == "" {
 		return "", false, nil
 	}
 	// THE ROOM THE CALLER NAMED WINS over the ambient `AGENTHUB_ROOM`. A seat shell always carries the room it
 	// sits in, so an env-first read answers for the WRONG room the moment a seat addresses another one -
-	// `send other-room-dev@other-room` from inside this rig's own shell asked this rig's room and heard that its
+	// `send other-room-dev@other-room` from inside this room's own shell asked this room's room and heard that its
 	// seat was not there. The ambient value is the fallback for a caller that named no room at all.
-	room := strings.TrimSpace(rig)
+	room = strings.TrimSpace(room)
 	if room == "" {
 		room = strings.TrimSpace(os.Getenv(agentHubRoomEnv))
 	}

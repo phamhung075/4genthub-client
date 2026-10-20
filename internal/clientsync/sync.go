@@ -31,7 +31,7 @@ func Commands() []clientcmd.Command {
 // the top-level view of a room - so no such verb is declared here either.
 //
 // `status` AND `room` ARE NOT HERE, and their absence is the point: both compared or materialized a seat's
-// snapshot against `GET /api/v2/rooms/{room}/rigspec`, which the server deleted (cbc51bae). A verb kept to
+// snapshot against `GET /api/v2/rooms/{room}/roomspec`, which the server deleted (cbc51bae). A verb kept to
 // print an error would be a deprecation shim, so they are gone - see the CHANGELOG entry that carries the
 // same sentence for an operator.
 var syncVerbs = []string{
@@ -116,7 +116,7 @@ func printUsage(w io.Writer) {
 	// client has no verb that STARTS a room from a bundle - so the paragraph names the verb it does have
 	// (`sync offline-install`, which puts the bundle's pinned policy in the seat store) and says the rest
 	// in words. The pin below fails on any reappearance of the dead procedure.
-	_, _ = io.WriteString(w, "\nOffline use is an explicit operator choice: after `bundle` produces a `.rigbundle`,\n"+
+	_, _ = io.WriteString(w, "\nOffline use is an explicit operator choice: after `bundle` produces a `.roombundle`,\n"+
 		"the pinned policy it carries goes in with `4genteam sync offline-install <TARGET>`. This client\n"+
 		"never falls back to a bundle automatically, and it has no verb that starts a room from one.\n")
 }

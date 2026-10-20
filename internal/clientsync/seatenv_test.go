@@ -12,7 +12,7 @@ import (
 )
 
 // test_the_store_and_state_root_do_not_follow_home pins the Python test of that name: the store and the
-// state root are resolved from the ACCOUNT home, so a decoy $HOME - what the rig orchestrator gives a seat - does not
+// state root are resolved from the ACCOUNT home, so a decoy $HOME - what the room orchestrator gives a seat - does not
 // move either of them.
 func TestTheStoreAndStateRootDoNotFollowHome(t *testing.T) {
 	decoy := t.TempDir()
@@ -46,7 +46,7 @@ func TestTheStoreAndStateRootDoNotFollowHome(t *testing.T) {
 // the real one.
 //
 // THE VERB NAMED HERE CHANGED WITH THE CUT, not the claim: `sync status` was the verb this read, and it is
-// gone with the rigspec route, so the same refusal is read through `sync pull`, which resolves the store
+// gone with the roomspec route, so the same refusal is read through `sync pull`, which resolves the store
 // the same way (resolveSeatStore is the one seam both call).
 func TestTheStoreRefusalNamesTheOutFlagTheSyncVerbsTake(t *testing.T) {
 	original := seatStore

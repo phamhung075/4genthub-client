@@ -80,7 +80,7 @@ func senderSeat() (string, string, error) {
 				"sender's own links: %v; nothing was sent", err),
 		}
 	}
-	room, seat := who.Identity.RigName, who.Identity.MemberId
+	room, seat := who.Identity.RoomName, who.Identity.MemberId
 	if room == "" || seat == "" {
 		return "", "", &clientcmd.CodedError{
 			Code:    clientcmd.ExitUnavailable,
@@ -117,7 +117,7 @@ func recipientSeat(socket, session string) (room, seat string, ok bool) {
 		if entry.SessionName != session && entry.CanonicalSessionName != session {
 			continue
 		}
-		if entry.RigName == "" {
+		if entry.RoomName == "" {
 			return "", "", false
 		}
 		// A logical id is `<pod>.<member>`, and the pod is not always the room's name, so the member is the
@@ -129,7 +129,7 @@ func recipientSeat(socket, session string) (room, seat string, ok bool) {
 		if member == "" {
 			return "", "", false
 		}
-		return entry.RigName, member, true
+		return entry.RoomName, member, true
 	}
 	return "", "", false
 }

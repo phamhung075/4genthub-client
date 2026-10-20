@@ -64,7 +64,7 @@ func Commands() []clientcmd.Command {
 }
 
 const (
-	policyUsage = "usage: 4genteam policy render --room RIG --seat SEAT [--state-root DIR] [--check]"
+	policyUsage = "usage: 4genteam policy render --room ROOM --seat SEAT [--state-root DIR] [--check]"
 	renderUsage = policyUsage
 )
 

@@ -143,7 +143,7 @@ func machineDeps(root string, client *clientruntime.Client, fix, allowPeak bool,
 		ProcEnv: procEnv,
 		Rows: func(room string) ([]clientservices.Health, error) {
 			state, _ := clientservices.ReadAgentState()
-			return clientservices.Verify(context.Background(), clientservices.Env{Root: root, Rigs: []string{room}, Supervised: state.Safeguards})
+			return clientservices.Verify(context.Background(), clientservices.Env{Root: root, Rooms: []string{room}, Supervised: state.Safeguards})
 		},
 		Up: func(room string) error {
 			self, err := os.Executable()

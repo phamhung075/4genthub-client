@@ -34,7 +34,7 @@ type CheckVerdict struct {
 // Check reads one listing and sorts the room's derived worktrees into the verdict's buckets. Its only
 // failure is a listing it could not read: a room whose derived paths are all missing is a Verdict with
 // four names in Missing, not an error, because "not started yet" is the state `up` exists to change.
-func Check(mainRoot, roomDir, rig string, seats []clientservices.SeatType) (CheckVerdict, error) {
+func Check(mainRoot, roomDir, room string, seats []clientservices.SeatType) (CheckVerdict, error) {
 	entries, err := Read(mainRoot)
 	if err != nil {
 		return CheckVerdict{}, err
@@ -43,7 +43,7 @@ func Check(mainRoot, roomDir, rig string, seats []clientservices.SeatType) (Chec
 	for _, entry := range entries {
 		present[canonicalPath(entry.Path)] = entry
 	}
-	derived := clientservices.DerivedWorktrees(roomDir, rig, seats)
+	derived := clientservices.DerivedWorktrees(roomDir, room, seats)
 	derivedPaths := make(map[string]bool, len(derived))
 	var verdict CheckVerdict
 	for _, worktree := range derived {

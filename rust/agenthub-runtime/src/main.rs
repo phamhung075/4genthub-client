@@ -20,22 +20,22 @@ use ipc::IpcServer;
 use supervisor::RoomSupervisor;
 
 /// The environment a seat's agent is allowed to see: everything the runtime was given, **minus** anything
-/// that addresses another rig.
+/// that addresses another room.
 ///
 /// Default deny, by prefix, because the failure this prevents is one of omission: the runtime only *adds*
 /// its own `AGENTHUB_*` variables, so without this a room started the way the operator starts one hands its
-/// agent a live rig's addressing and session/node ids, and an agent process can then reach that rig from
+/// agent a live room's addressing and session/node ids, and an agent process can then reach that room from
 /// inside a scratch room.
 ///
 /// `RIGGED_` is denied because the client still reads `RIGGED_SESSION_NAME` as `legacySessionEnv` (a
-/// client-side constant), so an agent that inherits a live rig's pre-rename session name is handed an
+/// client-side constant), so an agent that inherits a live room's pre-rename session name is handed an
 /// identity that is not its seat's - exactly the falsification this list exists to stop.
 ///
 /// `OPENRIG_` is denied one name earlier, and for the same failure: it is what the prior client's variables
 /// addressed its daemon with (`OPENRIG_HOME`, `OPENRIG_URL`, the activity-hook token, the session/node ids;
 /// nine of them measured in an agent's environ before e635e79). Purging the old name from this client's own
 /// docs and routes does not retire it from the environments that still export it, and an agent holding them
-/// can address a rig that is not its room.
+/// can address a room that is not its room.
 ///
 /// `AGENTHUB_` is deliberately NOT denied, and the boundary is a decision rather than an oversight. The
 /// supervisor inserts this room's own `AGENTHUB_ROOM`, `AGENTHUB_SEAT`, `AGENTHUB_ROLE`, `AGENTHUB_RUNTIME`,
@@ -278,7 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&resp)?);
                     } else {
-                        println!("Rig:     {}", resp.identity.rig_name);
+                        println!("Room:     {}", resp.identity.room_name);
                         println!("Seat:    {}", resp.identity.member_id);
                         println!("Role:    {}", resp.identity.role);
                         println!("Runtime: {}", resp.identity.runtime);
@@ -470,7 +470,7 @@ mod tests {
     /// time, and the rename left an alias the client still honours. The second half is the boundary: removing
     /// too much is its own defect, and `HOME`/`PATH`/`XDG_RUNTIME_DIR` are what a seat legitimately needs.
     #[test]
-    fn the_deny_list_covers_every_prefix_that_addresses_a_rig() {
+    fn the_deny_list_covers_every_prefix_that_addresses_a_room() {
         for denied in [
             "RIGGED_SESSION_NAME",
             "OPENRIG_URL",
@@ -478,7 +478,7 @@ mod tests {
         ] {
             assert!(
                 env_is_denied(denied),
-                "{denied} addresses a rig and must be denied"
+                "{denied} addresses a room and must be denied"
             );
         }
         for kept in [

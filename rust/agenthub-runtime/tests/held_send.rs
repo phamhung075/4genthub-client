@@ -272,7 +272,7 @@ fn a_text_sent_to_a_seat_that_is_mid_turn_is_delivered_when_the_turn_ends() {
     // THE HANDSHAKE IS DONE BEFORE ANYTHING IS SENT. The runner writes this file when its agent answers
     // `get_state`, and that answer's `idle` lands AFTER a `turn_start` the child printed while the handshake
     // was still running - so a prompt fired at the bare mailbox socket races the handshake and can leave the
-    // turn's own `working` overwritten. That race is this case's, not the runner's: in a live rig the mailbox
+    // turn's own `working` overwritten. That race is this case's, not the runner's: in a live room the mailbox
     // is how a text arrives, and the mailbox is served only once the runner is up. Waiting here is what makes
     // the next assertion about a refusal instead of about an ordering the probe happened to lose.
     assert!(

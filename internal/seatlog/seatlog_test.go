@@ -61,7 +61,7 @@ func TestNewestSessionPicksTheMostRecentlyWrittenLog(t *testing.T) {
 
 func TestSeatLogPrefersAnOmpStateDirectoryAndFallsBackToClaude(t *testing.T) {
 	stateRoot := t.TempDir()
-	seatDir := filepath.Join(stateRoot, "rooms", "my-rig", "seats", "lead")
+	seatDir := filepath.Join(stateRoot, "rooms", "my-room", "seats", "lead")
 	if err := os.MkdirAll(filepath.Join(seatDir, "sessions"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -69,11 +69,11 @@ func TestSeatLogPrefersAnOmpStateDirectoryAndFallsBackToClaude(t *testing.T) {
 	if err := os.WriteFile(log, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if path, runtime := SeatLog(stateRoot, "my-rig", "lead"); path != log || runtime != "omp" {
+	if path, runtime := SeatLog(stateRoot, "my-room", "lead"); path != log || runtime != "omp" {
 		t.Errorf("SeatLog = (%q, %q), want the omp session", path, runtime)
 	}
 	// No state directory and no configured Claude projects directory: no log, so no runtime is named.
-	if path, runtime := SeatLog(stateRoot, "my-rig", "absent"); path != "" || runtime != "" {
+	if path, runtime := SeatLog(stateRoot, "my-room", "absent"); path != "" || runtime != "" {
 		t.Errorf("SeatLog = (%q, %q), want no log", path, runtime)
 	}
 }
@@ -88,7 +88,7 @@ func TestSeatLogReadsAnAgySeatsTranscriptBesideAnOmpEraLog(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	seatDir := filepath.Join(stateRoot, "rooms", "my-rig", "seats", "reviewer")
+	seatDir := filepath.Join(stateRoot, "rooms", "my-room", "seats", "reviewer")
 	sessions := filepath.Join(seatDir, "sessions")
 	if err := os.MkdirAll(sessions, 0o755); err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestSeatLogReadsAnAgySeatsTranscriptBesideAnOmpEraLog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if path, runtime := SeatLog(stateRoot, "my-rig", "reviewer"); path != transcript || runtime != "agy" {
+	if path, runtime := SeatLog(stateRoot, "my-room", "reviewer"); path != transcript || runtime != "agy" {
 		t.Errorf("SeatLog = (%q, %q), want the agy transcript", path, runtime)
 	}
 
@@ -124,7 +124,7 @@ func TestSeatLogReadsAnAgySeatsTranscriptBesideAnOmpEraLog(t *testing.T) {
 	if err := os.WriteFile(newer, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if path, runtime := SeatLog(stateRoot, "my-rig", "reviewer"); path != newer || runtime != "omp" {
+	if path, runtime := SeatLog(stateRoot, "my-room", "reviewer"); path != newer || runtime != "omp" {
 		t.Errorf("SeatLog = (%q, %q), want the newer omp log", path, runtime)
 	}
 }

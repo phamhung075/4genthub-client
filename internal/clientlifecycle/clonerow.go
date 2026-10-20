@@ -12,8 +12,8 @@
 // disagree the first time a flag or an environment variable moved.
 //
 // THE ROW IS THE MACHINE'S, NOT A ROOM'S: two rooms share one checkout, so a row per room would repeat
-// the same paths. It therefore carries no rig, like the bridge and rigd rows, and it is reported whenever
-// the machine has a checkout at all - including a machine whose rigd has never run, which is exactly a
+// the same paths. It therefore carries no room, like the bridge and agent rows, and it is reported whenever
+// the machine has a checkout at all - including a machine whose agent has never run, which is exactly a
 // machine whose checkout may have been edited by hand.
 //
 // AN INPUT THAT COULD NOT BE READ IS A NOTE, NEVER A FAILURE, like the worktrees row: the row answers
@@ -65,7 +65,7 @@ func cloneLines(row cloneRow) []string {
 // read - without a repository on the machine.
 var cloneRowFor = cloneRows
 
-// cloneRows is the row the report covers. The argument is the rig the caller named, and it is deliberately
+// cloneRows is the row the report covers. The argument is the room the caller named, and it is deliberately
 // unused: the checkout belongs to the machine, not to a room.
 func cloneRows(string) []cloneRow { return []cloneRow{cloneRowOf()} }
 

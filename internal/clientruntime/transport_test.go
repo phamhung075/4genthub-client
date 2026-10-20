@@ -87,7 +87,7 @@ func noRuntimeSocket(t *testing.T) {
 func TestListSessionsAsksForTheRoomOrForEveryRoomItHosts(t *testing.T) {
 	sock, requests := fakeRuntime(t, func(string) string {
 		return okDataResponse(`[{"canonicalSessionName":"room-a-seat-1@room-a","sessionName":"agenthub--room-a--seat-1",` +
-			`"rigName":"room-a","logicalId":"room-a.seat-1","sessionStatus":"running",` +
+			`"roomName":"room-a","logicalId":"room-a.seat-1","sessionStatus":"running",` +
 			`"agentActivity":{"state":"idle","source":"idle"}}]`)
 	})
 	t.Setenv(RuntimeSocketEnv, sock)
@@ -207,7 +207,7 @@ func TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoRuntime(t *testing.T) {
 	var printed struct {
 		ResolvedBy string `json:"resolved_by"`
 		Identity   struct {
-			RigName  string `json:"rigName"`
+			RoomName string `json:"roomName"`
 			MemberID string `json:"memberId"`
 			Runtime  string `json:"runtime"`
 		} `json:"identity"`
@@ -218,7 +218,7 @@ func TestWhoamiJsonAnswersFromTheSeatEnvironmentWithNoRuntime(t *testing.T) {
 	if printed.ResolvedBy != "environment" {
 		t.Errorf("resolved_by = %q, want the seat's own environment to say so", printed.ResolvedBy)
 	}
-	if printed.Identity.RigName != "room-a" || printed.Identity.MemberID != "go-dev" || printed.Identity.Runtime != "omp" {
+	if printed.Identity.RoomName != "room-a" || printed.Identity.MemberID != "go-dev" || printed.Identity.Runtime != "omp" {
 		t.Errorf("identity = %+v, want the seat the environment names", printed.Identity)
 	}
 }
@@ -231,7 +231,7 @@ func TestWhoamiPrefersTheRuntimesIdentity(t *testing.T) {
 	t.Setenv(agentHubSeatEnv, "go-dev")
 	t.Setenv(agentHubSessionEnv, "agenthub--room-a--go-dev")
 
-	const identityDoc = `{"resolved_by":"session_name","identity":{"rigName":"room-a","memberId":"go-dev","runtime":"omp","sessionName":"agenthub--room-a--go-dev","logical_id":"go-dev","role":"developer"},"peers":[],"edges":{"outgoing":[],"incoming":[]},"transcript":{"enabled":true}}`
+	const identityDoc = `{"resolved_by":"session_name","identity":{"roomName":"room-a","memberId":"go-dev","runtime":"omp","sessionName":"agenthub--room-a--go-dev","logical_id":"go-dev","role":"developer"},"peers":[],"edges":{"outgoing":[],"incoming":[]},"transcript":{"enabled":true}}`
 	sock, requests := fakeRuntime(t, func(string) string {
 		return `{"ok":true,"data":` + identityDoc + "}\n"
 	})

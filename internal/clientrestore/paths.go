@@ -1,10 +1,10 @@
-// Package clientrestore puts a stopped rig back. Two verbs live here, and they are one package because
+// Package clientrestore puts a stopped room back. Two verbs live here, and they are one package because
 // the second one's action IS the first one's:
 //
-//   - `continue` restores a rig from its latest snapshot and briefs its seats.
-//   - `watchdog` notices when a rig's tmux seats have vanished and runs that same restore.
+//   - `continue` restores a room from its latest snapshot and briefs its seats.
+//   - `watchdog` notices when a room's tmux seats have vanished and runs that same restore.
 //
-// PORTED FROM the rig-continue.sh and rig-watchdog.sh shell pair. The shell pair had the watchdog invoke the continue SCRIPT
+// PORTED FROM the room-continue.sh and room-watchdog.sh shell pair. The shell pair had the watchdog invoke the continue SCRIPT
 // as a subprocess; here it calls the same function, so "the watchdog restores it" and "a resume restores
 // it" can never drift apart.
 //
@@ -15,7 +15,7 @@
 //   - both scripts reached `rig` and `tmux` through a shell (`exec.Command` with an argument list now,
 //     which is also why the continue script's warning that a brief must not contain backticks,
 //     apostrophes or `$` no longer applies: the text is sent as written);
-//   - the shell restored a rig whose tmux sessions were missing without asking what model its seats run,
+//   - the shell restored a room whose tmux sessions were missing without asking what model its seats run,
 //     so a resumed room could start DeepSeek work at the peak rate (clientlifecycle.PeakGate now runs
 //     before every restore in this package, the same gate `up` and `compact` obey).
 package clientrestore
@@ -79,6 +79,6 @@ var (
 // The two log file names are the scripts' own: the owner's existing logs, and any habit or tail built on
 // them, point at exactly these paths.
 const (
-	continueLogName = "rig-continue.log"
-	watchdogLogName = "rig-watchdog.log"
+	continueLogName = "room-continue.log"
+	watchdogLogName = "room-watchdog.log"
 )

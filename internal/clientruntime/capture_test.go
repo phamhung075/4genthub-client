@@ -1,5 +1,5 @@
 // The capture verb reads a pane over the client's OWN transport now - the runtime's terminal manager, the
-// process that owns the tmux server - and these tests MOVED here from the rig orchestrator-daemon suite when that path
+// process that owns the tmux server - and these tests MOVED here from the room orchestrator-daemon suite when that path
 // was deleted. A daemon stub would have gone on passing while testing nothing, which is exactly the failure
 // mode the cutover keeps finding: a test that stubs a path the verb no longer walks.
 //
@@ -78,17 +78,17 @@ func TestCaptureCommandPrintsThePane(t *testing.T) {
 func TestCaptureCommandPrintsItsOwnAnswerForJSON(t *testing.T) {
 	hermeticSeat(t)
 	sock, _ := fakeRuntime(t, func(string) string {
-		return okDataResponse(`{"session":"peer@rig","content":"PANE-LINE\n"}`)
+		return okDataResponse(`{"session":"peer@room","content":"PANE-LINE\n"}`)
 	})
 	t.Setenv(RuntimeSocketEnv, sock)
 
 	var out, errOut bytes.Buffer
-	code := captureCommand{}.Run(context.Background(), []string{"--json", "peer@rig"}, &out, &errOut)
+	code := captureCommand{}.Run(context.Background(), []string{"--json", "peer@room"}, &out, &errOut)
 
 	if code != clientcmd.ExitOK {
 		t.Fatalf("capture --json exit = %d, stderr = %q", code, errOut.String())
 	}
-	for _, want := range []string{`"session": "peer@rig"`, `"content": "PANE-LINE\n"`} {
+	for _, want := range []string{`"session": "peer@room"`, `"content": "PANE-LINE\n"`} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("stdout = %q, want it to carry %q", out.String(), want)
 		}
@@ -102,7 +102,7 @@ func TestCaptureCommandNamesTheRuntimeItCannotReach(t *testing.T) {
 	noRuntimeSocket(t)
 
 	var out, errOut bytes.Buffer
-	code := captureCommand{}.Run(context.Background(), []string{"peer@rig"}, &out, &errOut)
+	code := captureCommand{}.Run(context.Background(), []string{"peer@room"}, &out, &errOut)
 
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit = %d, want ExitUnavailable (%d); stderr = %q", code, clientcmd.ExitUnavailable, errOut.String())
@@ -110,7 +110,7 @@ func TestCaptureCommandNamesTheRuntimeItCannotReach(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("a runtime-less capture printed %q on stdout, want nothing", out.String())
 	}
-	for _, want := range []string{"could not capture peer@rig", "agenthub-runtime"} {
+	for _, want := range []string{"could not capture peer@room", "agenthub-runtime"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("stderr = %q, want it to name %q", errOut.String(), want)
 		}

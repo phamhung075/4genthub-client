@@ -57,31 +57,31 @@ type seatState struct {
 }
 
 // Supervisor is one `compact-run`: what it watches, its limits, and the seams the suite replaces.
-// Everything external - the seat list, its log, the rig tool, the clock - is a field, so one pass is
-// testable with no rig, no tmux and no waiting.
+// Everything external - the seat list, its log, the room tool, the clock - is a field, so one pass is
+// testable with no room, no tmux and no waiting.
 type Supervisor struct {
-	Rig       string
+	Room      string
 	Quiet     int
 	StateRoot string
 	Out       io.Writer
 
 	Now     func() float64
-	Seats   func(rig string) []string
-	SeatLog func(rig, seat string) (string, string)
-	Idle    func(rig, seat string) bool
+	Seats   func(room string) []string
+	SeatLog func(room, seat string) (string, string)
+	Idle    func(room, seat string) bool
 	// Say sends one message to a seat and returns the transport's own outcome - nil when it accepted it, the
 	// failure otherwise. The send is SYNCHRONOUS and refuses a mid-turn seat rather than waiting for it:
 	// waiting was the `rig send --wait-for-idle` dance, and the runtime's own SendText has no such wait to
 	// escape, so each caller's latch (or its compaction witness) is what makes a late arrival harmless.
-	Say        func(rig, seat, text string, raw bool) error
-	RPCCompact func(rig, seat string) string
-	Abort      func(rig, seat string)
-	Interrupt  func(rig, seat string)
+	Say        func(room, seat, text string, raw bool) error
+	RPCCompact func(room, seat string) string
+	Abort      func(room, seat string)
+	Interrupt  func(room, seat string)
 	Log        func(text string)
 	// IdleWhy carries the sentence behind an Idle=false, so the pass that ACTS on the false can say it rather than
 	// letting "the seat is working" and "nothing ever answered" print the same way - as nothing. Empty means the
 	// refusal was a deliberate one and there is nothing to say. nil means the wiring says nothing, as in tests.
-	IdleWhy func(rig, seat string) string
+	IdleWhy func(room, seat string) string
 	// Nodes is the room's node records - the reading the off-peak gate decides over, the same one the gated
 	// verbs take - and it carries the three answers the reading itself has, because the resume below is an
 	// AUTOMATIC seat action: a read that FAILED must hold the resume back rather than arrive at the gate as an
@@ -89,7 +89,7 @@ type Supervisor struct {
 	// seen a seat). Answered-with-no-records still proceeds - a room with no seats has nothing to bill - so
 	// the two must stay distinguishable here. Getenv is the environment the gate resolves its setting and its
 	// clock from.
-	Nodes  func(rig string) ([]map[string]any, bool, error)
+	Nodes  func(room string) ([]map[string]any, bool, error)
 	Getenv func(string) string
 
 	State map[string]*seatState
@@ -97,33 +97,33 @@ type Supervisor struct {
 
 // New is a supervisor wired to the real world: tmux for the seat list, the runtime for idleness and
 // messages, and the runtime daemon for a compact.
-func New(rig string, quiet int, stateRoot string, out io.Writer) *Supervisor {
+func New(room string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 	supervisor := &Supervisor{
-		Rig:       rig,
+		Room:      room,
 		Quiet:     quiet,
 		StateRoot: stateRoot,
 		Out:       out,
 		State:     map[string]*seatState{},
 	}
 	supervisor.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
-	supervisor.Seats = func(rig string) []string { return seatlog.RigSeats(stateRoot, rig) }
+	supervisor.Seats = func(room string) []string { return seatlog.RoomSeats(stateRoot, room) }
 	// The same resolver the idle guard binds: an agy seat's context is read from its live transcript,
 	// not from the omp log it left behind (measured 2026-10-17: ps said 53k while the stale file said 14h).
 	supervisor.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
-	supervisor.Idle = rigIdle
-	supervisor.IdleWhy = func(rig, seat string) string { _, why := rigIdleReason(rig, seat); return why }
-	supervisor.Say = rigSay
+	supervisor.Idle = roomIdle
+	supervisor.IdleWhy = func(room, seat string) string { _, why := roomIdleReason(room, seat); return why }
+	supervisor.Say = roomSay
 	supervisor.RPCCompact = func(r, seat string) string { return supervisor.rpcCompact(r, seat) }
-	supervisor.Abort = rigAbort
-	supervisor.Interrupt = func(rig, seat string) { tmuxInterrupt(stateRoot, rig, seat) }
+	supervisor.Abort = roomAbort
+	supervisor.Interrupt = func(room, seat string) { tmuxInterrupt(stateRoot, room, seat) }
 	// The gate's reading is the room's node records, the ONE reading this package already takes for its other
-	// gate (rigNodes), reached here without resolving a rig tool: the reading is the client's own. The seam
+	// gate (roomNodes), reached here without resolving a room tool: the reading is the client's own. The seam
 	// carries all three of that reading's answers, so the resume path below can tell a read that FAILED from a
 	// room with no seats; the peaked decision that must refuse is still PeakGate's above, which sees its own.
-	supervisor.Nodes = func(rig string) ([]map[string]any, bool, error) {
-		// rigNodes is read at CALL time rather than captured at wiring time, so a test that replaces the
+	supervisor.Nodes = func(room string) ([]map[string]any, bool, error) {
+		// roomNodes is read at CALL time rather than captured at wiring time, so a test that replaces the
 		// reading after the supervisor is built still reaches the gate.
-		return rigNodes(rig)
+		return roomNodes(room)
 	}
 	supervisor.Getenv = os.Getenv
 	supervisor.Log = func(text string) {
@@ -152,7 +152,7 @@ func (s *Supervisor) releaseResume(seat string, state *seatState) {
 	if state.held {
 		s.Log(seat + ": resume released, the off-peak gate is open")
 	}
-	if err := s.Say(s.Rig, seat, resumeText, false); err != nil {
+	if err := s.Say(s.Room, seat, resumeText, false); err != nil {
 		s.Log(fmt.Sprintf("%s: resume not delivered (%v), the witness stays and the gate is asked again", seat, err))
 		return
 	}
@@ -160,17 +160,17 @@ func (s *Supervisor) releaseResume(seat string, state *seatState) {
 	s.Log(seat + ": told to resume")
 }
 
-// Step is one pass over the rig's live seats. The order is compact.py's step(), and the three states it
+// Step is one pass over the room's live seats. The order is compact.py's step(), and the three states it
 // remembers per seat are what keep a notice from being repeated and a compaction from being demanded
 // again inside the cooldown.
 //
 // EVERY PASS BEATS, at the end, whatever the pass did. That is the whole point of the heartbeat (7.2): this
-// loop logs only when it ACTS, so on a quiet rig a healthy supervisor writes nothing and its log age
+// loop logs only when it ACTS, so on a quiet room a healthy supervisor writes nothing and its log age
 // cannot tell a dead supervisor from an idle one - which is the incident the report exists for.
 func (s *Supervisor) Step() {
 	now := s.Now()
-	for _, seat := range s.Seats(s.Rig) {
-		path, runtime := s.SeatLog(s.Rig, seat)
+	for _, seat := range s.Seats(s.Room) {
+		path, runtime := s.SeatLog(s.Room, seat)
 		if path == "" {
 			continue
 		}
@@ -220,7 +220,7 @@ func (s *Supervisor) Step() {
 					// `state.held` keeps such a witness and why the gate is re-asked even with done
 					// false. The hold itself is logged ONCE: this loop logs when it ACTS, and a held
 					// resume is one decision, not one per pass.
-					nodes, ok, err := s.Nodes(s.Rig)
+					nodes, ok, err := s.Nodes(s.Room)
 					if err != nil {
 						// FAILING OPEN WOULD BE THE BUG HERE: an unreadable reading is not an empty room, and a
 						// resume that proceeded on one would be the gate deciding over no seats at all.
@@ -248,13 +248,13 @@ func (s *Supervisor) Step() {
 			continue
 		}
 		if !state.told {
-			s.Say(s.Rig, seat, s.notice(), false)
+			s.Say(s.Room, seat, s.notice(), false)
 			state.told = true
 			s.Log(fmt.Sprintf("%s: told, %s of %s (%s)", seat, seatlog.Kilo(used),
 				seatlog.Kilo(seatlog.CompactLimit), runtime))
 		}
 		if used >= seatlog.WarnLimit && !state.warned {
-			s.Say(s.Rig, seat, warningText(), false)
+			s.Say(s.Room, seat, warningText(), false)
 			state.warned = true
 			s.Log(fmt.Sprintf("%s: warned, %s of %s", seat, seatlog.Kilo(used), seatlog.Kilo(seatlog.HardLimit)))
 		}
@@ -265,7 +265,7 @@ func (s *Supervisor) Step() {
 		}
 		if runtime == "omp" && urgent {
 			if hard {
-				s.Abort(s.Rig, seat)
+				s.Abort(s.Room, seat)
 			}
 			state.sent, state.before, state.hasBefore, state.count = now, used, true, compactions(path)
 			limit, aborted := "warn", ""
@@ -273,12 +273,12 @@ func (s *Supervisor) Step() {
 				limit, aborted = "hard", ", aborted"
 			}
 			s.Log(fmt.Sprintf("%s: %s past the %s limit%s: %s", seat, seatlog.Kilo(used), limit, aborted,
-				s.RPCCompact(s.Rig, seat)))
+				s.RPCCompact(s.Room, seat)))
 			continue
 		}
-		if hard && !s.Idle(s.Rig, seat) {
+		if hard && !s.Idle(s.Room, seat) {
 			if now-state.interrupted > interruptGap {
-				s.Interrupt(s.Rig, seat)
+				s.Interrupt(s.Room, seat)
 				state.interrupted = now
 				s.Log(fmt.Sprintf("%s: interrupted at %s (hard limit)", seat, seatlog.Kilo(used)))
 				// AND WHY NOTHING WAS COMPACTED, on this line, where the false is ACTED ON: this branch returns every
@@ -286,16 +286,16 @@ func (s *Supervisor) Step() {
 				// look the same as a seat that is simply working. Rate-limited with the interrupt above; a deliberate
 				// refusal (a busy seat) carries no sentence and says nothing here.
 				if s.IdleWhy != nil {
-					if why := s.IdleWhy(s.Rig, seat); why != "" {
+					if why := s.IdleWhy(s.Room, seat); why != "" {
 						s.Log(fmt.Sprintf("%s: not compacting at %s: %s", seat, seatlog.Kilo(used), why))
 					}
 				}
 			}
 			continue
 		}
-		if (urgent || silent >= float64(s.Quiet)) && s.Idle(s.Rig, seat) {
+		if (urgent || silent >= float64(s.Quiet)) && s.Idle(s.Room, seat) {
 			state.sent, state.before, state.hasBefore, state.count = now, used, true, compactions(path)
-			s.Say(s.Rig, seat, "/compact", true)
+			s.Say(s.Room, seat, "/compact", true)
 			note := ""
 			if urgent {
 				note = " (past the warn limit)"
@@ -306,7 +306,7 @@ func (s *Supervisor) Step() {
 	// The heartbeat, through clientservices: one write per pass, so a live-but-hung supervisor reads
 	// `silent` and a supervisor that died reads `stopped` (7.2). A failure to write is reported here and
 	// nowhere else - the report will say what it says.
-	if err := clientservices.WriteHeartbeat(s.StateRoot, clientservices.Compact, s.Rig); err != nil {
+	if err := clientservices.WriteHeartbeat(s.StateRoot, clientservices.Compact, s.Room); err != nil {
 		s.Log("cannot write the heartbeat: " + err.Error())
 	}
 }
@@ -390,26 +390,26 @@ func modTime(path string) float64 {
 	return float64(info.ModTime().UnixNano()) / 1e9
 }
 
-// rigIdle reads a seat's idleness through clientruntime.ReadSeatActivity, the runtime's own session list.
+// roomIdle reads a seat's idleness through clientruntime.ReadSeatActivity, the runtime's own session list.
 // Every failure answers false, and false means "not idle" to both callers: a seat that cannot be proved
 // idle WAITS rather than racing a working turn, because a check that failed open would send /compact into a
 // running seat, which is the one outcome the gate exists to prevent.
-func rigIdle(rig, seat string) bool {
-	idle, _ := rigIdleReason(rig, seat)
+func roomIdle(room, seat string) bool {
+	idle, _ := roomIdleReason(room, seat)
 	return idle
 }
 
-// rigIdleReason is rigIdle with the sentence that says WHY a false came back, and it exists because the two kinds of
+// roomIdleReason is roomIdle with the sentence that says WHY a false came back, and it exists because the two kinds of
 // false are not the same fact: "the seat is working" is a healthy answer, while "nothing ever answered" is this box's
 // actual state - on the compaction path the not-idle branch is taken EVERY pass (`:196`, rate-limited, interrupt and
 // continue), so the quiet-triggered compact below it never fires and a supervisor that never compacts looks exactly
 // like a supervisor with nothing to do. The bool the Idle hook trades in stays a bool; the sentence is said where the
 // false is ACTED ON, and only when the read could not answer at all.
-func rigIdleReason(rig, seat string) (idle bool, why string) {
-	read := clientruntime.ReadSeatActivity(rig, seat)
+func roomIdleReason(room, seat string) (idle bool, why string) {
+	read := clientruntime.ReadSeatActivity(room, seat)
 	if !read.Read {
 		// THE SENTENCE IS THE READ'S, not this caller's: it names what could not be asked - no daemon named in the
-		// environment, the rig absent from the list, the route's HTTP status, no record for this seat. One read, one
+		// environment, the room absent from the list, the route's HTTP status, no record for this seat. One read, one
 		// diagnosis; the two readers used to word their own failures, and the wording drifted with the program they
 		// exec'd.
 		return false, read.Why
@@ -434,7 +434,7 @@ func idleFromActivityWord(word string, present bool) (idle bool, why string) {
 	}
 	// UNKNOWN IS NAMED, because silence here is indistinguishable from a busy seat: `unknown` is a word this client
 	// RECOGNIZES, so the branch above does not catch it, and it is the daemon's own never-evidence value - a report
-	// that cannot tell. Measured on the live rig: architect and fe-dev both answer `unknown` and both used to give an
+	// that cannot tell. Measured on the live room: architect and fe-dev both answer `unknown` and both used to give an
 	// empty why, so two of five seats read exactly like a seat that is mid-turn when the truth was that the daemon
 	// could not say. The definite words stay silent on purpose: `running`/`working`/`needs_input` are ANSWERS ("not
 	// idle"), and a sentence is owed for a mystery, not for an answer.
@@ -456,7 +456,7 @@ func idleFromActivityWord(word string, present bool) (idle bool, why string) {
 // client, not before.
 const saySender = "owner session"
 
-// rigSay sends a seat one message through the RUNTIME, not through the rig tool. Two differences from the shell-out
+// roomSay sends a seat one message through the RUNTIME, not through the room tool. Two differences from the shell-out
 // it replaces, and both are deliberate:
 //
 //   - THE ENVELOPE is written HERE, because the runtime's send has none: it types the exact bytes it is given. A plain
@@ -474,9 +474,9 @@ const saySender = "owner session"
 //     already gates the send on s.Idle. So the removal costs that caller nothing it was actually relying on - which is
 //     a stronger reason than the pretence alone, and the reason the gate is named below rather than assumed.
 //
-//     The runtime's send has no idle wait to escape (the same reason rigAbort's start-and-release dance was
+//     The runtime's send has no idle wait to escape (the same reason roomAbort's start-and-release dance was
 //     unnecessary), and BOTH idle readings on this machine are the same shell-out this unit removes: this file's
-//     rigIdle, and QuietWaiter's Activity - clientseat's seatActivity, which also runs `rig ps --nodes --json` and reads
+//     roomIdle, and QuietWaiter's Activity - clientseat's seatActivity, which also runs `rig ps --nodes --json` and reads
 //     agentActivity.state. So honouring the wait would re-add the dependency being cut, in a second package.
 //
 //     EVERY CALLER THAT LOSES THE WAIT, and why each is safe. /compact (raw, on the urgent path) is gated by s.Idle at
@@ -485,8 +485,8 @@ const saySender = "owner session"
 //     boundary is the next prompt, which is the resume's purpose. The notice and the warning are each latched once by
 //     state.told/state.warned and read whenever the seat next looks at its pane, so arriving later changes nothing
 //     except that they are no longer held behind a busy seat.
-func rigSay(rig, seat, text string, raw bool) error {
-	session := clientruntime.SeatSessionName(rig, seat)
+func roomSay(room, seat, text string, raw bool) error {
+	session := clientruntime.SeatSessionName(room, seat)
 	if raw {
 		return runtimeSendText(session, text, "say")
 	}
@@ -495,9 +495,9 @@ func rigSay(rig, seat, text string, raw bool) error {
 
 // runtimeSendText is the ONE place this package types text into a seat's pane. It is a package-level variable rather
 // than an interface added for testing, which is the repo's rule, and it is what makes both sends' text observable:
-// rigSay ABOVE rebuilds the CLI's "From <sender>: " envelope for a plain message and sends a raw one bare, and
-// rigAbort BELOW sends the bare "/abort" keystroke. The one thing in this file that still reaches the rig tool is
-// rigIdle, which READS and types nothing (declared as an exception above).
+// roomSay ABOVE rebuilds the CLI's "From <sender>: " envelope for a plain message and sends a raw one bare, and
+// roomAbort BELOW sends the bare "/abort" keystroke. The one thing in this file that still reaches the room tool is
+// roomIdle, which READS and types nothing (declared as an exception above).
 //
 // The VERB is the third argument and it is not decoration: it rides the frame, and a text a mid-turn seat cannot
 // take comes back to this session naming the way it arrived. The two carriers here name themselves.
@@ -505,23 +505,23 @@ var runtimeSendText = func(session, text, verb string) error {
 	return clientruntime.NewClient("").SendText(session, text, verb)
 }
 
-// rigAbort sends /abort, the one pane text the omp runner turns into an abort of the running turn, and it goes
+// roomAbort sends /abort, the one pane text the omp runner turns into an abort of the running turn, and it goes
 // out WITHOUT the From/To envelope the send verb adds: a sender prefix would arrive as a MESSAGE and the runner
 // would see text where it needs a keystroke, so the bare "/abort" is the contract, not a detail. It is sent
 // without waiting for idle, because the seat is working by definition - and the runtime's send has no idle wait
 // to escape, so the old start-and-release dance is unnecessary rather than dropped.
-func rigAbort(rig, seat string) {
+func roomAbort(room, seat string) {
 	// The error is DELIBERATELY discarded, and it is the deliberate kind rather than an oversight: the caller is
 	// aborting a turn that is already running, so a refusal has nothing useful to do here - the seat is being
 	// interrupted either way, and the supervisor's next step is its own interrupt/escalation ladder, not a retry of
 	// this keystroke. The old code discarded it too (Start + Release), so this is not a new silence. The alternative
 	// is a supervisor log line, which this function cannot reach without a logger seam of its own: if a reader needs
 	// the refusal visible, THAT seam is the change to make - not a silent retry here.
-	_ = runtimeSendText(clientruntime.SeatSessionName(rig, seat), "/abort", "abort")
+	_ = runtimeSendText(clientruntime.SeatSessionName(room, seat), "/abort", "abort")
 }
 
-func tmuxInterrupt(root, rig, seat string) {
-	cmd, err := clientenv.TmuxCommandAt(root, "send-keys", "-t", clientruntime.SeatSessionName(rig, seat), "Escape")
+func tmuxInterrupt(root, room, seat string) {
+	cmd, err := clientenv.TmuxCommandAt(root, "send-keys", "-t", clientruntime.SeatSessionName(room, seat), "Escape")
 	if err != nil {
 		return
 	}
@@ -530,8 +530,8 @@ func tmuxInterrupt(root, rig, seat string) {
 
 // rpcCompact asks the runtime daemon to compact the seat through its runner, which reads the request
 // whatever the seat is doing.
-func (s *Supervisor) rpcCompact(rig, seat string) string {
-	answer, err := clientruntime.NewClient("").ForceCompact(clientruntime.SeatSessionName(rig, seat))
+func (s *Supervisor) rpcCompact(room, seat string) string {
+	answer, err := clientruntime.NewClient("").ForceCompact(clientruntime.SeatSessionName(room, seat))
 	if err != nil {
 		return err.Error()
 	}

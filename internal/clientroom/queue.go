@@ -314,7 +314,7 @@ const queueUnknownRoomPrefix = "no such room "
 //	    the same helper, so this group has one voice for it rather than two.
 //	2 - the daemon ANSWERED and refused the operation: a row that is not pending, an unknown qitem_id, a
 //	    state or reason the store will not take. The daemon did its part and the ask did not happen, which
-//	    is exactly what 2 is for (§2.5); 0 here would be the "success over a no-op" this rig has paid for.
+//	    is exactly what 2 is for (§2.5); 0 here would be the "success over a no-op" this room has paid for.
 func queueDaemonRefusal(stderr io.Writer, sub string, err error) int {
 	if strings.HasPrefix(err.Error(), queueUnknownRoomPrefix) {
 		return reportDaemon(stderr, "queue "+sub, err)
@@ -357,7 +357,7 @@ func queueRowLine(row clientruntime.QueueRow) string {
 // queueTransitionLine is one transition as show and the write verbs render it:
 // `<transition_id> <ts> <from_state> -> <state> by <actor> | <note>`. The actor is LABELLED because printed bare
 // after the arrow it read as the row's new DESTINATION: on 2026-10-18 an owner row was believed routed away from
-// its addressee three times - "blocked -> pending agenthub--rig--reviewer" - while the destination field never
+// its addressee three times - "blocked -> pending agenthub--room--reviewer" - while the destination field never
 // changed and the line only named who closed the blocker. The note is the transition's own text, appended after
 // the bar; a transition that carries no note still ends at the bar, so a note-less step is visibly note-less
 // rather than looking like a row whose note was not printed.

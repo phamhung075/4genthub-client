@@ -166,8 +166,8 @@ func eventsAck(sessionID, cursor string) map[string]any {
 	return map[string]any{"type": "events_ack", "session_id": sessionID, "last_seq": float64(0), "cursor": cursor}
 }
 
-func newCandidate(name, rig, member, state string) sessionCandidate {
-	return sessionCandidate{name: name, rigName: rig, member: member, state: state}
+func newCandidate(name, room, member, state string) sessionCandidate {
+	return sessionCandidate{name: name, roomName: room, member: member, state: state}
 }
 
 func keysOf(frame map[string]any) []string {
@@ -227,8 +227,8 @@ func TestHelloCarriesProtocolVersionAndCapabilities(t *testing.T) {
 // the ruled one, with pid present only when the row names a live pid.
 func TestSafeguardFramesOnlyAfterReadyEchoesTheCapability(t *testing.T) {
 	rows := []clientservices.Health{
-		{Rig: "room-a", Safeguard: "compact", State: "running", PID: 4321, Restarts: 2, AgeS: 1},
-		{Rig: "room-a", Safeguard: "bridge", State: "stopped", Restarts: 5, AgeS: 900},
+		{Room: "room-a", Safeguard: "compact", State: "running", PID: 4321, Restarts: 2, AgeS: 1},
+		{Room: "room-a", Safeguard: "bridge", State: "stopped", Restarts: 5, AgeS: 900},
 	}
 
 	h := newHarness(t)
@@ -248,16 +248,16 @@ func TestSafeguardFramesOnlyAfterReadyEchoesTheCapability(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("safeguard frames = %d, want 2", len(frames))
 	}
-	withPID := []string{"age_s", "at", "pid", "restarts", "rig", "safeguard", "state", "type"}
-	withoutPID := []string{"age_s", "at", "restarts", "rig", "safeguard", "state", "type"}
+	withPID := []string{"age_s", "at", "pid", "restarts", "room", "safeguard", "state", "type"}
+	withoutPID := []string{"age_s", "at", "restarts", "room", "safeguard", "state", "type"}
 	if got := keysOf(frames[0]); !reflect.DeepEqual(got, withPID) {
 		t.Errorf("frame[0] keys = %v, want %v", got, withPID)
 	}
 	if got := keysOf(frames[1]); !reflect.DeepEqual(got, withoutPID) {
 		t.Errorf("frame[1] keys = %v, want %v", got, withoutPID)
 	}
-	if frames[0]["rig"] != "room-a" || frames[0]["safeguard"] != "compact" || frames[0]["state"] != "running" {
-		t.Errorf("frame[0] = %v, want the row's rig, safeguard and state", frames[0])
+	if frames[0]["room"] != "room-a" || frames[0]["safeguard"] != "compact" || frames[0]["state"] != "running" {
+		t.Errorf("frame[0] = %v, want the row's room, safeguard and state", frames[0])
 	}
 	if frames[0]["restarts"] != 2 || frames[0]["age_s"] != 1 || frames[0]["pid"] != 4321 {
 		t.Errorf("frame[0] = %v, want restarts 2, age_s 1, pid 4321", frames[0])
@@ -677,7 +677,7 @@ func TestSessionIsResentAfterEveryReady(t *testing.T) {
 	}
 }
 
-func TestASeatLeavingRigPsIsSentStoppedOnce(t *testing.T) {
+func TestASeatLeavingRoomPsIsSentStoppedOnce(t *testing.T) {
 	h := newHarness(t)
 	candidates := []sessionCandidate{newCandidate("dev-alice@room-a", "room-a", "alice", SessionRunning)}
 	h.d.Sessions = func(context.Context) ([]sessionCandidate, error) { return candidates, nil }

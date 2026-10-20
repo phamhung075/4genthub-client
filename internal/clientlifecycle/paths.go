@@ -15,10 +15,10 @@ import (
 // SupervisorPattern is the argv fragment that identifies this client's compaction supervisor, read from
 // the ONE pattern table the health report also uses (clientservices.Pattern): `status` and the report must
 // never be able to disagree about which process is the supervisor, which two definitions of the same
-// command line eventually would. The Python matched "agenthub_client.compact --room <rig>", a Python module
+// command line eventually would. The Python matched "agenthub_client.compact --room <room>", a Python module
 // name; the Go supervisor is this binary's own `compact-run`.
-func SupervisorPattern(rig string) string {
-	return clientservices.Pattern(clientservices.Compact, rig)
+func SupervisorPattern(room string) string {
+	return clientservices.Pattern(clientservices.Compact, room)
 }
 
 // LogDir is where the lifecycle verbs keep their logs. It DELEGATES to clientservices.LogDir because the
@@ -28,15 +28,15 @@ func SupervisorPattern(rig string) string {
 // writes its logs there.
 func LogDir(root string) string { return clientservices.LogDir(root) }
 
-// LogPath is the supervisor's log for one rig.
-func LogPath(rig, root string) string {
-	return filepath.Join(LogDir(root), "compact-supervisor-"+rig+".log")
+// LogPath is the supervisor's log for one room.
+func LogPath(room, root string) string {
+	return filepath.Join(LogDir(root), "compact-supervisor-"+room+".log")
 }
 
-// MessagesLogPath is the seat-message deliverer's log for one rig: what every pass printed, so a message
+// MessagesLogPath is the seat-message deliverer's log for one room: what every pass printed, so a message
 // that would not land stays readable after the fact rather than only in the operator's scrollback.
-func MessagesLogPath(rig, root string) string {
-	return filepath.Join(LogDir(root), "messages-"+rig+".log")
+func MessagesLogPath(room, root string) string {
+	return filepath.Join(LogDir(root), "messages-"+room+".log")
 }
 
 // BridgeLogPath is the status bridge's log.

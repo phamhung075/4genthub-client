@@ -23,7 +23,7 @@ const (
 	numstat = "12\t3\tinternal/foo.go\n0\t7\tdocs/bar.md\n"
 )
 
-// runEvidence drives the verb the dispatcher drives: no rig is involved.
+// runEvidence drives the verb the dispatcher drives: no room is involved.
 func runEvidence(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return evidenceCommand{}.Run(ctx, args, stdout, stderr)
 }

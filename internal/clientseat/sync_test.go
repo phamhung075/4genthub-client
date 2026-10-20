@@ -14,8 +14,8 @@ func TestRelaunchAsksTheRuntimeForTheSeatAndNeverShellsOut(t *testing.T) {
 	t.Cleanup(func() { restartSeat = previousRestart })
 
 	restarts := 0
-	var gotRig, gotSeat string
-	restartSeat = func(rig, seat string) error { restarts++; gotRig, gotSeat = rig, seat; return nil }
+	var gotRoom, gotSeat string
+	restartSeat = func(room, seat string) error { restarts++; gotRoom, gotSeat = room, seat; return nil }
 	t.Setenv("PATH", t.TempDir())
 
 	if err := relaunch("room1", "alpha"); err != nil {
@@ -24,8 +24,8 @@ func TestRelaunchAsksTheRuntimeForTheSeatAndNeverShellsOut(t *testing.T) {
 	if restarts != 1 {
 		t.Fatalf("runtime restarts = %d, want 1", restarts)
 	}
-	if gotRig != "room1" || gotSeat != "alpha" {
-		t.Errorf("the runtime was asked for %s/%s, want room1/alpha", gotRig, gotSeat)
+	if gotRoom != "room1" || gotSeat != "alpha" {
+		t.Errorf("the runtime was asked for %s/%s, want room1/alpha", gotRoom, gotSeat)
 	}
 }
 
@@ -35,7 +35,7 @@ func TestRelaunchReportsTheRuntimesRefusal(t *testing.T) {
 	previousRestart := restartSeat
 	t.Cleanup(func() { restartSeat = previousRestart })
 
-	restartSeat = func(rig, seat string) error { return errors.New("seat alpha is not in room room1") }
+	restartSeat = func(room, seat string) error { return errors.New("seat alpha is not in room room1") }
 
 	err := relaunch("room1", "alpha")
 	if err == nil {

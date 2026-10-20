@@ -65,24 +65,24 @@ type verbUsage struct {
 
 var verbUsages = map[string]verbUsage{
 	"watch": {
-		line: "usage: 4genteam watch --room RIG [--cols N] [--back N] [--width N] [--lines N] [--detail]",
+		line: "usage: 4genteam watch --room ROOM [--cols N] [--back N] [--width N] [--lines N] [--detail]",
 		notes: "the seat grid, plus the lead window with its feed and an input pane.\n" +
 			"`4genteam watch <feed|grid|inputs|input> ...` runs that verb.",
 	},
 	"grid": {
-		line:  "usage: 4genteam grid --room RIG [--cols N] [--back N] [--width N] [--lines N] [--detail]",
+		line:  "usage: 4genteam grid --room ROOM [--cols N] [--back N] [--width N] [--lines N] [--detail]",
 		notes: "one pane per live seat, each running that seat's own feed.",
 	},
 	"feed": {
-		line:  "usage: 4genteam feed --room RIG [--seat SEAT ...] [--back N] [--width N] [--lines N] [--detail]",
+		line:  "usage: 4genteam feed --room ROOM [--seat SEAT ...] [--back N] [--width N] [--lines N] [--detail]",
 		notes: "one merged, READ-ONLY stream for a plain terminal or ssh.",
 	},
 	"inputs": {
-		line:  "usage: 4genteam inputs <open|hide> --room RIG [--seat SEAT ...]",
+		line:  "usage: 4genteam inputs <open|hide> --room ROOM [--seat SEAT ...]",
 		notes: "an input pane under each seat pane; a line typed there is sent to that seat through this client's own transport.",
 	},
 	"input": {
-		line:  "usage: 4genteam input --room RIG --seat SEAT",
+		line:  "usage: 4genteam input --room ROOM --seat SEAT",
 		notes: "one seat's input pane: read lines and send each to that seat through this client's own transport. /hide or Ctrl-D leaves.",
 	},
 }
@@ -103,7 +103,7 @@ const stateRootInHelp = "~/.config/4genthub"
 func commonFlags() string {
 	return `
 options:
-  --room RIG       the room to watch; required, there is no default room
+  --room ROOM       the room to watch; required, there is no default room
   --back N        events replayed per seat when a pane starts (default 3 for feed, 40 otherwise)
   --width N       characters kept of each line (default 170 for feed, 200 otherwise)
   --lines N       lines shown of each call, result or message (default 60)
@@ -132,7 +132,7 @@ func printVerbUsage(w io.Writer, verb string) {
 		fmt.Fprint(w, "  action          open or hide\n")
 	}
 	if verb == "input" {
-		fmt.Fprint(w, "\noptions:\n  --room RIG       the room to watch; required\n  --seat SEAT     the seat to talk to; required\n")
+		fmt.Fprint(w, "\noptions:\n  --room ROOM       the room to watch; required\n  --seat SEAT     the seat to talk to; required\n")
 	}
 }
 
@@ -152,7 +152,7 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 		return clientcmd.ExitOK
 	}
 	state := shared{}
-	flags.StringVar(&state.rig, "room", "", "the room to watch")
+	flags.StringVar(&state.room, "room", "", "the room to watch")
 	// THE ROOT IS READ THROUGH THE ONE PARSER, so this group's flag set no longer names it: the root is
 	// stripped wherever it sits and the runtime's spelling is refused before a pane is opened. A root this
 	// group cannot resolve stays ExitUnavailable (resolveStateRoot below), the group's own decision.
@@ -209,8 +209,8 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 		return clientcmd.ExitUsage
 	}
 
-	if state.rig == "" {
-		fmt.Fprintf(stderr, "4genteam %s: --room RIG is required (there is no default room)\n", verb)
+	if state.room == "" {
+		fmt.Fprintf(stderr, "4genteam %s: --room ROOM is required (there is no default room)\n", verb)
 		return clientcmd.ExitUsage
 	}
 	state.cols = max(1, state.cols)
@@ -223,7 +223,7 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 		return reportError(err, stderr)
 	}
 	state.stateRoot = stateRoot
-	if err := requireRoomAndSeats(stateRoot, state.rig, state.seats); err != nil {
+	if err := requireRoomAndSeats(stateRoot, state.room, state.seats); err != nil {
 		return reportError(err, stderr)
 	}
 
@@ -264,7 +264,7 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 			fmt.Fprintln(stderr, "4genteam input: --seat SEAT is required")
 			return clientcmd.ExitUsage
 		}
-		if err := runInputLoop(ctx, state.rig, state.seats[0], os.Stdin, stdout); err != nil {
+		if err := runInputLoop(ctx, state.room, state.seats[0], os.Stdin, stdout); err != nil {
 			return reportError(err, stderr)
 		}
 		return clientcmd.ExitOK

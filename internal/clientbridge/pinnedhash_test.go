@@ -68,8 +68,8 @@ func TestPinnedHashUsedWhenValid(t *testing.T) {
 		t.Fatal(err)
 	}
 	nodes, err := parseItems(`[
-		{"rigName":"eng","logicalId":"eng.coder","runtime":"omp","sessionStatus":"running","agentActivity":{"state":"working"}},
-		{"rigName":"eng","logicalId":"eng.reviewer","runtime":"omp","sessionStatus":"running","agentActivity":{"state":"working"}}
+		{"roomName":"eng","logicalId":"eng.coder","runtime":"omp","sessionStatus":"running","agentActivity":{"state":"working"}},
+		{"roomName":"eng","logicalId":"eng.reviewer","runtime":"omp","sessionStatus":"running","agentActivity":{"state":"working"}}
 	]`, "rig ps")
 	if err != nil {
 		t.Fatalf("unwrapping the two-seat fixture: %v", err)
@@ -109,7 +109,7 @@ func TestAMalformedPinRefusesTheSeatsReport(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "pinned.json"), []byte(contents), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			nodes, err := parseItems(`[{"rigName":"eng","logicalId":"eng.coder","runtime":"omp"}]`, "rig ps")
+			nodes, err := parseItems(`[{"roomName":"eng","logicalId":"eng.coder","runtime":"omp"}]`, "rig ps")
 			if err != nil {
 				t.Fatalf("unwrapping the fixture: %v", err)
 			}

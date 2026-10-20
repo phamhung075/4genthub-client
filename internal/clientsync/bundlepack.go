@@ -1,10 +1,10 @@
-// The bundle archive `sync bundle` writes: a gzip tar of the rig spec and the agent directories the rig root
+// The bundle archive `sync bundle` writes: a gzip tar of the room spec and the agent directories the room root
 // holds, with a manifest naming every file and its hash.
 //
-// It is built here, not by the rig orchestrator tool, so a machine without the rig orchestrator can ship a seat. The archive is
-// DETERMINISTIC - sorted entries, a zero mtime, fixed modes - so the same pin and the same rig root always
+// It is built here, not by the room orchestrator tool, so a machine without the room orchestrator can ship a seat. The archive is
+// DETERMINISTIC - sorted entries, a zero mtime, fixed modes - so the same pin and the same room root always
 // produce the same bytes, and a bundle's hash is a fact about its contents rather than about the day it was
-// built. `offline-install` reads the unpacked directory (`rig.yaml` and `agents/<agent>/`), which is the
+// built. `offline-install` reads the unpacked directory (`room.yaml` and `agents/<agent>/`), which is the
 // layout this archive carries.
 package clientsync
 
@@ -49,20 +49,20 @@ type bundleFile struct {
 // bundleSpec is what a bundle is built from.
 type bundleSpec struct {
 	name, version, notes string
-	rigYAML, rigRoot     string
+	roomYAML, roomRoot   string
 }
 
-// bundleCollect reads the files a bundle carries: the rig spec as `rig.yaml`, and every regular file under
-// `<rig root>/agents`. A symlink is skipped, never followed, so a bundle cannot be made to carry a file from
-// outside the rig root.
+// bundleCollect reads the files a bundle carries: the room spec as `room.yaml`, and every regular file under
+// `<room root>/agents`. A symlink is skipped, never followed, so a bundle cannot be made to carry a file from
+// outside the room root.
 func bundleCollect(spec bundleSpec) ([]bundleFile, error) {
-	yamlBytes, err := os.ReadFile(spec.rigYAML)
+	yamlBytes, err := os.ReadFile(spec.roomYAML)
 	if err != nil {
-		return nil, fmt.Errorf("cannot read the rig spec: %w", err)
+		return nil, fmt.Errorf("cannot read the room spec: %w", err)
 	}
-	files := []bundleFile{{path: "rig.yaml", content: yamlBytes}}
+	files := []bundleFile{{path: "room.yaml", content: yamlBytes}}
 
-	agents := filepath.Join(spec.rigRoot, "agents")
+	agents := filepath.Join(spec.roomRoot, "agents")
 	if info, err := os.Stat(agents); err != nil || !info.IsDir() {
 		return files, nil
 	}
@@ -73,7 +73,7 @@ func bundleCollect(spec bundleSpec) ([]bundleFile, error) {
 		if !entry.Type().IsRegular() {
 			return nil
 		}
-		relative, err := filepath.Rel(spec.rigRoot, path)
+		relative, err := filepath.Rel(spec.roomRoot, path)
 		if err != nil {
 			return err
 		}
@@ -85,7 +85,7 @@ func bundleCollect(spec bundleSpec) ([]bundleFile, error) {
 		return nil
 	})
 	if walkErr != nil {
-		return nil, fmt.Errorf("cannot read the rig root's agents: %w", walkErr)
+		return nil, fmt.Errorf("cannot read the room root's agents: %w", walkErr)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 	return files, nil

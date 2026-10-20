@@ -9,7 +9,7 @@
 // THE FOLDER IS GIT'S OWN ANSWER: `git rev-parse --git-path hooks` honors `core.hooksPath` and otherwise
 // names the repository's own hooks folder, so the row reads what git will run instead of guessing a path.
 // The checkout is the one `up` and the worktrees row already resolve (clientworktree.MainRoot), and like
-// the clone row this one is the MACHINE's: one checkout holds every room's worktrees, so it carries no rig.
+// the clone row this one is the MACHINE's: one checkout holds every room's worktrees, so it carries no room.
 //
 // A GUARD THAT WAS NEVER INSTALLED IS A NOTE, NOT A FAILURE. 7.5 makes `doctor` refuse while any row is not
 // running, and a machine where the guard has not been installed yet would refuse for a reason no reader can
@@ -80,7 +80,7 @@ func hooksLines(row hooksRow) []string {
 // without a repository on the machine.
 var hooksRowFor = hooksRows
 
-// hooksRows is the row the report covers. The argument is the rig the caller named and is deliberately
+// hooksRows is the row the report covers. The argument is the room the caller named and is deliberately
 // unused: the hooks folder belongs to the checkout, not to a room.
 func hooksRows(string) []hooksRow { return []hooksRow{hooksRowOf()} }
 

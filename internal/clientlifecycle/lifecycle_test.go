@@ -33,7 +33,7 @@ func helpOf(t *testing.T, name, flag string) (int, string, string) {
 
 // TestHelpIsHelpForEveryLifecycleVerb is the Python test of the same name: a help flag after ANY verb
 // prints that verb's own usage, exits 0, and does nothing else. The fault it pins is that `--help` used
-// to be read as the RIG of a lifecycle verb, so `compact --help` started a supervisor whose child died
+// to be read as the ROOM of a lifecycle verb, so `compact --help` started a supervisor whose child died
 // instantly while the verb still printed a pid and returned 0.
 func TestHelpIsHelpForEveryLifecycleVerb(t *testing.T) {
 	for _, command := range Commands() {
@@ -59,8 +59,8 @@ func stubHeartbeat(t *testing.T) *[]string {
 	t.Helper()
 	var calls []string
 	previous := clientservices.WriteHeartbeat
-	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
-		calls = append(calls, safeguard+"/"+rig)
+	clientservices.WriteHeartbeat = func(root, safeguard, room string) error {
+		calls = append(calls, safeguard+"/"+room)
 		return nil
 	}
 	t.Cleanup(func() { clientservices.WriteHeartbeat = previous })
@@ -75,22 +75,22 @@ func restoreAll(t *testing.T) {
 	// from a stub, so a lifecycle assertion never depends on the repository the test binary was built
 	// in; the two cases that assert the step replace it with their own.
 	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int { return clientcmd.ExitOK }
-	daemon, worktrees, rigStep := ensureDaemon, ensureWorktrees, ensureRig
-	record := recordRigFor
+	daemon, worktrees, roomStep := ensureDaemon, ensureWorktrees, ensureRoom
+	record := recordRoomFor
 	authority, wait := startAuthority, waitSafeguards
 	ui, watch, herdr := openUI, runWatchView, runHerdr
 	spawn, grace := spawnChild, SupervisorStartGrace
-	stop, nodes := stopPattern, rigNodes
+	stop, nodes := stopPattern, roomNodes
 	rows, authorityUp := rowsFor, agentRunning
 	clone, hooks := cloneRowFor, hooksRowFor
 	detach, executable := detachRespawn, respawnExecutable
 	t.Cleanup(func() {
-		ensureDaemon, ensureWorktrees, ensureRig = daemon, worktrees, rigStep
-		recordRigFor = record
+		ensureDaemon, ensureWorktrees, ensureRoom = daemon, worktrees, roomStep
+		recordRoomFor = record
 		startAuthority, waitSafeguards = authority, wait
 		openUI, runWatchView, runHerdr = ui, watch, herdr
 		spawnChild, SupervisorStartGrace = spawn, grace
-		stopPattern, rigNodes = stop, nodes
+		stopPattern, roomNodes = stop, nodes
 		rowsFor, agentRunning = rows, authorityUp
 		cloneRowFor, hooksRowFor = clone, hooks
 		detachRespawn, respawnExecutable = detach, executable
@@ -101,13 +101,13 @@ func restoreAll(t *testing.T) {
 	cloneRowFor = func(string) []cloneRow { return nil }
 	hooksRowFor = func(string) []hooksRow { return nil }
 	// A test in this package runs with the peak gate reading NO nodes: the gate then has nothing to
-	// decide, and no test here reaches the machine's own daemon, rig or clock. A test about the gate
-	// replaces rigNodes with the reading it wants to be judged on.
-	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	// decide, and no test here reaches the machine's own daemon, room or clock. A test about the gate
+	// replaces roomNodes with the reading it wants to be judged on.
+	roomNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
 	// NO TEST WRITES agent.json. The seams that would - recording the room and starting the authority -
 	// are replaced with recorders here, so a `up` test can assert the ORDER without touching the machine's
 	// own state file.
-	recordRigFor = func(string, io.Writer) bool { return true }
+	recordRoomFor = func(string, io.Writer) bool { return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { return true }
 	waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
 		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true, nil
@@ -151,7 +151,7 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 		ran = append(ran, "spawn")
 		return diedChild{}, nil
 	}
-	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
+	recordRoomFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 	openUI = func(io.Writer) {}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
@@ -170,7 +170,7 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 }
 
 // TestUpInitialisesEveryServiceInOrder is the Python test of the same name, restated for 7.1: the daemon,
-// the rig, the room recorded as meant-to-run, agent (the single restart authority),
+// the room, the room recorded as meant-to-run, agent (the single restart authority),
 // the same health check `doctor` makes, the watch view, the UI, then herdr.
 //
 // THE BRIDGE AND THE SUPERVISOR ARE NOT IN THIS LIST ANY MORE, and that is the ruling: `up` starts agent,
@@ -189,11 +189,11 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 		ran = append(ran, "ensureWorktrees")
 		return clientcmd.ExitOK
 	}
-	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
-		ran = append(ran, "ensureRig")
+	ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		ran = append(ran, "ensureRoom")
 		return clientcmd.ExitOK
 	}
-	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
+	recordRoomFor = func(string, io.Writer) bool { ran = append(ran, "recordRoom"); return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
 	waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
 		ran = append(ran, "waitSafeguards")
@@ -205,10 +205,10 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	t.Setenv("HERDR_ENV", "")
 
 	var out, errOut bytes.Buffer
-	if code := (upCommand{}).Run(context.Background(), []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (upCommand{}).Run(context.Background(), []string{"my-room", "--team", writeRoomDefinition(t, "my-room")}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up returned %d (stderr: %q)", code, errOut.String())
 	}
-	want := []string{"ensureDaemon", "ensureWorktrees", "ensureRig", "recordRig", "startAgent", "waitSafeguards", "watch", "openUI", "herdr"}
+	want := []string{"ensureDaemon", "ensureWorktrees", "ensureRoom", "recordRoom", "startAgent", "waitSafeguards", "watch", "openUI", "herdr"}
 	if strings.Join(ran, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", ran, want)
 	}
@@ -236,20 +236,20 @@ func TestUpRefusesADefinitionThatNamesAnotherRoom(t *testing.T) {
 	restoreAll(t)
 	var started []string
 	ensureDaemon = func(string, io.Writer) (string, error) { started = append(started, "daemon"); return "", nil }
-	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+	ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
 		started = append(started, "room")
 		return clientcmd.ExitOK
 	}
 
 	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(), []string{"other-rig", "--team", writeRoomDefinition(t, "my-rig")}, &out, &errOut)
+	code := (upCommand{}).Run(context.Background(), []string{"other-room", "--team", writeRoomDefinition(t, "my-room")}, &out, &errOut)
 	if code != clientcmd.ExitRoomRefused {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitRoomRefused, errOut.String())
 	}
 	if len(started) != 0 {
 		t.Errorf("a wrong room name reached the machine: %v", started)
 	}
-	if !strings.Contains(errOut.String(), "my-rig") {
+	if !strings.Contains(errOut.String(), "my-room") {
 		t.Errorf("stderr did not name the room the definition defines: %q", errOut.String())
 	}
 }
@@ -273,11 +273,11 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 				ran = append(ran, "ensureDaemon")
 				return "/tmp/daemon.log", nil
 			}
-			ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
-				ran = append(ran, "ensureRig")
+			ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+				ran = append(ran, "ensureRoom")
 				return c.room
 			}
-			recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
+			recordRoomFor = func(string, io.Writer) bool { ran = append(ran, "recordRoom"); return true }
 			startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
 			waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
 				ran = append(ran, "waitSafeguards")
@@ -288,11 +288,11 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 			runHerdr = func(io.Writer, io.Writer) int { ran = append(ran, "herdr"); return 0 }
 
 			var out, errOut bytes.Buffer
-			code := (upCommand{}).Run(context.Background(), []string{"my-rig", "--team", writeRoomDefinition(t, "my-rig"), "--room-only"}, &out, &errOut)
+			code := (upCommand{}).Run(context.Background(), []string{"my-room", "--team", writeRoomDefinition(t, "my-room"), "--room-only"}, &out, &errOut)
 			if code != c.want {
 				t.Fatalf("exit %d, want %d (stderr %q)", code, c.want, errOut.String())
 			}
-			if strings.Join(ran, ",") != "ensureDaemon,ensureRig" {
+			if strings.Join(ran, ",") != "ensureDaemon,ensureRoom" {
 				t.Errorf("--room-only ran %v, want only the daemon and the room", ran)
 			}
 		})
@@ -306,18 +306,18 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 func TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec(t *testing.T) {
 	restoreAll(t)
 	root := t.TempDir()
-	directory := filepath.Join(root, "rooms", "my-rig")
+	directory := filepath.Join(root, "rooms", "my-room")
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	live := `{"room":"my-rig","seats":[` +
+	live := `{"room":"my-room","seats":[` +
 		`{"seat_key":"lead","cwd":"/work/lead"},` +
 		`{"seat_key":"go-dev","cwd":"/work/go-dev"},` +
 		`{"seat_key":"reviewer","cwd":"   "}]}`
 	if err := os.WriteFile(filepath.Join(directory, "spec.json"), []byte(live), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	team := `{"room":{"slug":"my-rig"},` +
+	team := `{"room":{"slug":"my-room"},` +
 		`"seats":[{"seat_key":"lead","seat_type":"developer","runtime":"omp"},` +
 		`{"seat_key":"go-dev","seat_type":"developer","runtime":"omp","cwd":"/declared/go-dev"},` +
 		`{"seat_key":"fe-dev","seat_type":"developer","runtime":"omp"}],` +
@@ -330,14 +330,14 @@ func TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec(t *testing.T) {
 
 	ensureDaemon = func(string, io.Writer) (string, error) { return "/tmp/daemon.log", nil }
 	var sent clientruntime.RoomSpec
-	ensureRig = func(_ string, spec clientruntime.RoomSpec, _ string, _ io.Writer, _ io.Writer) int {
+	ensureRoom = func(_ string, spec clientruntime.RoomSpec, _ string, _ io.Writer, _ io.Writer) int {
 		sent = spec
 		return clientcmd.ExitOK
 	}
 
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(),
-		[]string{"my-rig", "--team", teamDir, "--state-root", root, "--room-only"}, &out, &errOut)
+		[]string{"my-room", "--team", teamDir, "--state-root", root, "--room-only"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d (stderr %q)", code, errOut.String())
 	}
@@ -371,11 +371,11 @@ func TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec(t *testing.T) {
 func TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition(t *testing.T) {
 	restoreAll(t)
 	root := t.TempDir()
-	directory := filepath.Join(root, "rooms", "my-rig")
+	directory := filepath.Join(root, "rooms", "my-room")
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	live := `{"room":"my-rig","seats":[` +
+	live := `{"room":"my-room","seats":[` +
 		`{"seat_key":"lead","seat_type":"developer","runtime":"omp","cwd":"/work/lead"},` +
 		`{"seat_key":"go-dev","seat_type":"developer","runtime":"omp","cwd":"/work/go-dev"}],` +
 		`"links":[{"from":"lead","kind":"delegates_to","to":"go-dev"}]}`
@@ -386,7 +386,7 @@ func TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition(t *testing.T) {
 	ensureDaemon = func(string, io.Writer) (string, error) { return "/tmp/daemon.log", nil }
 	started := false
 	var sent clientruntime.RoomSpec
-	ensureRig = func(_ string, spec clientruntime.RoomSpec, _ string, _ io.Writer, _ io.Writer) int {
+	ensureRoom = func(_ string, spec clientruntime.RoomSpec, _ string, _ io.Writer, _ io.Writer) int {
 		started = true
 		sent = spec
 		return clientcmd.ExitOK
@@ -394,7 +394,7 @@ func TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(),
-		[]string{"my-rig", "--state-root", root, "--room-only"}, &out, &errOut)
+		[]string{"my-room", "--state-root", root, "--room-only"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d (stderr %q)", code, errOut.String())
 	}
@@ -436,7 +436,7 @@ func TestStopSignalsAgentAndSaysTheStopIsMachineWide(t *testing.T) {
 	}
 
 	var out, errOut bytes.Buffer
-	if code := (stopCommand{}).Run(context.Background(), []string{"my-rig"}, &out, &errOut); code != clientcmd.ExitOK {
+	if code := (stopCommand{}).Run(context.Background(), []string{"my-room"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("stop returned %d (stderr %q)", code, errOut.String())
 	}
 	want := []string{clientservices.Pattern(clientservices.Agent, "")}
@@ -447,18 +447,18 @@ func TestStopSignalsAgentAndSaysTheStopIsMachineWide(t *testing.T) {
 		t.Errorf("stdout = %q, want it to report agent stopped", out.String())
 	}
 
-	// No rig means no guess, and nothing may be signalled while the verb decides that.
+	// No room means no guess, and nothing may be signalled while the verb decides that.
 	patterns = nil
 	out.Reset()
 	if code := (stopCommand{}).Run(context.Background(), nil, &out, &errOut); code != clientcmd.ExitUsage {
-		t.Errorf("stop with no rig returned %d, want %d", code, clientcmd.ExitUsage)
+		t.Errorf("stop with no room returned %d, want %d", code, clientcmd.ExitUsage)
 	}
 	// Help is the other case where a lifecycle action must not run.
 	if code := (stopCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Errorf("stop --help returned %d, want %d", code, clientcmd.ExitOK)
 	}
 	if len(patterns) != 0 {
-		t.Errorf("stop signalled %v without a rig to name", patterns)
+		t.Errorf("stop signalled %v without a room to name", patterns)
 	}
 }
 
@@ -492,17 +492,17 @@ func TestCompactSpawnsNothingAndRefusesWithoutTheAuthority(t *testing.T) {
 	agentRunning = func() (int, error) { return 0, nil }
 
 	var out, errOut bytes.Buffer
-	code := (compactCommand{}).Run(context.Background(), []string{"some-rig"}, &out, &errOut)
+	code := (compactCommand{}).Run(context.Background(), []string{"some-room"}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("compact with no agent returned %d, want %d", code, clientcmd.ExitUnavailable)
 	}
 	if len(spawned) != 0 {
 		t.Errorf("compact spawned %v, and agent is the only restart authority", spawned)
 	}
-	if !strings.Contains(errOut.String(), "agent is not running") || !strings.Contains(errOut.String(), "4genteam up some-rig") {
+	if !strings.Contains(errOut.String(), "agent is not running") || !strings.Contains(errOut.String(), "4genteam up some-room") {
 		t.Errorf("the refusal did not name agent and the repair verb: %q", errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "4genteam room compact some-rig") {
+	if !strings.Contains(errOut.String(), "4genteam room compact some-room") {
 		t.Errorf("the refusal did not name the runtime's own compact verb: %q", errOut.String())
 	}
 }
@@ -519,13 +519,13 @@ func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 	agentRunning = func() (int, error) { return 4242, nil }
 	rowsFor = func(string, string) ([]clientservices.Health, error) {
 		return []clientservices.Health{
-			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Running, PID: 99, AgeS: 3},
-			{Rig: "some-rig", Safeguard: clientservices.Watchdog, State: clientservices.Silent, AgeS: 400},
+			{Room: "some-room", Safeguard: clientservices.Compact, State: clientservices.Running, PID: 99, AgeS: 3},
+			{Room: "some-room", Safeguard: clientservices.Watchdog, State: clientservices.Silent, AgeS: 400},
 		}, nil
 	}
 
 	var out, errOut bytes.Buffer
-	code := (compactCommand{}).Run(context.Background(), []string{"some-rig"}, &out, &errOut)
+	code := (compactCommand{}).Run(context.Background(), []string{"some-room"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("compact with a running supervisor returned %d (stderr: %q)", code, errOut.String())
 	}
@@ -544,26 +544,26 @@ func TestCompactNamesTheRowWhenTheSupervisorIsNotRunning(t *testing.T) {
 	agentRunning = func() (int, error) { return 4242, nil }
 	rowsFor = func(string, string) ([]clientservices.Health, error) {
 		return []clientservices.Health{
-			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
+			{Room: "some-room", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
 		}, nil
 	}
 
 	var out, errOut bytes.Buffer
-	code := (compactCommand{}).Run(context.Background(), []string{"some-rig"}, &out, &errOut)
+	code := (compactCommand{}).Run(context.Background(), []string{"some-room"}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("compact with a stopped supervisor returned %d, want %d", code, clientcmd.ExitUnavailable)
 	}
-	if !strings.Contains(errOut.String(), "some-rig compact: stopped, age 31s") {
+	if !strings.Contains(errOut.String(), "some-room compact: stopped, age 31s") {
 		t.Errorf("stderr = %q, want the row named in doctor's own words", errOut.String())
 	}
 }
 
-// TestEveryLifecycleVerbRequiresARig: the Python defaulted to a rig of the owner's own team. There is no
+// TestEveryLifecycleVerbRequiresARoom: the Python defaulted to a room of the owner's own team. There is no
 // such default now, so an omitted name is a usage error that names the verb and the argument.
 //
 // `up` is the ONE exception to the code, not to the rule: its usage failures are 3, because 2 is a PARTIAL
 // START for that verb (design §2.5) and one number cannot mean both.
-func TestEveryLifecycleVerbRequiresARig(t *testing.T) {
+func TestEveryLifecycleVerbRequiresARoom(t *testing.T) {
 	for _, name := range []string{"up", "compact", "stop", "status", "log"} {
 		for _, command := range Commands() {
 			if command.Name() != name {
@@ -576,10 +576,10 @@ func TestEveryLifecycleVerbRequiresARig(t *testing.T) {
 			var out, errOut bytes.Buffer
 			code := command.Run(context.Background(), nil, &out, &errOut)
 			if code != want {
-				t.Errorf("%s with no rig: exit %d, want %d", name, code, want)
+				t.Errorf("%s with no room: exit %d, want %d", name, code, want)
 			}
-			if !strings.Contains(errOut.String(), "no default rig") {
-				t.Errorf("%s with no rig: stderr = %q, want the required-rig rule", name, errOut.String())
+			if !strings.Contains(errOut.String(), "no default room") {
+				t.Errorf("%s with no room: stderr = %q, want the required-room rule", name, errOut.String())
 			}
 		}
 	}
@@ -591,7 +591,7 @@ func TestEveryLifecycleVerbRequiresARig(t *testing.T) {
 func TestABlankQuietValueMeansTheDefaultNotAFailedParse(t *testing.T) {
 	t.Setenv("COMPACT_QUIET_SECONDS", "")
 	var errOut bytes.Buffer
-	options, ok := ParseCompactRunOptions([]string{"--room", "my-rig", "--once"}, &errOut)
+	options, ok := ParseCompactRunOptions([]string{"--room", "my-room", "--once"}, &errOut)
 	if !ok {
 		t.Fatalf("a blank COMPACT_QUIET_SECONDS was a parse failure: %q", errOut.String())
 	}
@@ -604,7 +604,7 @@ func TestABlankQuietValueMeansTheDefaultNotAFailedParse(t *testing.T) {
 func TestANonNumericQuietValueRefusesAndNamesIt(t *testing.T) {
 	t.Setenv("COMPACT_QUIET_SECONDS", "soon")
 	var errOut bytes.Buffer
-	if _, ok := ParseCompactRunOptions([]string{"--room", "my-rig", "--once"}, &errOut); ok {
+	if _, ok := ParseCompactRunOptions([]string{"--room", "my-room", "--once"}, &errOut); ok {
 		t.Fatal("a non-numeric COMPACT_QUIET_SECONDS was accepted")
 	}
 	if !strings.Contains(errOut.String(), "COMPACT_QUIET_SECONDS") {
@@ -615,7 +615,7 @@ func TestANonNumericQuietValueRefusesAndNamesIt(t *testing.T) {
 // TestCompactRunStateRootFlag: --state-root names the root; without it the machine's own default is used.
 func TestCompactRunStateRootFlag(t *testing.T) {
 	var errOut bytes.Buffer
-	options, ok := ParseCompactRunOptions([]string{"--room", "my-rig", "--once"}, &errOut)
+	options, ok := ParseCompactRunOptions([]string{"--room", "my-room", "--once"}, &errOut)
 	if !ok {
 		t.Fatalf("the default was refused: %s", errOut.String())
 	}
@@ -623,7 +623,7 @@ func TestCompactRunStateRootFlag(t *testing.T) {
 		t.Errorf("StateRoot = %q, want the machine default %q", options.StateRoot, want)
 	}
 
-	options, ok = ParseCompactRunOptions([]string{"--room", "my-rig", "--once", "--state-root", "/from/flag"}, &errOut)
+	options, ok = ParseCompactRunOptions([]string{"--room", "my-room", "--once", "--state-root", "/from/flag"}, &errOut)
 	if !ok {
 		t.Fatalf("the flag was refused: %s", errOut.String())
 	}
@@ -632,14 +632,14 @@ func TestCompactRunStateRootFlag(t *testing.T) {
 	}
 }
 
-// TestCompactRunRequiresARig: the Python's --room defaulted to the owner's rig.
-// test_compact_run_requires_a_rig.
-func TestCompactRunRequiresARig(t *testing.T) {
+// TestCompactRunRequiresARoom: the Python's --room defaulted to the owner's room.
+// test_compact_run_requires_a_room.
+func TestCompactRunRequiresARoom(t *testing.T) {
 	var errOut bytes.Buffer
 	if _, ok := ParseCompactRunOptions([]string{"--once"}, &errOut); ok {
 		t.Fatal("compact-run accepted no --room")
 	}
-	if !strings.Contains(errOut.String(), "no default rig") {
+	if !strings.Contains(errOut.String(), "no default room") {
 		t.Errorf("the refusal did not state the rule: %q", errOut.String())
 	}
 }
@@ -794,7 +794,7 @@ func TestATransportFailureRefusesInsteadOfStartingTheRoom(t *testing.T) {
 // the line on its own.
 func TestPeakGateSaysWhenItDidNotRunForARoomItHasNoRecordsOf(t *testing.T) {
 	restoreAll(t)
-	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	roomNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
 	// The clock is pinned inside the peak window on a DeepSeek-heavy Friday, so the case cannot pass
 	// merely because the schedule had nothing to refuse.
 	gateEnv(t, "2026-10-09 02:00")
@@ -826,7 +826,7 @@ func TestUpRefusesBeforeTheDaemonWhenTheProbeCannotRun(t *testing.T) {
 		ran = append(ran, "ensureDaemon")
 		return "/tmp/daemon.log", nil
 	}
-	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
+	recordRoomFor = func(string, io.Writer) bool { ran = append(ran, "recordRoom"); return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
 
 	var out, errOut bytes.Buffer
@@ -854,7 +854,7 @@ func TestStopRefusesWhenTheSignalProbeCannotRun(t *testing.T) {
 	t.Cleanup(func() { closeWatch = previousClose })
 
 	var out, errOut bytes.Buffer
-	code := (stopCommand{}).Run(context.Background(), []string{"my-rig"}, &out, &errOut)
+	code := (stopCommand{}).Run(context.Background(), []string{"my-room"}, &out, &errOut)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("stop exited %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 	}

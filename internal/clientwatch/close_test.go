@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// The grid and lead panes run `feed` and `input`, which poll forever: closing the rig's two workspaces is
-// what ends them, and another rig's workspaces are not touched.
-func TestCloseRigWorkspacesClosesTheGridAndLeadOfThatRigOnly(t *testing.T) {
+// The grid and lead panes run `feed` and `input`, which poll forever: closing the room's two workspaces is
+// what ends them, and another room's workspaces are not touched.
+func TestCloseRoomWorkspacesClosesTheGridAndLeadOfThatRoomOnly(t *testing.T) {
 	fake := newFakeExec(t)
 	fake.working["herdr"] = true
 	fake.on("herdr workspace list", `{"result": {"workspaces": [`+
@@ -17,7 +17,7 @@ func TestCloseRigWorkspacesClosesTheGridAndLeadOfThatRigOnly(t *testing.T) {
 	fake.on("herdr workspace close w1", `{"result": {}}`)
 	fake.on("herdr workspace close w2", `{"result": {}}`)
 
-	if err := CloseRigWorkspaces(context.Background(), "r"); err != nil {
+	if err := CloseRoomWorkspaces(context.Background(), "r"); err != nil {
 		t.Fatal(err)
 	}
 	closed := [][]string{}
@@ -31,9 +31,9 @@ func TestCloseRigWorkspacesClosesTheGridAndLeadOfThatRigOnly(t *testing.T) {
 	}
 }
 
-func TestCloseRigWorkspacesWithoutHerdrDoesNothing(t *testing.T) {
+func TestCloseRoomWorkspacesWithoutHerdrDoesNothing(t *testing.T) {
 	fake := newFakeExec(t)
-	if err := CloseRigWorkspaces(context.Background(), "r"); err != nil {
+	if err := CloseRoomWorkspaces(context.Background(), "r"); err != nil {
 		t.Fatal(err)
 	}
 	if calls := fake.callsOf("herdr"); len(calls) != 0 {

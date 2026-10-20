@@ -24,7 +24,7 @@ import (
 // which exit code a one-shot run earns. The Python specified all of it in tests/test_bridge.py; these
 // are those behaviours, ported onto this package's seams.
 //
-// Nothing here touches a rig, a seat or a network, and nothing sleeps: the local tools are fixtures
+// Nothing here touches a room, a seat or a network, and nothing sleeps: the local tools are fixtures
 // behind Runner, the transport is a script of answers and failures behind Send (or an in-process
 // http.RoundTripper for the sender itself), and the wait the loop would take comes back from Cycle as a
 // VALUE, so a test asserts it instead of living through it.
@@ -32,7 +32,7 @@ import (
 // fixtureNodes is one the rig orchestrator node in the shape `rig ps --json --nodes` prints. It carries a
 // latestError on purpose: the seat's detail must be NON-EMPTY, or the 422 strip would be asserted
 // against a field that could not have differed in the first place.
-const fixtureNodes = `[{"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp",` +
+const fixtureNodes = `[{"roomName":"room-a","logicalId":"room-a.seat-a","runtime":"omp",` +
 	`"sessionStatus":"running","agentActivity":{"state":"working"},"latestError":"boom in seat-a"}]`
 
 // step is one scripted exchange: the status the transport answers and the body it answers with, OR the
@@ -59,14 +59,14 @@ func (c *fakeClock) plusSeconds(seconds float64) {
 }
 
 type fixture struct {
-	bridge  *Bridge
-	clock   *fakeClock
-	notes   []string
-	rigJSON string
-	bodies  [][]byte
-	steps   []step
-	// queueJSON is what the notification sweep's queue read answers. Empty means the rig fixtures
-	// answer it instead, which parses to a rig with no rows - the sweep then does nothing.
+	bridge   *Bridge
+	clock    *fakeClock
+	notes    []string
+	roomJSON string
+	bodies   [][]byte
+	steps    []step
+	// queueJSON is what the notification sweep's queue read answers. Empty means the room fixtures
+	// answer it instead, which parses to a room with no rows - the sweep then does nothing.
 	queueJSON string
 	// frames are the notification frames the sweep posted, and notifySteps scripts their answers the
 	// same way steps scripts the report's.
@@ -83,14 +83,14 @@ type fixture struct {
 // clock the test advances, and the notes captured instead of printed.
 func newFixture(t *testing.T, steps ...step) *fixture {
 	t.Helper()
-	f := &fixture{rigJSON: fixtureNodes, steps: steps}
+	f := &fixture{roomJSON: fixtureNodes, steps: steps}
 	// Every iteration of the bridge's run loop beats (a one-shot cycle does not - see
 	// TestTheRunLoopBeatsAndTheOneShotDoesNot). The seam is replaced here, for every test that builds
 	// its bridge through this fixture, so no test writes into the machine's own log directory; the beat
 	// is recorded so a test can assert it happened.
 	previousBeat := clientservices.WriteHeartbeat
-	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
-		f.beats = append(f.beats, safeguard+"/"+rig)
+	clientservices.WriteHeartbeat = func(root, safeguard, room string) error {
+		f.beats = append(f.beats, safeguard+"/"+room)
 		return nil
 	}
 	t.Cleanup(func() { clientservices.WriteHeartbeat = previousBeat })
@@ -107,8 +107,8 @@ func newFixture(t *testing.T, steps ...step) *fixture {
 		}
 		return "", fmt.Errorf("%s: not a tool this fixture runs", argv[0])
 	}
-	f.bridge.Nodes = func() ([]any, error) { return parseItems(f.rigJSON, "rig ps") }
-	f.bridge.Links = func(string) ([]rigEdge, error) { return nil, nil }
+	f.bridge.Nodes = func() ([]any, error) { return parseItems(f.roomJSON, "rig ps") }
+	f.bridge.Links = func(string) ([]roomEdge, error) { return nil, nil }
 	f.clock = &fakeClock{at: time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)}
 	f.bridge.clock = f.clock.now
 
@@ -183,7 +183,7 @@ func TestCycleSendsOnChangeAndOnHeartbeat(t *testing.T) {
 		t.Errorf("an unchanged report was sent %d times before the heartbeat, want 1", len(f.bodies))
 	}
 
-	f.rigJSON = strings.Replace(fixtureNodes, "boom in seat-a", "moved on", 1)
+	f.roomJSON = strings.Replace(fixtureNodes, "boom in seat-a", "moved on", 1)
 	f.clock.plusSeconds(1)
 	f.cycle()
 	if len(f.bodies) != 2 {
@@ -222,7 +222,7 @@ func TestTheRunLoopBeatsAndTheOneShotDoesNot(t *testing.T) {
 	cancel()
 	f.bridge.Run(ctx, false)
 	if len(f.beats) != 1 || f.beats[0] != "bridge/" {
-		t.Fatalf("the run loop beat %v, want exactly one bridge/ beat (the bridge is one per machine, so no rig)", f.beats)
+		t.Fatalf("the run loop beat %v, want exactly one bridge/ beat (the bridge is one per machine, so no room)", f.beats)
 	}
 }
 
@@ -508,20 +508,20 @@ func TestAnUnreadableRecordReadsAsEmptyRatherThanInventingAHash(t *testing.T) {
 }
 
 // A node whose room or seat name fails this client's pattern is NOT reported, and the count is: the
-// report is an allow-list, so an the rig orchestrator value this client does not understand must not travel as a
+// report is an allow-list, so an the room orchestrator value this client does not understand must not travel as a
 // field the cloud then has to defend against. The Python asserted both halves - only the good seat
 // survives, and the caller says how many were skipped - and this is that case.
 func TestBuildSeatsSkipsInvalidNamesAndCountsThem(t *testing.T) {
 	fourBad := `[
-		{"rigName":"bad room","logicalId":"x"},
-		{"rigName":"eng","logicalId":"../etc"},
-		{"rigName":"eng","logicalId":"dev.coder"},
-		{"rigName":"ok","logicalId":7}
+		{"roomName":"bad room","logicalId":"x"},
+		{"roomName":"eng","logicalId":"../etc"},
+		{"roomName":"eng","logicalId":"dev.coder"},
+		{"roomName":"ok","logicalId":7}
 	]`
 	threeBad := `[
-		{"rigName":"eng","logicalId":"dev.coder"},
-		{"rigName":"bad room","logicalId":"dev.x"},
-		{"rigName":"eng","logicalId":"dev.../etc"}
+		{"roomName":"eng","logicalId":"dev.coder"},
+		{"roomName":"bad room","logicalId":"dev.x"},
+		{"roomName":"eng","logicalId":"dev.../etc"}
 	]`
 
 	for _, tc := range []struct {
@@ -538,7 +538,7 @@ func TestBuildSeatsSkipsInvalidNamesAndCountsThem(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t, step{code: 200})
-			f.rigJSON = tc.nodes
+			f.roomJSON = tc.nodes
 			f.cycle()
 
 			report := f.reported(t, 0)
@@ -617,7 +617,7 @@ func TestAbsentToolsAreEmptySourcesAndLoggedOnce(t *testing.T) {
 
 	payload := f.reported(t, 0)
 	if len(payload.Seats) != 1 || payload.Seats[0].Seat != "seat-a" {
-		t.Errorf("the seats are not the rig fixture's: %+v", payload.Seats)
+		t.Errorf("the seats are not the room fixture's: %+v", payload.Seats)
 	}
 	if len(payload.Agents) != 0 {
 		t.Errorf("agents = %+v, want none out of an absent herdr", payload.Agents)
@@ -749,7 +749,7 @@ func TestTheTokenNeverAppearsInANoteOrInTheError(t *testing.T) {
 	t.Setenv("AGENTHUB_TOKEN", token)
 
 	f := newFixture(t, step{code: 401}, step{code: 500}, step{err: errNoAnswer})
-	f.rigJSON = strings.Replace(fixtureNodes, "boom in seat-a", "auth failed token="+token, 1)
+	f.roomJSON = strings.Replace(fixtureNodes, "boom in seat-a", "auth failed token="+token, 1)
 	for i := 0; i < 3; i++ {
 		f.cycle()
 	}
@@ -803,7 +803,7 @@ func TestTheTokenNeverAppearsInANoteOrInTheError(t *testing.T) {
 
 	calls = 0 // counted again below, for the loop's own request only
 	g := newFixture(t)
-	g.rigJSON = f.rigJSON
+	g.roomJSON = f.roomJSON
 	g.bridge.Send = send
 	g.cycle()
 	if calls != 1 {

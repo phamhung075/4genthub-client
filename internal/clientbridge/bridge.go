@@ -37,8 +37,8 @@ const (
 // answer that did not exist.
 type Sender func(body []byte) (int, []byte, error)
 
-// Runner runs a LOCAL tool and returns its stdout. The rig itself is reached through clientcmd.Rig,
-// which is the one place an external command starts; herdr is not rig, so it gets this seam - argv,
+// Runner runs a LOCAL tool and returns its stdout. The room itself is reached through clientcmd.Room,
+// which is the one place an external command starts; herdr is not room, so it gets this seam - argv,
 // never a shell string, the same rule.
 type Runner func(ctx context.Context, argv ...string) (string, error)
 
@@ -49,18 +49,18 @@ type Bridge struct {
 	// Root is the state root the verb resolved: the heartbeat file lives under it and nowhere else.
 	Root string
 	Send Sender
-	// Notify posts one dashboard notification frame per human-addressed the rig orchestrator row (D3). Nil
+	// Notify posts one dashboard notification frame per human-addressed the room orchestrator row (D3). Nil
 	// disables the producer: 4genteam bridge once --print and the parity fixtures build payloads
 	// without talking to anything, and a bridge that cannot notify must still report.
 	Notify Sender
-	// Runner runs a LOCAL tool that is not rig; rig itself arrives through clientcmd.Rig, the one
+	// Runner runs a LOCAL tool that is not room; room itself arrives through clientcmd.Room, the one
 	// place an external command starts. Named Runner rather than Run so it cannot collide with the
 	// loop's own Run method.
 	Runner Runner
 	// Nodes reads the seats this machine hosts, in the node shape BuildSeats reads; Links reads one room's
 	// declared links. Both default to the agenthub runtime, and are seams so a test needs no daemon.
 	Nodes func() ([]any, error)
-	Links func(room string) ([]rigEdge, error)
+	Links func(room string) ([]roomEdge, error)
 	// Rooms lists the hosted rooms and Queue reads one room's active human-addressed rail rows, which the
 	// notification sweep walks; they default to the runtime too.
 	Rooms     func() ([]string, error)
@@ -165,12 +165,12 @@ func (b *Bridge) BuildPayload() (Payload, error) {
 		ReportedAt: UTCNow(),
 		Seats:      seats,
 		Agents:     BuildAgents(agents),
-		Edges:      BuildEdges(RigRooms(nodes), b.readEdges),
+		Edges:      BuildEdges(Rooms(nodes), b.readEdges),
 	}, nil
 }
 
 // readEdges reads one room's links, and reads a room it cannot read as having no edges.
-func (b *Bridge) readEdges(room string) []rigEdge {
+func (b *Bridge) readEdges(room string) []roomEdge {
 	edges, err := b.Links(room)
 	if err != nil {
 		b.note("edges "+room, fmt.Sprintf("runtime unavailable: %v", err))
@@ -193,7 +193,7 @@ func (b *Bridge) readNodes() []any {
 }
 
 // runtimeNodes lists every seat of every room the runtime hosts, in the node shape a `rig ps` listing
-// had: the room is both the rig id and the rig name.
+// had: the room is both the room id and the room name.
 func runtimeNodes() ([]any, error) {
 	client := clientruntime.NewClient("")
 	if !client.Reachable() {
@@ -206,7 +206,7 @@ func runtimeNodes() ([]any, error) {
 	nodes := make([]any, 0, len(entries))
 	for _, entry := range entries {
 		node := map[string]any{
-			"rigId": entry.RigName, "rigName": entry.RigName, "logicalId": entry.LogicalID,
+			"roomId": entry.RoomName, "roomName": entry.RoomName, "logicalId": entry.LogicalID,
 			"runtime": entry.Runtime, "sessionStatus": entry.SessionStatus,
 			"agentActivity": map[string]any{"state": entry.AgentActivity.State},
 		}
@@ -219,7 +219,7 @@ func runtimeNodes() ([]any, error) {
 }
 
 // runtimeLinks reads one room's declared links from the runtime.
-func runtimeLinks(room string) ([]rigEdge, error) {
+func runtimeLinks(room string) ([]roomEdge, error) {
 	client := clientruntime.NewClient("")
 	if !client.Reachable() {
 		return nil, errRuntimeAbsent
@@ -228,9 +228,9 @@ func runtimeLinks(room string) ([]rigEdge, error) {
 	if err != nil {
 		return nil, err
 	}
-	edges := make([]rigEdge, 0, len(links))
+	edges := make([]roomEdge, 0, len(links))
 	for _, link := range links {
-		edges = append(edges, rigEdge{link.From, link.To, link.Kind})
+		edges = append(edges, roomEdge{link.From, link.To, link.Kind})
 	}
 	return edges, nil
 }
@@ -410,7 +410,7 @@ func (b *Bridge) Run(ctx context.Context, once bool) int {
 		// THE BEAT BELONGS TO THE LOOP, before any early return of the cycle: a loop that finds nothing
 		// to send, or that fails, still proves the bridge is alive. A one-shot does NOT beat - it is a
 		// check, its pid dies with it, and a heartbeat naming it makes the row read silent (see Cycle).
-		// The bridge is one per machine, so no rig.
+		// The bridge is one per machine, so no room.
 		if !once {
 			if err := clientservices.WriteHeartbeat(b.Root, clientservices.Bridge, ""); err != nil {
 				b.note("heartbeat", fmt.Sprintf("heartbeat write failed: %v", err))

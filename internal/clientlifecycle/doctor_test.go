@@ -4,7 +4,7 @@
 // WHAT THIS FILE PROVES, in the shape the brief asks for:
 //
 //	(a) the health report names the safeguard STOPPED or SILENT, with an AGE;
-//	(b) `doctor` exits ExitUnavailable (3) and prints `<rig> <safeguard>: <state>, age <n>s` on stderr;
+//	(b) `doctor` exits ExitUnavailable (3) and prints `<room> <safeguard>: <state>, age <n>s` on stderr;
 //	(c) THE FALSIFICATION - the SAME fixture with the safeguard alive and beating produces ExitOK and a
 //	    `running` row. Without (c) the case would only prove that a check ran, not that it discriminates.
 //
@@ -46,7 +46,7 @@ type healthFixture struct {
 
 // newHealthFixture wires the seams to a temp machine and restores them afterwards. No test in this file
 // touches the real /var-like paths, and none of them starts, restarts or signals anything.
-func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
+func newHealthFixture(t *testing.T, listedRooms []string) *healthFixture {
 	t.Helper()
 	root := t.TempDir()
 	stateDir := t.TempDir()
@@ -68,7 +68,7 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 	// installed the guard. The two cases that assert those rows replace these.
 	cloneRowFor = func(string) []cloneRow { return nil }
 	hooksRowFor = func(string) []hooksRow { return nil }
-	// The orphan row reads the queue and the node list through the rig tool, and no test in this file runs
+	// The orphan row reads the queue and the node list through the room tool, and no test in this file runs
 	// a daemon: the default here is a report with NO orphan row at all, so every case below sees exactly
 	// the safeguard rows it was written for. A case that wants the row replaces this.
 	orphanRowsFor = func(string) []orphanRow { return nil }
@@ -83,8 +83,8 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 	clientservices.Live = func(pattern string) ([]int, error) { return fixture.live[pattern], nil }
 
 	state := clientservices.AgentState{}
-	for _, rig := range listedRigs {
-		state = clientservices.AddRig(state, rig)
+	for _, room := range listedRooms {
+		state = clientservices.AddRoom(state, room)
 	}
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -97,9 +97,9 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 
 // beat writes one safeguard's heartbeat file with a chosen pid and age, through the real file layout the
 // report reads (clientservices.HeartbeatPath).
-func (f *healthFixture) beat(safeguard, rig string, age time.Duration, pid int) {
+func (f *healthFixture) beat(safeguard, room string, age time.Duration, pid int) {
 	f.t.Helper()
-	path := clientservices.HeartbeatPath(f.root, safeguard, rig)
+	path := clientservices.HeartbeatPath(f.root, safeguard, room)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		f.t.Fatal(err)
 	}
@@ -113,9 +113,9 @@ func (f *healthFixture) beat(safeguard, rig string, age time.Duration, pid int) 
 }
 
 // running makes one safeguard healthy: its process is live AND its heartbeat is fresh, from that process.
-func (f *healthFixture) running(safeguard, rig string, pid int) {
-	f.live[clientservices.Pattern(safeguard, rig)] = []int{pid}
-	f.beat(safeguard, rig, time.Second, pid)
+func (f *healthFixture) running(safeguard, room string, pid int) {
+	f.live[clientservices.Pattern(safeguard, room)] = []int{pid}
+	f.beat(safeguard, room, time.Second, pid)
 }
 
 // everythingRunning is the all-healthy machine: every safeguard the report walks, plus agent itself.
@@ -130,14 +130,14 @@ func (f *healthFixture) everythingRunning() {
 }
 
 // row finds one row of the report, so an assertion names the safeguard rather than an index.
-func row(t *testing.T, rows []clientservices.Health, safeguard, rig string) clientservices.Health {
+func row(t *testing.T, rows []clientservices.Health, safeguard, room string) clientservices.Health {
 	t.Helper()
 	for _, candidate := range rows {
-		if candidate.Safeguard == safeguard && candidate.Rig == rig {
+		if candidate.Safeguard == safeguard && candidate.Room == room {
 			return candidate
 		}
 	}
-	t.Fatalf("the report has no row for %s/%s: %+v", safeguard, rig, rows)
+	t.Fatalf("the report has no row for %s/%s: %+v", safeguard, room, rows)
 	return clientservices.Health{}
 }
 
@@ -150,14 +150,14 @@ func doctor(t *testing.T, fixture *healthFixture, args ...string) (int, string, 
 	return code, out.String(), errOut.String()
 }
 
-// orphanRowFor is one rig's orphan_handoffs row as a case supplies it, so a case can choose the state
+// orphanRowFor is one room's orphan_handoffs row as a case supplies it, so a case can choose the state
 // without producing a queue or a daemon.
-func orphanRowFor(t *testing.T, rig string, state string, orphans ...orphanHandoff) {
+func orphanRowFor(t *testing.T, room string, state string, orphans ...orphanHandoff) {
 	t.Helper()
 	orphanRowsFor = func(string) []orphanRow {
 		return []orphanRow{{
 			Row: clientservices.Health{
-				Rig:       rig,
+				Room:      room,
 				Safeguard: clientservices.OrphanHandoffs,
 				State:     state,
 				AgeS:      clientservices.UnknownAge,
@@ -224,7 +224,7 @@ func TestAnUnreadableOrphanReadIsNotACleanReport(t *testing.T) {
 	f.everythingRunning()
 	orphanRowsFor = func(string) []orphanRow {
 		return []orphanRow{{
-			Row: clientservices.Health{Rig: "demo", Safeguard: clientservices.OrphanHandoffs, State: clientservices.Silent, AgeS: clientservices.UnknownAge},
+			Row: clientservices.Health{Room: "demo", Safeguard: clientservices.OrphanHandoffs, State: clientservices.Silent, AgeS: clientservices.UnknownAge},
 			Err: errors.New("rig queue list: exit status 1"),
 		}}
 	}
@@ -295,7 +295,7 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 	cases := []struct {
 		name      string
 		safeguard string
-		rig       string
+		room      string
 		// silent keeps the process alive so the HEARTBEAT decides, which is the hung case; otherwise the
 		// process is gone and the PROCESS decides.
 		silent bool
@@ -314,10 +314,10 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 
 			// The failure. The last beat is 31 s old: past compact's 30 s threshold, past agent's 75 s? no -
 			// 31 s is inside agent's, which is why the target row is the only one that moves.
-			fixture.beat(c.safeguard, c.rig, 31*time.Second, 4101)
+			fixture.beat(c.safeguard, c.room, 31*time.Second, 4101)
 			if !c.silent {
 				// The process is gone: pgrep finds nothing for its command line.
-				fixture.live[clientservices.Pattern(c.safeguard, c.rig)] = nil
+				fixture.live[clientservices.Pattern(c.safeguard, c.room)] = nil
 			}
 			wantState := clientservices.Stopped
 			if c.silent {
@@ -329,7 +329,7 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("rowsFor refused: %v", err)
 			}
-			got := row(t, rows, c.safeguard, c.rig)
+			got := row(t, rows, c.safeguard, c.room)
 			if got.State != wantState {
 				t.Errorf("row = %+v, want state %q", got, wantState)
 			}
@@ -342,7 +342,7 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 			if code != clientcmd.ExitUnavailable {
 				t.Fatalf("doctor exited %d, want %d\nstdout:\n%s\nstderr:\n%s", code, clientcmd.ExitUnavailable, stdout, stderr)
 			}
-			named := strings.TrimSpace(c.rig + " " + c.safeguard)
+			named := strings.TrimSpace(c.room + " " + c.safeguard)
 			want := named + ": " + wantState + ", age 31s"
 			if !strings.Contains(stderr, want) {
 				t.Errorf("stderr = %q, want the line %q", stderr, want)
@@ -366,7 +366,7 @@ func TestASafeguardThatIsDownIsNamedNoMatterWhichOneItIs(t *testing.T) {
 		t.Fatalf("doctor exited %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, stderr)
 	}
 	if !strings.Contains(stderr, "agent: stopped, age 1s") {
-		t.Errorf("stderr = %q, want agent named without a rig", stderr)
+		t.Errorf("stderr = %q, want agent named without a room", stderr)
 	}
 
 	// --json prints the rows themselves, so a caller reads the same decision the lines carry.
@@ -423,14 +423,14 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rowsFor refused: %v", err)
 	}
-	for _, want := range []struct{ safeguard, rig string }{
+	for _, want := range []struct{ safeguard, room string }{
 		{clientservices.Compact, "demo"},
 		{clientservices.Watchdog, "demo"},
 		{clientservices.Budget, "demo"},
 		{clientservices.Bridge, ""},
 		{clientservices.Agent, ""},
 	} {
-		if got := row(t, rows, want.safeguard, want.rig); got.State != clientservices.Running {
+		if got := row(t, rows, want.safeguard, want.room); got.State != clientservices.Running {
 			t.Errorf("row = %+v, want running", got)
 		}
 	}
@@ -462,9 +462,9 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	}
 }
 
-// TestDoctorWithoutARigReportsEveryListedRoom: no argument means every room in agent.json's list, and a
+// TestDoctorWithoutARoomReportsEveryListedRoom: no argument means every room in agent.json's list, and a
 // room with no agent row at all still gets its safeguard rows - a machine started by hand must be visible.
-func TestDoctorWithoutARigReportsEveryListedRoom(t *testing.T) {
+func TestDoctorWithoutARoomReportsEveryListedRoom(t *testing.T) {
 	fixture := newHealthFixture(t, []string{"demo", "other"})
 	fixture.running(clientservices.Agent, "", 4104)
 
@@ -472,19 +472,19 @@ func TestDoctorWithoutARigReportsEveryListedRoom(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rowsFor refused: %v", err)
 	}
-	for _, want := range []struct{ safeguard, rig string }{
+	for _, want := range []struct{ safeguard, room string }{
 		{clientservices.Compact, "demo"},
 		{clientservices.Watchdog, "demo"},
 		{clientservices.Compact, "other"},
 		{clientservices.Watchdog, "other"},
 		{clientservices.Bridge, ""},
 	} {
-		got := row(t, rows, want.safeguard, want.rig)
+		got := row(t, rows, want.safeguard, want.room)
 		if got.State != clientservices.Stopped {
-			t.Errorf("%s/%s = %+v, want stopped", want.rig, want.safeguard, got)
+			t.Errorf("%s/%s = %+v, want stopped", want.room, want.safeguard, got)
 		}
 	}
-	// agent itself is alive in this fixture, and it has no rig: the machine-scoped row is reported without
+	// agent itself is alive in this fixture, and it has no room: the machine-scoped row is reported without
 	// one.
 	if got := row(t, rows, clientservices.Agent, ""); got.State != clientservices.Running {
 		t.Errorf("agent = %+v, want running", got)
@@ -544,7 +544,7 @@ func TestDoctorIsReadOnly(t *testing.T) {
 	// A NODE READ IS NOT AN ACTION, and the identity row makes one: the recorder names it so the assertion
 	// below can tell the two apart, rather than forbidding the read the report has to make.
 	reads := 0
-	rigNodes = func(string) ([]map[string]any, bool, error) {
+	roomNodes = func(string) ([]map[string]any, bool, error) {
 		reads++
 		return nil, false, nil
 	}
@@ -583,7 +583,7 @@ func TestDoctorJSONCarriesTheReasonsTheLinesShow(t *testing.T) {
 	}
 	reasons := map[string][]string{}
 	for _, row := range rows {
-		reasons[strings.TrimSpace(row.Rig+" "+row.Safeguard)] = row.Reasons
+		reasons[strings.TrimSpace(row.Room+" "+row.Safeguard)] = row.Reasons
 	}
 	orphan := strings.Join(reasons["demo "+clientservices.OrphanHandoffs], "\n")
 	if !strings.Contains(orphan, "qitem-20261009-aaaa") || !strings.Contains(orphan, "demo-writer@demo") {

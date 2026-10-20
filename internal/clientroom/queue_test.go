@@ -181,8 +181,8 @@ func TestRoomQueueCreateWithoutTheSessionEnvRefusesAndSendsNothing(t *testing.T)
 }
 
 // TestRoomQueueActsAsTheNativeSeatSession pins the variable by its literal name: the runtime launches every
-// seat with AGENTHUB_SESSION_NAME and no the rig orchestrator variable, so a verb reading any other name has no actor on a
-// machine without the rig orchestrator.
+// seat with AGENTHUB_SESSION_NAME and no the room orchestrator variable, so a verb reading any other name has no actor on a
+// machine without the room orchestrator.
 func TestRoomQueueActsAsTheNativeSeatSession(t *testing.T) {
 	t.Setenv("AGENTHUB_SESSION_NAME", testSeat)
 	daemon := newFakeDaemon(t, map[string]string{
@@ -289,7 +289,7 @@ func TestRoomQueueUpdateWithANoteSendsAStatePreservingTransition(t *testing.T) {
 	t.Setenv(sessionEnv, testSeat)
 	daemon := newFakeDaemon(t, map[string]string{
 		"QueueUpdate": okData(queueRowFrame("qitem-x", "in-progress", "high", "hand me the build log",
-			queueTransitionFrame(1, "2026-10-14T00:17:00Z", "", "pending", "lead@rig", "created"),
+			queueTransitionFrame(1, "2026-10-14T00:17:00Z", "", "pending", "lead@room", "created"),
 			queueTransitionFrame(2, "2026-10-14T00:24:00Z", "in-progress", "in-progress", testSeat, "waiting on the log"))),
 	})
 
@@ -335,7 +335,7 @@ func TestRoomQueueUpdateWithoutAnyChangeWritesNothing(t *testing.T) {
 func TestRoomQueueShowPrintsTheRowsFieldsThenItsTransitions(t *testing.T) {
 	daemon := newFakeDaemon(t, map[string]string{
 		"QueueShow": okData(queueRowFrame("qitem-x", "in-progress", "high", "hand me the build log",
-			queueTransitionFrame(1, "2026-10-14T00:17:00Z", "", "pending", "lead@rig", "created"),
+			queueTransitionFrame(1, "2026-10-14T00:17:00Z", "", "pending", "lead@room", "created"),
 			queueTransitionFrame(2, "2026-10-14T00:24:00Z", "pending", "in-progress", testSeat, "claimed"))),
 	})
 
@@ -362,7 +362,7 @@ func TestRoomQueueShowPrintsTheRowsFieldsThenItsTransitions(t *testing.T) {
 		"ts_created: -\n" +
 		"ts_updated: -\n" +
 		"transitions: 2\n" +
-		"1 2026-10-14T00:17:00Z - -> pending by lead@rig | created\n" +
+		"1 2026-10-14T00:17:00Z - -> pending by lead@room | created\n" +
 		"2 2026-10-14T00:24:00Z pending -> in-progress by " + testSeat + " | claimed\n"
 	if stdout != want {
 		t.Fatalf("stdout:\n got %q\nwant %q (stderr %q)", stdout, want, stderr)

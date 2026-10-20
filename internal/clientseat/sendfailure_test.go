@@ -163,7 +163,7 @@ func daemonForTheSendTest(t *testing.T, sendTextFailure string) {
 		case strings.Contains(line, `"GetRoomLinks"`):
 			return roomLinksDoc("go-dev", "fe-dev")
 		case strings.Contains(line, `"Whoami"`):
-			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+			return `{"ok":true,"data":{"identity":{"roomName":"4genthub-min","memberId":"go-dev",` +
 				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
 		case strings.Contains(line, `"GetRoomStatus"`):
 			return `{"ok":true,"data":[{"room":"4genthub-min","seat":"fe-dev",` +
@@ -187,7 +187,7 @@ func daemonAnsweringTheSend(t *testing.T, data string) {
 		case strings.Contains(line, `"GetRoomLinks"`):
 			return roomLinksDoc("go-dev", "fe-dev")
 		case strings.Contains(line, `"Whoami"`):
-			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+			return `{"ok":true,"data":{"identity":{"roomName":"4genthub-min","memberId":"go-dev",` +
 				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
 		case strings.Contains(line, `"GetRoomStatus"`):
 			return `{"ok":true,"data":[{"room":"4genthub-min","seat":"fe-dev",` +

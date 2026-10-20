@@ -1,4 +1,4 @@
-# Agent setup: 4genthub, the rig orchestrator and herdr, then rooms and seats
+# Agent setup: 4genthub, the room orchestrator and herdr, then rooms and seats
 
 For an AI agent (or a person) bringing a machine into service for 4genthub, and then building
 rooms and seats when the user asks for them.
@@ -6,7 +6,7 @@ rooms and seats when the user asks for them.
 Three rules run through the whole page.
 
 - **Ask the user for every value that depends on the machine, the room or the operator's choice.**
-  The placeholders are `<SERVER-URL>`, `<ROOM>`, `<RIG>`, `<SEAT>`, `<RUNTIME>`, `<MODEL>`,
+  The placeholders are `<SERVER-URL>`, `<ROOM>`, `<ROOM>`, `<SEAT>`, `<RUNTIME>`, `<MODEL>`,
   `<TEAM-DIR>`, `<SKILLS-PATH>`. Never guess one, never copy one off another machine.
 - **If a prerequisite is missing, stop and tell the user which one.** Do not invent a workaround.
 - **Never print, log, commit or send the token.** It lives in one file, named below, and nowhere
@@ -112,8 +112,8 @@ fix: ask for a key, and never paste one into a message.
 | the client says `AGENTHUB_URL` and `AGENTHUB_TOKEN` must be set | neither the file nor the environment has them | ask the user for the key, write `~/.config/4genthub/.env` |
 | `403 Not authenticated` from `<SERVER-URL>` or the MCP endpoint | no bearer token reached the server | ask the user for a key; never paste one into a message |
 | `401 Invalid authentication credentials` | a token arrived and is invalid or expired | ask the user for a new key; nothing else in the client or `.mcp.json` needs to change |
-| `4genteam doctor` reports a safeguard row that is not running | the runtime daemon or that safeguard is stopped | `4genteam up <RIG> --team <DIR>`; `doctor` itself is read-only and starts nothing |
-| `4genteam ps <RIG> --nodes` shows no seat for the room | the room was never materialized on this machine | `4genteam up <RIG> --team <DIR>` (step 2.5) |
+| `4genteam doctor` reports a safeguard row that is not running | the runtime daemon or that safeguard is stopped | `4genteam up <ROOM> --team <DIR>`; `doctor` itself is read-only and starts nothing |
+| `4genteam ps <ROOM> --nodes` shows no seat for the room | the room was never materialized on this machine | `4genteam up <ROOM> --team <DIR>` (step 2.5) |
 | the watch view does not open | herdr or tmux is missing | `herdr --version`, `tmux -V`; stop and tell the user |
 | `… run a DeepSeek model (…) and DeepSeek bills at PEAK right now` from `4genteam up`, `compact`, `continue`, `watchdog` or `sync respawn` | the room holds a seat on a `deepseek/` model, and `OFFPEAK_ONLY` is on (the default) so the client will not start or resume it inside a peak window (01:00-04:00 and 06:00-10:00 UTC, Monday-Friday) | not a fault. Start it at the peak rate with `--allow-peak`, or `4genteam offpeak set off` to allow it from now on, or wait for the off-peak instant the message names. `4genteam offpeak` reports the state, `4genteam offpeak status` the setting |
 | a seat exits at once after launch | its runtime is not installed, or its runtime and model disagree | read the seat's log and report the missing piece to the user; do not switch the model to make it start |
@@ -146,7 +146,7 @@ choices the software accepts. Do not answer any of them yourself.
 - whether it **pins a version** (`pinned_version`, a concrete `x.y.z`) or **follows the latest**.
 
 **(b) The permission policy, one answer per seat.** Read the five choices to the user and get an
-explicit answer for each seat. `4genteam policy render --room <RIG> --seat <SEAT>` prints one
+explicit answer for each seat. `4genteam policy render --room <ROOM> --seat <SEAT>` prints one
 seat's rendered policy — the hub's own render of it, which is also the document the client installs
 as that seat's `config.yml` at launch:
 
@@ -158,7 +158,7 @@ as that seat's `config.yml` at launch:
 | `yolo` | the operator/no-guardrails posture — everything the harness allows; the launch posture is **full bypass** | `builtin:yolo` |
 | `none` | the reserved deliberate-none choice: the posture is the floor, the same as naming nothing, but the choice is visible | `none` |
 
-This client has no `policy list`: `4genteam policy render --room <RIG> --seat <SEAT>` prints one
+This client has no `policy list`: `4genteam policy render --room <ROOM> --seat <SEAT>` prints one
 seat's rendered policy, and the five postures above are the choices a 4genthub
 seat may record.
 
@@ -227,7 +227,7 @@ which:
 The reader finds a skill by one rule: **a directory holding `SKILL.md` is a skill, and a directory
 without one is a seat folder.** So `skills/rooms/<room>/<name>` is a room-level skill when it holds
 `SKILL.md` and the seat folder `<name>` when it does not. A shared or client skill stays generic — no
-rig, seat, host or personal path in it.
+room, seat, host or personal path in it.
 
 **The RUNTIME installs this tree, not the client.** A seat's skills are installed by the runtime at
 every start (`install_seat_skills`, `rust/agenthub-runtime/src/supervisor/mod.rs:258`): it rebuilds
@@ -339,18 +339,18 @@ there). A failure stops the run and names the step.
 
 ### 2.5 Materialize the room on this machine
 
-The cloud now knows the room; this machine has no seats yet. Ask the user which `<RIG>` name to
+The cloud now knows the room; this machine has no seats yet. Ask the user which `<ROOM>` name to
 use (the room name by default), then:
 
 ```bash
-4genteam up <RIG> --team <DIR>   # launches daemon, seats, supervisor, bridge and watch wall
-4genteam ps <RIG> --nodes        # one row per seat of the room, with its lifecycle and activity
+4genteam up <ROOM> --team <DIR>   # launches daemon, seats, supervisor, bridge and watch wall
+4genteam ps <ROOM> --nodes        # one row per seat of the room, with its lifecycle and activity
 ```
 
-`4genteam up <RIG> --team <DIR>` is the way to bring a room back after a restart: in one command it
+`4genteam up <ROOM> --team <DIR>` is the way to bring a room back after a restart: in one command it
 checks the runtime daemon, starts the room from the local team definition that directory holds, starts the
-status bridge, then the compaction supervisor, opens the watch view, opens the rig UI and hands
-over to herdr. `--team DIR` is required — there is no default team — and its positional is the **rig** name, the room name unless the user asked for a
+status bridge, then the compaction supervisor, opens the watch view, opens the room UI and hands
+over to herdr. `--team DIR` is required — there is no default team — and its positional is the **room** name, the room name unless the user asked for a
 different one.
 
 `4genteam up`, `4genteam compact`, `4genteam continue`, `4genteam watchdog` and `sync respawn` are
@@ -395,8 +395,8 @@ direction gets its own link.
 ]
 ```
 
-Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam up <RIG> --team <DIR>`
-(2.5), `4genteam ps <RIG> --nodes`, and the brief
+Then, in order: the dry run (2.3), approval, the apply (2.4), `4genteam up <ROOM> --team <DIR>`
+(2.5), `4genteam ps <ROOM> --nodes`, and the brief
 to the lead (2.6).
 
 ### 2.8 The questions, in the order to ask them
@@ -425,7 +425,7 @@ is waiting and stop.
 
 Once the room is up, a seat works the same way on any project.
 
-- **Startup.** `4genteam whoami --json` prints this seat's identity (`rigName`, `memberId`, runtime,
+- **Startup.** `4genteam whoami --json` prints this seat's identity (`roomName`, `memberId`, runtime,
   session name, role, model), its peers, the edges and the transcript path. Its first key,
   `current_task`, is the task this seat holds `in_progress` and the hub's resume brief for it
   (`{"id", "resume"}`), so a seat that was compacted or restarted rebuilds from the task's record

@@ -25,12 +25,12 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/seatpark"
 )
 
-// reseatDeps is what reseat touches outside its arguments, as fields so the suite needs no rig and no wait.
+// reseatDeps is what reseat touches outside its arguments, as fields so the suite needs no room and no wait.
 type reseatDeps struct {
-	nodes     func(rig string) ([]map[string]any, error)
-	waitQuiet func(rig, seat string) bool
-	relaunch  func(rig, seat string) error
-	checkSeat func(rig, seat string) []string
+	nodes     func(room string) ([]map[string]any, error)
+	waitQuiet func(room, seat string) bool
+	relaunch  func(room, seat string) error
+	checkSeat func(room, seat string) []string
 	getenv    func(string) string
 	logf      func(format string, args ...any)
 }
@@ -38,11 +38,11 @@ type reseatDeps struct {
 func defaultReseatDeps(stateRoot string) *reseatDeps {
 	return &reseatDeps{
 		nodes:     roomNodes,
-		waitQuiet: func(rig, seat string) bool { return NewQuietWaiter(stateRoot).Wait(rig, seat) },
+		waitQuiet: func(room, seat string) bool { return NewQuietWaiter(stateRoot).Wait(room, seat) },
 		relaunch:  relaunch,
 		getenv:    os.Getenv,
-		checkSeat: func(rig, seat string) []string {
-			return clientlifecycle.SeatCheckLines(stateRoot, rig, seat)
+		checkSeat: func(room, seat string) []string {
+			return clientlifecycle.SeatCheckLines(stateRoot, room, seat)
 		},
 		logf: logLine,
 	}
@@ -55,7 +55,7 @@ var reseatDepsFor = defaultReseatDeps
 
 func runReseat(args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
-		fmt.Fprintln(stdout, "usage: 4genteam seat reseat RIG --seat NAME [--seat NAME]... [--force] "+clientoffpeak.ModeFlagUsage+" [--state-root DIR]")
+		fmt.Fprintln(stdout, "usage: 4genteam seat reseat ROOM --seat NAME [--seat NAME]... [--force] "+clientoffpeak.ModeFlagUsage+" [--state-root DIR]")
 		fmt.Fprintln(stdout, "\nRestarts each named seat once it is quiet, so it loads the skills, guide and cwd it is now")
 		fmt.Fprintln(stdout, "configured with. The seats go one at a time, in the order given. --force skips the wait: a seat in the middle of a turn loses that turn and resumes its session. The DeepSeek peak gate applies:")
 		fmt.Fprintln(stdout, "with OFFPEAK_ONLY on (the default) a deepseek/ seat is not restarted at peak.")
@@ -73,15 +73,15 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 	flags.Var(&seats, "seat", "seat to restart (repeatable, required)")
 	force := flags.Bool("force", false, "restart at once, without waiting for the seat to be quiet")
 	if len(rest) == 0 || strings.HasPrefix(rest[0], "-") {
-		fmt.Fprintln(stderr, "4genteam seat reseat: the RIG comes first, then the --seat flags")
+		fmt.Fprintln(stderr, "4genteam seat reseat: the ROOM comes first, then the --seat flags")
 		return clientcmd.ExitUsage
 	}
-	rig := rest[0]
+	room := rest[0]
 	if err := flags.Parse(rest[1:]); err != nil {
 		return clientcmd.ExitUsage
 	}
 	if flags.NArg() != 0 || len(seats) == 0 {
-		fmt.Fprintln(stderr, "4genteam seat reseat: a RIG and at least one --seat are required")
+		fmt.Fprintln(stderr, "4genteam seat reseat: a ROOM and at least one --seat are required")
 		return clientcmd.ExitUsage
 	}
 	stateRoot, err := clientenv.ResolveStateRoot(rootFlag)
@@ -92,7 +92,7 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 	if *force {
 		deps.waitQuiet = func(string, string) bool { return true }
 	}
-	code, err := reseatSeats(rig, seats, allowPeak, deps)
+	code, err := reseatSeats(room, seats, allowPeak, deps)
 	if err != nil {
 		return report(stderr, err)
 	}
@@ -101,8 +101,8 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 
 // reseatSeats refuses before touching anything when a seat is unknown or the peak gate says no, then
 // restarts the seats one by one. A seat that is not quiet in time is left running and the exit code says so.
-func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (int, error) {
-	nodes, err := deps.nodes(rig)
+func reseatSeats(room string, seats []string, allowPeak bool, deps *reseatDeps) (int, error) {
+	nodes, err := deps.nodes(room)
 	if err != nil {
 		return 0, err
 	}
@@ -110,7 +110,7 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 	for _, seat := range seats {
 		found := false
 		for _, node := range nodes {
-			if node["logicalId"] == rig+"."+seat {
+			if node["logicalId"] == room+"."+seat {
 				targets = append(targets, node)
 				found = true
 				break
@@ -118,7 +118,7 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 		}
 		if !found {
 			return 0, &clientcmd.CodedError{
-				Message: fmt.Sprintf("rig %q has no seat %q: %s", rig, seat, seatArgumentHint(seat)),
+				Message: fmt.Sprintf("room %q has no seat %q: %s", room, seat, seatArgumentHint(seat)),
 				Code:    clientcmd.ExitUsage,
 			}
 		}
@@ -138,7 +138,7 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 		// 2026-10-15: `seat reseat` was killed at 300s inside this wait having printed nothing at all, and the
 		// reading was "the verb never returns".
 		deps.logf("%s: waiting for quiet (up to %s), then the seat is restarted", seat, quietBudget())
-		if !deps.waitQuiet(rig, seat) {
+		if !deps.waitQuiet(room, seat) {
 			deps.logf("%s: not quiet within %s, left running", seat, quietBudget())
 			failed++
 			continue
@@ -147,7 +147,7 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 		// the line after it is the answer, and with no line before it `restarting` is indistinguishable from the
 		// silence this verb was reported for.
 		deps.logf("%s: restarting - the runtime stops the session and starts it again", seat)
-		if err := deps.relaunch(rig, seat); err != nil {
+		if err := deps.relaunch(room, seat); err != nil {
 			return 0, err
 		}
 		deps.logf("%s: restarted", seat)
@@ -156,7 +156,7 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 		// the moment it returns - a runtime relaunch that did not bring the seat back leaves its status
 		// saying so, and the check answers with that fact rather than silently. They are findings, never a
 		// refusal: reseat's exit code is the one it already had.
-		for _, line := range deps.checkSeat(rig, seat) {
+		for _, line := range deps.checkSeat(room, seat) {
 			deps.logf("%s", line)
 		}
 	}
@@ -168,14 +168,14 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 
 // roomNodes is the room's node records, read from the LOCAL RUNTIME instead of from `rig ps --nodes`.
 //
-// NAMED roomNodes, NOT rigNodes, ON PURPOSE: clientlifecycle has a function of the older name that takes the SAME
+// NAMED roomNodes, NOT roomNodes, ON PURPOSE: clientlifecycle has a function of the older name that takes the SAME
 // runtime call and has the OPPOSITE failure contract - it treats an unreadable read as EMPTY, because its gate must
 // never read an unreadable poll as a seat death. Two same-named functions in two packages with opposite contracts is
 // a trap whose only guard would be a commit message, and later readers do not read those. Whichever name you arrived
 // from, the other is one grep away and deliberately different.
 //
 // The exec is gone, the capability is not: this is the client's own reading (clientruntime.GetRoomStatus,
-// the same one clientlifecycle's rigNodes takes), and it produces the SAME record shape the consumers
+// the same one clientlifecycle's roomNodes takes), and it produces the SAME record shape the consumers
 // below already key on - `logicalId` for the seat match in reseatSeats, and `runtime`/`model` for the peak
 // gate - so nothing downstream learns a new vocabulary. After the client's own rename the exec was also a
 // self-call into the installed binary, which is the class this row exists to remove.
@@ -183,19 +183,19 @@ func reseatSeats(rig string, seats []string, allowPeak bool, deps *reseatDeps) (
 // Unlike the lifecycle gate, a failed read here is an ERROR rather than an empty reading: `reseat` is a
 // command that must be able to say why it will not restart a seat, and "no seats" and "could not ask"
 // are different answers.
-func roomNodes(rig string) ([]map[string]any, error) {
-	seats, err := clientruntime.NewClient("").GetRoomStatus(rig)
+func roomNodes(room string) ([]map[string]any, error) {
+	seats, err := clientruntime.NewClient("").GetRoomStatus(room)
 	if err != nil {
 		return nil, &clientcmd.CodedError{
-			Message: fmt.Sprintf("could not read %s's seats from the local runtime: %v", rig, err),
+			Message: fmt.Sprintf("could not read %s's seats from the local runtime: %v", room, err),
 			Code:    ExitFailed,
 		}
 	}
 	nodes := make([]map[string]any, 0, len(seats))
 	for _, seat := range seats {
 		nodes = append(nodes, map[string]any{
-			"rigName":       rig,
-			"logicalId":     fmt.Sprintf("%s.%s", rig, seat.Seat),
+			"roomName":      room,
+			"logicalId":     fmt.Sprintf("%s.%s", room, seat.Seat),
 			"seat":          seat.Seat,
 			"runtime":       seat.Runtime,
 			"sessionStatus": seat.State,
@@ -218,10 +218,10 @@ func (sendCommand) Name() string { return "send" }
 // between a refusal that can be acted on and one that has to be reverse-engineered.
 func seatArgumentHint(seat string) string {
 	if strings.Contains(seat, "@") {
-		return fmt.Sprintf("%q is a session name; the SEAT argument is the rig's own seat key (e.g. \"reviewer\"), "+
+		return fmt.Sprintf("%q is a session name; the SEAT argument is the room's own seat key (e.g. \"reviewer\"), "+
 			"and a session is addressed with `4genteam send SESSION MESSAGE`", seat)
 	}
-	return "SEAT is the rig's own seat key as the rig declares it (e.g. \"reviewer\")"
+	return "SEAT is the room's own seat key as the room declares it (e.g. \"reviewer\")"
 }
 
 func (sendCommand) Summary() string { return "send one signed message to one seat" }
@@ -234,7 +234,7 @@ const unknownSender = "<unknown sender>"
 // sendFlagSpecs is the `send` option surface, spelled out so that SplitFlags can take an option from either
 // side of the message. Two groups, and the difference matters:
 //
-//   - honoured: --raw, --json (and --from for the native `send RIG SEAT MESSAGE` shape);
+//   - honoured: --raw, --json (and --from for the native `send ROOM SEAT MESSAGE` shape);
 //   - refused explicitly (see sendRefused): a documented flag must stop the send, never silently become
 //     message text.
 var sendFlagSpecs = []clientruntime.FlagSpec{
@@ -272,7 +272,7 @@ var sendRefused = []struct{ Name, Why string }{
 	{"reason", "--reason belongs to --dangerously-interact, which the runtime does not have"},
 	{"to", "--to is a fan-out to several sessions; this verb sends to one"},
 	{"pod", "--pod is a pod fan-out; this verb sends to one session"},
-	{"rig", "--rig is a rig fan-out; this verb sends to one session"},
+	{"rig", "--rig belongs to the predecessor's send, where it was a room fan-out; this verb sends to one session"},
 	{"host", "--host sends through a declared remote host; this verb speaks to the local runtime only"},
 	{"context", "--context resolves a context pack and delivers it; this verb does not resolve packs"},
 }
@@ -280,8 +280,8 @@ var sendRefused = []struct{ Name, Why string }{
 func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, "usage: 4genteam send SESSION MESSAGE [options]")
-		fmt.Fprintln(stdout, "       4genteam send [--from NAME] RIG SEAT MESSAGE")
-		fmt.Fprintln(stdout, "\nSESSION is a session name (`4genteam ps <RIG> --nodes --json` names every seat's). It goes to")
+		fmt.Fprintln(stdout, "       4genteam send [--from NAME] ROOM SEAT MESSAGE")
+		fmt.Fprintln(stdout, "\nSESSION is a session name (`4genteam ps <ROOM> --nodes --json` names every seat's). It goes to")
 		fmt.Fprintln(stdout, "the runtime's own socket, wrapped in a From/To/Sent envelope attributed to this shell's")
 		fmt.Fprintln(stdout, "AGENTHUB_SESSION_NAME. A canonical name `ROOM-SEAT@ROOM` is TRANSLATED before it is sent, because the")
 		fmt.Fprintln(stdout, "runtime's own session for a seat is `agenthub--ROOM--SEAT`: the name is READ from the room's runtime")
@@ -303,10 +303,10 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 		fmt.Fprintln(stdout, "  with it, and the seat's name is read from THAT daemon's record.")
 		fmt.Fprintln(stdout, "  --verify/--force/--wait-for-idle/--dangerously-interact/--reason and --to/--pod/--rig/--host/--context")
 		fmt.Fprintln(stdout, "  are REFUSED: nothing is sent when one is present")
-		fmt.Fprintln(stdout, "\nThe RIG SEAT MESSAGE shape sends MESSAGE to that seat AS TYPED, with no sender written into the text:")
+		fmt.Fprintln(stdout, "\nThe ROOM SEAT MESSAGE shape sends MESSAGE to that seat AS TYPED, with no sender written into the text:")
 		fmt.Fprintln(stdout, "the sender a seat reads comes from the environment of the shell that ran the send, and a message with")
-		fmt.Fprintln(stdout, "none shows as \""+unknownSender+"\"; --raw drops the runtime's own envelope. SEAT is the rig's")
-		fmt.Fprintln(stdout, "own seat key, as the rig declares it")
+		fmt.Fprintln(stdout, "none shows as \""+unknownSender+"\"; --raw drops the runtime's own envelope. SEAT is the room's")
+		fmt.Fprintln(stdout, "own seat key, as the room declares it")
 		fmt.Fprintln(stdout, "(e.g. \"reviewer\"); a canonical session name handed to that argument is refused BY NAME. The seat's")
 		fmt.Fprintln(stdout, "session name is READ from the room's runtime record, never composed.")
 		return clientcmd.ExitOK
@@ -332,7 +332,7 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	// THE SHAPES ARE CHECKED BEFORE ANYTHING IS DECIDED, so a caller error stays a caller error rather than
 	// being reported as a policy refusal.
 	if len(positional) < 2 {
-		fmt.Fprintln(stderr, "4genteam send: SESSION and MESSAGE, or RIG SEAT and MESSAGE, are required")
+		fmt.Fprintln(stderr, "4genteam send: SESSION and MESSAGE, or ROOM SEAT and MESSAGE, are required")
 		return clientcmd.ExitUsage
 	}
 
@@ -356,7 +356,7 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	if len(positional) == 2 {
 		return sendToSession(positional[0], positional[1], opts, socket, intent, stdout, stderr)
 	}
-	rig, seat := positional[0], positional[1]
+	room, seat := positional[0], positional[1]
 	// THE TEXT GOES VERBATIM, with no "From NAME:" written into it: that prefix is a CLAIM inside the message,
 	// and the sender a seat sees must come from the environment of the shell that ran the send (the runtime's
 	// own envelope here, or the owner node's terminal on the --via-owner route).
@@ -364,16 +364,16 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	if opts["via-owner"] == "true" {
 		// THE NODE'S SIGNATURE IS THE ROUTE, so the node is the only caller allowed to ask for it: the
 		// refusal is decided here, before a message file is written or a key is typed (ruling 2026-10-18).
-		if refusal := viaOwnerRefusal(rig, os.Getenv); refusal != "" {
+		if refusal := viaOwnerRefusal(room, os.Getenv); refusal != "" {
 			fmt.Fprintf(stderr, "4genteam send: %s; nothing was sent\n", refusal)
 			return clientcmd.ExitRefused
 		}
-		return sendViaOwnerNode(ownerSendDepsFor(), rig, seat, text, stdout, stderr)
+		return sendViaOwnerNode(ownerSendDepsFor(), room, seat, text, stdout, stderr)
 	}
 
 	// THE SEAT'S SESSION NAME IS READ, NEVER COMPOSED, from the room's runtime record: a name invented from
 	// a convention cannot be split back into halves for a room whose name carries a dash.
-	address, err := clientruntime.ResolveSeatAddressOn(socket, rig, seat)
+	address, err := clientruntime.ResolveSeatAddressOn(socket, room, seat)
 	if err != nil {
 		return report(stderr, err)
 	}
@@ -384,12 +384,12 @@ func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	}
 	// A PARKED SEAT IS NOT HANDED WORK, and here the seat key IS the caller's, so no lookup stands between
 	// the park and the refusal (seatpark).
-	if err := seatpark.Refuse(socket, rig, seat); err != nil {
+	if err := seatpark.Refuse(socket, room, seat); err != nil {
 		return report(stderr, err)
 	}
 	// THE DECISION COMES BEFORE THE DELIVERY. On this shape the seat key the caller typed IS the key the
 	// policy speaks in, so no lookup stands between them.
-	handle, err := authorizeToSeat(socket, rig, seat, intent)
+	handle, err := authorizeToSeat(socket, room, seat, intent)
 	if err != nil {
 		return report(stderr, err)
 	}
@@ -418,9 +418,9 @@ func sendToSession(session, text string, opts map[string]string, socket string, 
 	// THE CANONICAL FORM CARRIES ITS OWN SPLIT, so the seat key is the caller's, not something to read back:
 	// only the address is resolved through the seat's record.
 	room, seat := "", ""
-	if rig, key, ok := clientruntime.CanonicalRigSeat(session); ok {
-		if address, err := clientruntime.ResolveSeatAddressOn(socket, rig, key); err == nil {
-			session, room, seat = address.SessionName, rig, key
+	if owner, key, ok := clientruntime.CanonicalRoomSeat(session); ok {
+		if address, err := clientruntime.ResolveSeatAddressOn(socket, owner, key); err == nil {
+			session, room, seat = address.SessionName, owner, key
 		}
 	}
 	// A NATIVE SESSION NAME CARRIES NO SPLIT RULE THIS VERB MAY INVENT, so the daemon the delivery goes to is

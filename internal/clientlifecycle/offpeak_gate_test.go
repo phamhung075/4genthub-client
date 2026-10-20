@@ -23,7 +23,7 @@ func deepSeekRoomNode() []map[string]any {
 	return []map[string]any{{
 		"logicalId":            "room-alpha.dev",
 		"canonicalSessionName": "room-alpha-dev@room-alpha",
-		"rigName":              "room-alpha",
+		"roomName":             "room-alpha",
 		"model":                "deepseek/deepseek-flash",
 		"sessionStatus":        "stopped",
 	}}
@@ -40,7 +40,7 @@ func gateEnv(t *testing.T, pin string) {
 }
 
 // stubWholeUp makes `up` runnable to its end without touching this machine, and records the steps that
-// took an effect. ensureRig is the RESUME step: whether it ran is the difference between a refusal that
+// took an effect. ensureRoom is the RESUME step: whether it ran is the difference between a refusal that
 // saved the peak rate and one that only printed a sentence.
 func stubWholeUp(t *testing.T) *[]string {
 	t.Helper()
@@ -49,13 +49,13 @@ func stubWholeUp(t *testing.T) *[]string {
 		*ran = append(*ran, "ensureDaemon")
 		return "/tmp/daemon.log", nil
 	}
-	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
-		*ran = append(*ran, "ensureRig")
+	ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		*ran = append(*ran, "ensureRoom")
 		return clientcmd.ExitOK
 	}
 	// The room recorded and the authority started are the steps after the gate; a test about the gate
 	// asserts whether the RESUME ran, so these two are stubbed to no-ops that cannot touch this machine.
-	recordRigFor = func(string, io.Writer) bool { return true }
+	recordRoomFor = func(string, io.Writer) bool { return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { return true }
 	waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
 		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true, nil
@@ -79,7 +79,7 @@ func stubWholeUp(t *testing.T) *[]string {
 func TestUpRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -128,7 +128,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			restoreAll(t)
 			ran := stubWholeUp(t)
-			rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+			roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 			t.Setenv(clientoffpeak.HolidaysEnv, "")
 			t.Setenv(clientoffpeak.PinEnv, c.pin)
 			t.Setenv(clientoffpeak.ModeEnv, c.modeEnv)
@@ -139,7 +139,7 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 			if code != c.want {
 				t.Fatalf("exit %d, want %d (stderr %q)", code, c.want, errOut.String())
 			}
-			resumed := strings.Contains(strings.Join(*ran, ","), "ensureRig")
+			resumed := strings.Contains(strings.Join(*ran, ","), "ensureRoom")
 			if wantResumed := c.want == clientcmd.ExitOK; resumed != wantResumed {
 				t.Errorf("resumed = %v, want %v (steps %v)", resumed, wantResumed, *ran)
 			}
@@ -148,14 +148,14 @@ func TestUpProceedsOffPeakOrWhenTheCheckIsOff(t *testing.T) {
 }
 
 // TestUpRefusesAFlagItDoesNotTake: the gate has ONE flag, so an argument this verb does not know is a
-// caller error naming it - whether it sits where the rig name goes or after it, because the failure
+// caller error naming it - whether it sits where the room name goes or after it, because the failure
 // shape this replaced was a verb that quietly ignored the extra argument.
 //
 // The code is 3, not the CLI-wide ExitUsage (2): for this verb 2 is a PARTIAL START - the daemon started
 // but a seat did not (design §2.5) - so the two numbers must not mean the same thing.
 func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 	restoreAll(t)
-	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	for _, args := range [][]string{
@@ -179,7 +179,7 @@ func TestUpRefusesAFlagItDoesNotTake(t *testing.T) {
 func TestUpTakesTheOneFlagTwice(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -187,7 +187,7 @@ func TestUpTakesTheOneFlagTwice(t *testing.T) {
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0 (stderr %q)", code, errOut.String())
 	}
-	if !strings.Contains(strings.Join(*ran, ","), "ensureRig") {
+	if !strings.Contains(strings.Join(*ran, ","), "ensureRoom") {
 		t.Errorf("steps = %v, want the resume to have run", *ran)
 	}
 }
@@ -202,7 +202,7 @@ func TestCompactRefusesAtPeakWhenTheRoomRunsADeepSeekSeat(t *testing.T) {
 		return diedChild{}, nil
 	}
 	SupervisorStartGrace = time.Millisecond
-	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -243,9 +243,9 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 			SupervisorStartGrace = time.Millisecond
 			agentRunning = func() (int, error) { return 4242, nil }
 			rowsFor = func(string, string) ([]clientservices.Health, error) {
-				return []clientservices.Health{{Rig: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}, nil
+				return []clientservices.Health{{Room: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}, nil
 			}
-			rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+			roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 			gateEnv(t, c.pin)
 
 			args := append([]string{"room-alpha"}, c.extra...)
@@ -268,7 +268,7 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 func TestTheGateDecidesAFirstStartOnTheDefinition(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	roomNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	var out, errOut bytes.Buffer
@@ -276,7 +276,7 @@ func TestTheGateDecidesAFirstStartOnTheDefinition(t *testing.T) {
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0: the definition declares no DeepSeek seat (stderr %q)", code, errOut.String())
 	}
-	if !strings.Contains(strings.Join(*ran, ","), "ensureRig") {
+	if !strings.Contains(strings.Join(*ran, ","), "ensureRoom") {
 		t.Error("a room with no records must still be restored, so its own error can be reported")
 	}
 	if strings.Contains(errOut.String(), "did NOT run") {
@@ -290,7 +290,7 @@ func TestTheGateDecidesAFirstStartOnTheDefinition(t *testing.T) {
 func TestAFailedNodeReadRefusesAtTheGate(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, bool, error) {
+	roomNodes = func(string) ([]map[string]any, bool, error) {
 		return nil, false, errors.New("the node read asked /api/ps and got HTTP 500")
 	}
 	gateEnv(t, "2026-10-09 02:00")
@@ -305,7 +305,7 @@ func TestAFailedNodeReadRefusesAtTheGate(t *testing.T) {
 			t.Errorf("the refusal does not carry %q: %q", want, errOut.String())
 		}
 	}
-	if strings.Contains(strings.Join(*ran, ","), "ensureRig") {
+	if strings.Contains(strings.Join(*ran, ","), "ensureRoom") {
 		t.Error("the resume ran although the gate could not decide")
 	}
 }
@@ -315,7 +315,7 @@ func TestAFailedNodeReadRefusesAtTheGate(t *testing.T) {
 func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 	restoreAll(t)
 	stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
+	roomNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 	gateEnv(t, "whenever")
 
 	var out, errOut bytes.Buffer
@@ -334,7 +334,7 @@ func TestAnUnreadableClockIsACallerErrorNotARefusal(t *testing.T) {
 func TestUpRefusesAtPeakAFirstStartWhoseDefinitionDeclaresADeepSeekSeat(t *testing.T) {
 	restoreAll(t)
 	ran := stubWholeUp(t)
-	rigNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
+	roomNodes = func(string) ([]map[string]any, bool, error) { return nil, false, nil }
 	gateEnv(t, "2026-10-09 02:00")
 
 	directory := t.TempDir()

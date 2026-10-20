@@ -100,7 +100,7 @@ var Allowed = []Allow{
 			"to forbid it, so the pin's data names what the pin forbids",
 	},
 	{
-		File:    "skills/client/rig-runtime-switch/SKILL.md",
+		File:    "skills/client/room-runtime-switch/SKILL.md",
 		Program: "rig",
 		Subverb: "ps",
 		Match:   "not the predecessor's",

@@ -190,8 +190,8 @@ func TestEnsureStartsWithASubmodulePinThatWasNeverPushed(t *testing.T) {
 	if !strings.Contains(status, clientSubmodule) {
 		t.Errorf("`git -C %s submodule status` does not name %s:\n%s", lead, clientSubmodule, status)
 	}
-	if branch := gitIn(t, filepath.Join(lead, "agenthub_client"), "rev-parse", "--abbrev-ref", "HEAD"); branch != fixture.rig+"/lead" {
-		t.Errorf("the client submodule worktree is on %s, want %s/lead", branch, fixture.rig)
+	if branch := gitIn(t, filepath.Join(lead, "agenthub_client"), "rev-parse", "--abbrev-ref", "HEAD"); branch != fixture.name+"/lead" {
+		t.Errorf("the client submodule worktree is on %s, want %s/lead", branch, fixture.name)
 	}
 	// `.claude` is not a submodule of this hub and has no gitlink: the link must not be attempted at
 	// all, and the seat's worktree must not carry one.

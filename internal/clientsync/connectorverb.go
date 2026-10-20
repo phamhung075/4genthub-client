@@ -2,7 +2,7 @@
 // REDACT LOCALLY, then hello -> session -> events on /ws/connector, and report the ids the cloud
 // assigned.
 //
-// ONE SESSION, ONE DIRECTION, ON PURPOSE. Multi-session, JSONL tailing, rig capture, reconnect with
+// ONE SESSION, ONE DIRECTION, ON PURPOSE. Multi-session, JSONL tailing, room capture, reconnect with
 // backoff and the frontend are the rest of C1 and are deliberately NOT here: this slice exists to
 // prove that a real session reaches the cloud under the right account, and every extra moving part
 // would make a failure harder to attribute.
@@ -23,8 +23,8 @@ import (
 // connectorUsage is the whole surface of this verb.
 const connectorUsage = `usage: 4genteam sync connector [--session <name>] [--connector-id <id>] [--lines <n>]
 
-Sends ONE local rig session to the cloud over /ws/connector.
-  --session <name>      the rig session to send (required)
+Sends ONE local room session to the cloud over /ws/connector.
+  --session <name>      the room session to send (required)
   --connector-id <id>   the connector identity the server binds this socket to (default: hostname)
   --lines <n>           transcript lines to send, newest last (default 50)
 
@@ -101,16 +101,16 @@ func RunConnectorVerb(ctx context.Context, args []string, stdout, stderr io.Writ
 	// the CLI the cutover removes, so it could not survive it. This surface has ONE way to name the session, so the
 	// refusal names it and says what it takes.
 	if session == "" {
-		fmt.Fprintf(stderr, "sync connector: --session <name> is required — it names the local rig session this connector sends to the cloud\n")
+		fmt.Fprintf(stderr, "sync connector: --session <name> is required — it names the local room session this connector sends to the cloud\n")
 		return clientcmd.ExitUsage
 	}
 
 	// The seat this session belongs to, as the RUNTIME reports it. When the runtime names no entry for
 	// the session, the frame carries NO room and NO seat - the server records a session it was not told
 	// the seat of, rather than one it was told to guess.
-	room, seat := rigSeatFor(ctx, session)
+	room, seat := roomSeatFor(ctx, session)
 
-	transcript, err := rigTranscript(ctx, session)
+	transcript, err := roomTranscript(ctx, session)
 	if err != nil {
 		fmt.Fprintf(stderr, "sync connector: %v\n", err)
 		return clientcmd.ExitRemote
@@ -158,17 +158,17 @@ func RunConnectorVerb(ctx context.Context, args []string, stdout, stderr io.Writ
 }
 
 // sessionCandidate is one entry `rig ps --json` reports for a running session: the names a verb may
-// address it by, the rig that runs it, and the member inside that rig.
+// address it by, the room that runs it, and the member inside that room.
 //
-// THE RIG IS THE ROOM and the member after the FIRST dot of logicalId is the SEAT KEY. Every rig the
-// server renders is named after its room (seat_management's rigspec names a rig and its pod after the
+// THE ROOM IS THE ROOM and the member after the FIRST dot of logicalId is the SEAT KEY. Every room the
+// server renders is named after its room (seat_management's roomspec names a room and its pod after the
 // room slug), and this client already splits logicalId that way for the seat-status report
 // (clientbridge.SeatName). A candidate carrying neither is left with no seat, and the session frame
 // then names neither room nor seat rather than guessing one.
 type sessionCandidate struct {
 	name        string
 	identifiers []string
-	rigName     string
+	roomName    string
 	member      string
 	// state is the node's status reduced to 2.2's two values: the `session` frame carries it, and a
 	// seat that leaves the node list is sent once with `stopped`.
@@ -186,14 +186,14 @@ func (c sessionCandidate) answersTo(session string) bool {
 	return false
 }
 
-// rigSessionCandidates asks the RUNTIME which sessions exist. It is the read the connector's whole seat
+// roomSessionCandidates asks the RUNTIME which sessions exist. It is the read the connector's whole seat
 // resolution rests on: the runtime answers one entry per seat of every room it hosts, in the CLI's own keys,
 // so the same names reach the same code that used to read `rig ps --json`.
 //
 // THE CLI REACH IS RETIRED RATHER THAN WRAPPED. This exec-ed `rig ps --json` - the shell-out the cutover
 // removes (DEPLOY-READY section 65, the parked runtime request this unit answers) - and it now reads the
 // runtime's own socket through the one client this package already uses for a room's status.
-func rigSessionCandidates(ctx context.Context) ([]sessionCandidate, error) {
+func roomSessionCandidates(ctx context.Context) ([]sessionCandidate, error) {
 	entries, err := clientruntime.NewClient("").ListSessions("")
 	if err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ func rigSessionCandidates(ctx context.Context) ([]sessionCandidate, error) {
 // naming one session is a runtime bug and listing it twice would double every event uploaded.
 //
 // CANONICAL FIRST, and that order is a fix rather than a preference: the canonical name
-// (<pod>-<member>@<rig>) is the one the UI shows and the one a person passes to --session, so a verb that
+// (<pod>-<member>@<room>) is the one the UI shows and the one a person passes to --session, so a verb that
 // printed the logicalId instead addressed sessions by an identifier nobody types.
 func candidatesFrom(entries []clientruntime.SessionEntry) []sessionCandidate {
 	var result []sessionCandidate
@@ -219,7 +219,7 @@ func candidatesFrom(entries []clientruntime.SessionEntry) []sessionCandidate {
 	for _, entry := range entries {
 		c := sessionCandidate{
 			identifiers: entryIdentifiers(entry),
-			rigName:     entry.RigName,
+			roomName:    entry.RoomName,
 			member:      memberOf(entry.LogicalID),
 			state:       entry.SessionStatus,
 		}
@@ -262,8 +262,8 @@ func memberOf(logicalID string) string {
 	return member
 }
 
-// rigSeatFor returns the room and the seat key the rig reports for a session, or two empty strings
-// when it reports no entry naming it. A rig query that fails is not an error here: the session and
+// roomSeatFor returns the room and the seat key the room reports for a session, or two empty strings
+// when it reports no entry naming it. A room query that fails is not an error here: the session and
 // its transcript are still worth reporting, and a session with no seat is one the UI shows without
 // an input box.
 //
@@ -271,25 +271,25 @@ func memberOf(logicalID string) string {
 // (`ListSessions`), which is the interface DEPLOY-READY section 65 parked and this unit builds. The
 // alternative it used to wait for - a contract change where the frame carries no room or seat at all -
 // remains a different decision, and it is not this one.
-func rigSeatFor(ctx context.Context, session string) (string, string) {
-	candidates, err := rigSessionCandidates(ctx)
+func roomSeatFor(ctx context.Context, session string) (string, string) {
+	candidates, err := roomSessionCandidates(ctx)
 	if err != nil {
 		return "", ""
 	}
 	for _, c := range candidates {
 		if c.answersTo(session) {
-			return c.rigName, c.member
+			return c.roomName, c.member
 		}
 	}
 	return "", ""
 }
 
-// rigTranscript reads a session's transcript through the RUNTIME, from the file that seat's runner publishes.
+// roomTranscript reads a session's transcript through the RUNTIME, from the file that seat's runner publishes.
 //
 // THE OLD PATH COULD NOT WORK WHERE IT MATTERED: `rig transcript` is not a verb the installed client has
 // ("4genteam: unknown command transcript"), so the exec this replaces was not a slower route to the same
 // bytes - it was a reach that failed wherever the installed client was what `rig` resolved to.
-func rigTranscript(ctx context.Context, session string) (string, error) {
+func roomTranscript(ctx context.Context, session string) (string, error) {
 	answer, err := clientruntime.NewClient("").Transcript(session, 0)
 	if err != nil {
 		return "", err

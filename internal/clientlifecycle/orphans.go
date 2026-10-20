@@ -6,10 +6,10 @@
 // not in the live set is an orphan, and the live set is the room's node records with
 // `sessionStatus: running`, read from the local runtime.
 //
-// WHAT IS NOT AN ORPHAN. A destination that is not a seat session - `human@<rig>`, the form the bridge
+// WHAT IS NOT AN ORPHAN. A destination that is not a seat session - `human@<room>`, the form the bridge
 // addresses the owner with - is not a handoff to a seat at all, and such rows are the COMMON case rather
 // than the exception: on 2026-10-11, 14 of 4genthub-min's 30 pending qitems were `human@`. So a
-// destination is checked only when it names a seat session (`<pod>-<member>@<rig>`).
+// destination is checked only when it names a seat session (`<pod>-<member>@<room>`).
 package clientlifecycle
 
 import (
@@ -27,7 +27,7 @@ type orphanHandoff struct {
 	Destination string
 }
 
-// orphanRow is 7.11's row for ONE rig: the report row, the orphans it names, and the reason the row could
+// orphanRow is 7.11's row for ONE room: the report row, the orphans it names, and the reason the row could
 // not be read when that is what happened. The names are held here rather than in the row because a Health
 // row's field set is 7.2's exactly and has no place for them - the row line says the state, the lines after
 // it say which qitems.
@@ -69,22 +69,22 @@ var (
 // daemon, and the reader's own filtering is driven by replacing queuePending and roomLive.
 var orphanRowsFor = orphanRows
 
-// orphanRows computes the row for every rig the report covers.
-func orphanRows(rig string) []orphanRow {
-	// The same list the safeguard rows cover: agent.json's rigs, or the named rig alone. A failed read
+// orphanRows computes the row for every room the report covers.
+func orphanRows(room string) []orphanRow {
+	// The same list the safeguard rows cover: agent.json's rooms, or the named room alone. A failed read
 	// leaves it empty exactly as a machine whose agent never ran does, and the row below still prints.
 	state, _ := clientservices.ReadAgentState()
-	rigs := reportedRigs(state.Rigs, rig)
-	if len(rigs) == 0 {
+	rooms := reportedRooms(state.Rooms, room)
+	if len(rooms) == 0 {
 		// A machine whose agent has never run lists no rooms, and still gets this row: a queue read needs a
 		// scope rather than a room, and the row's absence would then be indistinguishable from a clean
-		// machine. It is reported for no rig at all, like the bridge and agent rows.
-		rigs = []string{""}
+		// machine. It is reported for no room at all, like the bridge and agent rows.
+		rooms = []string{""}
 	}
-	rows := make([]orphanRow, 0, len(rigs))
-	for _, name := range rigs {
+	rows := make([]orphanRow, 0, len(rooms))
+	for _, name := range rooms {
 		row := orphanRow{Row: clientservices.Health{
-			Rig:       name,
+			Room:      name,
 			Safeguard: clientservices.OrphanHandoffs,
 			State:     clientservices.Running,
 			AgeS:      clientservices.UnknownAge,
@@ -121,21 +121,21 @@ func orphanLine(orphan orphanHandoff) string {
 // from a broken reading would report a clean machine, which is the failure mode this row exists to remove.
 // The rail and the node records are the runtime's own (QueueList, RoomNodes), so a room's row is read from
 // the one writer that owns it; a handoff addressed into another room appears in THAT room's row.
-func orphanHandoffs(rig string) ([]orphanHandoff, error) {
-	items, err := queuePending(rig)
+func orphanHandoffs(room string) ([]orphanHandoff, error) {
+	items, err := queuePending(room)
 	if err != nil {
-		return nil, fmt.Errorf("room %s queue: %w", rig, err)
+		return nil, fmt.Errorf("room %s queue: %w", room, err)
 	}
-	live, err := roomLive(rig)
+	live, err := roomLive(room)
 	if err != nil {
-		return nil, fmt.Errorf("room %s seats: %w", rig, err)
+		return nil, fmt.Errorf("room %s seats: %w", room, err)
 	}
 	orphans := []orphanHandoff{}
 	for _, item := range items {
 		if !seatSession(item.DestinationSession) || live[item.DestinationSession] {
 			continue
 		}
-		if rigOfSession(item.DestinationSession) != rig {
+		if roomOfSession(item.DestinationSession) != room {
 			continue
 		}
 		orphans = append(orphans, orphanHandoff{Qitem: item.QitemID, Destination: item.DestinationSession})
@@ -144,16 +144,16 @@ func orphanHandoffs(rig string) ([]orphanHandoff, error) {
 	return orphans, nil
 }
 
-// seatSession reports whether a queue destination names a seat session (`<pod>-<member>@<rig>`) rather than
-// some other reader. `human@<rig>` is the bridge's owner form and is deliberately not one.
+// seatSession reports whether a queue destination names a seat session (`<pod>-<member>@<room>`) rather than
+// some other reader. `human@<room>` is the bridge's owner form and is deliberately not one.
 func seatSession(destination string) bool {
-	local, rig, found := strings.Cut(destination, "@")
-	return found && local != "" && rig != "" && local != "human"
+	local, room, found := strings.Cut(destination, "@")
+	return found && local != "" && room != "" && local != "human"
 }
 
-// rigOfSession is the room a session name belongs to: the part after the '@', which is the form `rig send`
+// roomOfSession is the room a session name belongs to: the part after the '@', which is the form `rig send`
 // addresses a seat with.
-func rigOfSession(session string) string {
-	_, rig, _ := strings.Cut(session, "@")
-	return rig
+func roomOfSession(session string) string {
+	_, room, _ := strings.Cut(session, "@")
+	return room
 }

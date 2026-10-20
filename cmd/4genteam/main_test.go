@@ -52,7 +52,7 @@ func TestAPendingVerbAnswersHelpToo(t *testing.T) {
 // longer the porting note but the failure a ported verb gives when the platform is not configured - the
 // same one the binary was smoked against: exit 2 and the variable's name, with nothing on stdout.
 //
-// `sync status` SAT IN THIS TABLE until 2026-10-15 and is gone with the rigspec route it compared against;
+// `sync status` SAT IN THIS TABLE until 2026-10-15 and is gone with the roomspec route it compared against;
 // the row went with the verb rather than being re-pointed, because the property under test is "a ported
 // verb names the missing environment" and a verb that no longer exists has nothing to say.
 //
@@ -81,7 +81,7 @@ func TestPortedVerbsRefuseOnTheEnvironment(t *testing.T) {
 }
 
 // TestBridgeIsNotGovernedByThePlatformMatrix: the bridge reads its seats, topology and human queue from the
-// agenthub runtime, so a machine with no rig tool is not refused for it. With no rig on PATH the verb reaches
+// agenthub runtime, so a machine with no room tool is not refused for it. With no room on PATH the verb reaches
 // its own argument check (here, a missing cloud setting) instead of stopping at the matrix.
 func TestBridgeIsNotGovernedByThePlatformMatrix(t *testing.T) {
 	// THE VERB IS POINTED AT A TEMP TREE AND TOLD THERE IS NO CLOUD. Before 2026-10-17 this test drove
@@ -92,19 +92,19 @@ func TestBridgeIsNotGovernedByThePlatformMatrix(t *testing.T) {
 	t.Setenv("AGENTHUB_TOKEN", "")
 	var out, errOut bytes.Buffer
 	if code := run([]string{"bridge", "once", "--state-root", t.TempDir()}, &out, &errOut); code == clientcmd.ExitUnavailable {
-		t.Fatalf("exit code = %d: the bridge was refused as if it needed rig", code)
+		t.Fatalf("exit code = %d: the bridge was refused as if it needed room", code)
 	}
-	if strings.Contains(errOut.String(), "rig is not on PATH") {
+	if strings.Contains(errOut.String(), "room is not on PATH") {
 		t.Errorf("message = %q, want the bridge's own answer, not the matrix's reason", errOut.String())
 	}
 }
 
-// TestUsageAndVersionAreTheOnlyFreeCommands: no arguments means `up` (which then needs a rig), an
+// TestUsageAndVersionAreTheOnlyFreeCommands: no arguments means `up` (which then needs a room), an
 // unknown command is a usage error, and the two commands that need nothing at all succeed.
 //
-// THE RIG SEAM IS PINNED IN BOTH DIRECTIONS, because the no-argument answer depends on it: with rig on
-// PATH the dispatcher reaches `up`'s own argument check, and with rig absent it stops at the platform
-// matrix. Leaving the seam alone here read the HOST instead - a masked clone at b01a211 with no rig on
+// THE ROOM SEAM IS PINNED IN BOTH DIRECTIONS, because the no-argument answer depends on it: with room on
+// PATH the dispatcher reaches `up`'s own argument check, and with room absent it stops at the platform
+// matrix. Leaving the seam alone here read the HOST instead - a masked clone at b01a211 with no room on
 // PATH got the matrix's answer and this assertion failed, on exactly the machine the client must stay
 // honest on. Both answers are now asserted rather than one assumed.
 func TestUsageAndVersionAreTheOnlyFreeCommands(t *testing.T) {
@@ -120,16 +120,16 @@ func TestUsageAndVersionAreTheOnlyFreeCommands(t *testing.T) {
 		t.Errorf("no arguments: stderr = %q, want up's missing-definition error", errOut.String())
 	}
 
-	// THE OTHER HALF: a machine that has never had the rig orchestrator. No verb consults the platform matrix any more -
+	// THE OTHER HALF: a machine that has never had the room orchestrator. No verb consults the platform matrix any more -
 	// the room's start, the restore, the bridge and `ui` all go through the runtime or the browser - so with no
-	// rig on PATH `up` still reaches its own argument check and answers exactly as it did with one.
+	// room on PATH `up` still reaches its own argument check and answers exactly as it did with one.
 	out.Reset()
 	errOut.Reset()
 	if code := run(nil, &out, &errOut); code != clientcmd.ExitRoomRefused {
-		t.Errorf("no arguments, no rig on PATH: exit code = %d, want %d", code, clientcmd.ExitRoomRefused)
+		t.Errorf("no arguments, no room on PATH: exit code = %d, want %d", code, clientcmd.ExitRoomRefused)
 	}
-	if strings.Contains(errOut.String(), "rig is not on PATH") || !strings.Contains(errOut.String(), "--team") {
-		t.Errorf("no arguments, no rig on PATH: stderr = %q, want up's own error and no matrix reason", errOut.String())
+	if strings.Contains(errOut.String(), "room is not on PATH") || !strings.Contains(errOut.String(), "--team") {
+		t.Errorf("no arguments, no room on PATH: stderr = %q, want up's own error and no matrix reason", errOut.String())
 	}
 
 	out.Reset()
@@ -167,11 +167,11 @@ func TestSyncRefusesAnUnknownVerbAsUsageNotAsUnavailable(t *testing.T) {
 }
 
 // TestHelpIsAnsweredBeforeThePlatformMatrix: a verb's own usage must be readable on a machine that has
-// never had the rig orchestrator, and the client's README states that rule without conditions. Six verbs used to
+// never had the room orchestrator, and the client's README states that rule without conditions. Six verbs used to
 // refuse here instead - `up`, `ui`, `bridge`, and bridge's `run`, `once` and `install-service` - because
-// the dispatcher resolved rig BEFORE it called the verb, so the verb's own help path, which every one of
+// the dispatcher resolved room BEFORE it called the verb, so the verb's own help path, which every one of
 // them answers first, was never reached. Those six are the whole extent: measured against the binary with
-// a PATH that has no rig on it, they were the only refusing shapes of forty, and every other verb already
+// a PATH that has no room on it, they were the only refusing shapes of forty, and every other verb already
 // answered.
 //
 // The second half is the half a fix like this usually breaks: the SAME verbs driven WITHOUT --help must
@@ -206,7 +206,7 @@ func TestHelpIsAnsweredBeforeThePlatformMatrix(t *testing.T) {
 	if code := run([]string{"up", "--help"}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up --help exited %d, want %d", code, clientcmd.ExitOK)
 	}
-	if !strings.Contains(out.String(), "usage: 4genteam up RIG") {
+	if !strings.Contains(out.String(), "usage: 4genteam up ROOM") {
 		t.Errorf("up --help printed %q, want up's own usage line", out.String())
 	}
 

@@ -42,7 +42,7 @@ func TestPruneRemovesOnlyTheWorktreesTheRulingNames(t *testing.T) {
 	}
 
 	var out strings.Builder
-	err := runPrune([]string{"--main", fixture.main, fixture.rig}, &out)
+	err := runPrune([]string{"--main", fixture.main, fixture.name}, &out)
 	if err == nil {
 		t.Fatalf("prune left three worktrees behind, so it must fail:\n%s", out.String())
 	}
@@ -110,13 +110,13 @@ func TestListPrintsTheDerivedWorktreesAndEveryForeignEntry(t *testing.T) {
 	removeTmpWorktree(t, fixture.main, foreign)
 
 	var out strings.Builder
-	if err := runList([]string{"--main", fixture.main, fixture.rig}, &out); err != nil {
+	if err := runList([]string{"--main", fixture.main, fixture.name}, &out); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	for _, want := range []string{
-		"derived " + filepath.Join(fixture.room, "wt", "lead") + " " + fixture.rig + "/lead",
+		"derived " + filepath.Join(fixture.room, "wt", "lead") + " " + fixture.name + "/lead",
 		"derived " + missing + " missing",
-		"derived " + filepath.Join(fixture.room, "wt", "integration") + " " + fixture.rig + "/integration",
+		"derived " + filepath.Join(fixture.room, "wt", "integration") + " " + fixture.name + "/integration",
 		"foreign " + fixture.main + " main",
 		"foreign " + foreign + " detached",
 	} {
@@ -130,7 +130,7 @@ func TestListPrintsTheDerivedWorktreesAndEveryForeignEntry(t *testing.T) {
 // checks the porcelain parse through Read, with no repository at all.
 func TestReadGoesThroughTheSeamAndParsesPorcelain(t *testing.T) {
 	// The shape git 2.43 prints, including the two states prune must respect.
-	sample := "worktree /room/wt/lead\nHEAD abc123\nbranch refs/heads/rig/lead\n\n" +
+	sample := "worktree /room/wt/lead\nHEAD abc123\nbranch refs/heads/room/lead\n\n" +
 		"worktree /tmp/gate-x\nHEAD def456\ndetached\nlocked\nprunable gitdir file points to non-existent location\n"
 	original := gitWorktrees
 	gitWorktrees = func(mainRoot string) ([]Entry, error) {
@@ -146,7 +146,7 @@ func TestReadGoesThroughTheSeamAndParsesPorcelain(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	want := []Entry{
-		{Path: "/room/wt/lead", Branch: "rig/lead"},
+		{Path: "/room/wt/lead", Branch: "room/lead"},
 		{Path: "/tmp/gate-x", Detached: true, Locked: true, Prunable: true},
 	}
 	if !reflect.DeepEqual(entries, want) {

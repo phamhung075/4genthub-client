@@ -2,7 +2,7 @@
 //! over the room socket (design §3). The client renders it; it never opens the file — two writers is the
 //! defect class this team has already paid for.
 //!
-//! Semantics that were load-bearing on the live rig and are preserved here:
+//! Semantics that were load-bearing on the live room and are preserved here:
 //!
 //! * `state ∈ {pending, in-progress, blocked, handed-off, done}`; `handed-off` is intermediate
 //!   (acceptance pending), `done` is terminal.
@@ -14,10 +14,10 @@
 //! * an append-only transitions table (who, when, from-state, to-state, note) — the audit trail.
 //! * wake fields (`blocked_on`, `wake_after_seconds`) so the idle-seat alert has something to stand on.
 //!
-//! Deliberately NOT ported: the rig orchestrator table's human-notification, identity-provenance and bridge
+//! Deliberately NOT ported: the room orchestrator table's human-notification, identity-provenance and bridge
 //! columns. Sender identity stays on the wire and is stamped by the transport, not stored as history.
 //!
-//! Two anti-lying rules, because both are defects this rig has already seen:
+//! Two anti-lying rules, because both are defects this room has already seen:
 //!
 //! * a write returns the row **re-read from the database**, so the state a caller is told is the state
 //!   the next read shows (the shim's stub answered success over a no-op);
@@ -32,7 +32,7 @@ use std::path::Path;
 /// The five states a row may occupy.
 pub const STATES: [&str; 5] = ["pending", "in-progress", "blocked", "handed-off", "done"];
 
-/// The closure reasons, exactly the set the rig daemon enforced, plus `gate`: a reviewer's verdict close.
+/// The closure reasons, exactly the set the room daemon enforced, plus `gate`: a reviewer's verdict close.
 /// `gate` exists as a reason so the rail says what the close WAS - the reviewer's verdict, whose text the
 /// transition note carries - instead of recording a gate as `no-follow-on` with nothing to read.
 pub const CLOSURE_REASONS: [&str; 8] = [

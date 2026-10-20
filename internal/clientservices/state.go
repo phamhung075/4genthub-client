@@ -12,14 +12,14 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// AgentState is agent's local state file, `<seat store>/agent.json`, mode 0600. 7.1 rules its `rigs` list -
+// AgentState is agent's local state file, `<seat store>/agent.json`, mode 0600. 7.1 rules its `rooms` list -
 // the rooms that are meant to run, which `up` appends to and `down` removes from - and 7.2's row carries
 // two fields no external observer can compute, so agent records its supervision of each safeguard here
 // too. `doctor` and `status --json` read them and compute everything else themselves; a row whose
 // safeguard agent never started simply carries no restarts and no started_at.
 type AgentState struct {
-	// Rigs is the list a report walks: one compaction supervisor and one watchdog per rig.
-	Rigs []string `json:"rigs"`
+	// Rooms is the list a report walks: one compaction supervisor and one watchdog per room.
+	Rooms []string `json:"rooms"`
 	// Safeguards are the rows agent recorded as it supervised its children. Only the fields pgrep and a
 	// heartbeat cannot answer are read back from here (restarts, started_at, failing).
 	Safeguards []Health `json:"safeguards"`
@@ -101,31 +101,31 @@ func WriteAgentState(state AgentState) error {
 	return os.Rename(temp.Name(), path)
 }
 
-// AddRig records a room as one agent supervises, once: `up` is idempotent, and a rig listed twice would
+// AddRoom records a room as one agent supervises, once: `up` is idempotent, and a room listed twice would
 // be reported twice.
-func AddRig(state AgentState, rig string) AgentState {
-	if strings.TrimSpace(rig) == "" {
+func AddRoom(state AgentState, room string) AgentState {
+	if strings.TrimSpace(room) == "" {
 		return state
 	}
-	for _, listed := range state.Rigs {
-		if listed == rig {
+	for _, listed := range state.Rooms {
+		if listed == room {
 			return state
 		}
 	}
-	state.Rigs = append(state.Rigs, rig)
+	state.Rooms = append(state.Rooms, room)
 	return state
 }
 
-// RemoveRig drops a room from the list. A room that is not listed is stopped on purpose (7.9), so this
+// RemoveRoom drops a room from the list. A room that is not listed is stopped on purpose (7.9), so this
 // is what `down` does to it.
-func RemoveRig(state AgentState, rig string) AgentState {
-	kept := make([]string, 0, len(state.Rigs))
-	for _, listed := range state.Rigs {
-		if listed != rig {
+func RemoveRoom(state AgentState, room string) AgentState {
+	kept := make([]string, 0, len(state.Rooms))
+	for _, listed := range state.Rooms {
+		if listed != room {
 			kept = append(kept, listed)
 		}
 	}
-	state.Rigs = kept
+	state.Rooms = kept
 	return state
 }
 

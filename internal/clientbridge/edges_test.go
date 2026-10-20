@@ -6,10 +6,10 @@ import (
 )
 
 func TestEdgesAreReportedPerRoomAndTheServerRefusableOnesAreDropped(t *testing.T) {
-	nodes := []any{map[string]any{"rigId": "eng", "rigName": "eng"}}
+	nodes := []any{map[string]any{"roomId": "eng", "roomName": "eng"}}
 	bridge := &Bridge{
-		Links: func(room string) ([]rigEdge, error) {
-			return []rigEdge{
+		Links: func(room string) ([]roomEdge, error) {
+			return []roomEdge{
 				{"coder", "reviewer", "delegates_to"},
 				{"reviewer", "coder", "escalates_to"},
 				{"coder", "reviewer", "delegates_to"}, // a repeat
@@ -20,7 +20,7 @@ func TestEdgesAreReportedPerRoomAndTheServerRefusableOnesAreDropped(t *testing.T
 		},
 		notes: map[string]string{},
 	}
-	got := BuildEdges(RigRooms(nodes), bridge.readEdges)
+	got := BuildEdges(Rooms(nodes), bridge.readEdges)
 	want := []EdgeStatus{
 		{"eng", "coder", "reviewer", "delegates_to"},
 		{"eng", "reviewer", "coder", "escalates_to"},
@@ -31,8 +31,8 @@ func TestEdgesAreReportedPerRoomAndTheServerRefusableOnesAreDropped(t *testing.T
 }
 
 func TestAnUnreadableRoomHasNoEdges(t *testing.T) {
-	got := BuildEdges(RigRooms([]any{map[string]any{"rigId": "r1", "rigName": "eng"}}),
-		func(string) []rigEdge { return nil })
+	got := BuildEdges(Rooms([]any{map[string]any{"roomId": "r1", "roomName": "eng"}}),
+		func(string) []roomEdge { return nil })
 	if got == nil || len(got) != 0 {
 		t.Fatalf("edges = %#v, want an empty non-nil list (the wire needs [] not null)", got)
 	}

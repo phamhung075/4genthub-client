@@ -22,10 +22,10 @@ type overlapFixture struct {
 	now     time.Time
 	state   string
 	roomDir string
-	rig     string
+	room    string
 }
 
-const overlapFixtureRig = "demo"
+const overlapFixtureRoom = "demo"
 
 // overlapGitAnswers is a fake git keyed by `<worktree>|<arguments>`: an absent key FAILS, so "could not read"
 // is a case a test can reach rather than a path nobody exercises.
@@ -59,8 +59,8 @@ func overlapFactsFor(answers map[string]string, worktree, base string, changed, 
 func overlapFixtureFor(t *testing.T, seats []clientservices.SeatType, answers map[string]string, verdict clientworktree.CheckVerdict) *overlapFixture {
 	t.Helper()
 	fixture := &overlapFixture{
-		rig:     overlapFixtureRig,
-		roomDir: filepath.Join(t.TempDir(), overlapFixtureRig),
+		room:    overlapFixtureRoom,
+		roomDir: filepath.Join(t.TempDir(), overlapFixtureRoom),
 		state:   filepath.Join(t.TempDir(), "overlap.json"),
 		now:     time.Date(2026, 10, 11, 10, 0, 0, 0, time.UTC),
 	}
@@ -74,7 +74,7 @@ func overlapFixtureFor(t *testing.T, seats []clientservices.SeatType, answers ma
 			return verdict, nil
 		},
 		git:   overlapGitAnswers(answers),
-		say:   func(rig, seat, text string) { fixture.sent = append(fixture.sent, seat+": "+text) },
+		say:   func(room, seat, text string) { fixture.sent = append(fixture.sent, seat+": "+text) },
 		now:   func() time.Time { return fixture.now },
 		state: func(string) (string, error) { return fixture.state, nil },
 	}
@@ -82,7 +82,7 @@ func overlapFixtureFor(t *testing.T, seats []clientservices.SeatType, answers ma
 }
 
 func (f *overlapFixture) options() overlapOptions {
-	return overlapOptions{Rig: f.rig, StaleAfter: overlapStaleAfter, Repeat: overlapRepeat, Now: f.now}
+	return overlapOptions{Room: f.room, StaleAfter: overlapStaleAfter, Repeat: overlapRepeat, Now: f.now}
 }
 
 // Two seats changing one file is the whole point: both of them and the lead are told, the message names the
@@ -388,7 +388,7 @@ func TestOverlapReportsAStaleSeatBranch(t *testing.T) {
 	overlapNotify(fixture.deps, fixture.options(), &report)
 	text := strings.Join(fixture.sent, "\n")
 	for _, want := range []string{"A seat branch has unmerged commits and has not moved for 4h0m0s.",
-		"Seat go-dev on branch " + overlapFixtureRig + "/go-dev (4 commits not yet merged, last at 2026-10-11T01:00:00Z).",
+		"Seat go-dev on branch " + overlapFixtureRoom + "/go-dev (4 commits not yet merged, last at 2026-10-11T01:00:00Z).",
 		"Nothing is blocked. The lead decides whether it is merged, rebased or dropped."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the alert does not carry %q:\n%s", want, text)
@@ -409,9 +409,9 @@ func TestPorcelainPathsReadsWhatStatusNames(t *testing.T) {
 	}
 }
 
-// rigd runs the detector every ten minutes, and the first pass runs immediately: a room `up` adds while rigd
+// agent runs the detector every ten minutes, and the first pass runs immediately: a room `up` adds while agent
 // runs is looked at on the next pass, not ten minutes later.
-func TestRigdRunsTheDetectorEveryTenMinutes(t *testing.T) {
+func TestRoomdRunsTheDetectorEveryTenMinutes(t *testing.T) {
 	manager := newAgentManager(t.TempDir(), func(string) {})
 	start := time.Date(2026, 10, 11, 10, 0, 0, 0, time.UTC)
 	if !manager.overlapDue(start) {
@@ -439,7 +439,7 @@ func TestOverlapVerbRunsOneScanAndPrintsIt(t *testing.T) {
 		}
 	}
 	overlapScanFor = func(_ *overlapDeps, opts overlapOptions) overlapReport {
-		return overlapReport{Rig: opts.Rig, Base: opts.BaseBranch, StaleAt: opts.StaleAfter}
+		return overlapReport{Room: opts.Room, Base: opts.BaseBranch, StaleAt: opts.StaleAfter}
 	}
 	t.Setenv("OPENRIG_STATE_ROOT", dir)
 
@@ -455,13 +455,13 @@ func TestOverlapVerbRunsOneScanAndPrintsIt(t *testing.T) {
 
 	stdout.Reset()
 	code = (overlapCommand{}).Run(context.Background(), []string{"--json", "demo"}, &stdout, &stderr)
-	if code != clientcmd.ExitOK || !strings.Contains(stdout.String(), `"rig": "demo"`) {
+	if code != clientcmd.ExitOK || !strings.Contains(stdout.String(), `"room": "demo"`) {
 		t.Errorf("--json printed %q (exit %d)", stdout.String(), code)
 	}
 
 	stdout.Reset()
 	if code := (overlapCommand{}).Run(context.Background(), nil, &stdout, &stderr); code != clientcmd.ExitUsage {
-		t.Errorf("a run with no RIG exited %d, want the usage exit", code)
+		t.Errorf("a run with no ROOM exited %d, want the usage exit", code)
 	}
 }
 
@@ -475,7 +475,7 @@ func TestOverlapDryRunSendsNothing(t *testing.T) {
 	overlapDepsFor = func(string) *overlapDeps {
 		return &overlapDeps{
 			now:   func() time.Time { return time.Now() },
-			say:   func(rig, seat, text string) { said = append(said, seat) },
+			say:   func(room, seat, text string) { said = append(said, seat) },
 			state: func(string) (string, error) { return filepath.Join(t.TempDir(), "overlap.json"), nil },
 		}
 	}
@@ -484,7 +484,7 @@ func TestOverlapDryRunSendsNothing(t *testing.T) {
 			{Seat: "go-dev", Branch: "demo/go-dev", Unmerged: 2, Last: time.Unix(1, 0).UTC()},
 			{Seat: "fe-dev", Branch: "demo/fe-dev", Unmerged: 1, Last: time.Unix(1, 0).UTC()},
 		}
-		return overlapReport{Rig: opts.Rig, Base: "main", StaleAt: opts.StaleAfter,
+		return overlapReport{Room: opts.Room, Base: "main", StaleAt: opts.StaleAfter,
 			Hits: []overlapHit{{File: "src/shared.go", Seats: seats}}}
 	}
 	t.Setenv("OPENRIG_STATE_ROOT", t.TempDir())
@@ -509,7 +509,7 @@ func TestOverlapDryRunSendsNothing(t *testing.T) {
 // rule (clientservices.DerivedWorktrees), so a case cannot pass against a path the doctor and `up` disagree
 // with. An empty answer means the room derives no entry for that key.
 func overlapFixtureWorktree(roomDir, key, seatType string) (string, string) {
-	for _, derived := range clientservices.DerivedWorktrees(roomDir, overlapFixtureRig,
+	for _, derived := range clientservices.DerivedWorktrees(roomDir, overlapFixtureRoom,
 		[]clientservices.SeatType{{Key: key, Type: seatType}}) {
 		if derived.SeatKey == key {
 			return derived.Path, derived.Branch

@@ -8,7 +8,7 @@
 // owner-only always answers "escalate to owner" by code, without a Jev call, whatever the confidence.
 //
 // The owner tier is not this verb: a question that reaches the owner becomes a row the owner answers
-// on the dashboard, raised through the rig's own ask path.
+// on the dashboard, raised through the room's own ask path.
 package clientdecide
 
 import (

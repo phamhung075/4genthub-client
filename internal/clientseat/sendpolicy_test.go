@@ -77,7 +77,7 @@ func newAuditHarness(t *testing.T, links string) *auditHarness {
 				case strings.Contains(text, `"GetRoomLinks"`):
 					_, _ = conn.Write([]byte(links))
 				case strings.Contains(text, `"Whoami"`):
-					_, _ = conn.Write([]byte(`{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"` + auditSender + `","sessionName":"agenthub--4genthub-min--` + auditSender + `"}}}` + "\n"))
+					_, _ = conn.Write([]byte(`{"ok":true,"data":{"identity":{"roomName":"4genthub-min","memberId":"` + auditSender + `","sessionName":"agenthub--4genthub-min--` + auditSender + `"}}}` + "\n"))
 				case strings.Contains(text, `"GetRoomStatus"`):
 					state := harness.state
 					if state == "" {

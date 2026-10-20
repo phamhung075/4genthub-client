@@ -23,8 +23,8 @@ import (
 const bundleHashLong = "c3d4e5f6" +
 	"00000000000000000000000000000000000000000000000000000000"
 
-// bundleRigYAML is BUNDLE_RIG_YAML: one pod, one member pointing at a local agent directory.
-const bundleRigYAML = "version: \"0.2\"\n" +
+// bundleRoomYAML is BUNDLE_ROOM_YAML: one pod, one member pointing at a local agent directory.
+const bundleRoomYAML = "version: \"0.2\"\n" +
 	"name: room1\n" +
 	"pods:\n" +
 	"  - id: room1\n" +
@@ -56,8 +56,8 @@ func TestSyncBundleDoesNotAdvertiseAStoreFlagItLacks(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := RunBundleVerb(context.Background(), []string{
 		"room1", "seat1",
-		"--rig-yaml", filepath.Join(t.TempDir(), "rig.yaml"),
-		"--rig-root", t.TempDir(),
+		"--room-yaml", filepath.Join(t.TempDir(), "room.yaml"),
+		"--room-root", t.TempDir(),
 	}, &stdout, &stderr)
 	if code != clientcmd.ExitUsage {
 		t.Fatalf("exit %d, want %d: %s", code, clientcmd.ExitUsage, stderr.String())
@@ -86,29 +86,29 @@ func bundleWritePin(t *testing.T, store, hash string) {
 	}
 }
 
-func bundleRun(t *testing.T, rigYAML, rigRoot, outDir string) (int, string, string) {
+func bundleRun(t *testing.T, roomYAML, roomRoot, outDir string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	code := RunBundleVerb(context.Background(),
-		[]string{"room1", "seat1", "--rig-yaml", rigYAML, "--rig-root", rigRoot, "--out-dir", outDir},
+		[]string{"room1", "seat1", "--room-yaml", roomYAML, "--room-root", roomRoot, "--out-dir", outDir},
 		&stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 
-// bundleFixture is the pinned seat in a scratch store, plus a rig root whose agent dir may carry a
+// bundleFixture is the pinned seat in a scratch store, plus a room root whose agent dir may carry a
 // policy; outDir is where the bundle lands.
-func bundleFixture(t *testing.T, policy map[string]any) (rigYAML, rigRoot, outDir string) {
+func bundleFixture(t *testing.T, policy map[string]any) (roomYAML, roomRoot, outDir string) {
 	t.Helper()
 	store := bundleStoreHome(t)
 	bundleWritePin(t, store, bundleHashLong)
 
 	scratch := t.TempDir()
-	rigYAML = filepath.Join(scratch, "rig.yaml")
-	if err := os.WriteFile(rigYAML, []byte(bundleRigYAML), 0o644); err != nil {
+	roomYAML = filepath.Join(scratch, "room.yaml")
+	if err := os.WriteFile(roomYAML, []byte(bundleRoomYAML), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rigRoot = filepath.Join(scratch, "rig-root")
-	agentDir := filepath.Join(rigRoot, "agents", "seat1")
+	roomRoot = filepath.Join(scratch, "room-root")
+	agentDir := filepath.Join(roomRoot, "agents", "seat1")
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -125,21 +125,21 @@ func bundleFixture(t *testing.T, policy map[string]any) (rigYAML, rigRoot, outDi
 		}
 	}
 	outDir = filepath.Join(scratch, "bundles")
-	return rigYAML, rigRoot, outDir
+	return roomYAML, roomRoot, outDir
 }
 
 // test_bundle_uses_pinned_hash: the pinned hash names the file and rides in the notes, and the archive
-// carries the rig spec and the agent directory under a manifest that hashes each file.
-func TestBundleUsesPinnedHashAndPacksTheRigRoot(t *testing.T) {
-	rigYAML, rigRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
+// carries the room spec and the agent directory under a manifest that hashes each file.
+func TestBundleUsesPinnedHashAndPacksTheRoomRoot(t *testing.T) {
+	roomYAML, roomRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
 
-	code, out, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
+	code, out, errOut := bundleRun(t, roomYAML, roomRoot, outDir)
 
 	absoluteOut, err := filepath.Abs(outDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundlePath := filepath.Join(absoluteOut, "room1-seat1-"+bundleHashLong[:8]+".rigbundle")
+	bundlePath := filepath.Join(absoluteOut, "room1-seat1-"+bundleHashLong[:8]+".roombundle")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut)
 	}
@@ -159,8 +159,8 @@ func TestBundleUsesPinnedHashAndPacksTheRigRoot(t *testing.T) {
 		manifest.Notes != "resolved_sha256="+bundleHashLong+" source=4genteam" {
 		t.Errorf("manifest = %+v", manifest)
 	}
-	if string(files["rig.yaml"]) != bundleRigYAML {
-		t.Errorf("rig.yaml was not carried")
+	if string(files["room.yaml"]) != bundleRoomYAML {
+		t.Errorf("room.yaml was not carried")
 	}
 	for _, want := range []string{"agents/seat1/agent.yaml", "agents/seat1/policy.json"} {
 		if _, ok := files[want]; !ok {
@@ -177,19 +177,19 @@ func TestBundleUsesPinnedHashAndPacksTheRigRoot(t *testing.T) {
 
 // The same inputs always make the same bytes, so a bundle's hash is a fact about its contents.
 func TestBundleIsDeterministic(t *testing.T) {
-	rigYAML, rigRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
+	roomYAML, roomRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
 	read := func() []byte {
-		if code, _, errOut := bundleRun(t, rigYAML, rigRoot, outDir); code != clientcmd.ExitOK {
+		if code, _, errOut := bundleRun(t, roomYAML, roomRoot, outDir); code != clientcmd.ExitOK {
 			t.Fatalf("exit %d: %s", code, errOut)
 		}
-		raw, err := os.ReadFile(filepath.Join(outDir, "room1-seat1-"+bundleHashLong[:8]+".rigbundle"))
+		raw, err := os.ReadFile(filepath.Join(outDir, "room1-seat1-"+bundleHashLong[:8]+".roombundle"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		return raw
 	}
 	first := read()
-	if err := os.Chtimes(filepath.Join(rigRoot, "agents", "seat1", "agent.yaml"), time.Now(), time.Now().Add(time.Hour)); err != nil {
+	if err := os.Chtimes(filepath.Join(roomRoot, "agents", "seat1", "agent.yaml"), time.Now(), time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(first, read()) {
@@ -232,7 +232,7 @@ func TestBundleWithoutLockExitsTwo(t *testing.T) {
 	bundleStoreHome(t)
 	outDir := t.TempDir()
 
-	code, out, errOut := bundleRun(t, "/nonexistent/rig.yaml", "/nonexistent/rig-root", outDir)
+	code, out, errOut := bundleRun(t, "/nonexistent/room.yaml", "/nonexistent/room-root", outDir)
 
 	if code != clientcmd.ExitUsage {
 		t.Errorf("exit %d, want %d", code, clientcmd.ExitUsage)
@@ -248,18 +248,18 @@ func TestBundleWithoutLockExitsTwo(t *testing.T) {
 	}
 }
 
-// test_bundle_warns_when_the_rig_root_carries_no_pin: the artifact builds, stdout stays the machine line,
+// test_bundle_warns_when_the_room_root_carries_no_pin: the artifact builds, stdout stays the machine line,
 // and the WARNING on stderr says what the bundle does not contain.
-func TestBundleWarnsWhenTheRigRootCarriesNoPin(t *testing.T) {
-	rigYAML, rigRoot, outDir := bundleFixture(t, nil)
+func TestBundleWarnsWhenTheRoomRootCarriesNoPin(t *testing.T) {
+	roomYAML, roomRoot, outDir := bundleFixture(t, nil)
 
-	code, out, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
+	code, out, errOut := bundleRun(t, roomYAML, roomRoot, outDir)
 
 	absoluteOut, err := filepath.Abs(outDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundlePath := filepath.Join(absoluteOut, "room1-seat1-"+bundleHashLong[:8]+".rigbundle")
+	bundlePath := filepath.Join(absoluteOut, "room1-seat1-"+bundleHashLong[:8]+".roombundle")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, errOut)
 	}
@@ -276,9 +276,9 @@ func TestBundleWarnsWhenTheRigRootCarriesNoPin(t *testing.T) {
 // test_bundle_warns_when_the_pin_belongs_to_another_seat: two seats sharing one agent directory can only
 // carry one policy, and the seat that lost is named.
 func TestBundleWarnsWhenThePinBelongsToAnotherSeat(t *testing.T) {
-	rigYAML, rigRoot, outDir := bundleFixture(t, map[string]any{"Seat": "someone-else", "Links": []any{}})
+	roomYAML, roomRoot, outDir := bundleFixture(t, map[string]any{"Seat": "someone-else", "Links": []any{}})
 
-	code, _, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
+	code, _, errOut := bundleRun(t, roomYAML, roomRoot, outDir)
 
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want %d", code, clientcmd.ExitOK)
@@ -291,11 +291,11 @@ func TestBundleWarnsWhenThePinBelongsToAnotherSeat(t *testing.T) {
 	}
 }
 
-// test_bundle_says_nothing_when_the_pin_is_this_seats: no noise when the rig root carries this seat.
+// test_bundle_says_nothing_when_the_pin_is_this_seats: no noise when the room root carries this seat.
 func TestBundleSaysNothingWhenThePinIsThisSeats(t *testing.T) {
-	rigYAML, rigRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
+	roomYAML, roomRoot, outDir := bundleFixture(t, map[string]any{"Seat": "seat1", "Links": []any{}})
 
-	code, out, errOut := bundleRun(t, rigYAML, rigRoot, outDir)
+	code, out, errOut := bundleRun(t, roomYAML, roomRoot, outDir)
 
 	absoluteOut, err := filepath.Abs(outDir)
 	if err != nil {
@@ -307,16 +307,16 @@ func TestBundleSaysNothingWhenThePinIsThisSeats(t *testing.T) {
 	if errOut != "" {
 		t.Errorf("stderr = %q, want nothing at all", errOut)
 	}
-	if want := filepath.Join(absoluteOut, "room1-seat1-"+bundleHashLong[:8]+".rigbundle"); strings.TrimSpace(out) != want {
+	if want := filepath.Join(absoluteOut, "room1-seat1-"+bundleHashLong[:8]+".roombundle"); strings.TrimSpace(out) != want {
 		t.Errorf("stdout = %q, want %q", strings.TrimSpace(out), want)
 	}
 }
 
-// An unreadable rig spec is a remote failure that names what could not be read, and leaves no bundle behind.
-func TestBundleUnreadableRigSpecExitsOne(t *testing.T) {
-	_, rigRoot, outDir := bundleFixture(t, nil)
+// An unreadable room spec is a remote failure that names what could not be read, and leaves no bundle behind.
+func TestBundleUnreadableRoomSpecExitsOne(t *testing.T) {
+	_, roomRoot, outDir := bundleFixture(t, nil)
 
-	code, out, errOut := bundleRun(t, filepath.Join(t.TempDir(), "missing.yaml"), rigRoot, outDir)
+	code, out, errOut := bundleRun(t, filepath.Join(t.TempDir(), "missing.yaml"), roomRoot, outDir)
 
 	if code != clientcmd.ExitRemote {
 		t.Errorf("exit %d, want %d", code, clientcmd.ExitRemote)
@@ -324,7 +324,7 @@ func TestBundleUnreadableRigSpecExitsOne(t *testing.T) {
 	if out != "" {
 		t.Errorf("stdout = %q, want nothing", out)
 	}
-	if !strings.Contains(errOut, "cannot read the rig spec") {
+	if !strings.Contains(errOut, "cannot read the room spec") {
 		t.Errorf("stderr = %q, want it to name the unreadable spec", errOut)
 	}
 	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {

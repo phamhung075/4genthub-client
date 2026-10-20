@@ -1,19 +1,19 @@
 // Package clientwatch is the `watch` verb group: the live, READ-ONLY view of a room.
 //
-// It renders what every seat of a rig is doing - each tool call and its result, the agent's own
+// It renders what every seat of a room is doing - each tool call and its result, the agent's own
 // reasoning, what it says and what it is told - from the seats' session logs, and it never types into
 // a seat from the feed. docs/WATCH.md and skills/client/watch-team/SKILL.md are the contract this code
 // must make true; the Python client's watch.py is the behaviour it was ported from.
 //
 // Four deliberate departures from the Python, all recorded in the phase report:
 //
-//   - `--room` is REQUIRED. The Python defaulted it to the owner's own rig name, and the mission
+//   - `--room` is REQUIRED. The Python defaulted it to the owner's own room name, and the mission
 //     forbids an owner default; the doc already says "there is no default room".
 //   - the state root is `--state-root`, else the machine's own
 //     ~/.config/4genthub (clientenv.DefaultStateRoot) - and a machine where that root is not there, or is without herdr, exits non-zero with ONE
 //     message naming the path it tried, instead of failing on a missing owner path.
 //   - every external process goes through ONE injectable seam (`execCommand`), so the tests need no
-//     herdr, no tmux, no rig and no seat, and the refusals are testable by name.
+//     herdr, no tmux, no room and no seat, and the refusals are testable by name.
 //   - the pane commands run this binary rather than a Python interpreter and module.
 package clientwatch
 
@@ -47,7 +47,7 @@ func Commands() []clientcmd.Command {
 }
 
 // execCommand is the ONE seam every external process goes through. Replacing it is what makes the
-// tests able to run without herdr, tmux, rig or a seat - and what lets the refusals be checked by
+// tests able to run without herdr, tmux, room or a seat - and what lets the refusals be checked by
 // name. It is exec.Command with an argument list, never a shell string.
 var execCommand = func(ctx context.Context, name string, args ...string) (string, error) {
 	out, err := exec.CommandContext(ctx, name, args...).Output()
@@ -62,9 +62,9 @@ var lookPath = exec.LookPath
 var executable = os.Executable
 
 // shared are the flags every reading verb takes. `--room` has NO default: the doc says there is no
-// default room, and an owner's rig name must never be baked in.
+// default room, and an owner's room name must never be baked in.
 type shared struct {
-	rig       string
+	room      string
 	back      int
 	width     int
 	lines     int
@@ -160,14 +160,14 @@ func watchRootError(err error) error {
 // named seat must be one inside it (<root>/rooms/<room>/seats/<seat>). It checks EXISTENCE and never a
 // count - a real room whose seats are all stopped is still a room, and "following 0 seats" is its
 // correct output, so refusing on a zero count would break a legitimate case.
-func requireRoomAndSeats(root, rig string, seats []string) error {
-	room := filepath.Join(root, "rooms", rig)
-	if !isDir(room) {
-		return usageError(fmt.Sprintf("no such room: %s", rig))
+func requireRoomAndSeats(root, room string, seats []string) error {
+	dir := filepath.Join(root, "rooms", room)
+	if !isDir(dir) {
+		return usageError(fmt.Sprintf("no such room: %s", room))
 	}
 	for _, seat := range seats {
-		if !isDir(filepath.Join(room, "seats", seat)) {
-			return usageError(fmt.Sprintf("no such seat: %s in %s", seat, rig))
+		if !isDir(filepath.Join(dir, "seats", seat)) {
+			return usageError(fmt.Sprintf("no such seat: %s in %s", seat, room))
 		}
 	}
 	return nil

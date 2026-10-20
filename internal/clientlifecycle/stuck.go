@@ -1,5 +1,5 @@
-// The stuck and idle alerts of `rigd` (plan item 5 of
-// ai_docs/operations/client-features-for-the-dev-team.md). It rides the SAME rigd loop the overlap detector
+// The stuck and idle alerts of `agent` (plan item 5 of
+// ai_docs/operations/client-features-for-the-dev-team.md). It rides the SAME agent loop the overlap detector
 // rides, on its own ten-minute timer, and it reports three things:
 //
 //  1. A STUCK QUEUE ROW: a row of this room still `in-progress` past its OWN deadline, or one whose owning
@@ -18,13 +18,13 @@
 // THE ESCALATION ROUTE IS THE PLAN'S, SEAT THEN LEAD THEN OWNER, and it is the same timer with a SECOND,
 // LONGER threshold: the first alert goes to the seat the finding names (when it names one) and to the lead,
 // and a finding still there `stuckEscalateAfter` later is written to the room's human as a queue row. That
-// destination is `human@<rig>`, NOT the owner node: ruling 4.6 says a row left on the owner node's queue
-// waits unseen, and `human@<rig>` is the form the bridge already delivers to the cloud as a notification, so
+// destination is `human@<room>`, NOT the owner node: ruling 4.6 says a row left on the owner node's queue
+// waits unseen, and `human@<room>` is the form the bridge already delivers to the cloud as a notification, so
 // it is a surface that reaches the owner rather than one that only looks like one.
 //
 // AND IT DOES NOT REPEAT ITSELF: one finding is sent once at each rung, and a rung that has been sent is
 // never sent again while the finding stands, so a room told the same thing every ten minutes stops reading
-// it. The memory is a file under the state root, so a restarted rigd does not start telling the room the
+// it. The memory is a file under the state root, so a restarted agent does not start telling the room the
 // same thing over, and a finding that clears is forgotten - so a row that comes back IS news again.
 package clientlifecycle
 
@@ -51,10 +51,10 @@ import (
 )
 
 const (
-	stuckUsage = "usage: 4genteam stuck RIG [--once|--every DURATION] [--idle-after DURATION] " +
+	stuckUsage = "usage: 4genteam stuck ROOM [--once|--every DURATION] [--idle-after DURATION] " +
 		"[--escalate-after DURATION] [--state-root DIR] [--json] [--dry-run]"
 
-	// stuckEvery is how often rigd runs the scan: the SAME cadence as the overlap detector beside it (4.5's
+	// stuckEvery is how often agent runs the scan: the SAME cadence as the overlap detector beside it (4.5's
 	// ten minutes). The plan's 5.3c leaves the loop's cadence to one number; two timers in one loop that
 	// disagreed would be a second schedule nobody could reason about.
 	stuckEvery = 10 * time.Minute
@@ -108,31 +108,31 @@ const (
 // stuckDeps is what a scan touches outside its arguments, as fields so a case drives the whole detector
 // without a room, a queue, a board, a terminal or a clock.
 type stuckDeps struct {
-	rows     func(rig string) ([]stuckRow, []string)
+	rows     func(room string) ([]stuckRow, []string)
 	board    func() ([]boardTask, []string)
-	seats    func(rig string) []string
-	seatLog  func(rig, seat string) (string, string)
+	seats    func(room string) []string
+	seatLog  func(room, seat string) (string, string)
 	writeAt  func(path string) (time.Time, error)
-	say      func(rig, seat, text string)
-	escalate func(rig string, finding stuckFinding, open time.Duration) (string, error)
+	say      func(room, seat, text string)
+	escalate func(room string, finding stuckFinding, open time.Duration) (string, error)
 	now      func() time.Time
-	state    func(rig string) (string, error)
+	state    func(room string) (string, error)
 }
 
-// stuckDepsFor is the scan's production wiring, and a seam so a case drives rigd's pass without a room.
+// stuckDepsFor is the scan's production wiring, and a seam so a case drives agent's pass without a room.
 var stuckDepsFor = defaultStuckDeps
 
 func defaultStuckDeps(stateRoot string) *stuckDeps {
 	return &stuckDeps{
 		rows:     stuckQueueRows,
 		board:    stuckBoardTasks,
-		seats:    func(rig string) []string { return seatlog.RigSeats(stateRoot, rig) },
-		seatLog:  func(rig, seat string) (string, string) { return seatlog.SeatLog(stateRoot, rig, seat) },
+		seats:    func(room string) []string { return seatlog.RoomSeats(stateRoot, room) },
+		seatLog:  func(room, seat string) (string, string) { return seatlog.SeatLog(stateRoot, room, seat) },
 		writeAt:  stuckWriteAt,
-		say:      func(rig, seat, text string) { rigSay(rig, seat, text, false) },
+		say:      func(room, seat, text string) { roomSay(room, seat, text, false) },
 		escalate: stuckEscalateRow,
 		now:      clientservices.Now,
-		state:    func(rig string) (string, error) { return filepath.Join(stateRoot, "stuck-"+rig+".json"), nil },
+		state:    func(room string) (string, error) { return filepath.Join(stateRoot, "stuck-"+room+".json"), nil },
 	}
 }
 
@@ -178,7 +178,7 @@ type boardTask struct {
 
 // stuckOptions is one run's inputs.
 type stuckOptions struct {
-	Rig           string
+	Room          string
 	Now           time.Time
 	IdleAfter     time.Duration
 	EscalateAfter time.Duration
@@ -207,7 +207,7 @@ type idleSeat struct {
 
 // stuckReport is what one scan found, and what it sent.
 type stuckReport struct {
-	Rig           string            `json:"rig"`
+	Room          string            `json:"room"`
 	IdleAfter     time.Duration     `json:"idle_after"`
 	EscalateAfter time.Duration     `json:"escalate_after"`
 	Findings      []stuckFinding    `json:"findings"`
@@ -219,27 +219,27 @@ type stuckReport struct {
 	Deadlines     map[string]string `json:"-"`
 }
 
-// stuckScanFor is the scan as a seam: rigd's timer, the `stuck` verb and every case go through it.
+// stuckScanFor is the scan as a seam: agent's timer, the `stuck` verb and every case go through it.
 var stuckScanFor = stuckScan
 
 // stuckScan reads one room's queue rows, the board's tasks and every live seat's log, and answers what is
 // stuck and what is idle. Every read that fails produces a NOTE rather than a state: a detector that could
 // not look has no answer to give, and an empty report must not read as "nothing is stuck".
 func stuckScan(deps *stuckDeps, opts stuckOptions) stuckReport {
-	report := stuckReport{Rig: opts.Rig, IdleAfter: opts.IdleAfter, EscalateAfter: opts.EscalateAfter}
-	liveSeats := deps.seats(opts.Rig)
+	report := stuckReport{Room: opts.Room, IdleAfter: opts.IdleAfter, EscalateAfter: opts.EscalateAfter}
+	liveSeats := deps.seats(opts.Room)
 	live := map[string]bool{}
 	for _, seat := range liveSeats {
 		live[seat] = true
 	}
 
-	rows, rowNotes := deps.rows(opts.Rig)
+	rows, rowNotes := deps.rows(opts.Room)
 	report.Notes = append(report.Notes, rowNotes...)
 	for _, row := range rows {
 		if row.State != stuckInProgress {
 			continue
 		}
-		seat := stuckSeat(opts.Rig, row.Destination)
+		seat := stuckSeat(opts.Room, row.Destination)
 		// THE ONE STUCK FACT THE RAIL PROVES is an owner with no live session. A deadline is not among the
 		// daemon's row fields (stuckRow says why), and an age threshold was measured false before it was
 		// dropped: a row whose owner is working reads hours old.
@@ -254,7 +254,7 @@ func stuckScan(deps *stuckDeps, opts stuckOptions) stuckReport {
 
 	// THE BOARD IS THE USER'S, NOT A ROOM'S, so a task is reported by the room whose live seats one of its
 	// assignees names. A task no live seat of this room names is counted, not alerted: the row would
-	// otherwise be repeated by every room rigd supervises, and a repeated alert is one the reader stops
+	// otherwise be repeated by every room agent supervises, and a repeated alert is one the reader stops
 	// reading.
 	tasks, boardNotes := deps.board()
 	report.Notes = append(report.Notes, boardNotes...)
@@ -288,7 +288,7 @@ func stuckScan(deps *stuckDeps, opts stuckOptions) stuckReport {
 		})
 	}
 	if unplaced > 0 {
-		report.Notes = append(report.Notes, fmt.Sprintf("%d board task(s) in progress are past their due date and name no live seat of %s", unplaced, opts.Rig))
+		report.Notes = append(report.Notes, fmt.Sprintf("%d board task(s) in progress are past their due date and name no live seat of %s", unplaced, opts.Room))
 	}
 
 	// THE IDLE SCAN COVERS ONLY SEATS WITH A LIVE SESSION. A seat whose session is gone is not idle, and it
@@ -301,7 +301,7 @@ func stuckScan(deps *stuckDeps, opts stuckOptions) stuckReport {
 		if seat == ownerNodeSeat {
 			continue
 		}
-		path, runtime := deps.seatLog(opts.Rig, seat)
+		path, runtime := deps.seatLog(opts.Room, seat)
 		if path == "" {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("%s (no session log this machine can read: runtime %s)", seat, stuckRuntime(runtime)))
 			continue
@@ -329,33 +329,33 @@ func stuckScan(deps *stuckDeps, opts stuckOptions) stuckReport {
 }
 
 // stuckSeat is the seat key a queue destination names, or nothing when it names no seat of this room.
-// `human@<rig>` is the owner's destination and deliberately answers nothing: it is a reader, not a worker.
+// `human@<room>` is the owner's destination and deliberately answers nothing: it is a reader, not a worker.
 // The rail's destinations are the runtime's own session names (`agenthub--<room>--<seat>`) and, on older
 // rows, the canonical `<room>-<seat>@<room>`; both forms are read here, because a detector that only knew
 // one would call every row ownerless.
-func stuckSeat(rig, destination string) string {
-	if room, seat, ok := clientruntime.ParseSeatSessionName(destination); ok {
-		if rig != "" && room != rig {
+func stuckSeat(room, destination string) string {
+	if sessionRoom, seat, ok := clientruntime.ParseSeatSessionName(destination); ok {
+		if sessionRoom != "" && sessionRoom != room {
 			return ""
 		}
 		return seat
 	}
-	local, room, found := strings.Cut(destination, "@")
-	if !found || local == "" || room == "" || local == "human" {
+	local, destRoom, found := strings.Cut(destination, "@")
+	if !found || local == "" || destRoom == "" || local == "human" {
 		return ""
 	}
-	if rig != "" && (room != rig || !strings.HasPrefix(local, rig+"-")) {
+	if destRoom != "" && (destRoom != room || !strings.HasPrefix(local, destRoom+"-")) {
 		return ""
 	}
-	return strings.TrimPrefix(local, rig+"-")
+	return strings.TrimPrefix(local, destRoom+"-")
 }
 
-// stuckDestinationRig is the room a destination belongs to, in either of the two forms stuckSeat reads.
-func stuckDestinationRig(destination string) string {
+// stuckDestinationRoom is the room a destination belongs to, in either of the two forms stuckSeat reads.
+func stuckDestinationRoom(destination string) string {
 	if room, _, ok := clientruntime.ParseSeatSessionName(destination); ok {
 		return room
 	}
-	return rigOfSession(destination)
+	return roomOfSession(destination)
 }
 
 // stuckMoment parses one timestamp field. It answers (time, present, parsed): a field the row does not carry
@@ -436,7 +436,7 @@ type stuckRecord struct {
 }
 
 // stuckMemory is the file under the state root: the findings already sent and the seats already nudged, so a
-// restarted rigd does not start the window over.
+// restarted agent does not start the window over.
 type stuckMemory struct {
 	Findings map[string]stuckRecord `json:"findings"`
 	Idle     map[string]stuckRecord `json:"idle"`
@@ -449,7 +449,7 @@ func newStuckMemory() *stuckMemory {
 // stuckNotify sends what the plan says to send and remembers it. It is separate from the scan so the reading
 // and the sending can be driven apart, which is how the hour-long escalation is testable without an hour.
 func stuckNotify(deps *stuckDeps, opts stuckOptions, report *stuckReport) {
-	memory, path := stuckLoad(deps, opts.Rig)
+	memory, path := stuckLoad(deps, opts.Room)
 	changed := false
 	for _, finding := range report.Findings {
 		key := finding.Kind + " " + finding.ID
@@ -460,20 +460,20 @@ func stuckNotify(deps *stuckDeps, opts stuckOptions, report *stuckReport) {
 			// forgotten below, so a row that comes back is news again.
 			continue
 		case seen && record.Stage == stuckAlerted && opts.Now.Sub(record.At) >= opts.EscalateAfter:
-			written, err := deps.escalate(opts.Rig, finding, opts.Now.Sub(record.At))
+			written, err := deps.escalate(opts.Room, finding, opts.Now.Sub(record.At))
 			if err != nil {
 				report.Notes = append(report.Notes, "the escalation row could not be written: "+err.Error())
 				continue
 			}
 			memory.Findings[key] = stuckRecord{At: opts.Now, Stage: stuckEscalated}
-			report.Escalated = append(report.Escalated, fmt.Sprintf("%s -> %s: %s", key, stuckOwnerPrefix+opts.Rig, stuckClip(written, 120)))
+			report.Escalated = append(report.Escalated, fmt.Sprintf("%s -> %s: %s", key, stuckOwnerPrefix+opts.Room, stuckClip(written, 120)))
 		case seen:
 			// Already the seat's and the lead's, and the escalation window has not closed: silent is the
 			// correct answer, because a room told the same thing every ten minutes stops reading the alert.
 			// The window closing is what moves a finding up a rung, in the case above.
 			continue
 		default:
-			stuckTell(deps, opts.Rig, stuckRecipients(finding), stuckMessage(finding))
+			stuckTell(deps, opts.Room, stuckRecipients(finding), stuckMessage(finding))
 			memory.Findings[key] = stuckRecord{Seats: stuckRecipients(finding), At: opts.Now, Stage: stuckAlerted}
 			report.Sent = append(report.Sent, key+" -> "+overlapNames(stuckRecipients(finding)))
 		}
@@ -486,20 +486,20 @@ func stuckNotify(deps *stuckDeps, opts stuckOptions, report *stuckReport) {
 			continue
 		case seen && record.Stage == stuckAlerted && opts.Now.Sub(record.At) >= opts.EscalateAfter:
 			finding := stuckFinding{Kind: stuckIdleKind, ID: seat.Seat, Seat: seat.Seat, Title: seat.Seat, Reason: stuckIdleReason(seat)}
-			written, err := deps.escalate(opts.Rig, finding, opts.Now.Sub(record.At))
+			written, err := deps.escalate(opts.Room, finding, opts.Now.Sub(record.At))
 			if err != nil {
 				report.Notes = append(report.Notes, "the escalation row could not be written: "+err.Error())
 				continue
 			}
 			memory.Idle[seat.Seat] = stuckRecord{At: opts.Now, Stage: stuckEscalated}
-			report.Escalated = append(report.Escalated, fmt.Sprintf("idle %s -> %s: %s", seat.Seat, stuckOwnerPrefix+opts.Rig, stuckClip(written, 120)))
+			report.Escalated = append(report.Escalated, fmt.Sprintf("idle %s -> %s: %s", seat.Seat, stuckOwnerPrefix+opts.Room, stuckClip(written, 120)))
 		case seen:
 			// Already the seat's and the lead's, and the escalation window has not closed: silent is the
 			// correct answer, because a room told the same thing every ten minutes stops reading the alert.
 			// The window closing is what moves a finding up a rung, in the case above.
 			continue
 		default:
-			stuckTell(deps, opts.Rig, []string{overlapLeadSeat}, stuckIdleMessage(seat))
+			stuckTell(deps, opts.Room, []string{overlapLeadSeat}, stuckIdleMessage(seat))
 			memory.Idle[seat.Seat] = stuckRecord{Seats: []string{overlapLeadSeat}, At: opts.Now, Stage: stuckAlerted}
 			report.Sent = append(report.Sent, "idle "+seat.Seat+" -> the "+overlapLeadSeat)
 		}
@@ -529,9 +529,9 @@ func stuckRecipients(finding stuckFinding) []string {
 
 // stuckTell sends one message to each named recipient. It is the same shape as overlapTell, and it names the
 // recipients the same way, so the two detectors' messages read alike.
-func stuckTell(deps *stuckDeps, rig string, seats []string, text string) {
+func stuckTell(deps *stuckDeps, room string, seats []string, text string) {
 	for _, seat := range seats {
-		deps.say(rig, seat, text)
+		deps.say(room, seat, text)
 	}
 }
 
@@ -564,9 +564,9 @@ func stuckForget(memory *stuckMemory, report *stuckReport) bool {
 
 // stuckLoad reads the memory. A file that cannot be read is started over rather than refused: the cost of
 // forgetting is one repeated alert, and the cost of refusing is a detector that stops detecting.
-func stuckLoad(deps *stuckDeps, rig string) (*stuckMemory, string) {
+func stuckLoad(deps *stuckDeps, room string) (*stuckMemory, string) {
 	memory := newStuckMemory()
-	path, err := deps.state(rig)
+	path, err := deps.state(room)
 	if err != nil {
 		return memory, ""
 	}
@@ -628,11 +628,11 @@ func stuckIdleMessage(seat idleSeat) string {
 // stuckEscalationText is the row written to the room's human: the finding, how long it has stood, and where it
 // is in the plan's route. Its first line is the one line a queue listing shows, so it says what the row is
 // about rather than repeating the id.
-func stuckEscalationText(rig string, finding stuckFinding, open time.Duration) string {
+func stuckEscalationText(room string, finding stuckFinding, open time.Duration) string {
 	return fmt.Sprintf("Stuck escalation in %s: %s.\n\n%s\n\nThe seat and the lead were told %s ago and the "+
 		"finding is still there. Nothing is blocked. This is the third rung of the escalation route (seat, then "+
 		"lead, then owner), and it is here for the owner to decide.",
-		rig, stuckEscalationSubject(finding), stuckMessage(finding), stuckDuration(open))
+		room, stuckEscalationSubject(finding), stuckMessage(finding), stuckDuration(open))
 }
 
 // stuckEscalationSubject is the escalation row's one line.
@@ -649,16 +649,16 @@ func stuckEscalationSubject(finding stuckFinding) string {
 
 // ---- the production readers ------------------------------------------------
 
-// stuckQueueRows reads this room's in-progress rows. `--all-rigs` because agent serves every room on the
+// stuckQueueRows reads this room's in-progress rows. `--all-rooms` because agent serves every room on the
 // machine, and an unreadable listing is an ERROR rather than an empty result: a detector that could not look
 // must not answer "nothing is stuck" (the same rule the orphan list follows).
 //
 // THE RAIL IS THE RUNTIME'S OWN (clientruntime.QueueList), the same reader doctor's orphan row uses: the
 // predecessor shelled the retired `rig queue list --full`, whose row shape carried a claim time and a closure
 // deadline the daemon's row does not have.
-func stuckQueueRows(rig string) ([]stuckRow, []string) {
+func stuckQueueRows(room string) ([]stuckRow, []string) {
 	limit := int64(stuckQueueLimit)
-	rows, err := clientruntime.NewClient("").QueueList(rig, clientruntime.QueueListFilter{
+	rows, err := clientruntime.NewClient("").QueueList(room, clientruntime.QueueListFilter{
 		State: []string{stuckInProgress},
 		Limit: &limit,
 	})
@@ -670,7 +670,7 @@ func stuckQueueRows(rig string) ([]stuckRow, []string) {
 		if row.QitemID == "" {
 			continue
 		}
-		if rig != "" && stuckDestinationRig(row.DestinationSession) != rig {
+		if room != "" && stuckDestinationRoom(row.DestinationSession) != room {
 			continue
 		}
 		out = append(out, stuckRow{
@@ -689,7 +689,7 @@ func stuckQueueRows(rig string) ([]stuckRow, []string) {
 
 // stuckBoardTasks reads the board's in-progress tasks. It needs the same credential the rest of the client
 // uses to talk to the cloud (AGENTHUB_URL and AGENTHUB_TOKEN), and a machine without them gets a NOTE rather
-// than a silent empty board: rigd's own start already requires both, so this is a reading that was asked for
+// than a silent empty board: agent's own start already requires both, so this is a reading that was asked for
 // and could not be made, not a configuration this detector is free to skip.
 func stuckBoardTasks() ([]boardTask, []string) {
 	baseURL, token := os.Getenv("AGENTHUB_URL"), os.Getenv("AGENTHUB_TOKEN")
@@ -756,8 +756,8 @@ func stuckAssignees(value any) []string {
 // daemon - the rail's only writer - validates and stores it. The destination is the room's human, and the
 // body is the rail's four-line grammar, which is what a create now requires: the predecessor wrote a free-form
 // body through the retired `rig queue create`, and no such body is accepted today.
-func stuckEscalateRow(rig string, finding stuckFinding, open time.Duration) (string, error) {
-	summary := stuckClip("Stuck escalation in "+rig+": "+stuckEscalationSubject(finding), 120)
+func stuckEscalateRow(room string, finding stuckFinding, open time.Duration) (string, error) {
+	summary := stuckClip("Stuck escalation in "+room+": "+stuckEscalationSubject(finding), 120)
 	body := fmt.Sprintf("facts: %s\nrule: %s\ndecision: %s\nnext: %s",
 		stuckClip("the "+finding.Kind+" finding "+finding.ID+" stands: "+finding.Reason, 280),
 		stuckClip("the escalation route is seat, then lead, then owner; the first alert went "+stuckDuration(open)+" ago", 110),
@@ -765,9 +765,9 @@ func stuckEscalateRow(rig string, finding stuckFinding, open time.Duration) (str
 		stuckClip("the owner reads this row and decides", 78))
 	priority := "normal"
 	tag := stuckEscalationTag
-	row, err := clientruntime.NewClient("").QueueCreate(rig, clientruntime.QueueCreateInput{
-		SourceSession:      stuckSourceSession(rig),
-		DestinationSession: stuckOwnerPrefix + rig,
+	row, err := clientruntime.NewClient("").QueueCreate(room, clientruntime.QueueCreateInput{
+		SourceSession:      stuckSourceSession(room),
+		DestinationSession: stuckOwnerPrefix + room,
 		Summary:            summary,
 		Body:               body,
 		Priority:           &priority,
@@ -782,11 +782,11 @@ func stuckEscalateRow(rig string, finding stuckFinding, open time.Duration) (str
 // stuckSourceSession is who the escalation row is written by: the machine's own supervision process, named
 // the way a room names its sessions so the row's source is readable rather than blank. It is not a seat and
 // claims to be none.
-func stuckSourceSession(rig string) string {
-	return rig + "-agent@" + rig
+func stuckSourceSession(room string) string {
+	return room + "-agent@" + room
 }
 
-// ---- the verb, and rigd's timer --------------------------------------------
+// ---- the verb, and agent's timer --------------------------------------------
 
 type stuckCommand struct{}
 
@@ -804,7 +804,7 @@ func (stuckCommand) Run(_ context.Context, args []string, stdout, stderr io.Writ
 				"named, never called idle; the owner node is never idle, because it runs no model. Nothing is\n"+
 				"blocked: the first alert goes to the seat the finding names and to the lead, and a finding still\n"+
 				"there an hour later is written to the room's human as a queue row. A finding is sent once at each\n"+
-				"rung and a rung is never re-sent while it stands. rigd runs this every "+stuckEvery.String()+" on its\n"+
+				"rung and a rung is never re-sent while it stands. agent runs this every "+stuckEvery.String()+" on its\n"+
 				"own; this verb is the run on request, one scan by default.")
 		return clientcmd.ExitOK
 	}
@@ -816,20 +816,20 @@ func (stuckCommand) Run(_ context.Context, args []string, stdout, stderr io.Writ
 	stateRoot := flags.String("state-root", "", "where OpenRig keeps its per-seat state: the flag, else this machine's own")
 	asJSON := flags.Bool("json", false, "print one scan's report as JSON (one scan, never a loop)")
 	dryRun := flags.Bool("dry-run", false, "print what would be sent and send nothing, and remember nothing")
-	// THE RIG IS LIFTED OUT OF THE ARGUMENTS BEFORE THE FLAGS ARE PARSED, because flag.Parse STOPS at the
-	// first non-flag argument: with the documented order (`stuck RIG --dry-run`) the flag was left as a
+	// THE ROOM IS LIFTED OUT OF THE ARGUMENTS BEFORE THE FLAGS ARE PARSED, because flag.Parse STOPS at the
+	// first non-flag argument: with the documented order (`stuck ROOM --dry-run`) the flag was left as a
 	// second positional, ignored, and the verb SENT what a dry run exists to hold back. The built binary
-	// is what showed it. A flag given before the rig keeps working.
-	rig, flagArgs := splitStuckArgs(args)
+	// is what showed it. A flag given before the room keeps working.
+	room, flagArgs := splitStuckArgs(args)
 	if err := flags.Parse(flagArgs); err != nil {
 		return clientcmd.ExitUsage
 	}
 	if flags.NArg() > 0 {
-		fmt.Fprintf(stderr, "4genteam stuck: unexpected argument %s - this verb takes one rig name. %s\n", flags.Arg(0), stuckUsage)
+		fmt.Fprintf(stderr, "4genteam stuck: unexpected argument %s - this verb takes one room name. %s\n", flags.Arg(0), stuckUsage)
 		return clientcmd.ExitUsage
 	}
-	if rig == "" {
-		fmt.Fprintf(stderr, "4genteam stuck: RIG is required. %s\n", stuckUsage)
+	if room == "" {
+		fmt.Fprintf(stderr, "4genteam stuck: ROOM is required. %s\n", stuckUsage)
 		return clientcmd.ExitUsage
 	}
 	root, err := clientenv.ResolveStateRoot(*stateRoot)
@@ -838,7 +838,7 @@ func (stuckCommand) Run(_ context.Context, args []string, stdout, stderr io.Writ
 		return clientcmd.ExitUnavailable
 	}
 	deps := stuckDepsFor(root)
-	opts := stuckOptions{Rig: rig, IdleAfter: *idle, EscalateAfter: *escalate}
+	opts := stuckOptions{Room: room, IdleAfter: *idle, EscalateAfter: *escalate}
 
 	interrupted := make(chan os.Signal, 1)
 	signal.Notify(interrupted, os.Interrupt)
@@ -871,8 +871,8 @@ func (stuckCommand) Run(_ context.Context, args []string, stdout, stderr io.Writ
 	}
 }
 
-// stuckFlagsWithValues are the flags of this verb that take an argument of their own, so the rig can be
-// picked out of a command line in EITHER order without a flag's value being mistaken for the rig name.
+// stuckFlagsWithValues are the flags of this verb that take an argument of their own, so the room can be
+// picked out of a command line in EITHER order without a flag's value being mistaken for the room name.
 var stuckFlagsWithValues = map[string]bool{
 	"-every": true, "--every": true,
 	"-idle-after": true, "--idle-after": true,
@@ -880,11 +880,11 @@ var stuckFlagsWithValues = map[string]bool{
 	"-state-root": true, "--state-root": true,
 }
 
-// splitStuckArgs answers the rig name and the arguments the flag set should read, from either order.
-// The first argument that is not a flag and not a flag's value is the rig; anything positional after it is
-// kept for the flag set, which refuses it, so a second rig name is an error rather than a silent drop.
+// splitStuckArgs answers the room name and the arguments the flag set should read, from either order.
+// The first argument that is not a flag and not a flag's value is the room; anything positional after it is
+// kept for the flag set, which refuses it, so a second room name is an error rather than a silent drop.
 func splitStuckArgs(args []string) (string, []string) {
-	var rig string
+	var room string
 	rest := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -900,20 +900,20 @@ func splitStuckArgs(args []string) (string, []string) {
 			}
 			continue
 		}
-		if rig == "" {
-			rig = arg
+		if room == "" {
+			room = arg
 			continue
 		}
 		rest = append(rest, arg)
 	}
-	return rig, rest
+	return room, rest
 }
 
 // printStuckReport is one scan as the operator reads it: what was sent, what was escalated, and what could not
 // be read. The messages are shown as they were sent, so the report and the alert cannot drift apart.
 func printStuckReport(out io.Writer, report stuckReport) {
 	fmt.Fprintf(out, "stuck %s: %d stuck finding(s), %d idle seat(s), %d escalation row(s) written\n",
-		report.Rig, len(report.Findings), len(report.Idle), len(report.Escalated))
+		report.Room, len(report.Findings), len(report.Idle), len(report.Escalated))
 	for _, finding := range report.Findings {
 		fmt.Fprintf(out, "  %s\n", stuckMessage(finding))
 	}
@@ -937,12 +937,12 @@ func printStuckReport(out io.Writer, report stuckReport) {
 // run of a detector that messages a room is safe to watch.
 func printStuckPlan(out io.Writer, report stuckReport) {
 	fmt.Fprintf(out, "stuck %s: %d stuck finding(s), %d idle seat(s) - DRY RUN, nothing sent\n",
-		report.Rig, len(report.Findings), len(report.Idle))
+		report.Room, len(report.Findings), len(report.Idle))
 	for _, finding := range report.Findings {
 		recipients := stuckRecipients(finding)
 		fmt.Fprintf(out, "  would send to %s: %s\n", overlapNames(recipients), stuckMessage(finding))
-		fmt.Fprintf(out, "  would escalate to %s after %s, if still there: %s\n", stuckOwnerPrefix+report.Rig,
-			stuckDuration(report.EscalateAfter), stuckEscalationText(report.Rig, finding, report.EscalateAfter))
+		fmt.Fprintf(out, "  would escalate to %s after %s, if still there: %s\n", stuckOwnerPrefix+report.Room,
+			stuckDuration(report.EscalateAfter), stuckEscalationText(report.Room, finding, report.EscalateAfter))
 	}
 	for _, seat := range report.Idle {
 		fmt.Fprintf(out, "  would send to the %s: %s\n", overlapLeadSeat, stuckIdleMessage(seat))
@@ -965,15 +965,15 @@ func printStuckJSON(out io.Writer, report stuckReport) {
 	fmt.Fprintln(out, string(raw))
 }
 
-// stuckRigScan is rigd's own scan of one room: the same function the verb calls, with the production wiring,
+// stuckRoomScan is agent's own scan of one room: the same function the verb calls, with the production wiring,
 // so the operator's run on request and the loop can never do different things.
-func stuckRigScan(rig string, now time.Time) stuckReport {
+func stuckRoomScan(room string, now time.Time) stuckReport {
 	root, err := clientenv.ResolveStateRoot("")
 	if err != nil {
-		return stuckReport{Rig: rig, Notes: []string{"the state root cannot be resolved: " + err.Error()}}
+		return stuckReport{Room: room, Notes: []string{"the state root cannot be resolved: " + err.Error()}}
 	}
 	deps := stuckDepsFor(root)
-	opts := stuckOptions{Rig: rig, IdleAfter: stuckIdleAfter, EscalateAfter: stuckEscalateAfter, Now: now}
+	opts := stuckOptions{Room: room, IdleAfter: stuckIdleAfter, EscalateAfter: stuckEscalateAfter, Now: now}
 	report := stuckScanFor(deps, opts)
 	stuckNotify(deps, opts, &report)
 	return report
@@ -989,20 +989,20 @@ func (m *agentManager) stuckDue(now time.Time) bool {
 	return true
 }
 
-// scanStuck runs the alert scan for every room rigd supervises, and logs only what it SENT or ESCALATED: a
+// scanStuck runs the alert scan for every room agent supervises, and logs only what it SENT or ESCALATED: a
 // pass that found nothing is not news, and a log line every ten minutes per room would bury the alerts that
 // matter.
-func (m *agentManager) scanStuck(rigs []string, now time.Time) {
-	for _, rig := range rigs {
-		report := stuckRigScan(rig, now)
+func (m *agentManager) scanStuck(rooms []string, now time.Time) {
+	for _, room := range rooms {
+		report := stuckRoomScan(room, now)
 		for _, line := range report.Sent {
-			m.log("stuck " + rig + ": " + line)
+			m.log("stuck " + room + ": " + line)
 		}
 		for _, line := range report.Escalated {
-			m.log("stuck " + rig + ": escalated: " + line)
+			m.log("stuck " + room + ": escalated: " + line)
 		}
 		for _, note := range report.Notes {
-			m.log("stuck " + rig + ": not observed: " + note)
+			m.log("stuck " + room + ": not observed: " + note)
 		}
 	}
 }

@@ -14,7 +14,7 @@
 //
 // A NODE IS ATTRIBUTED WHEN THE DAEMON CAN NAME IT: `canonicalSessionName` is the name a message is stamped
 // with, and a `logicalId` without one still resolves to a node. Only a node with NEITHER is unset, which is
-// what the ruling measured. The node list is the same reading the peak gate and the restore make (rigNodes),
+// what the ruling measured. The node list is the same reading the peak gate and the restore make (roomNodes),
 // so the three cannot disagree about which nodes exist.
 //
 // AN INPUT THAT COULD NOT BE READ IS A NOTE, never a failure, like every other check row.
@@ -98,11 +98,11 @@ var identityRowFor = identityRows
 
 // identityRows computes the identity row of every room the report covers. The room list is the one the
 // safeguard rows use, so the two surfaces cannot disagree about which rooms exist.
-func identityRows(rig string) []identityRow {
+func identityRows(room string) []identityRow {
 	state, _ := clientservices.ReadAgentState()
-	rigs := reportedRigs(state.Rigs, rig)
-	rows := make([]identityRow, 0, len(rigs))
-	for _, name := range rigs {
+	rooms := reportedRooms(state.Rooms, room)
+	rows := make([]identityRow, 0, len(rooms))
+	for _, name := range rooms {
 		rows = append(rows, identityRowOf(name))
 	}
 	return rows
@@ -112,7 +112,7 @@ func identityRows(rig string) []identityRow {
 // row's failures and its list of attributed senders can never disagree about which nodes exist.
 func identityRowOf(name string) identityRow {
 	row := identityRow{Row: clientservices.Health{
-		Rig:       name,
+		Room:      name,
 		Safeguard: clientservices.Identity,
 		State:     clientservices.Running,
 		AgeS:      clientservices.UnknownAge,
@@ -166,8 +166,8 @@ func nodeName(node map[string]any) string {
 	if logical := nodeField(node, nodeLogicalField); logical != "" {
 		return logical
 	}
-	if rig := strings.TrimSpace(nodeField(node, "rigName")); rig != "" {
-		return "(unnamed node of " + rig + ")"
+	if room := strings.TrimSpace(nodeField(node, "roomName")); room != "" {
+		return "(unnamed node of " + room + ")"
 	}
 	return "(unnamed node)"
 }
@@ -184,7 +184,7 @@ func nodeField(node map[string]any, key string) string {
 // FAILED is the empty list here, because this row reports rather than refuses: the note says the row could not
 // observe the room, and the failure itself is named by the verbs that act.
 var identityNodes = func(name string) []map[string]any {
-	nodes, _, err := rigNodes(name)
+	nodes, _, err := roomNodes(name)
 	if err != nil {
 		return nil
 	}

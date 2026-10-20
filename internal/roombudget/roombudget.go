@@ -173,9 +173,9 @@ type Parked struct {
 // record exists (rust/agenthub-runtime/src/supervisor/mod.rs:1011, via ipc/mod.rs:143), so a reseat run before
 // the removal STOPS the seat and leaves it stopped rather than running. The room and seat are written out
 // rather than left as placeholders, so the command can be copied out of the file.
-func ParkExit(rig, seat string) string {
+func ParkExit(room, seat string) string {
 	return fmt.Sprintf("remove this file FIRST, then `4genteam room reseat %s %s`; the record's absence is the "+
-		"exit, and a reseat before the removal leaves the seat stopped", rig, seat)
+		"exit, and a reseat before the removal leaves the seat stopped", room, seat)
 }
 
 // ParkedPath is the park record of one seat.

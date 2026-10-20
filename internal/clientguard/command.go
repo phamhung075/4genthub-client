@@ -1,5 +1,5 @@
 // The `4genteam guard` verb: `install` puts the guard's hooks into a checkout, and `run` is what those hooks
-// call. Neither needs a rig: the guard is a fact about a checkout, not about a room (one checkout holds every
+// call. Neither needs a room: the guard is a fact about a checkout, not about a room (one checkout holds every
 // room's worktrees).
 package clientguard
 

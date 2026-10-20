@@ -101,7 +101,7 @@ func TestDoctorPrintsTheIdentityRowAndItsNode(t *testing.T) {
 	identityRowFor = func(string) []identityRow {
 		return []identityRow{{
 			Row: clientservices.Health{
-				Rig: "demo", Safeguard: clientservices.Identity,
+				Room: "demo", Safeguard: clientservices.Identity,
 				State: clientservices.IdentityUnset, AgeS: clientservices.UnknownAge,
 			},
 			Failures: []identityFinding{{

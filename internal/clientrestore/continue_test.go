@@ -21,21 +21,21 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
-// These tests need no network, no rig, no seat, no tmux and no real home: every one of those is a seam
-// above. What they pin is the pair of behaviours the shell pair was written for - restore a rig whose
+// These tests need no network, no room, no seat, no tmux and no real home: every one of those is a seam
+// above. What they pin is the pair of behaviours the shell pair was written for - restore a room whose
 // seats are gone, never re-restore one whose seats are there - plus the rules this client added on top
 // (the peak gate before a restore, an argument it does not know refused by name).
 
 // deepSeekNodes is a room whose seat runs a DeepSeek model: the case the gate exists for, since resuming
 // it bills the peak rate. The keys are the ones clientoffpeak reads off `rig ps --nodes --json`.
 func deepSeekNodes() string {
-	return `[{"logicalId":"rig-a.dev","canonicalSessionName":"agenthub--rig-a--dev","rigName":"rig-a",` +
+	return `[{"logicalId":"room-a.dev","canonicalSessionName":"agenthub--room-a--dev","roomName":"room-a",` +
 		`"model":"deepseek/deepseek-flash","sessionStatus":"stopped"}]`
 }
 
 // plainNodes is a room with no DeepSeek seat anywhere: the gate never has an opinion about it.
 func plainNodes() string {
-	return `[{"logicalId":"rig-a.dev","canonicalSessionName":"agenthub--rig-a--dev","rigName":"rig-a",` +
+	return `[{"logicalId":"room-a.dev","canonicalSessionName":"agenthub--room-a--dev","roomName":"room-a",` +
 		`"model":"anthropic/claude-sonnet-4-5","sessionStatus":"stopped"}]`
 }
 
@@ -46,7 +46,7 @@ func seatStatuses(nodes, room string) []map[string]any {
 	_ = json.Unmarshal([]byte(nodes), &rows)
 	statuses := []map[string]any{}
 	for _, row := range rows {
-		if name, _ := row["rigName"].(string); name != room {
+		if name, _ := row["roomName"].(string); name != room {
 			continue
 		}
 		logical, _ := row["logicalId"].(string)
@@ -65,7 +65,7 @@ func roomsOf(nodes string) []string {
 	rooms := []string{}
 	seen := map[string]bool{}
 	for _, row := range rows {
-		if name, _ := row["rigName"].(string); name != "" && !seen[name] {
+		if name, _ := row["roomName"].(string); name != "" && !seen[name] {
 			seen[name] = true
 			rooms = append(rooms, name)
 		}
@@ -128,9 +128,9 @@ type world struct {
 	sends []string
 	walls []string
 	tmux  func() []string
-	// safeguards is the rig's row report the restorer reads; every row is up unless a test says otherwise,
+	// safeguards is the room's row report the restorer reads; every row is up unless a test says otherwise,
 	// because the report is not what most tests are about.
-	safeguards func(rig string) ([]clientservices.Health, error)
+	safeguards func(room string) ([]clientservices.Health, error)
 	// listFails makes the runtime refuse the room list: the read that failed.
 	listFails bool
 }
@@ -186,26 +186,26 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 			w.sends = append(w.sends, session+"\t"+text)
 			return nil
 		}
-		r.wall = func(rig string) (bool, string) {
-			w.walls = append(w.walls, rig)
+		r.wall = func(room string) (bool, string) {
+			w.walls = append(w.walls, room)
 			return true, ""
 		}
-		r.safeguards = func(rig string) ([]clientservices.Health, error) { return w.safeguards(rig) }
+		r.safeguards = func(room string) ([]clientservices.Health, error) { return w.safeguards(room) }
 	}
 	t.Cleanup(func() { restoreSteps = previousSteps })
 	return w
 }
 
-// allRunningRows is the room's seven safeguards, every row up: the state a healthy rig is in, so a test
+// allRunningRows is the room's seven safeguards, every row up: the state a healthy room is in, so a test
 // that is not about the report never has to build one.
-func allRunningRows(rig string) ([]clientservices.Health, error) {
+func allRunningRows(room string) ([]clientservices.Health, error) {
 	rows := make([]clientservices.Health, 0, len(clientservices.Safeguards()))
 	for _, safeguard := range clientservices.Safeguards() {
-		rowRig := ""
-		if clientservices.RigScoped(safeguard) {
-			rowRig = rig
+		rowRoom := ""
+		if clientservices.RoomScoped(safeguard) {
+			rowRoom = room
 		}
-		rows = append(rows, clientservices.Health{Rig: rowRig, Safeguard: safeguard, State: clientservices.Running})
+		rows = append(rows, clientservices.Health{Room: rowRoom, Safeguard: safeguard, State: clientservices.Running})
 	}
 	return rows, nil
 }
@@ -254,7 +254,7 @@ func (w *world) log() string {
 	return string(raw)
 }
 
-// run drives the verb the way the dispatcher does, with the stub rig on the path. The dispatcher hands a
+// run drives the verb the way the dispatcher does, with the stub room on the path. The dispatcher hands a
 // verb the arguments AFTER its own name, so the name is dropped here - a test that named the verb and
 // passed it through would be testing a different verb.
 func (w *world) run(args ...string) (int, string, string) {
@@ -270,39 +270,39 @@ func (w *world) run(args ...string) (int, string, string) {
 // shellQuote wraps a string for the stub script's sh.
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// staticSessions is a rig whose seats are up: the state a resume must NOT restore.
+// staticSessions is a room whose seats are up: the state a resume must NOT restore.
 func staticSessions(names ...string) func() []string {
 	return func() []string { return names }
 }
 
-// TestALiveRigIsNotRestoredAndItsSeatsAreBriefed is the first half of the rule the shell existed for: a
+// TestALiveRoomIsNotRestoredAndItsSeatsAreBriefed is the first half of the rule the shell existed for: a
 // second `rig up --existing` on a live rig is what the verb must avoid, and the brief still goes out, in
 // the seats' own order, with the shared text.
-func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--beta", "agenthub--rig-a--alpha", "agenthub--other-rig--alpha"), plainNodes())
-	brief := w.brief("rig-a.txt", "Take the next board row.\n")
+func TestALiveRoomIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
+	w := newWorld(t, staticSessions("agenthub--room-a--beta", "agenthub--room-a--alpha", "agenthub--other-room--alpha"), plainNodes())
+	brief := w.brief("room-a.txt", "Take the next board row.\n")
 
-	code, _, errOut := w.run("continue", "rig-a", brief)
+	code, _, errOut := w.run("continue", "room-a", brief)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0 (stderr %q)", code, errOut)
 	}
-	if calls := strings.Join(w.calls(), "|"); strings.Contains(calls, "up rig-a") {
-		t.Errorf("the restore ran on a live rig: %v", w.calls())
+	if calls := strings.Join(w.calls(), "|"); strings.Contains(calls, "up room-a") {
+		t.Errorf("the restore ran on a live room: %v", w.calls())
 	}
 	want := []string{
-		"agenthub--rig-a--alpha\tYour seat: alpha. Take the next board row.",
-		"agenthub--rig-a--beta\tYour seat: beta. Take the next board row.",
+		"agenthub--room-a--alpha\tYour seat: alpha. Take the next board row.",
+		"agenthub--room-a--beta\tYour seat: beta. Take the next board row.",
 	}
 	if strings.Join(w.sends, "\n") != strings.Join(want, "\n") {
 		t.Errorf("briefs sent:\n%q\nwant:\n%q", w.sends, want)
 	}
 	for _, line := range []string{
-		"rig-a: already live, skipping restore",
-		"rig-a: seats live: 2",
-		"rig-a: briefed alpha",
-		"rig-a: briefed beta",
-		"rig-a: watch wall opened",
-		"rig-a: done — verify with: 4genteam ps rig-a --nodes",
+		"room-a: already live, skipping restore",
+		"room-a: seats live: 2",
+		"room-a: briefed alpha",
+		"room-a: briefed beta",
+		"room-a: watch wall opened",
+		"room-a: done — verify with: 4genteam ps room-a --nodes",
 	} {
 		if !strings.Contains(w.log(), line) {
 			t.Errorf("the log is missing %q:\n%s", line, w.log())
@@ -310,15 +310,15 @@ func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
 	}
 }
 
-// TestALiveRigWhoseSupervisionIsDownIsNotRestored: the room `stop` leaves behind - the seat sessions
+// TestALiveRoomWhoseSupervisionIsDownIsNotRestored: the room `stop` leaves behind - the seat sessions
 // standing, agent and its children gone. `continue` used to print "already live", count the seats and end
 // with "done" over it, so the owner read a restored room that had no supervision at all. The seams are up,
 // the seats are up, two safeguards are not: the log must name them and the verb that starts them, must not
 // say done, and must still deliver the brief to the seats that are alive.
-func TestALiveRigWhoseSupervisionIsDownIsNotRestored(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
-	w.safeguards = func(rig string) ([]clientservices.Health, error) {
-		rows, err := allRunningRows(rig)
+func TestALiveRoomWhoseSupervisionIsDownIsNotRestored(t *testing.T) {
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
+	w.safeguards = func(room string) ([]clientservices.Health, error) {
+		rows, err := allRunningRows(room)
 		if err != nil {
 			return nil, err
 		}
@@ -329,16 +329,16 @@ func TestALiveRigWhoseSupervisionIsDownIsNotRestored(t *testing.T) {
 		}
 		return rows, nil
 	}
-	brief := w.brief("rig-a.txt", "Take the next board row.\n")
+	brief := w.brief("room-a.txt", "Take the next board row.\n")
 
-	code, _, _ := w.run("continue", "rig-a", brief)
+	code, _, _ := w.run("continue", "room-a", brief)
 	if code != ExitRestoreFailed {
 		t.Fatalf("exit = %d, want %d — a room with no supervision is not restored", code, ExitRestoreFailed)
 	}
 	for _, line := range []string{
-		"rig-a: already live, skipping restore",
-		"rig-a: seats live: 1",
-		"rig-a: seats live but supervision is down (compact, agent) - not restored; run `4genteam up rig-a`",
+		"room-a: already live, skipping restore",
+		"room-a: seats live: 1",
+		"room-a: seats live but supervision is down (compact, agent) - not restored; run `4genteam up room-a`",
 	} {
 		if !strings.Contains(w.log(), line) {
 			t.Errorf("the log is missing %q:\n%s", line, w.log())
@@ -358,8 +358,8 @@ func TestALiveRigWhoseSupervisionIsDownIsNotRestored(t *testing.T) {
 // missed are named, and the verb leaves non-zero. Before this, each seat was logged as failed and the verb
 // still ended saying done, which is the shape R3 forbids: a delivery reported that never happened.
 func TestAnUndeliveredBriefIsAFailedRestore(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
-	brief := w.brief("rig-a.txt", "Take the next board row.\n")
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
+	brief := w.brief("room-a.txt", "Take the next board row.\n")
 
 	previousSteps := restoreSteps
 	restoreSteps = func(r *restorer) {
@@ -370,55 +370,55 @@ func TestAnUndeliveredBriefIsAFailedRestore(t *testing.T) {
 	}
 	t.Cleanup(func() { restoreSteps = previousSteps })
 
-	code, _, _ := w.run("continue", "rig-a", brief)
+	code, _, _ := w.run("continue", "room-a", brief)
 	if code != ExitRestoreFailed {
 		t.Fatalf("exit = %d, want %d: a brief that did not arrive is not a completed restore", code, ExitRestoreFailed)
 	}
-	for _, line := range []string{"rig-a: send failed for alpha", "rig-a: brief did not reach alpha"} {
+	for _, line := range []string{"room-a: send failed for alpha", "room-a: brief did not reach alpha"} {
 		if !strings.Contains(w.log(), line) {
 			t.Errorf("the log is missing %q:\n%s", line, w.log())
 		}
 	}
-	if strings.Contains(w.log(), "rig-a: done") {
+	if strings.Contains(w.log(), "room-a: done") {
 		t.Errorf("an undelivered brief was reported as done:\n%s", w.log())
 	}
 }
 
-// TestADeadRigIsRestoredFromItsSnapshot is the other half: no sessions means `rig up --existing`, and the
+// TestADeadRoomIsRestoredFromItsSnapshot is the other half: no sessions means `rig up --existing`, and the
 // seat count is read AFTER it, which is why the stub's sessions appear only once the restore has run.
-func TestADeadRigIsRestoredFromItsSnapshot(t *testing.T) {
+func TestADeadRoomIsRestoredFromItsSnapshot(t *testing.T) {
 	var w *world
 	w = newWorld(t, func() []string {
-		if strings.Contains(strings.Join(w.calls(), "|"), "up rig-a") {
-			return []string{"agenthub--rig-a--alpha"}
+		if strings.Contains(strings.Join(w.calls(), "|"), "up room-a") {
+			return []string{"agenthub--room-a--alpha"}
 		}
 		return nil
 	}, plainNodes())
-	brief := w.brief("rig-a.txt", "Resume the port.\n")
+	brief := w.brief("room-a.txt", "Resume the port.\n")
 
-	code, _, errOut := w.run("continue", "rig-a", brief)
+	code, _, errOut := w.run("continue", "room-a", brief)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0 (stderr %q)", code, errOut)
 	}
-	if !strings.Contains(strings.Join(w.calls(), "|"), "up rig-a --existing") {
+	if !strings.Contains(strings.Join(w.calls(), "|"), "up room-a --existing") {
 		t.Errorf("the snapshot restore did not run: %v", w.calls())
 	}
-	if len(w.sends) != 1 || !strings.HasPrefix(w.sends[0], "agenthub--rig-a--alpha\tYour seat: alpha. Resume the port.") {
+	if len(w.sends) != 1 || !strings.HasPrefix(w.sends[0], "agenthub--room-a--alpha\tYour seat: alpha. Resume the port.") {
 		t.Errorf("briefs sent = %q, want one to alpha with the shared text", w.sends)
 	}
-	if !strings.Contains(w.log(), "rig-a: restoring from latest snapshot") {
+	if !strings.Contains(w.log(), "room-a: restoring from latest snapshot") {
 		t.Errorf("the log does not say it restored:\n%s", w.log())
 	}
 }
 
-// TestASeatWithItsOwnBriefGetsThatInsteadOfTheSharedOne: briefs/<rig>/<seat>.txt replaces the shared text
+// TestASeatWithItsOwnBriefGetsThatInsteadOfTheSharedOne: briefs/<room>/<seat>.txt replaces the shared text
 // for that seat, so no generic paragraph is pushed onto a seat that has its own.
 func TestASeatWithItsOwnBriefGetsThatInsteadOfTheSharedOne(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha", "agenthub--rig-a--beta"), plainNodes())
-	shared := w.brief("rig-a.txt", "Shared text\n")
-	w.brief(filepath.Join("rig-a", "beta.txt"), "Beta only\n")
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha", "agenthub--room-a--beta"), plainNodes())
+	shared := w.brief("room-a.txt", "Shared text\n")
+	w.brief(filepath.Join("room-a", "beta.txt"), "Beta only\n")
 
-	if code, _, errOut := w.run("continue", "rig-a", shared); code != clientcmd.ExitOK {
+	if code, _, errOut := w.run("continue", "room-a", shared); code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0 (stderr %q)", code, errOut)
 	}
 	if len(w.sends) != 2 {
@@ -432,20 +432,20 @@ func TestASeatWithItsOwnBriefGetsThatInsteadOfTheSharedOne(t *testing.T) {
 	}
 }
 
-// TestNoSeatsUpAbortsForThatRig: a restore that leaves nothing up cannot brief anyone, so the verb fails
+// TestNoSeatsUpAbortsForThatRoom: a restore that leaves nothing up cannot brief anyone, so the verb fails
 // rather than reporting a success it did not get. This is the state a dead tmux server leaves behind.
-func TestNoSeatsUpAbortsForThatRig(t *testing.T) {
+func TestNoSeatsUpAbortsForThatRoom(t *testing.T) {
 	w := newWorld(t, staticSessions(), plainNodes())
-	brief := w.brief("rig-a.txt", "Text\n")
+	brief := w.brief("room-a.txt", "Text\n")
 
-	code, _, _ := w.run("continue", "rig-a", brief)
+	code, _, _ := w.run("continue", "room-a", brief)
 	if code != ExitRestoreFailed {
 		t.Fatalf("exit = %d, want %d", code, ExitRestoreFailed)
 	}
 	if len(w.sends) != 0 {
 		t.Errorf("briefs went out to no seats: %q", w.sends)
 	}
-	if !strings.Contains(w.log(), "rig-a: no seats up, aborting for this rig") {
+	if !strings.Contains(w.log(), "room-a: no seats up, aborting for this room") {
 		t.Errorf("the log does not say why it stopped:\n%s", w.log())
 	}
 }
@@ -454,9 +454,9 @@ func TestNoSeatsUpAbortsForThatRig(t *testing.T) {
 // The restore happened - that work is not undone - but the run's answer is a failure, because the caller
 // asked for a briefing and did not get one.
 func TestAMissingBriefFileIsReportedAndFailsTheRun(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
 
-	code, _, _ := w.run("continue", "rig-a", filepath.Join(w.home, "nope.txt"))
+	code, _, _ := w.run("continue", "room-a", filepath.Join(w.home, "nope.txt"))
 	if code != ExitRestoreFailed {
 		t.Fatalf("exit = %d, want %d", code, ExitRestoreFailed)
 	}
@@ -468,17 +468,17 @@ func TestAMissingBriefFileIsReportedAndFailsTheRun(t *testing.T) {
 // TestNoBriefRequestedSendsNothing: --no-brief is a restore with no words, and it must not fall back to
 // the default brief file - the caller said not to brief.
 func TestNoBriefRequestedSendsNothing(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
-	w.brief("rig-a.txt", "Default text that must NOT be sent\n")
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
+	w.brief("room-a.txt", "Default text that must NOT be sent\n")
 
-	code, _, _ := w.run("continue", "rig-a", "--no-brief")
+	code, _, _ := w.run("continue", "room-a", "--no-brief")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
 	if len(w.sends) != 0 {
 		t.Errorf("--no-brief sent %q", w.sends)
 	}
-	if !strings.Contains(w.log(), "rig-a: no brief requested") {
+	if !strings.Contains(w.log(), "room-a: no brief requested") {
 		t.Errorf("the log does not say the brief was skipped:\n%s", w.log())
 	}
 }
@@ -498,13 +498,13 @@ func gateEnv(t *testing.T, pin string) {
 func TestTheGateRefusesBeforeTheRestoreAtPeak(t *testing.T) {
 	w := newWorld(t, staticSessions(), deepSeekNodes())
 	gateEnv(t, "2026-10-08 07:00") // Thursday 07:00Z: inside the 06:00-10:00 peak block
-	brief := w.brief("rig-a.txt", "Text\n")
+	brief := w.brief("room-a.txt", "Text\n")
 
-	code, _, errOut := w.run("continue", "rig-a", brief)
+	code, _, errOut := w.run("continue", "room-a", brief)
 	if code != clientcmd.ExitUnavailable {
 		t.Fatalf("exit = %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut)
 	}
-	if calls := strings.Join(w.calls(), "|"); strings.Contains(calls, "up rig-a") {
+	if calls := strings.Join(w.calls(), "|"); strings.Contains(calls, "up room-a") {
 		t.Errorf("the seats were resumed despite the refusal: %v", w.calls())
 	}
 	if !strings.Contains(errOut, clientoffpeak.FlagAllowPeak) {
@@ -520,39 +520,39 @@ func TestAllowPeakRestoresTheSameRoom(t *testing.T) {
 	w := newWorld(t, staticSessions(), deepSeekNodes())
 	gateEnv(t, "2026-10-08 07:00")
 
-	code, _, errOut := w.run("continue", "rig-a", "--allow-peak", "--no-brief")
+	code, _, errOut := w.run("continue", "room-a", "--allow-peak", "--no-brief")
 	if code != ExitRestoreFailed { // the stub restore leaves no seats up, which is the point of the next case
 		t.Fatalf("exit = %d, want %d (stderr %q)", code, ExitRestoreFailed, errOut)
 	}
-	if !strings.Contains(strings.Join(w.calls(), "|"), "up rig-a --existing") {
+	if !strings.Contains(strings.Join(w.calls(), "|"), "up room-a --existing") {
 		t.Errorf("--allow-peak did not restore: %v", w.calls())
 	}
 }
 
-// TestAnAlreadyLiveRigIsNotGated: the gate exists to stop seats STARTING. A rig whose seats are already
+// TestAnAlreadyLiveRoomIsNotGated: the gate exists to stop seats STARTING. A room whose seats are already
 // there has nothing to start, and its brief is text to seats that are running - so a peak reading must not
 // refuse it, which is also what a caller watching a live room expects.
-func TestAnAlreadyLiveRigIsNotGated(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), deepSeekNodes())
+func TestAnAlreadyLiveRoomIsNotGated(t *testing.T) {
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), deepSeekNodes())
 	gateEnv(t, "2026-10-08 07:00")
-	brief := w.brief("rig-a.txt", "Text\n")
+	brief := w.brief("room-a.txt", "Text\n")
 
-	code, _, errOut := w.run("continue", "rig-a", brief)
+	code, _, errOut := w.run("continue", "room-a", brief)
 	if code != clientcmd.ExitOK {
-		t.Fatalf("exit = %d, want 0: a live rig is not gated (stderr %q)", code, errOut)
+		t.Fatalf("exit = %d, want 0: a live room is not gated (stderr %q)", code, errOut)
 	}
 	if len(w.sends) != 1 {
-		t.Errorf("the live rig was not briefed: %q", w.sends)
+		t.Errorf("the live room was not briefed: %q", w.sends)
 	}
 }
 
-// TestTheDefaultBriefIsTheRigsOwnFile: no second argument means <home>/.config/4genthub/briefs/<rig>.txt, which is
+// TestTheDefaultBriefIsTheRoomsOwnFile: no second argument means <home>/.config/4genthub/briefs/<room>.txt, which is
 // the path the help, the listing and this default must agree on.
-func TestTheDefaultBriefIsTheRigsOwnFile(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
-	w.brief("rig-a.txt", "Default text\n")
+func TestTheDefaultBriefIsTheRoomsOwnFile(t *testing.T) {
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
+	w.brief("room-a.txt", "Default text\n")
 
-	if code, _, errOut := w.run("continue", "rig-a"); code != clientcmd.ExitOK {
+	if code, _, errOut := w.run("continue", "room-a"); code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0 (stderr %q)", code, errOut)
 	}
 	if len(w.sends) != 1 || !strings.HasSuffix(w.sends[0], "Default text") {
@@ -560,21 +560,21 @@ func TestTheDefaultBriefIsTheRigsOwnFile(t *testing.T) {
 	}
 }
 
-// TestAllContinuesEveryRigThatHasABrief, one at a time, and does not stop at the first rig that fails.
-func TestAllContinuesEveryRigThatHasABrief(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha", "agenthub--rig-b--alpha"), plainNodes())
-	w.brief("rig-b.txt", "B text\n")
-	w.brief("rig-a.txt", "A text\n") // sorted, so rig-a is briefed first
+// TestAllContinuesEveryRoomThatHasABrief, one at a time, and does not stop at the first room that fails.
+func TestAllContinuesEveryRoomThatHasABrief(t *testing.T) {
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha", "agenthub--room-b--alpha"), plainNodes())
+	w.brief("room-b.txt", "B text\n")
+	w.brief("room-a.txt", "A text\n") // sorted, so room-a is briefed first
 
 	code, _, _ := w.run("continue", "--all")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
 	if len(w.sends) != 2 {
-		t.Fatalf("briefs = %q, want both rigs", w.sends)
+		t.Fatalf("briefs = %q, want both rooms", w.sends)
 	}
 	if !strings.Contains(w.sends[0], "Your seat: alpha. A text") || !strings.Contains(w.sends[1], "Your seat: alpha. B text") {
-		t.Errorf("briefs = %q, want rig-a then rig-b", w.sends)
+		t.Errorf("briefs = %q, want room-a then room-b", w.sends)
 	}
 }
 
@@ -590,56 +590,56 @@ func TestAllWithNoBriefsSaysSo(t *testing.T) {
 	}
 }
 
-// TestAllReportsARigItCouldNotBringUp: the shell's `|| true` inside the loop is kept - the rigs after a
+// TestAllReportsARoomItCouldNotBringUp: the shell's `|| true` inside the loop is kept - the rooms after a
 // failure are still visited - but the run no longer ends 0 whatever happened, so a caller reading only the
-// exit code can tell a run that resumed every room from one that did not. The rig that could not come up
+// exit code can tell a run that resumed every room from one that did not. The room that could not come up
 // is named in the log, which is the record a reader has after the fact.
-func TestAllReportsARigItCouldNotBringUp(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
-	w.brief("rig-a.txt", "A text\n")
-	w.brief("rig-b.txt", "B text\n") // no seat of rig-b is up, so its restore cannot end with a live room
+func TestAllReportsARoomItCouldNotBringUp(t *testing.T) {
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
+	w.brief("room-a.txt", "A text\n")
+	w.brief("room-b.txt", "B text\n") // no seat of room-b is up, so its restore cannot end with a live room
 
 	code, _, _ := w.run("continue", "--all")
 	if code != ExitRestoreFailed {
 		t.Fatalf("exit = %d, want %d", code, ExitRestoreFailed)
 	}
-	if !strings.Contains(w.log(), "rig-b: no seats up, aborting for this rig") {
-		t.Errorf("the log does not say rig-b could not be brought up:\n%s", w.log())
+	if !strings.Contains(w.log(), "room-b: no seats up, aborting for this room") {
+		t.Errorf("the log does not say room-b could not be brought up:\n%s", w.log())
 	}
-	if !strings.Contains(w.log(), "--all: 1 of 2 rigs did not complete: rig-b") {
-		t.Errorf("the summary does not name rig-b:\n%s", w.log())
+	if !strings.Contains(w.log(), "--all: 1 of 2 rooms did not complete: room-b") {
+		t.Errorf("the summary does not name room-b:\n%s", w.log())
 	}
-	if !strings.Contains(w.log(), "rig-a: already live, skipping restore") {
-		t.Errorf("the first rig was not visited before the failing one:\n%s", w.log())
+	if !strings.Contains(w.log(), "room-a: already live, skipping restore") {
+		t.Errorf("the first room was not visited before the failing one:\n%s", w.log())
 	}
 	if len(w.sends) != 1 || !strings.Contains(w.sends[0], "A text") {
-		t.Errorf("briefs = %q, want the live rig's own", w.sends)
+		t.Errorf("briefs = %q, want the live room's own", w.sends)
 	}
 }
 
-// TestAllCountsARefusedRig: a peak refusal is deliberate, not a failure - but the run visited that room and
+// TestAllCountsARefusedRoom: a peak refusal is deliberate, not a failure - but the run visited that room and
 // left it stopped, so it is not a run that brought everything up either. Exit non-zero, the room named, and
 // nothing started for it: --allow-peak is how a caller asks for the peak-hour restore.
-func TestAllCountsARefusedRig(t *testing.T) {
-	bothDeepSeek := `[{"logicalId":"rig-a.dev","canonicalSessionName":"agenthub--rig-a--dev","rigName":"rig-a",` +
+func TestAllCountsARefusedRoom(t *testing.T) {
+	bothDeepSeek := `[{"logicalId":"room-a.dev","canonicalSessionName":"agenthub--room-a--dev","roomName":"room-a",` +
 		`"model":"deepseek/deepseek-flash","sessionStatus":"stopped"},` +
-		`{"logicalId":"rig-b.dev","canonicalSessionName":"agenthub--rig-b--dev","rigName":"rig-b",` +
+		`{"logicalId":"room-b.dev","canonicalSessionName":"agenthub--room-b--dev","roomName":"room-b",` +
 		`"model":"deepseek/deepseek-flash","sessionStatus":"stopped"}]`
 	w := newWorld(t, staticSessions(), bothDeepSeek)
 	gateEnv(t, "2026-10-08 07:00") // Thursday 07:00Z: inside the 06:00-10:00 peak block
-	w.brief("rig-a.txt", "A text\n")
-	w.brief("rig-b.txt", "B text\n")
+	w.brief("room-a.txt", "A text\n")
+	w.brief("room-b.txt", "B text\n")
 
 	code, _, _ := w.run("continue", "--all")
 	if code != ExitRestoreFailed {
 		t.Fatalf("exit = %d, want %d", code, ExitRestoreFailed)
 	}
-	if !strings.Contains(w.log(), "--all: 2 of 2 rigs did not complete: rig-a, rig-b") {
-		t.Errorf("the summary does not name both refused rigs:\n%s", w.log())
+	if !strings.Contains(w.log(), "--all: 2 of 2 rooms did not complete: room-a, room-b") {
+		t.Errorf("the summary does not name both refused rooms:\n%s", w.log())
 	}
 	for _, call := range w.calls() {
 		if strings.Contains(call, "up ") {
-			t.Errorf("a refused rig was restored anyway: %q", call)
+			t.Errorf("a refused room was restored anyway: %q", call)
 		}
 	}
 }
@@ -648,14 +648,14 @@ func TestAllCountsARefusedRig(t *testing.T) {
 // second argument as a brief PATH and ignored everything after it, so a caller who mistyped got a restore
 // with a briefing that never happened.
 func TestAnArgumentTheVerbDoesNotKnowIsRefusedByName(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
 	for _, args := range [][]string{
-		{"continue", "--wat", "rig-a"},
+		{"continue", "--wat", "room-a"},
 		{"continue", "-x"},
-		{"continue", "rig-a", "--wat"},
-		{"continue", "rig-a", "--no-brief", "extra"},
-		{"continue", "rig-a", "brief.txt", "extra"},
-		{"continue", "--all", "rig-a"},
+		{"continue", "room-a", "--wat"},
+		{"continue", "room-a", "--no-brief", "extra"},
+		{"continue", "room-a", "brief.txt", "extra"},
+		{"continue", "--all", "room-a"},
 	} {
 		code, _, errOut := w.run(args...)
 		if code != clientcmd.ExitUsage {
@@ -666,30 +666,30 @@ func TestAnArgumentTheVerbDoesNotKnowIsRefusedByName(t *testing.T) {
 		}
 	}
 	if len(w.calls()) != 0 {
-		t.Errorf("a refused invocation still ran rig: %v", w.calls())
+		t.Errorf("a refused invocation still ran room: %v", w.calls())
 	}
 }
 
 // TestTheWallIsSkippedWithoutATerminalHost: herdr hosts the wall, and the shell logged a skip rather than
-// a failure on a machine that has no wall. RIG_CONTINUE_WATCH=0 is the other way out, for a headless run.
+// a failure on a machine that has no wall. ROOM_CONTINUE_WATCH=0 is the other way out, for a headless run.
 func TestTheWallIsSkippedWithoutATerminalHost(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
-	w.run("continue", "rig-a", "--no-brief")
-	if !strings.Contains(w.log(), "rig-a: watch wall opened") {
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
+	w.run("continue", "room-a", "--no-brief")
+	if !strings.Contains(w.log(), "room-a: watch wall opened") {
 		t.Errorf("the stubbed wall did not report opening:\n%s", w.log())
 	}
 
 	// Now the real wall step with no herdr on the machine: a skip with its reason.
-	opened, why := watchWall("rig-a", clientenv.StateSubdir(w.home, ""))
+	opened, why := watchWall("room-a", clientenv.StateSubdir(w.home, ""))
 	if opened || why != wallNoTerminal {
 		t.Errorf("watchWall with no herdr = (%v, %q), want (false, %q)", opened, why, wallNoTerminal)
 	}
 
-	w2 := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
+	w2 := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
 	t.Setenv(watchEnv, "0")
-	w2.run("continue", "rig-a", "--no-brief")
+	w2.run("continue", "room-a", "--no-brief")
 	if len(w2.walls) != 0 {
-		t.Errorf("RIG_CONTINUE_WATCH=0 still asked for the wall: %v", w2.walls)
+		t.Errorf("ROOM_CONTINUE_WATCH=0 still asked for the wall: %v", w2.walls)
 	}
 	if strings.Contains(w2.log(), "watch wall") {
 		t.Errorf("a skipped wall should log nothing about the wall:\n%s", w2.log())
@@ -697,7 +697,7 @@ func TestTheWallIsSkippedWithoutATerminalHost(t *testing.T) {
 }
 
 // TestTheWallIsThisSameBinaryWithTheWatchArguments pins the wall's own contract: herdr must be there, and
-// the wall is `4genteam watch --room RIG` - the shell ran `4genteam watch watch --room RIG`, whose group and
+// the wall is `4genteam watch --room ROOM` - the shell ran `4genteam watch watch --room ROOM`, whose group and
 // sub-verb are one verb here.
 func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 	var started []string
@@ -717,38 +717,38 @@ func TestTheWallIsThisSameBinaryWithTheWatchArguments(t *testing.T) {
 	}
 	t.Cleanup(func() { execLookPath, execSelfPath, execCommand = previousLook, previousSelf, previousCommand })
 
-	opened, why := watchWall("rig-a", clientenv.StateSubdir(home, ""))
+	opened, why := watchWall("room-a", clientenv.StateSubdir(home, ""))
 	if !opened {
 		t.Fatalf("watchWall = (false, %q), want it opened", why)
 	}
-	if len(started) != 1 || started[0] != "/stub/4genteam watch --room rig-a" {
-		t.Errorf("started %v, want `/stub/4genteam watch --room rig-a`", started)
+	if len(started) != 1 || started[0] != "/stub/4genteam watch --room room-a" {
+		t.Errorf("started %v, want `/stub/4genteam watch --room room-a`", started)
 	}
 }
 
-// TestTheListingNeedsNoRigTool: the room lines come from the runtime and the briefs from the disk. The
+// TestTheListingNeedsNoRoomTool: the room lines come from the runtime and the briefs from the disk. The
 // output is pinned whole, surroundings included, so the section's shape cannot drift; the rooms are served
 // out of order, so name order and each room's one-word state (running, partial, stopped) are asserted.
-func TestTheListingNeedsNoRigTool(t *testing.T) {
+func TestTheListingNeedsNoRoomTool(t *testing.T) {
 	nodes := `[` +
-		`{"logicalId":"rig-b.one","canonicalSessionName":"agenthub--rig-b--one","rigName":"rig-b","model":"m","sessionStatus":"running"},` +
-		`{"logicalId":"rig-b.two","canonicalSessionName":"agenthub--rig-b--two","rigName":"rig-b","model":"m","sessionStatus":"stopped"},` +
-		`{"logicalId":"rig-a.dev","canonicalSessionName":"agenthub--rig-a--dev","rigName":"rig-a","model":"m","sessionStatus":"running"},` +
-		`{"logicalId":"rig-z.dev","canonicalSessionName":"agenthub--rig-z--dev","rigName":"rig-z","model":"m","sessionStatus":"stopped"}]`
+		`{"logicalId":"room-b.one","canonicalSessionName":"agenthub--room-b--one","roomName":"room-b","model":"m","sessionStatus":"running"},` +
+		`{"logicalId":"room-b.two","canonicalSessionName":"agenthub--room-b--two","roomName":"room-b","model":"m","sessionStatus":"stopped"},` +
+		`{"logicalId":"room-a.dev","canonicalSessionName":"agenthub--room-a--dev","roomName":"room-a","model":"m","sessionStatus":"running"},` +
+		`{"logicalId":"room-z.dev","canonicalSessionName":"agenthub--room-z--dev","roomName":"room-z","model":"m","sessionStatus":"stopped"}]`
 	w := newWorld(t, staticSessions(), nodes)
-	w.brief("rig-a.txt", "Text\n")
+	w.brief("room-a.txt", "Text\n")
 
 	code, out, _ := w.run("continue")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
-	want := "Rigs that can be continued:\n" +
-		"  rig-a  running\n" +
-		"  rig-b  partial\n" +
-		"  rig-z  stopped\n" +
+	want := "Rooms that can be continued:\n" +
+		"  room-a  running\n" +
+		"  room-b  partial\n" +
+		"  room-z  stopped\n" +
 		"\n" +
 		"briefs on disk:\n" +
-		"  rig-a\n" +
+		"  room-a\n" +
 		"\n" +
 		continueListingUsage + "\n"
 	if out != want {
@@ -760,7 +760,7 @@ func TestTheListingNeedsNoRigTool(t *testing.T) {
 		t.Errorf("the listing repeats the prefix:\n%s", out)
 	}
 	if calls := w.calls(); len(calls) != 0 {
-		t.Errorf("the listing ran rig: %v", calls)
+		t.Errorf("the listing ran room: %v", calls)
 	}
 }
 
@@ -768,7 +768,7 @@ func TestTheListingNeedsNoRigTool(t *testing.T) {
 // fail - and it fails in its own one line while the briefs below it still print and the run still ends 0.
 func TestTheListingSaysSoWhenTheRoomListCannotBeRead(t *testing.T) {
 	w := newWorld(t, staticSessions(), plainNodes())
-	w.brief("rig-a.txt", "Text\n")
+	w.brief("room-a.txt", "Text\n")
 	w.listFails = true
 
 	code, out, _ := w.run("continue")
@@ -776,18 +776,18 @@ func TestTheListingSaysSoWhenTheRoomListCannotBeRead(t *testing.T) {
 		t.Fatalf("exit = %d, want 0: the briefs are still listed", code)
 	}
 	for _, want := range []string{
-		"Rigs that can be continued:",
+		"Rooms that can be continued:",
 		"  (the room list could not be read from the runtime: ",
 		"the room table is not here",
 		"briefs on disk:",
-		"  rig-a\n",
+		"  room-a\n",
 		continueListingUsage,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the listing is missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "  rig-a  ") {
+	if strings.Contains(out, "  room-a  ") {
 		t.Errorf("a read that failed printed a room line:\n%s", out)
 	}
 }
@@ -797,14 +797,14 @@ func TestTheListingSaysSoWhenTheRoomListCannotBeRead(t *testing.T) {
 // the section left empty, because an empty section reads as "no rooms here".
 func TestTheListingSaysWhenNoRuntimeAnswers(t *testing.T) {
 	w := newWorld(t, staticSessions(), plainNodes())
-	w.brief("rig-a.txt", "Text\n")
+	w.brief("room-a.txt", "Text\n")
 	t.Setenv("AGENTHUB_RUNTIME_SOCKET", filepath.Join(t.TempDir(), "no-runtime.sock"))
 
 	code, out, _ := w.run("continue")
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit = %d, want 0", code)
 	}
-	if !strings.Contains(out, "  (the room list could not be read from the runtime: ") || !strings.Contains(out, "  rig-a\n") {
+	if !strings.Contains(out, "  (the room list could not be read from the runtime: ") || !strings.Contains(out, "  room-a\n") {
 		t.Errorf("the listing printed:\n%s", out)
 	}
 }
@@ -823,23 +823,23 @@ func TestHelpIsAnsweredBeforeAnythingElse(t *testing.T) {
 	}
 }
 
-// TestRigSessionsReadsOnlyThisRigsSeats: a name that merely contains the rig's name is another rig's seat,
-// and counting it would make the watchdog think a dead rig is up - the one mistake that silences it.
-func TestRigSessionsReadsOnlyThisRigsSeats(t *testing.T) {
+// TestRoomSessionsReadsOnlyThisRoomsSeats: a name that merely contains the room's name is another room's seat,
+// and counting it would make the watchdog think a dead room is up - the one mistake that silences it.
+func TestRoomSessionsReadsOnlyThisRoomsSeats(t *testing.T) {
 	names := []string{
-		"agenthub--rig-a--beta",
-		"agenthub--rig-a--alpha",
-		"agenthub--other-rig-a--alpha",
-		"rig-a@rig-a",
-		"agenthub--rig-aa--alpha",
-		"rig-a-late@rig-a-x",
+		"agenthub--room-a--beta",
+		"agenthub--room-a--alpha",
+		"agenthub--other-room-a--alpha",
+		"room-a@room-a",
+		"agenthub--room-aa--alpha",
+		"room-a-late@room-a-x",
 		"",
 	}
-	if got := strings.Join(rigSeats("rig-a", names), ","); got != "alpha,beta" {
-		t.Errorf("rigSeats = %q, want alpha,beta (only <rig>-<seat>@<rig>)", got)
+	if got := strings.Join(roomSeats("room-a", names), ","); got != "alpha,beta" {
+		t.Errorf("roomSeats = %q, want alpha,beta (only <room>-<seat>@<room>)", got)
 	}
-	if got := len(rigSessions("rig-a", names)); got != 2 {
-		t.Errorf("rigSessions = %d, want 2", got)
+	if got := len(roomSessions("room-a", names)); got != 2 {
+		t.Errorf("roomSessions = %d, want 2", got)
 	}
 }
 
@@ -857,8 +857,8 @@ func TestAMissingTmuxServerReadsAsNoSessions(t *testing.T) {
 // TestTheLogLineKeepsTheShellsShape: `date -Is` then the message, so a log the client writes and the log
 // the script wrote read as one file rather than two dialects.
 func TestTheLogLineKeepsTheShellsShape(t *testing.T) {
-	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
-	w.run("continue", "rig-a", "--no-brief")
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
+	w.run("continue", "room-a", "--no-brief")
 	first := strings.SplitN(w.log(), "\n", 2)[0]
 	if !strings.HasPrefix(first, "2026-10-10T15:00:00+00:00 ") {
 		t.Errorf("log line = %q, want the pinned RFC3339 stamp first", first)
@@ -867,7 +867,7 @@ func TestTheLogLineKeepsTheShellsShape(t *testing.T) {
 
 // TestTheBriefIsRefusedInWordsWhenNoTransportCanDeliverIt drives the REAL delivery seam rather than the
 // stubbed one, because this is the seam whose native branch was unreachable: it looked for the Python-era
-// agenthub--<room>--<seat> session shape, which the sessions this rig actually has do not match, then
+// agenthub--<room>--<seat> session shape, which the sessions this room actually has do not match, then
 // exec'd `rig send` and SWALLOWED its failure - so a brief for agenthub--4genthub-min--reviewer was
 // reported as briefed and dropped. The seal is the pair of facts below: the delivery is refused for the
 // real session shape, and the refusal says what could not deliver it.

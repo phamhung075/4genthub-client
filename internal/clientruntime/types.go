@@ -113,7 +113,7 @@ type WhoamiResponse struct {
 }
 
 type WhoamiIdentity struct {
-	RigName     string  `json:"rigName"`
+	RoomName    string  `json:"roomName"`
 	MemberId    string  `json:"memberId"`
 	Runtime     string  `json:"runtime"`
 	SessionName string  `json:"sessionName"`

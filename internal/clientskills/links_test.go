@@ -2,7 +2,7 @@
 // against the directory that carries the document.
 //
 // The package's delivery half - the tree locator (`Locate`), the copy into a seat's skills path
-// (`Install`) and the `agent.yaml` declaration (`Declare`) - went with `clientsync/rigverb.go`, its
+// (`Install`) and the `agent.yaml` declaration (`Declare`) - went with `clientsync/roomverb.go`, its
 // only caller, and the runtime installs a seat's skills itself (`install_seat_skills`,
 // `rust/agenthub-runtime/src/supervisor/mod.rs:258`, from the tree `AGENTHUB_CLIENT_SKILLS` names).
 // No path in the module resolves that half any more, so it is deleted; this guard is kept, because it

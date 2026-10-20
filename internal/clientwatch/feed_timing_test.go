@@ -66,7 +66,7 @@ func TestFeedWritesEachLineWithinOnePoll(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runFeed(ctx, shared{rig: "r", stateRoot: root, back: 2, width: 120, lines: 3, detail: true}, out)
+		done <- runFeed(ctx, shared{room: "r", stateRoot: root, back: 2, width: 120, lines: 3, detail: true}, out)
 	}()
 	defer func() {
 		cancel()

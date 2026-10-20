@@ -47,7 +47,7 @@ func seatLogFile(t *testing.T, tokens int, ageSeconds float64) string {
 
 // supervisorFor is one pass over one seat, with every action recorded instead of taken.
 func supervisorFor(path, runtime string, working bool, sent *[]string, interrupted *[]string) *Supervisor {
-	supervisor := &Supervisor{Rig: "r", Quiet: 180, State: map[string]*seatState{}}
+	supervisor := &Supervisor{Room: "r", Quiet: 180, State: map[string]*seatState{}}
 	supervisor.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 	supervisor.Seats = func(string) []string { return []string{"lead"} }
 	supervisor.SeatLog = func(string, string) (string, string) { return path, runtime }
@@ -192,7 +192,7 @@ func TestAWorkingSeatOfAnotherRuntimePastTheWarnLimitWaitsThenIsInterruptedAtThe
 //
 // `unknown` was the one that slipped through unnamed, and it is worth saying why: it is a RECOGNIZED word, so the
 // unrecognized-word branch did not catch it, and it returned an empty why while the daemon's own taxonomy defines it
-// as NOT EVIDENCE - a report that cannot tell. Measured on the live rig: architect and fe-dev both answer `unknown`,
+// as NOT EVIDENCE - a report that cannot tell. Measured on the live room: architect and fe-dev both answer `unknown`,
 // so two of five seats read exactly like a busy seat when the truth was that the daemon could not say.
 func TestIdleFromActivityWordNamesWhatItCouldNotRead(t *testing.T) {
 	cases := []struct {
@@ -424,10 +424,10 @@ func TestTheResumeIsSentWhenTheGateIsOff(t *testing.T) {
 }
 
 // THE PROPERTY, PINNED THE WAY IT HAS TO BE PINNED: this FAILS IF AN ENVELOPE APPEARS rather than recording that
-// none is there today. rigAbort's text is the runner's keystroke, so the assertion is on the EXACT string - a
+// none is there today. roomAbort's text is the runner's keystroke, so the assertion is on the EXACT string - a
 // "From NAME:" prefix would arrive as a MESSAGE where the runner needs "/abort", which is the difference between
 // aborting a turn and sending a seat a note about aborting one.
-func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
+func TestRoomAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
 	previous := runtimeSendText
 	t.Cleanup(func() { runtimeSendText = previous })
 
@@ -437,7 +437,7 @@ func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
 		return nil
 	}
 
-	rigAbort("room1", "alpha")
+	roomAbort("room1", "alpha")
 
 	if gotSession != "agenthub--room1--alpha" {
 		t.Errorf("session = %q, want the room's canonical session name agenthub--room1--alpha", gotSession)
@@ -452,9 +452,9 @@ func TestRigAbortSendsTheBareKeystrokeWithNoEnvelope(t *testing.T) {
 	}
 }
 
-// rigSay's two shapes, pinned the same way: a plain message carries the "From" envelope the CLI used to write, and a
+// roomSay's two shapes, pinned the same way: a plain message carries the "From" envelope the CLI used to write, and a
 // raw one is the exact text - a /compact wrapped in an envelope arrives as prose the runner cannot act on.
-func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
+func TestRoomSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
 	previous := runtimeSendText
 	t.Cleanup(func() { runtimeSendText = previous })
 
@@ -464,8 +464,8 @@ func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
 		return nil
 	}
 
-	rigSay("room1", "alpha", "context was compacted", false)
-	rigSay("room1", "alpha", "/compact", true)
+	roomSay("room1", "alpha", "context was compacted", false)
+	roomSay("room1", "alpha", "/compact", true)
 
 	if len(texts) != 2 {
 		t.Fatalf("sends = %d, want 2", len(texts))
@@ -475,7 +475,7 @@ func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
 			t.Errorf("send %d session = %q, want the room's canonical session name agenthub--room1--alpha", i, session)
 		}
 		if verbs[i] != "say" {
-			t.Errorf("send %d verb = %q, want \"say\": the frame names the carrier - the rig's own say - so a text "+
+			t.Errorf("send %d verb = %q, want \"say\": the frame names the carrier - the room's own say - so a text "+
 				"the runtime could not deliver comes back saying which verb sent it", i, verbs[i])
 		}
 	}
@@ -490,9 +490,9 @@ func TestRigSayEnvelopesAPlainMessageAndSendsTheRawOneBare(t *testing.T) {
 }
 
 // THE ABSENCE, pinned the way the seat-send conversion pinned its own: with no `rig` on PATH the send must still reach
-// the runtime. A fallback to the rig tool would return early and silently, which this test cannot see unless it
+// the runtime. A fallback to the room tool would return early and silently, which this test cannot see unless it
 // empties PATH.
-func TestRigSayNeverShellsOutToTheRigTool(t *testing.T) {
+func TestRoomSayNeverShellsOutToTheRoomTool(t *testing.T) {
 	previous := runtimeSendText
 	t.Cleanup(func() { runtimeSendText = previous })
 
@@ -500,9 +500,9 @@ func TestRigSayNeverShellsOutToTheRigTool(t *testing.T) {
 	runtimeSendText = func(session, text, verb string) error { called = true; return nil }
 	t.Setenv("PATH", t.TempDir())
 
-	rigSay("room1", "alpha", "hello", false)
+	roomSay("room1", "alpha", "hello", false)
 	if !called {
-		t.Fatal("rigSay did not reach the runtime with no `rig` on PATH: it shelled out to the rig tool instead")
+		t.Fatal("roomSay did not reach the runtime with no `rig` on PATH: it shelled out to the rig tool instead")
 	}
 }
 

@@ -26,9 +26,9 @@ from this file: 4genteam send (internal/clientseat) builds it at send time from 
 links. TARGET is the materialized bundle; HOME defaults to this account's home directory.
 `
 
-// rigSpec is only the part of a rig spec this verb reads: the room's name and each member's id and
+// roomSpec is only the part of a room spec this verb reads: the room's name and each member's id and
 // agent reference. Everything else in the document is none of its business.
-type rigSpec struct {
+type roomSpec struct {
 	Name string `yaml:"name"`
 	Pods []struct {
 		Members []struct {
@@ -88,11 +88,11 @@ func offlineInstall(target, home string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam sync offline-install: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	spec, code := readRigSpec(filepath.Join(root, "rig.yaml"), stderr)
+	spec, code := readRoomSpec(filepath.Join(root, "room.yaml"), stderr)
 	if code != clientcmd.ExitOK {
 		return code
 	}
-	rig, err := ValidateName("room", spec.Name)
+	room, err := ValidateName("room", spec.Name)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync offline-install: %v\n", err)
 		return clientcmd.ExitUsage
@@ -116,7 +116,7 @@ func offlineInstall(target, home string, stdout, stderr io.Writer) int {
 			}
 			agent := agentFromRef(member.AgentRef)
 			if agent == "" {
-				fmt.Fprintf(stderr, "skipped %s/%s: no local agent ref\n", rig, seat)
+				fmt.Fprintf(stderr, "skipped %s/%s: no local agent ref\n", room, seat)
 				continue
 			}
 			if _, err := SafeRelative(agent); err != nil {
@@ -127,7 +127,7 @@ func offlineInstall(target, home string, stdout, stderr io.Writer) int {
 			policy := filepath.Join(agentDir, "policy.json")
 			if info, err := os.Stat(policy); err != nil || info.IsDir() {
 				fmt.Fprintf(stderr, "skipped %s/%s: no pinned policy in the bundle (%s is missing)\n",
-					rig, seat, policy)
+					room, seat, policy)
 				continue
 			}
 			// Two members that share one seat type share one agent directory in the bundle, so only
@@ -142,10 +142,10 @@ func offlineInstall(target, home string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stderr,
 					"skipped %s/%s: the bundle's %s policy belongs to seat '%s' (members sharing one "+
 						"seat type share one agent directory in a bundle; per-seat policy needs distinct "+
-						"seat types)\n", rig, seat, agent, claimed)
+						"seat types)\n", room, seat, agent, claimed)
 				continue
 			}
-			seatDir := filepath.Join(store, rig, seat)
+			seatDir := filepath.Join(store, room, seat)
 			if err := os.MkdirAll(seatDir, 0o755); err != nil {
 				fmt.Fprintf(stderr, "4genteam sync offline-install: %v\n", err)
 				return clientcmd.ExitUsage
@@ -161,12 +161,12 @@ func offlineInstall(target, home string, stdout, stderr io.Writer) int {
 					return clientcmd.ExitUsage
 				}
 			}
-			installed = append(installed, rig+"/"+seat)
+			installed = append(installed, room+"/"+seat)
 		}
 	}
 	if len(installed) == 0 {
 		fmt.Fprintf(stderr,
-			"4genteam sync offline-install: no pinned policy found under %s/agents; the rig root must "+
+			"4genteam sync offline-install: no pinned policy found under %s/agents; the room root must "+
 				"carry it (the client's `sync room` verb wrote it until 2026-10-15)\n",
 			root)
 		return clientcmd.ExitUsage
@@ -177,27 +177,27 @@ func offlineInstall(target, home string, stdout, stderr io.Writer) int {
 	return clientcmd.ExitOK
 }
 
-// readRigSpec parses the bundle's rig.yaml: a missing file, invalid YAML and a document that is not
+// readRoomSpec parses the bundle's room.yaml: a missing file, invalid YAML and a document that is not
 // a spec are three different usage errors, and saying which one it was is the whole point.
-func readRigSpec(path string, stderr io.Writer) (rigSpec, int) {
+func readRoomSpec(path string, stderr io.Writer) (roomSpec, int) {
 	text, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync offline-install: cannot read %s: %v\n", path, err)
-		return rigSpec{}, clientcmd.ExitUsage
+		return roomSpec{}, clientcmd.ExitUsage
 	}
 	var document any
 	if err := yaml.Unmarshal(text, &document); err != nil {
 		fmt.Fprintf(stderr, "4genteam sync offline-install: %s is not valid YAML: %v\n", path, err)
-		return rigSpec{}, clientcmd.ExitUsage
+		return roomSpec{}, clientcmd.ExitUsage
 	}
 	if _, ok := document.(map[string]any); !ok {
-		fmt.Fprintf(stderr, "4genteam sync offline-install: %s is not a rig spec\n", path)
-		return rigSpec{}, clientcmd.ExitUsage
+		fmt.Fprintf(stderr, "4genteam sync offline-install: %s is not a room spec\n", path)
+		return roomSpec{}, clientcmd.ExitUsage
 	}
-	var spec rigSpec
+	var spec roomSpec
 	if err := yaml.Unmarshal(text, &spec); err != nil {
-		fmt.Fprintf(stderr, "4genteam sync offline-install: %s is not a rig spec: %v\n", path, err)
-		return rigSpec{}, clientcmd.ExitUsage
+		fmt.Fprintf(stderr, "4genteam sync offline-install: %s is not a room spec: %v\n", path, err)
+		return roomSpec{}, clientcmd.ExitUsage
 	}
 	return spec, clientcmd.ExitOK
 }

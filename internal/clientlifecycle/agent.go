@@ -9,7 +9,7 @@
 // inside ten minutes is `failing`, and agent keeps retrying it at the cap.
 //
 // WHAT CHANGED AROUND IT, so the reader does not go looking for the old mechanism: `up` starts agent (one
-// detached child, checked with awaitStart) and records the rig in agent.json's `rigs` list; `compact` and
+// detached child, checked with awaitStart) and records the room in agent.json's `rooms` list; `compact` and
 // `stop` no longer spawn or kill a safeguard directly, and `stop` stops agent, which stops its children.
 package clientlifecycle
 
@@ -55,10 +55,10 @@ func AgentLogPath(root string) string {
 }
 
 // WatchdogLogPath is the log of the watchdog CHILD agent starts. It is deliberately NOT the watchdog's own
-// <root>/logs/rig-watchdog.log: that file is written by the watchdog itself through its tee, and
+// <root>/logs/room-watchdog.log: that file is written by the watchdog itself through its tee, and
 // pointing its stdout at the same file would append every line twice.
-func WatchdogLogPath(rig, root string) string {
-	return filepath.Join(LogDir(root), "watchdog-"+rig+".log")
+func WatchdogLogPath(room, root string) string {
+	return filepath.Join(LogDir(root), "watchdog-"+room+".log")
 }
 
 type agentCommand struct{}
@@ -71,10 +71,10 @@ func (agentCommand) Summary() string {
 func (agentCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, agentUsage,
-			"One outbound /ws/connector socket: every local rig session registered, its transcript tailed and\n"+
+			"One outbound /ws/connector socket: every local room session registered, its transcript tailed and\n"+
 				"uploaded redacted, and every safeguard transition published. It also starts and restarts\n"+
 				"`compact-run --room R`, `watchdog R --watch`, `sync messages --room R --watch` and `bridge run`\n"+
-				"for the rigs listed in agent.json,\n"+
+				"for the rooms listed in agent.json,\n"+
 				"so it is the single restart authority: `stop` stops agent and its children, and `up` starts it.\n\n"+
 				"  status [--json]      the safeguard rows and the per-session withheld counts\n\n"+
 				"Requires AGENTHUB_URL and AGENTHUB_CONNECTOR_TOKEN, a token with the sessions:write scope\n"+
@@ -175,7 +175,7 @@ func connectorIdentity() string {
 // agentSpec is one child agent must have running.
 type agentSpec struct {
 	safeguard string
-	rig       string
+	room      string
 	argv      []string
 	logPath   string
 	// threshold is 7.4's silence threshold, derived from the flags agent launches this child with - not
@@ -198,7 +198,7 @@ type agentChild struct {
 	starts    int
 }
 
-func (c *agentChild) key() string { return c.spec.safeguard + " " + c.spec.rig }
+func (c *agentChild) key() string { return c.spec.safeguard + " " + c.spec.room }
 
 // agentManager is the supervision half of agent. Its two mutex-guarded maps are the only shared state: the
 // children it owns, and the transitions the socket half has not sent yet.
@@ -249,7 +249,7 @@ func (m *agentManager) supervise(ctx context.Context) error {
 	}
 }
 
-// pass is one turn: bring the children in line with the listed rigs, then report what changed.
+// pass is one turn: bring the children in line with the listed rooms, then report what changed.
 func (m *agentManager) pass() error {
 	// AGENT BEATS ITSELF ON EVERY PASS, and it does so HERE rather than on the socket, because the process
 	// must read `running` while the cloud is unreachable: a beat that needs the network would make an
@@ -261,7 +261,7 @@ func (m *agentManager) pass() error {
 	if err != nil {
 		m.log(fmt.Sprintf("the rooms meant to run could not be read, so no child is started this pass: %v", err))
 	}
-	specs := agentSpecs(state.Rigs, m.root)
+	specs := agentSpecs(state.Rooms, m.root)
 	now := clientservices.Now()
 	if err := m.reconcile(specs, now); err != nil {
 		return err
@@ -271,14 +271,14 @@ func (m *agentManager) pass() error {
 	// second always-on process is a second thing to supervise. Two timers rather than one because the two
 	// read different things, and one being slow must not delay the other.
 	if m.overlapDue(now) {
-		m.scanOverlaps(state.Rigs, now)
+		m.scanOverlaps(state.Rooms, now)
 	}
 	if m.stuckDue(now) {
-		m.scanStuck(state.Rigs, now)
+		m.scanStuck(state.Rooms, now)
 	}
 	rows, err := clientservices.Verify(context.Background(), clientservices.Env{
 		Root:       m.root,
-		Rigs:       state.Rigs,
+		Rooms:      state.Rooms,
 		Supervised: m.recorded(),
 		Thresholds: m.thresholds(),
 	})
@@ -291,43 +291,43 @@ func (m *agentManager) pass() error {
 }
 
 // agentSpecs is the child list of 7.1: a compaction supervisor, a watchdog and a seat-message deliverer
-// per listed rig, and ONE bridge per machine.
-func agentSpecs(rigs []string, root string) []agentSpec {
+// per listed room, and ONE bridge per machine.
+func agentSpecs(rooms []string, root string) []agentSpec {
 	var specs []agentSpec
-	for _, rig := range rigs {
-		supervisorLog := LogPath(rig, root)
-		watchdogLog := WatchdogLogPath(rig, root)
-		messagesLog := MessagesLogPath(rig, root)
-		guardLog := IdleLogPath(rig, root)
-		budgetLog := BudgetLogPath(rig, root)
+	for _, room := range rooms {
+		supervisorLog := LogPath(room, root)
+		watchdogLog := WatchdogLogPath(room, root)
+		messagesLog := MessagesLogPath(room, root)
+		guardLog := IdleLogPath(room, root)
+		budgetLog := BudgetLogPath(room, root)
 		specs = append(specs,
 			agentSpec{
-				safeguard: clientservices.Compact, rig: rig,
-				argv:      []string{"compact-run", "--room", rig, "--state-root", root},
+				safeguard: clientservices.Compact, room: room,
+				argv:      []string{"compact-run", "--room", room, "--state-root", root},
 				logPath:   supervisorLog,
 				threshold: clientservices.SilentAfter(clientservices.CompactEvery),
 			},
 			agentSpec{
-				safeguard: clientservices.Watchdog, rig: rig,
-				argv:      []string{"watchdog", rig, "--watch", "--state-root", root},
+				safeguard: clientservices.Watchdog, room: room,
+				argv:      []string{"watchdog", room, "--watch", "--state-root", root},
 				logPath:   watchdogLog,
 				threshold: clientservices.SilentAfter(clientservices.WatchdogInterval),
 			},
 			agentSpec{
-				safeguard: clientservices.Messages, rig: rig,
-				argv:      []string{"sync", "messages", "--room", rig, "--watch", "--state-root", root},
+				safeguard: clientservices.Messages, room: room,
+				argv:      []string{"sync", "messages", "--room", room, "--watch", "--state-root", root},
 				logPath:   messagesLog,
 				threshold: clientservices.SilentAfter(clientservices.MessagesEvery),
 			},
 			agentSpec{
-				safeguard: clientservices.RoomGuard, rig: rig,
-				argv:      []string{"idle-run", "--room", rig, "--state-root", root},
+				safeguard: clientservices.RoomGuard, room: room,
+				argv:      []string{"idle-run", "--room", room, "--state-root", root},
 				logPath:   guardLog,
 				threshold: clientservices.SilentAfter(clientservices.RoomGuardEvery),
 			},
 			agentSpec{
-				safeguard: clientservices.Budget, rig: rig,
-				argv:      []string{"budget-run", "--room", rig, "--state-root", root},
+				safeguard: clientservices.Budget, room: room,
+				argv:      []string{"budget-run", "--room", room, "--state-root", root},
 				logPath:   budgetLog,
 				threshold: clientservices.SilentAfter(clientservices.BudgetEvery),
 			},
@@ -342,13 +342,13 @@ func agentSpecs(rigs []string, root string) []agentSpec {
 	return specs
 }
 
-// reconcile starts what is missing, adopts what is already running, and stops what a rig that left the
+// reconcile starts what is missing, adopts what is already running, and stops what a room that left the
 // list no longer needs. The first probe error ends the pass: nothing is adopted, nothing is started, and
 // nothing is stopped from a process table nobody read (7.12).
 func (m *agentManager) reconcile(specs []agentSpec, now time.Time) error {
 	wanted := map[string]bool{}
 	for _, spec := range specs {
-		wanted[spec.safeguard+" "+spec.rig] = true
+		wanted[spec.safeguard+" "+spec.room] = true
 		if err := m.ensure(spec, now); err != nil {
 			return err
 		}
@@ -361,7 +361,7 @@ func (m *agentManager) reconcile(specs []agentSpec, now time.Time) error {
 		}
 		if child.pid > 0 {
 			if err := signalPID(child.pid, syscall.SIGTERM); err == nil {
-				m.log(fmt.Sprintf("%s: stopped, its rig left agent.json's list", key))
+				m.log(fmt.Sprintf("%s: stopped, its room left agent.json's list", key))
 			}
 		}
 		delete(m.children, key)
@@ -372,7 +372,7 @@ func (m *agentManager) reconcile(specs []agentSpec, now time.Time) error {
 // ensure is one child's turn: adopt a live process, restart a dead one when its backoff has elapsed.
 //
 // ADOPTION IS NOT A NICETY. The children are detached processes, so one can outlive an agent that was
-// SIGKILLed; spawning a second copy would put two supervisors on one rig. A live process matching the
+// SIGKILLed; spawning a second copy would put two supervisors on one room. A live process matching the
 // child's command line is therefore adopted rather than duplicated, and liveness is read from the SAME
 // pgrep the report uses, so agent and `doctor` can never disagree about who is running.
 //
@@ -380,8 +380,8 @@ func (m *agentManager) reconcile(specs []agentSpec, now time.Time) error {
 // neither adopted nor spawned and the caller ends the pass. The old spelling read the error as an empty
 // process table, and one missing pgrep started a second supervision tree.
 func (m *agentManager) ensure(spec agentSpec, now time.Time) error {
-	key := spec.safeguard + " " + spec.rig
-	live, err := clientservices.Live(clientservices.Pattern(spec.safeguard, spec.rig))
+	key := spec.safeguard + " " + spec.room
+	live, err := clientservices.Live(clientservices.Pattern(spec.safeguard, spec.room))
 	if err != nil {
 		return err
 	}
@@ -499,7 +499,7 @@ func (m *agentManager) recorded() []clientservices.Health {
 	rows := make([]clientservices.Health, 0, len(m.children))
 	for _, child := range m.children {
 		row := clientservices.Health{
-			Rig:       child.spec.rig,
+			Room:      child.spec.room,
 			Safeguard: child.spec.safeguard,
 			Restarts:  child.restarts,
 		}
@@ -536,16 +536,16 @@ func (m *agentManager) report(rows []clientservices.Health) {
 	m.mu.Lock()
 	previous := map[string]clientservices.Health{}
 	for _, row := range m.last {
-		previous[row.Safeguard+" "+row.Rig] = row
+		previous[row.Safeguard+" "+row.Room] = row
 	}
 	m.last = rows
 	var changed []clientservices.Health
 	for _, row := range rows {
-		before, known := previous[row.Safeguard+" "+row.Rig]
+		before, known := previous[row.Safeguard+" "+row.Room]
 		if known && before.State == row.State && before.Restarts == row.Restarts && before.PID == row.PID {
 			continue
 		}
-		m.pending[row.Safeguard+" "+row.Rig] = row
+		m.pending[row.Safeguard+" "+row.Room] = row
 		changed = append(changed, row)
 	}
 	m.mu.Unlock()
@@ -558,13 +558,13 @@ func (m *agentManager) report(rows []clientservices.Health) {
 	}
 }
 
-// persist rewrites agent.json's `safeguards` list with what agent knows now. The rigs list is re-read and
+// persist rewrites agent.json's `safeguards` list with what agent knows now. The rooms list is re-read and
 // kept: `up` may have added a room between this pass's read and this write, and dropping it would make up
 // a liar.
 func (m *agentManager) persist(rows []clientservices.Health) {
 	fresh, err := clientservices.ReadAgentState()
 	if err != nil {
-		// NOTHING IS WRITTEN: this pass rewrites the rigs list from what it read, so persisting over a list
+		// NOTHING IS WRITTEN: this pass rewrites the rooms list from what it read, so persisting over a list
 		// that could not be read would drop every room from the rooms meant to run. The next pass reads again.
 		m.log(fmt.Sprintf("the rooms meant to run could not be read, so this pass kept no safeguard rows: %v", err))
 		return
@@ -573,7 +573,7 @@ func (m *agentManager) persist(rows []clientservices.Health) {
 	merged := make([]clientservices.Health, 0, len(rows))
 	for _, row := range rows {
 		for _, known := range recorded {
-			if known.Safeguard == row.Safeguard && known.Rig == row.Rig {
+			if known.Safeguard == row.Safeguard && known.Room == row.Room {
 				row.Restarts, row.StartedAt = known.Restarts, known.StartedAt
 				break
 			}
@@ -629,12 +629,12 @@ func (m *agentManager) take() []clientservices.Health {
 	return out
 }
 
-// sortRows makes the report order stable: by rig, then by safeguard, so two runs of the same state print
+// sortRows makes the report order stable: by room, then by safeguard, so two runs of the same state print
 // the same lines in the same order.
 func sortRows(rows []clientservices.Health) {
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Rig != rows[j].Rig {
-			return rows[i].Rig < rows[j].Rig
+		if rows[i].Room != rows[j].Room {
+			return rows[i].Room < rows[j].Room
 		}
 		return rows[i].Safeguard < rows[j].Safeguard
 	})
@@ -667,19 +667,19 @@ var signalPID = func(pid int, signal syscall.Signal) error {
 	return process.Signal(signal)
 }
 
-// recordRig adds a room to agent.json's list, which is what "meant to run" means: agent supervises a
+// recordRoom adds a room to agent.json's list, which is what "meant to run" means: agent supervises a
 // supervisor and a watchdog for it from its next pass on.
-func recordRig(rig string, stderr io.Writer) bool {
+func recordRoom(room string, stderr io.Writer) bool {
 	state, err := clientservices.ReadAgentState()
 	if err != nil {
-		// NOT RECORDED, AND NOTHING WRITTEN: adding this rig to a list that could not be read would record it
+		// NOT RECORDED, AND NOTHING WRITTEN: adding this room to a list that could not be read would record it
 		// into the empty list and drop every OTHER room from the rooms meant to run.
-		fmt.Fprintf(stderr, "4genteam: the rooms meant to run could not be read, so %s was NOT recorded in agent.json: %v\n", rig, err)
+		fmt.Fprintf(stderr, "4genteam: the rooms meant to run could not be read, so %s was NOT recorded in agent.json: %v\n", room, err)
 		return false
 	}
-	state = clientservices.AddRig(state, rig)
+	state = clientservices.AddRoom(state, room)
 	if err := clientservices.WriteAgentState(state); err != nil {
-		fmt.Fprintf(stderr, "4genteam: could not record rig %s in agent.json: %v\n", rig, err)
+		fmt.Fprintf(stderr, "4genteam: could not record room %s in agent.json: %v\n", room, err)
 		return false
 	}
 	return true
@@ -732,14 +732,14 @@ func startAgent(root string, stdout, stderr io.Writer) bool {
 }
 
 // stopAgent stops the authority and, through its own shutdown, its children. The stop is machine-wide, so
-// the rig name is named as staying listed rather than used to pick a target: `stop` is not room intent
+// the room name is named as staying listed rather than used to pick a target: `stop` is not room intent
 // (7.9), and a verb that silently dropped its argument would be worse than one that says why it ignores it.
 //
 // IT ANSWERS THIS VERB'S EXIT CODE (7.12). A pkill that could not run is not "nothing matched": the caller
 // gets 3 and the word NOT, never the `was not running` line that let `4genteam stop` exit 0 on a stop it
 // never attempted. `verb` is the caller's spelling (`stop`, `up`), so the refusal names the command the
 // operator ran.
-func stopAgent(verb, rig string, stdout, stderr io.Writer) int {
+func stopAgent(verb, room string, stdout, stderr io.Writer) int {
 	stopped, err := stopPattern(clientservices.Pattern(clientservices.Agent, ""))
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam %s: agent was NOT stopped: %v\n", verb, err)
@@ -749,11 +749,11 @@ func stopAgent(verb, rig string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, "agent: was not running")
 		return clientcmd.ExitOK
 	}
-	fmt.Fprintf(stdout, "agent: stopped with its children (a machine-wide stop; rig %s stays listed)\n", rig)
+	fmt.Fprintf(stdout, "agent: stopped with its children (a machine-wide stop; room %s stays listed)\n", room)
 	return clientcmd.ExitOK
 }
 
-// runAgentStatus is `4genteam agent status`: the safeguard rows, the listed rigs, and the per-session
+// runAgentStatus is `4genteam agent status`: the safeguard rows, the listed rooms, and the per-session
 // withheld counts 4.4 names. It is a reading surface and not a checker - `doctor` exits 3, this exits 0.
 func runAgentStatus(args []string, root string, stdout, stderr io.Writer) int {
 	asJSON := false
@@ -772,22 +772,22 @@ func runAgentStatus(args []string, root string, stdout, stderr io.Writer) int {
 	state, stateErr := clientservices.ReadAgentState()
 	if stateErr != nil {
 		// The rows and the counts below are measured from pgrep and heartbeat files, so they still print; the
-		// rigs list does not, and saying so is the difference between "no rooms are meant to run" and "the list
+		// rooms list does not, and saying so is the difference between "no rooms are meant to run" and "the list
 		// could not be read".
-		fmt.Fprintf(stderr, "4genteam agent status: the rooms meant to run could not be read, so the rigs list below is empty for that reason: %v\n", stateErr)
+		fmt.Fprintf(stderr, "4genteam agent status: the rooms meant to run could not be read, so the rooms list below is empty for that reason: %v\n", stateErr)
 	}
 	rows, err := rowsFor("", root)
 	if err != nil {
 		// A READING VERB KEEPS ITS EXIT (7.12): the rows could not be decided, so none is printed and the
-		// probe is named on stderr. The rigs list and the counts are unrelated readings and still print.
+		// probe is named on stderr. The rooms list and the counts are unrelated readings and still print.
 		fmt.Fprintf(stderr, "4genteam agent status: no safeguard row was decided: %v\n", err)
-		fmt.Fprintf(stdout, "rigs: %s\n", strings.Join(state.Rigs, ", "))
+		fmt.Fprintf(stdout, "rooms: %s\n", strings.Join(state.Rooms, ", "))
 		return clientcmd.ExitOK
 	}
 	withheld := withheldCounts()
 	if asJSON {
 		body, err := json.MarshalIndent(map[string]any{
-			"rigs":       state.Rigs,
+			"rooms":      state.Rooms,
 			"safeguards": rows,
 			"withheld":   withheld,
 		}, "", "  ")
@@ -798,7 +798,7 @@ func runAgentStatus(args []string, root string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, string(body))
 		return clientcmd.ExitOK
 	}
-	fmt.Fprintf(stdout, "rigs: %s\n", strings.Join(state.Rigs, ", "))
+	fmt.Fprintf(stdout, "rooms: %s\n", strings.Join(state.Rooms, ", "))
 	for _, row := range rows {
 		fmt.Fprintln(stdout, clientservices.StateLine(row))
 	}

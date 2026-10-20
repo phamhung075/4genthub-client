@@ -16,7 +16,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-// runFeedback drives the verb the dispatcher drives: no rig is involved.
+// runFeedback drives the verb the dispatcher drives: no room is involved.
 func runFeedback(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return feedbackCommand{}.Run(ctx, args, stdout, stderr)
 }
@@ -85,8 +85,8 @@ func feedbackEnv(t *testing.T, serverURL, token string) {
 }
 
 // nativeChain isolates the identity chain from the machine the tests run on: no runtime socket answers, no
-// rig daemon is named, and no seat is stated. A test that wants an identity must then state one with
-// seatEnv, and a test that wants the refusal gets it on every machine - the isolation the deleted rig stub
+// room daemon is named, and no seat is stated. A test that wants an identity must then state one with
+// seatEnv, and a test that wants the refusal gets it on every machine - the isolation the deleted room stub
 // used to give the PATH.
 func nativeChain(t *testing.T) {
 	t.Helper()
