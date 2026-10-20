@@ -31,11 +31,11 @@ The reads are native:
 4genteam status <room>                   # the safeguard rows
 ```
 
-`4genteam ps <rig> [--nodes|--compact|--grid|--json]` reads tmux and the seat transcripts, marks a seat `quota` when its transcript tail shows a quota or credit message, and prints this client's own JSON — not the predecessor's `rig ps --nodes --room R --json` shape.
+`4genteam ps <room> [--nodes|--compact|--grid|--json]` reads tmux and the seat transcripts, marks a seat `quota` when its transcript tail shows a quota or credit message, and prints this client's own JSON — not the predecessor's `rig ps --nodes --room R --json` shape.
 
 ## When to use
 
-- A seat sits in the `/rate-limit-options` dialog (stop / wait for reset / upgrade): `4genteam ps <rig> --nodes` shows its RUNTIME/MODEL/STATUS and `4genteam capture <session> --lines 25` shows the dialog itself. The predecessor CLI's `parked` reported these; `4genteam` has no `parked`.
+- A seat sits in the `/rate-limit-options` dialog (stop / wait for reset / upgrade): `4genteam ps <room> --nodes` shows its RUNTIME/MODEL/STATUS and `4genteam capture <session> --lines 25` shows the dialog itself. The predecessor CLI's `parked` reported these; `4genteam` has no `parked`.
 - `4genteam capture <session> --lines 25` shows that dialog; quota evidence confirms the cap (e.g. transcript
   `quotaLimits.rate_limit_type = seven_day`, or a clean `env -u ANTHROPIC_BASE_URL claude -p …`
   probe returning "You've hit your weekly limit").
@@ -74,7 +74,7 @@ The reads are native:
    ```bash
    4genteam seat reseat <room> --seat <seat> [--allow-peak]     # stop and restart one seat, once it is quiet
    ```
-   `seat reseat` waits for the seat to be quiet; `--force` skips that wait and a seat mid-turn loses the turn. **Whether the restart carries a changed RUNTIME is not established — measure it after the restart** (`4genteam ps <rig> --nodes --json` per seat) rather than assuming it. The predecessor CLI's teardown/relaunch sequence is deliberately not printed here: measured, its middle line stopped the machine's safeguards rather than the room's, and its last could not run at all.
+   `seat reseat` waits for the seat to be quiet; `--force` skips that wait and a seat mid-turn loses the turn. **Whether the restart carries a changed RUNTIME is not established — measure it after the restart** (`4genteam ps <room> --nodes --json` per seat) rather than assuming it. The predecessor CLI's teardown/relaunch sequence is deliberately not printed here: measured, its middle line stopped the machine's safeguards rather than the room's, and its last could not run at all.
 6. **Ensure the client lifecycle is running**:
    ```bash
    4genteam up <room> --team <the room's team dir> [--allow-peak]

@@ -5,7 +5,7 @@ description: Switch ONE seat of a team room to another runtime/LLM (e.g. archite
 
 # Switch one seat's runtime / LLM
 
-Nothing changes a *running* seat's runtime in place: the predecessor CLI's `launch` and `remove` acted on a node without changing one, and editing a spec never touched a live seat. `4genteam` says the same of itself — `4genteam sync switch` prints no sequence that completes a runtime change, and names only the two things that exist (the room's definition and each seat's files are written by the launcher, `4genteam up <room> --team <dir>`; `4genteam seat reseat <rig> --seat <name>` stops and restarts a seat so it loads the configuration it now has). Example: an architect seat moved from `claude-code`/`opus` to `omp`/`deepseek/deepseek-flash` — a definition change plus a restart.
+Nothing changes a *running* seat's runtime in place: the predecessor CLI's `launch` and `remove` acted on a node without changing one, and editing a spec never touched a live seat. `4genteam` says the same of itself — `4genteam sync switch` prints no sequence that completes a runtime change, and names only the two things that exist (the room's definition and each seat's files are written by the launcher, `4genteam up <room> --team <dir>`; `4genteam seat reseat <room> --seat <name>` stops and restarts a seat so it loads the configuration it now has). Example: an architect seat moved from `claude-code`/`opus` to `omp`/`deepseek/deepseek-flash` — a definition change plus a restart.
 
 ## Which binary: `4genteam`, and what it can and cannot do
 
