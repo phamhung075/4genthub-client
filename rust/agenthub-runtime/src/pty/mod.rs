@@ -82,6 +82,19 @@ fn pane_command(denied: &[String], runtime_cmd: &str) -> String {
     wrapped
 }
 
+/// The `-e` pairs one seat's session receives: its own environment minus every denied key.
+///
+/// ONE definition for both halves of the launch - the pairs `new-session` is given, and the keys
+/// `scrub_session_env` takes back out of the session once the pane exists. A second copy of the predicate here
+/// would let the two drift apart, and a key that `-e` wrote but the scrub did not name is a readable copy left
+/// behind for the seat's whole life.
+fn pane_env_pairs(env_vars: &HashMap<String, String>) -> Vec<(&String, &String)> {
+    env_vars
+        .iter()
+        .filter(|(k, _)| !crate::env_is_denied(k))
+        .collect()
+}
+
 /// The `-e KEY=VALUE` arguments for one session, minus every denied key.
 ///
 /// `-e` is what gives a seat its own identity instead of the server's, so the list itself is not optional; what
@@ -90,10 +103,7 @@ fn pane_command(denied: &[String], runtime_cmd: &str) -> String {
 /// - measured on this box 2026-10-15.
 fn pane_env_args(env_vars: &HashMap<String, String>) -> Vec<String> {
     let mut args = Vec::new();
-    for (k, v) in env_vars {
-        if crate::env_is_denied(k) {
-            continue;
-        }
+    for (k, v) in pane_env_pairs(env_vars) {
         args.push("-e".to_string());
         args.push(format!("{k}={v}"));
     }
@@ -104,6 +114,150 @@ fn tmux_command() -> Command {
     let mut cmd = Command::new("tmux");
     crate::scrub_env(&mut cmd);
     cmd
+}
+
+/// The tmux client that may CREATE this root's server: no inherited environment at all, then the allowlist.
+///
+/// This is the one client whose environment the server KEEPS - a server takes the environment of whoever
+/// started it, and `show-environment -g` prints that copy to any pane of any room on the root. `env_clear` first
+/// rather than scrub-what-is-denied, because the point of the allowlist is that a variable nobody has thought
+/// about yet is out: the answer must not depend on this file knowing the credential's name
+/// (`RULING-sec02-tmux-global-env-2026-10-19.md`).
+fn tmux_bootstrap_command() -> Command {
+    let mut cmd = Command::new("tmux");
+    cmd.env_clear();
+    for (key, value) in std::env::vars_os() {
+        if key.to_str().is_some_and(crate::server_env_allowed) {
+            cmd.env(key, value);
+        }
+    }
+    cmd
+}
+
+/// The keys the server's global environment holds, from `show-environment -g`'s `KEY=value` lines.
+///
+/// `-KEY` is how tmux prints a variable it has marked UNSET, which holds no value and needs no cleanup; only a
+/// `KEY=value` line is a key the server carries.
+fn parse_server_env(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| line.split_once('=').map(|(key, _)| key.to_string()))
+        .filter(|key| !key.is_empty())
+        .collect()
+}
+
+/// The one tmux command sequence that does `set-environment -g -u KEY` for every key named - one client, not
+/// one process per key. Empty when there is nothing to remove.
+fn unset_global_args(keys: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    for key in keys {
+        if !args.is_empty() {
+            args.push(";".to_string());
+        }
+        args.extend([
+            "set-environment".to_string(),
+            "-g".to_string(),
+            "-u".to_string(),
+            key.clone(),
+        ]);
+    }
+    args
+}
+
+/// The keys the server's global environment holds, read from `show-environment -g`.
+///
+/// The read is the measurement as much as the cleanup is: `show-environment -g` is what any pane on this root
+/// can run, so a key it prints is a key that has already left the room.
+fn server_global_env() -> Result<Vec<String>, String> {
+    let out = tmux_command()
+        .args(["show-environment", "-g"])
+        .output()
+        .map_err(|e| format!("tmux show-environment could not be run: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(format!("tmux show-environment refused: {stderr}"));
+    }
+    Ok(parse_server_env(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// Take every key outside the allowlist off the server's global environment.
+///
+/// A server that is already up keeps whatever it was created with, and a pane takes the server's environment -
+/// so a bootstrapped server is only half the fix: a server an older runtime started dirty stays dirty, and the
+/// first launch on top of it must clean it (`RULING-sec02-tmux-global-env-2026-10-19.md`). Every key this loop
+/// removes is one `show-environment -g` would have printed to the next reader, and one every later pane would
+/// have inherited.
+///
+/// `set-environment -g -u` takes the NAME as its argument; the `NAME=value` form is refused by tmux with
+/// "variable name contains =" and is pinned by a test. A key the server never held is not an error.
+fn clean_server_env() -> Result<(), String> {
+    let foreign: Vec<String> = server_global_env()?
+        .into_iter()
+        .filter(|key| !crate::server_env_allowed(key))
+        .collect();
+    if foreign.is_empty() {
+        return Ok(());
+    }
+    let out = tmux_command()
+        .args(unset_global_args(&foreign))
+        .output()
+        .map_err(|e| format!("tmux set-environment could not be run: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(format!(
+            "tmux set-environment left {} key(s) on the server: {stderr}",
+            foreign.len()
+        ));
+    }
+    info!(
+        "removed {} key(s) outside the allowlist from the tmux server's environment",
+        foreign.len()
+    );
+    Ok(())
+}
+
+/// Remove the keys `new-session -e` wrote from the seat's SESSION environment, once its pane exists.
+///
+/// `-e` is how a seat gets its identity, and the same pairs stay in the session's environment, which
+/// `tmux show-environment -t <session>` prints to any pane on the root - a second readable copy of every
+/// credential a seat holds. Removing them does not disturb the seat: the pane keeps the environment the kernel
+/// gave it at `exec`, which is where `mcp.json`'s `${AGENTHUB_TOKEN}` and the model client's key are read
+/// (`RULING-sec02-tmux-global-env-2026-10-19.md`, measured on a scratch socket).
+///
+/// A refused scrub is logged rather than fatal: the seat is already running and its own environment is intact,
+/// so what is lost is the second copy, not the seat.
+fn scrub_session_env(session_name: &str, env_vars: &HashMap<String, String>) {
+    let keys: Vec<&String> = pane_env_pairs(env_vars)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    if keys.is_empty() {
+        return;
+    }
+    let mut args: Vec<String> = Vec::new();
+    for key in &keys {
+        if !args.is_empty() {
+            args.push(";".to_string());
+        }
+        args.extend([
+            "set-environment".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "-u".to_string(),
+            (*key).clone(),
+        ]);
+    }
+    match tmux_command().args(&args).output() {
+        Ok(out) if out.status.success() => info!(
+            "removed {} key(s) from session {session_name}'s environment",
+            keys.len()
+        ),
+        Ok(out) => warn!(
+            "session {session_name} still carries its own environment: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(e) => warn!("session {session_name} could not be scrubbed: {e}"),
+    }
 }
 
 /// Start this root's tmux server from a client whose command line carries no seat's environment, and keep it
@@ -130,13 +284,20 @@ fn tmux_command() -> Command {
 ///
 /// A server that is already up is left exactly as it is - not started, and its own `exit-empty` not touched -
 /// because whether an older server's argv is clean cannot be read from here and a live server may be carrying
-/// live seats. A server started before this change has `exit-empty` on, so it still exits with its last session
-/// and the next launch bootstraps over its grave; one started by this call is clean and stays clean.
+/// live seats. Its ENVIRONMENT is another matter and `launch_session` cleans that on every launch. A server
+/// started before this change has `exit-empty` on, so it still exits with its last session and the next launch
+/// bootstraps over its grave; one started by this call is clean and stays clean.
+///
+/// The bootstrap client's own environment is the allowlist (`tmux_bootstrap_command`), not "this daemon minus the
+/// denied names": a server's environment is readable through `show-environment -g` from any pane of any room on
+/// the root and inherited by every pane created afterwards, so what it may hold is decided by an allowlist.
 fn ensure_server() -> Result<(), String> {
     if matches!(tmux_command().args(["list-sessions"]).output(), Ok(out) if out.status.success()) {
         return Ok(());
     }
-    let out = tmux_command()
+    // The bootstrap client carries the allowlist and nothing else: whatever it holds, the server holds for as
+    // long as it runs, and every pane of every room on this root inherits.
+    let out = tmux_bootstrap_command()
         .args(["start-server", ";", "set", "-g", "exit-empty", "off"])
         .output()
         .map_err(|e| format!("failed to start the tmux server: {e}"))?;
@@ -292,18 +453,16 @@ impl TerminalManager {
         // server's environment, and a key merely left out of `-e` still arrives. Measured on this box
         // 2026-10-15 with the server up: `tmux show-environment -g` held AGENTHUB_CONNECTOR_TOKEN while this
         // runtime was the only thing creating sessions. The server exists by this point - `ensure_server` above
-        // starts it, from an already-scrubbed client, when it is not there, and `has-session` cannot create one
-        // now that it is - so this loop can only ever clean a server, never make a dirty one. A key the server
-        // never held is not an error.
+        // starts it, from an allowlisted client, when it is not there, and `has-session` cannot create one now
+        // that it is - so this can only ever clean a server, never make a dirty one.
         //
-        // The credential class is cleaned HERE rather than by the `env -u` wrapper below: the wrapper prints the
-        // key's NAME on the pane's command line for the seat's whole life, which is the surface the owner's own
-        // measurement greps, and a deny list that names the credential would publish it. Prefix keys carry no
-        // such cost, and the wrapper is what covers them.
-        for key in crate::denied_name_keys() {
-            let _ = tmux_command()
-                .args(["set-environment", "-g", "-u", &key])
-                .output();
+        // By ALLOWLIST, not by name: the mechanism that has to hold is "the server carries host plumbing and
+        // nothing else", so a credential added to the daemon's environment tomorrow is out without a code change
+        // (`RULING-sec02-tmux-global-env-2026-10-19.md`). This is also why the credential class is cleaned HERE
+        // rather than by the `env -u` wrapper below: the wrapper prints the key's NAME on the pane's command
+        // line for the seat's whole life, which is the surface the owner's own measurement greps.
+        if let Err(reason) = clean_server_env() {
+            warn!("the tmux server's environment could not be cleaned: {reason}");
         }
 
         // Prepare new tmux session detached
@@ -352,6 +511,13 @@ impl TerminalManager {
                 "session {session_name} was created but its pane pid could not be read: {reason}"
             );
         }
+
+        // The seat has its pane, so the readable copy of its environment has done its job and goes: one
+        // `set-environment -t <session> -u` per `-e` pair, out of the SESSION's environment, which
+        // `show-environment -t` prints to any pane on this root. The pane itself keeps what the kernel gave it at
+        // exec, so `mcp.json`'s `${AGENTHUB_TOKEN}` and the model client's key are still read from there
+        // (`RULING-sec02-tmux-global-env-2026-10-19.md`).
+        scrub_session_env(session_name, env_vars);
 
         info!("session {} started with {}", session_name, pane.describe());
         Ok(pane)
@@ -601,15 +767,14 @@ mod launch_env_tests {
         );
     }
 
-    /// The two mechanisms are kept apart on purpose. The credential is denied by NAME and cleaned off the tmux
-    /// SERVER, so it must never appear in `denied_env_keys`: that list is what the `env -u` wrapper prints on
-    /// the pane's command line, and the owner's measurement greps exactly that line. A credential routed to the
-    /// wrong mechanism breaks the property the fix is for.
+    /// The two mechanisms are kept apart on purpose. The credential is denied by NAME, kept out of the `-e`
+    /// list and out of the tmux SERVER's environment by allowlist, so it must never appear in
+    /// `denied_env_keys`: that list is what the `env -u` wrapper prints on the pane's command line, and the
+    /// owner's measurement greps exactly that line.
     #[test]
     fn the_credential_is_cleaned_by_the_server_and_never_named_on_the_pane_command() {
         std::env::set_var("AGENTHUB_CONNECTOR_TOKEN", "set-by-this-test");
         assert!(crate::env_is_denied("AGENTHUB_CONNECTOR_TOKEN"));
-        assert!(crate::denied_name_keys().contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()));
         assert!(!crate::denied_env_keys().contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()));
         assert!(
             !pane_command(&crate::denied_env_keys(), "/bin/runner x").contains("CONNECTOR_TOKEN")
@@ -790,6 +955,207 @@ mod launch_env_tests {
 
         let _ = TerminalManager::stop_session(&session);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The server's environment is decided by an ALLOWLIST, and the unit is the predicate itself: host plumbing
+    /// passes, a locale family passes by prefix, and every credential a seat needs fails - including the two the
+    /// deny list deliberately leaves alone, because what is wrong with those is that the SERVER holds them.
+    #[test]
+    fn the_server_allowlist_admits_plumbing_and_refuses_a_seat_s_keys() {
+        for allowed in [
+            "PATH",
+            "HOME",
+            "PWD",
+            "USER",
+            "LOGNAME",
+            "SHELL",
+            "TERM",
+            "TMPDIR",
+            "XDG_CONFIG_HOME",
+            "XDG_RUNTIME_DIR",
+            "LANG",
+            "LC_ALL",
+            "LC_CTYPE",
+            "TMUX_TMPDIR",
+        ] {
+            assert!(
+                crate::server_env_allowed(allowed),
+                "{allowed} is host plumbing"
+            );
+        }
+        for refused in [
+            "AGENTHUB_TOKEN",
+            "DEEPSEEK_API_KEY",
+            "TYPESAFE_API_KEY",
+            "AGENTHUB_CONNECTOR_TOKEN",
+            "AGENTHUB_URL",
+            "COMPACT_THRESHOLD",
+            "HERDR_STATE_ROOT",
+        ] {
+            assert!(
+                !crate::server_env_allowed(refused),
+                "{refused} must not survive on the tmux server"
+            );
+        }
+    }
+
+    /// `show-environment -g` prints a set variable as `KEY=value` and one marked unset as `-KEY`; only the first
+    /// form names a key the server carries, so only it needs removing.
+    #[test]
+    fn only_the_set_form_of_show_environment_names_a_key_to_clean() {
+        assert_eq!(
+            super::parse_server_env("PATH=/usr/bin\nDEEPSEEK_API_KEY=sk-x\n-HOME\nLC_ALL=C\n"),
+            vec!["PATH", "DEEPSEEK_API_KEY", "LC_ALL"]
+        );
+        assert_eq!(super::parse_server_env(""), Vec::<String>::new());
+        assert_eq!(
+            super::unset_global_args(&["A".to_string(), "B".to_string()]),
+            vec![
+                "set-environment",
+                "-g",
+                "-u",
+                "A",
+                ";",
+                "set-environment",
+                "-g",
+                "-u",
+                "B"
+            ]
+        );
+        assert!(super::unset_global_args(&[]).is_empty());
+    }
+
+    /// A server this runtime STARTS carries the allowlist and nothing else - the daemon's own environment is
+    /// not copied onto it. Measured through `show-environment -g`, which is the surface any pane of any room on
+    /// this root can read.
+    #[test]
+    fn a_server_started_here_inherits_only_the_allowlist() {
+        let _server = super::test_servers::own("bootstrap-env");
+        std::env::set_var("DEEPSEEK_API_KEY", SECRET_IN_THE_ENV);
+        super::ensure_server().expect("a server with no sessions");
+
+        let keys = super::server_global_env().expect("show-environment -g on our own server");
+        assert!(!keys.is_empty(), "a server carries at least PATH");
+        for key in &keys {
+            assert!(
+                crate::server_env_allowed(key),
+                "{key} is on the tmux server's environment, where `show-environment -g` prints it"
+            );
+        }
+        assert!(!keys.iter().any(|k| k == "DEEPSEEK_API_KEY"), "{keys:?}");
+        std::env::remove_var("DEEPSEEK_API_KEY");
+    }
+
+    /// THE RESIDUAL THE RULING NAMES, pinned: a server an older runtime started dirty is cleaned by the next
+    /// launch, and the seat's `-e` pairs are gone from its session environment once its pane exists - while the
+    /// pane itself still holds both values, which is what makes the scrub safe.
+    #[test]
+    fn a_launch_cleans_the_servers_environment_and_the_seats_session_copy() {
+        if !Path::new("/proc/self").exists() {
+            eprintln!("no /proc: this case IS that measurement, so it cannot be taken here");
+            return;
+        }
+        let _server = super::test_servers::own("dirty-server");
+        let dir = std::env::temp_dir().join(format!("pty-dirty-env-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        super::ensure_server().expect("a server with no sessions");
+        // What an older runtime left behind: a credential in the GLOBAL environment, which every pane created
+        // afterwards inherits and `show-environment -g` prints.
+        let seeded = super::tmux_command()
+            .args([
+                "set-environment",
+                "-g",
+                "HOST_LEGACY_TOKEN",
+                SECRET_IN_THE_ENV,
+            ])
+            .output()
+            .expect("a scratch server to seed");
+        assert!(seeded.status.success(), "{:?}", seeded);
+
+        let session = format!("pty-dirty-env-{}", std::process::id());
+        let delivered = dir.join("seat-env");
+        let env = HashMap::from([
+            (
+                "DEEPSEEK_API_KEY".to_string(),
+                SECRET_IN_THE_ENV.to_string(),
+            ),
+            ("AGENTHUB_TOKEN".to_string(), "mcp-credential".to_string()),
+            ("AGENTHUB_SEAT".to_string(), "dev".to_string()),
+        ]);
+        let cmd = format!(
+            "sh -c 'printf %s \"$DEEPSEEK_API_KEY\" > {}; sleep 5'",
+            delivered.display()
+        );
+        TerminalManager::launch_session(&session, &dir, &cmd, &env).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !delivered.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            fs::read_to_string(&delivered).unwrap_or_default(),
+            SECRET_IN_THE_ENV,
+            "the pane must still hold its own environment: the scrub removes a readable COPY"
+        );
+
+        let global = super::server_global_env().expect("show-environment -g");
+        assert!(
+            !global.iter().any(|k| k == "HOST_LEGACY_TOKEN"),
+            "the first launch on top of a dirty server must clean it: {global:?}"
+        );
+        for key in &global {
+            assert!(
+                crate::server_env_allowed(key),
+                "{key} survived on the server"
+            );
+        }
+
+        let session_keys = show_environment(&["-t", &session]);
+        for key in &session_keys {
+            assert!(
+                !crate::env_is_denied(key)
+                    && !["AGENTHUB_TOKEN", "DEEPSEEK_API_KEY", "AGENTHUB_SEAT"]
+                        .contains(&key.as_str()),
+                "{key} is still on session {session}'s environment: {session_keys:?}"
+            );
+        }
+
+        let _ = TerminalManager::stop_session(&session);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// tmux's `set-environment` takes the NAME and the VALUE as two arguments; the `NAME=value` form is refused.
+    /// The cleanup depends on that split, so it is pinned rather than assumed.
+    #[test]
+    fn the_cleanup_names_the_key_and_not_a_pair() {
+        let _server = super::test_servers::own("set-env-form");
+        super::ensure_server().expect("a server with no sessions");
+        let joined = super::tmux_command()
+            .args(["set-environment", "-g", "PAIR=value"])
+            .output()
+            .expect("tmux set-environment to run");
+        assert!(
+            !joined.status.success(),
+            "tmux accepted a NAME=value pair; the cleanup's argv would be wrong"
+        );
+        let apart = super::tmux_command()
+            .args(["set-environment", "-g", "PAIR", "value"])
+            .output()
+            .expect("tmux set-environment to run");
+        assert!(apart.status.success(), "{:?}", apart);
+        assert!(show_environment(&["-g"]).iter().any(|k| k == "PAIR"));
+    }
+
+    /// The keys `show-environment` lists for the given tmux arguments (`-g`, or `-t <session>`).
+    fn show_environment(args: &[&str]) -> Vec<String> {
+        let out = super::tmux_command()
+            .args(["show-environment"])
+            .args(args)
+            .output()
+            .expect("tmux show-environment to run");
+        assert!(out.status.success(), "show-environment {args:?} refused");
+        super::parse_server_env(&String::from_utf8_lossy(&out.stdout))
     }
 
     /// The owner's own predicate, kept as written: a `KEY=VALUE` whose key names a `TOKEN`, `KEY`, `SECRET` or

@@ -61,6 +61,44 @@ pub fn env_is_denied(key: &str) -> bool {
     ENV_DENY_PREFIXES.iter().any(|p| key.starts_with(p)) || ENV_DENY_NAMES.contains(&key)
 }
 
+/// The host plumbing a tmux SERVER may carry, and nothing else.
+///
+/// The server is not a seat: it is the one process of a room that outlives every seat, and a variable it holds
+/// is a variable `tmux show-environment -g` prints AND every pane created after it inherits. A deny list cannot
+/// hold that line - it misses whatever credential is added to `.env` tomorrow, and it would have to name
+/// `AGENTHUB_TOKEN` and `DEEPSEEK_API_KEY`, which the current list deliberately does not. An allowlist is the
+/// boundary instead (`RULING-sec02-tmux-global-env-2026-10-19.md`): a seat still receives its own values
+/// through `new-session -e`, so what the server needs is only what an idle server needs to exist, to be
+/// addressed and to run a shell.
+///
+/// `TMUX_TMPDIR` is the load-bearing member: it decides WHICH server, and a bootstrap that dropped it would
+/// start the host's default one instead of this root's. `PWD` is here because tmux itself writes it into the
+/// server's global environment from the creating client's directory (measured: a server started with
+/// `env_clear()` still carries `PWD`), and it is a path, not a credential.
+pub const ENV_SERVER_ALLOWLIST: [&str; 12] = [
+    "PATH",
+    "HOME",
+    "PWD",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "TMPDIR",
+    "XDG_CONFIG_HOME",
+    "XDG_RUNTIME_DIR",
+    "LANG",
+    "TMUX_TMPDIR",
+];
+
+/// Locale selectors are one family (`LC_ALL`, `LC_CTYPE`, `LC_MESSAGES`, …) and a seat's own text rendering is
+/// the one thing an empty-environment server would visibly break, so the family is allowed by prefix.
+pub const ENV_SERVER_ALLOW_PREFIXES: [&str; 1] = ["LC_"];
+
+pub fn server_env_allowed(key: &str) -> bool {
+    ENV_SERVER_ALLOWLIST.contains(&key)
+        || ENV_SERVER_ALLOW_PREFIXES.iter().any(|p| key.starts_with(p))
+}
+
 /// The denied keys actually present in this process's environment, for the exec wrapper.
 ///
 /// Used to launch a seat's pane through `env -u <key> …`, which is the only mechanism that satisfies the
@@ -69,28 +107,15 @@ pub fn env_is_denied(key: &str) -> bool {
 /// so removing a variable from a running process would not be visible where the predicate is measured, and
 /// tmux gives a pane its session environment from the tmux *server* when the variable is not in the client's.
 ///
-/// PREFIX keys only. An exact-name credential is removed before the pane exists — out of the seat's own
-/// environment and off the tmux server's global one, see `denied_name_keys` — so there is nothing left for a
-/// wrapper to unset, and naming it here would print the name on the pane's command line for the seat's whole
-/// life, which is the surface the owner's own measurement reads.
+/// PREFIX keys only. An exact-name credential never reaches the pane's own environment: it is dropped from the
+/// `-e` list and the tmux server's global environment is cleaned by allowlist before any pane exists
+/// (`pty::clean_server_env`) — so there is nothing left for a wrapper to unset, and naming it here would print
+/// the name on the pane's command line for the seat's whole life, which is the surface the owner's own
+/// measurement reads.
 pub fn denied_env_keys() -> Vec<String> {
     std::env::vars()
         .map(|(key, _)| key)
         .filter(|key| ENV_DENY_PREFIXES.iter().any(|p| key.starts_with(p)))
-        .collect()
-}
-
-/// The exact-name denied keys present in this process's environment: the credential class, cleaned off the
-/// tmux server's global environment before a pane is created.
-///
-/// A server that already exists keeps the environment it was created with, and a pane takes the SERVER's
-/// environment - so dropping the key from the seat's env map and from the `-e` list is not enough: measured on
-/// this box 2026-10-15, `tmux show-environment -g` held `AGENTHUB_CONNECTOR_TOKEN` while this runtime was the
-/// only thing creating sessions, and the panes inherited it from there.
-pub fn denied_name_keys() -> Vec<String> {
-    std::env::vars()
-        .map(|(key, _)| key)
-        .filter(|key| ENV_DENY_NAMES.contains(&key.as_str()))
         .collect()
 }
 
@@ -489,22 +514,17 @@ mod tests {
     }
 
     /// The two classes are handled by two mechanisms, and a key that reached the wrong one would break the
-    /// owner's measurement: the credential is cleaned off the tmux server and must never be WRAPPED, because a
-    /// wrapper prints the name on the pane's own command line for the seat's whole life, while a prefix key is
-    /// wrapped and published nowhere.
+    /// owner's measurement: the credential is cleaned off the tmux server by ALLOWLIST and must never be
+    /// WRAPPED, because a wrapper prints the name on the pane's own command line for the seat's whole life,
+    /// while a prefix key is wrapped and published nowhere.
     #[test]
     fn the_credential_is_removed_by_the_server_and_never_by_a_wrapper() {
         std::env::set_var("AGENTHUB_CONNECTOR_TOKEN", "sentinel");
         std::env::set_var("RIGGED_TESTONLY_CLASS", "poison");
-        let named = denied_name_keys();
         let wrapped = denied_env_keys();
         std::env::remove_var("AGENTHUB_CONNECTOR_TOKEN");
         std::env::remove_var("RIGGED_TESTONLY_CLASS");
 
-        assert!(
-            named.contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()),
-            "{named:?}"
-        );
         assert!(
             !wrapped.contains(&"AGENTHUB_CONNECTOR_TOKEN".to_string()),
             "the credential would be named on every pane's command line: {wrapped:?}"
