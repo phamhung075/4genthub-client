@@ -29,14 +29,13 @@ type checks struct {
 	D5Numstat bool `json:"d5_numstat_sanity"`
 }
 
-// result is the gate's whole answer. Warnings are advisory: they name criteria whose wording the judge
-// cannot read, and they never change the verdict.
+// result is the gate's whole answer. A criterion whose only fact is a redacted path is a refusal, not a
+// warning: the gate refuses it before the judge sees it, with the same words it would print as advice.
 type result struct {
 	Verdict   clientjev.Verdict `json:"verdict"`
 	Reasons   string            `json:"reasons"`
 	Checks    checks            `json:"deterministic_checks"`
 	Evaluator string            `json:"evaluator"`
-	Warnings  []string          `json:"warnings,omitempty"`
 }
 
 // register is what the evidence bundle carries, and the only set of facts a criterion may be about: the
@@ -71,15 +70,22 @@ type facts struct {
 	command, exitCode, path, sha, count bool
 }
 
-// any is carries' own rule: each fact stands on its own.
+// any reports whether the criterion names any register fact. Each fact stands on its own - that is the
+// ruling's "a criterion resolving to NONE of these is refused" - so a criterion naming the run's exit code or
+// a carried path is judged even when it names neither command nor sha. The bundle's exit-code fact is THIS
+// run's own value, so a criterion claiming a different code does not resolve to it (it is still judged if it
+// names the command, which is a fact in its own right). Whether the named facts survive the wire is
+// pathOnly's question, and the gate refuses on both.
 func (f facts) any() bool { return f.command || f.exitCode || f.path || f.sha || f.count }
 
-// carries reports whether the criterion is about a fact the bundle carries. Each fact stands on its own -
-// that is the ruling's "a criterion resolving to NONE of these is refused" - so a criterion naming the run's
-// exit code or a carried path is judged even when it names neither command nor sha. The bundle's exit-code
-// fact is THIS run's own value, so a criterion claiming a different code does not resolve to it (it is still
-// judged if it names the command, which is a fact in its own right).
-func (r register) carries(criterion string) bool { return r.names(criterion).any() }
+// pathOnly reports whether a carried path is the criterion's ONLY fact. The register can read such a
+// criterion and the judge cannot: the count-only wire (clientjev.RedactForWire, owner ruling O9a) replaces
+// the path with "<path>" before Jev sees it, so the judge would be asked whether "<path> is fixed" - a
+// claim whose only fact was removed. The gate knows that in the same millisecond it resolves the criterion,
+// so it refuses instead of spending a judge call and a completion cycle on a verdict it cannot defend.
+// A criterion that carries a path AND another fact stays admitted: the claim then survives the redaction
+// (precedent 35431928: "go -C agenthub_go test <path> -count=1 exits 0" closed at 0.96-0.98).
+func (f facts) pathOnly() bool { return f.path && !f.command && !f.exitCode && !f.sha && !f.count }
 
 // names says which of the register's facts a criterion names.
 func (r register) names(criterion string) facts {
@@ -176,27 +182,6 @@ func firstInteger(text string) (int, bool) {
 	return 0, false
 }
 
-// pathOnlyWarnings names the criteria the judge will read blind. A criterion that carries a numstat path and
-// none of the command, the exit code, a sha or a count is ADMITTED by the register, and then the count-only
-// wire (clientjev.RedactForWire, owner ruling O9a) replaces its path with "<path>" before Jev sees it: the
-// judge is asked whether "<path> is fixed", a claim whose only fact was removed. These are warnings, not
-// refusals - the criterion stays in the judge's set and the verdict is unchanged - and each names the form
-// the wire carries: the test command with its exit code, a base/head sha prefix, and the counts.
-func (r register) pathOnlyWarnings(criteria []string) []string {
-	var warnings []string
-	for i, criterion := range criteria {
-		f := r.names(criterion)
-		if !f.path || f.command || f.exitCode || f.sha || f.count {
-			continue
-		}
-		warnings = append(warnings, fmt.Sprintf("criterion_%d %q names only a carried path, and the wire "+
-			"redacts a path to <path> before Jev sees it, so the criterion is judged blind; name a fact the "+
-			"judge can read: the test command with its exit code, a base/head sha prefix, or the counts "+
-			"(files_changed, lines_changed, lines_added, lines_deleted) with this bundle's value", i+1, criterion))
-	}
-	return warnings
-}
-
 // shaToken is a sha a criterion may name: the register's 7-char floor, and at most one 40-hex commit sha.
 // Either case is accepted, because a criterion may spell a sha the way it was pasted.
 var shaToken = regexp.MustCompile(`(?i)\b[0-9a-f]{7,40}\b`)
@@ -254,13 +239,30 @@ func baseMismatchWarnings(ctx context.Context, criteria []string, base, head str
 	return warnings
 }
 
-// refusal is the unjudgeable verdict's own words: the criteria it refused, the ones that were judgeable, and
-// the register the bundle does carry. R6 of the ruling: a refusal is corrected by REMOVING the claims the
-// bundle cannot carry, so the reader must be told both which claims those are and what the bundle does carry.
-func (r register) refusal(refused, judgeable []int, criteria []string) string {
-	named := make([]string, 0, len(refused))
-	for _, i := range refused {
-		named = append(named, fmt.Sprintf("criterion_%d %q", i+1, criteria[i]))
+// refusal is the unjudgeable verdict's own words: the criteria it REFUSED, split into the ones naming no
+// fact the bundle carries (silent) and the ones whose only fact is a path the wire redacts (blind), the ones
+// that were judgeable, and the register the bundle does carry. R6 of the ruling: a refusal is corrected by
+// REMOVING the claims the bundle cannot carry, so the reader must be told both which claims those are and
+// what the bundle does carry. The blind criterion's advice is the vocabulary the wire does carry - the test
+// command with its exit code, a base/head sha prefix, the counts - not the path that was just taken away.
+func (r register) refusal(silent, blind, judgeable []int, criteria []string) string {
+	isSilent := make([]bool, len(criteria))
+	for _, i := range silent {
+		isSilent[i] = true
+	}
+	isBlind := make([]bool, len(criteria))
+	for _, i := range blind {
+		isBlind[i] = true
+	}
+	named := make([]string, 0, len(silent)+len(blind))
+	for i, criterion := range criteria {
+		switch {
+		case isSilent[i]:
+			named = append(named, fmt.Sprintf("criterion_%d %q names no fact this bundle carries", i+1, criterion))
+		case isBlind[i]:
+			named = append(named, fmt.Sprintf("criterion_%d %q names only a carried path, and the wire redacts a "+
+				"path to <path> before Jev sees it, so the criterion would be judged blind", i+1, criterion))
+		}
 	}
 	ids := make([]string, 0, len(judgeable))
 	for _, i := range judgeable {
@@ -270,12 +272,13 @@ func (r register) refusal(refused, judgeable []int, criteria []string) string {
 	if len(ids) > 0 {
 		carries = strings.Join(ids, ", ")
 	}
-	return fmt.Sprintf("unjudgeable: %s name no fact this bundle carries, so the task cannot close and Jev was "+
-		"not asked; judgeable: %s. The register carries the test command %q with exit code %d, the numstat paths "+
-		"(%s) and its counts (files_changed %d, lines_changed %d, lines_added %d, lines_deleted %d), and the "+
-		"base/head shas (%s)", strings.Join(named, ", "), carries, r.command, r.exitCode,
-		strings.Join(r.pathList(), ", "), r.counts.Files(), r.counts.Total(), r.counts.Added, r.counts.Deleted,
-		strings.Join(r.shas, ", "))
+	return fmt.Sprintf("unjudgeable: %s. The task cannot close and Jev was not asked; judgeable: %s. A criterion "+
+		"must name a fact the judge can read: the test command %q with its exit code %d, a base/head sha prefix "+
+		"(%s), or the counts (files_changed %d, lines_changed %d, lines_added %d, lines_deleted %d) with this "+
+		"bundle's value. The register also carries the numstat paths (%s), but the wire replaces a path with "+
+		"<path>, so a path is not enough on its own", strings.Join(named, "; "), carries, r.command, r.exitCode,
+		strings.Join(r.shas, ", "), r.counts.Files(), r.counts.Total(), r.counts.Added, r.counts.Deleted,
+		strings.Join(r.pathList(), ", "))
 }
 
 // normaliseSpace folds every run of whitespace into one space, which is the form the ruling defines the
@@ -335,21 +338,24 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 	}
 	r := register{command: normaliseSpace(body.Test.Command), exitCode: body.Test.ExitCode, counts: stats,
 		shas: []string{body.BaseSHA, body.HeadSHA}}
-	warnings := r.pathOnlyWarnings(criteria)
-	var refused, judgeable []int
+	var silent, blind, judgeable []int
 	for i, criterion := range criteria {
-		if r.carries(criterion) {
+		f := r.names(criterion)
+		switch {
+		case f.pathOnly():
+			blind = append(blind, i)
+		case f.any():
 			judgeable = append(judgeable, i)
-			continue
+		default:
+			silent = append(silent, i)
 		}
-		refused = append(refused, i)
 	}
-	if len(refused) > 0 {
-		return result{Verdict: clientjev.Unjudgeable, Reasons: r.refusal(refused, judgeable, criteria),
-			Checks: c, Evaluator: "deterministic", Warnings: warnings}
+	if len(silent) > 0 || len(blind) > 0 {
+		return result{Verdict: clientjev.Unjudgeable, Reasons: r.refusal(silent, blind, judgeable, criteria),
+			Checks: c, Evaluator: "deterministic"}
 	}
 	verdict, reasons, _ := cfg.EvaluateCriteria(ctx, criteria, body)
-	return result{Verdict: verdict, Reasons: reasons, Checks: c, Evaluator: "jev", Warnings: warnings}
+	return result{Verdict: verdict, Reasons: reasons, Checks: c, Evaluator: "jev"}
 }
 
 func keptOut(path string) (string, bool) {

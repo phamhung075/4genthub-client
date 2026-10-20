@@ -191,7 +191,8 @@ func TestACriterionIsJudgedOnlyWhenTheBundleCarriesItsFact(t *testing.T) {
 	}{
 		{"the submitted command", "the acceptance command `go test -count=1 ./...` exits 0", false},
 		{"this run's own exit code", "the run exits 0 with nothing failed", false},
-		{"a path the numstat lists", "the numstat names internal/seatpark/park.go", false},
+		{"a path the numstat lists", "the numstat names internal/seatpark/park.go", true},
+		{"a path plus this run's exit code", "the run exits 0 and internal/seatpark/park.go carries the change", false},
 		{"a path the numstat does not list", "the numstat names internal/nowhere/absent.go", true},
 		{"production behaviour", "the panel renders the pending row on production", true},
 	} {
@@ -223,7 +224,11 @@ func TestABaseShaPrefixAloneIsJudged(t *testing.T) {
 	}
 }
 
-func TestAPathOnlyCriterionIsWarnedAndStillJudged(t *testing.T) {
+// A path is the one fact the wire takes away, so a criterion whose only fact is a path is REFUSED here, before
+// the judge is asked: the same refusal the verb used to print as advice, with the vocabulary the wire does
+// carry. The sibling criterion names the command, its exit code and a sha - it keeps a fact after redaction and
+// is judged.
+func TestAPathOnlyCriterionIsRefusedBeforeTheJudge(t *testing.T) {
 	cfg, hits, asked := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99},"criterion_2":{"noul":0.97}}}`)
 	criteria := []string{
 		"the file internal/roombudget/roombudget.go is fixed",
@@ -231,37 +236,36 @@ func TestAPathOnlyCriterionIsWarnedAndStillJudged(t *testing.T) {
 			"names rust/agenthub-runtime/tests/seat_guard.rs",
 	}
 	got := evaluate(context.Background(), cfg, criteria, measured())
-	if got.Verdict != clientjev.Accept || got.Evaluator != "jev" || *hits != 1 {
-		t.Fatalf("the warning is not a refusal: got %+v, %d judge calls", got, *hits)
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+		t.Fatalf("a path-only criterion is refused, not judged: got %+v", got)
 	}
-	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "criterion_1") {
-		t.Fatalf("the path-only criterion is the one warned, got %q", got.Warnings)
+	if *hits != 0 || len(*asked) != 0 {
+		t.Fatalf("Jev was called %d times (%v) for a criterion the gate knows is judged blind", *hits, *asked)
 	}
-	if strings.Contains(got.Warnings[0], "criterion_2") {
-		t.Errorf("criterion_2 names the command, its exit code and a sha, so it must not be warned: %q", got.Warnings[0])
+	if !strings.Contains(got.Reasons, `criterion_1 "the file internal/roombudget/roombudget.go is fixed"`) {
+		t.Errorf("the refusal must name the blind criterion by number:\n%s", got.Reasons)
 	}
-	for _, want := range []string{"test command", "exit code", "sha", "counts"} {
-		if !strings.Contains(got.Warnings[0], want) {
-			t.Errorf("the warning must name the admissible form (%q is missing): %s", want, got.Warnings[0])
+	if strings.Contains(got.Reasons, `criterion_2 "`) {
+		t.Errorf("criterion_2 names the command, its exit code and a sha, so it must not be refused:\n%s", got.Reasons)
+	}
+	for _, want := range []string{"test command", "exit code", "sha", "counts", "judgeable: criterion_2"} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the refusal must name the admissible form (%q is missing):\n%s", want, got.Reasons)
 		}
 	}
-	// The judged text went out with its only fact redacted: that is what the warning is about.
-	shaped := ""
-	for _, instruction := range *asked {
-		if strings.Contains(instruction, "is fixed") {
-			shaped = instruction
+	// The measured evidence stays in the message: the register's own paths and counts.
+	for _, want := range []string{"internal/seatpark/park.go", "files_changed 4", "lines_added 45"} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the refusal must print the measured register (%q is missing):\n%s", want, got.Reasons)
 		}
-	}
-	if !strings.Contains(shaped, "<path>") {
-		t.Errorf("the path-only criterion reached the judge unredacted (%q): the warning's premise is the wire", shaped)
 	}
 }
 
-func TestAShaAndCountCriterionIsNotWarned(t *testing.T) {
+func TestAShaAndCountCriterionIsJudged(t *testing.T) {
 	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.97}}}`)
 	got := evaluate(context.Background(), cfg, []string{"measured from base b32369c, the numstat names 2 files"}, measured())
-	if got.Verdict != clientjev.Accept || *hits != 1 || len(got.Warnings) != 0 {
-		t.Errorf("a sha+count criterion is readable, so no warning: got %+v, %d judge calls", got, *hits)
+	if got.Verdict != clientjev.Accept || *hits != 1 {
+		t.Errorf("a sha+count criterion is readable, so it is judged: got %+v, %d judge calls", got, *hits)
 	}
 }
 
@@ -346,9 +350,6 @@ func TestAMergeGitlinkDiffAndATwoFileDocsDiffAreAdmitted(t *testing.T) {
 				t.Fatalf("a sha+counts criterion on this diff is a bundle fact, so it is judged: got %+v, %d calls",
 					got, *hits)
 			}
-			if len(got.Warnings) != 0 {
-				t.Errorf("the criterion names a sha, so it is not judged blind: %q", got.Warnings)
-			}
 			if len(*states) != 1 {
 				t.Fatalf("the judge was shown %d states, want the one counts summary", len(*states))
 			}
@@ -402,7 +403,7 @@ func TestOneRefusedCriterionRefusesTheCompletionEvenWhenTheOthersWouldAccept(t *
 func TestCriteriaVerdicts(t *testing.T) {
 	// The judge's verdict mapping is this test's subject, so the criteria are the register's own shape: a
 	// criterion the bundle carries no fact about never reaches the judge (TestACriterionIsJudgedOnly…).
-	judged := []string{"the numstat names src/a.go", "the run exits 0"}
+	judged := []string{"the numstat names src/a.go and lines_changed is 4", "the run exits 0"}
 	for _, tc := range []struct {
 		reply string
 		want  clientjev.Verdict
@@ -593,17 +594,38 @@ func TestFailingTestRunInShadowCompletesWithExitFive(t *testing.T) {
 	}
 }
 
-func TestPathOnlyCriterionWarnsOnStderrAndStillCompletes(t *testing.T) {
+// A path-only criterion is refused by the verb itself: enforced, it stops before any server write; in shadow
+// it records the verdict and completes, exactly as any other non-accept verdict does.
+func TestPathOnlyCriterionRefusesTheCompletion(t *testing.T) {
 	base := repo(t)
-	taskServer(t, `["the file a.txt is changed"]`)
+	rec := taskServer(t, `["the file a.txt is changed"]`)
+	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	t.Setenv(enforcementEnv, "true")
+	code, out, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
+	var verdict result
+	if err := json.Unmarshal([]byte(out), &verdict); err != nil || code != ExitGateRefused ||
+		verdict.Verdict != clientjev.Unjudgeable {
+		t.Fatalf("a path-only criterion must stop the completion: exit %d out %q err %q", code, out, errs)
+	}
+	if !strings.Contains(errs, `criterion_1 "the file a.txt is changed"`) || !strings.Contains(errs, "judged blind") {
+		t.Errorf("the refusal must name the criterion and the redaction: err %q", errs)
+	}
+	if !strings.Contains(errs, "the task was not completed") {
+		t.Errorf("the enforced refusal must say the task was not completed: err %q", errs)
+	}
+	if len(rec.calls) != 1 || rec.calls[0] != "GET /api/v2/tasks/t1" {
+		t.Errorf("calls = %v, want only the task read", rec.calls)
+	}
+}
+
+func TestPathOnlyCriterionInShadowRecordsAndCompletes(t *testing.T) {
+	base := repo(t)
+	rec := taskServer(t, `["the file a.txt is changed"]`)
 	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
 	t.Setenv(enforcementEnv, "")
 	code, _, errs := run("--task", "t1", "--base", base, "--summary", "s", "--test", "git --version")
-	if code != clientcmd.ExitOK || !strings.Contains(errs, "warning: criterion_1") || !strings.Contains(errs, "judged blind") {
-		t.Errorf("the warning is a preflight of the verdict, not a refusal: exit %d err %q", code, errs)
-	}
-	if !strings.Contains(errs, "gate (shadow) accept") {
-		t.Errorf("the criterion was still judged: err %q", errs)
+	if code != clientcmd.ExitOK || !strings.Contains(errs, "gate (shadow) unjudgeable") || len(rec.calls) != 4 {
+		t.Errorf("exit %d err %q calls %v", code, errs, rec.calls)
 	}
 }
 
@@ -746,14 +768,13 @@ func TestAZeroCountIsACarriedValue(t *testing.T) {
 	}
 }
 
-// The warning's premise is that a path is the criterion's ONLY readable fact. A criterion that also states a
-// count now has one, so it is not judged blind and must not be warned.
-func TestAPathPlusCountCriterionIsNotWarned(t *testing.T) {
+// A path plus a readable fact is admitted: the count survives the wire, so the claim is not judged blind.
+func TestAPathPlusCountCriterionIsJudged(t *testing.T) {
 	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
 	got := evaluate(context.Background(), cfg,
 		[]string{"the file internal/seatpark/park.go changed and files_changed is 4"}, measured())
-	if got.Verdict != clientjev.Accept || *hits != 1 || len(got.Warnings) != 0 {
-		t.Errorf("a path plus this bundle's count is readable, so no warning: got %+v, %d calls", got, *hits)
+	if got.Verdict != clientjev.Accept || *hits != 1 {
+		t.Errorf("a path plus this bundle's count is readable, so it is judged: got %+v, %d calls", got, *hits)
 	}
 }
 

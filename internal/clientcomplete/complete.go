@@ -157,9 +157,6 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 	}
 
 	verdict := evaluate(ctx, cfg, state.Criteria, body)
-	for _, warning := range verdict.Warnings {
-		fmt.Fprintf(stderr, "4genteam complete: warning: %s\n", warning)
-	}
 	encoded, _ := json.Marshal(verdict)
 	enforced := strings.EqualFold(strings.TrimSpace(os.Getenv(enforcementEnv)), "true")
 	entry := clientjev.LogEntry{Timestamp: time.Now(), Kind: "gate", Summary: "task " + opts.task, Detail: verdict.Reasons, Outcome: string(verdict.Verdict)}

@@ -141,13 +141,14 @@ Running a verification is necessary but not sufficient: a check can exit clean a
 `4genteam complete` sends the acceptance criteria to a counts-only judge, so a criterion must name something
 the judge is SHOWN. Paths are redacted to `<path>` and test names to `<test>` at the transport, and exactly
 seven keys travel: test_command_ran, test_exit_code, tests_failed, files_changed, lines_changed, base_sha,
-head_sha. A criterion is admitted only when it names the test command, the run's exit code, a path this run's
-numstat lists, or a base/head sha prefix of at least 7 (`clientcomplete/gate.go`, `register.carries`); there is
-no line-count branch, so a count alone is refused before the judge is called.
+head_sha. A criterion is admitted only when it names the test command, the run's exit code, a base/head sha
+prefix of at least 7, or a count key with this bundle's value (`clientcomplete/gate.go`, `register.names`); a
+criterion whose only fact is a path is refused even when the numstat lists it, because the path is the fact the
+wire removes. There is no line-count sentence: state the key and the value.
 
 - **Admissible and informative:** the sha prefix plus the totals - "between 2c34515 and 216a89d, files_changed
-  is 3 and lines_changed is 21". Measured bands: a path-only criterion is admitted then judged blind
-  (0.16-0.34); a count alone is refused (exit 6); sha plus totals settles at 0.93-0.97.
+  is 3 and lines_changed is 21". Measured bands: a path-only criterion is refused before the judge (exit 6, no
+  judge call); a count alone with no key is refused too; sha plus totals settles at 0.93-0.97.
 - **The base is the commit the change LEFT the line at:** the second parent of a merge tip, otherwise the
   merge-base. The merge-base shortcut reports main-only commits reversed - measured: 3 files/72 lines where
   the true change is 3 files/21 lines.

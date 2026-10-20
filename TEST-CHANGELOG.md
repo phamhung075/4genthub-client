@@ -2,6 +2,25 @@
 
 Track test suite changes, fixes, and improvements for the client.
 
+## 2026-10-20 - a path-only criterion is a refusal, not a warning (branch 4genthub-min/int03-cascades)
+
+- `internal/clientcomplete/complete_test.go`: `TestAPathOnlyCriterionIsWarnedAndStillJudged` is deleted with
+  the contract it pinned (the warning), and `TestAPathOnlyCriterionIsRefusedBeforeTheJudge` replaces it: the
+  verdict is `unjudgeable`, `evaluator` is `deterministic`, the judge is never called, the refusal names
+  `criterion_1` with the vocabulary the wire carries (test command, exit code, sha, counts), and the sibling
+  criterion that keeps a fact after redaction stays judgeable.
+- `TestPathOnlyCriterionWarnsOnStderrAndStillCompletes` (deleted) splits into
+  `TestPathOnlyCriterionRefusesTheCompletion` - enforced mode, exit 6 and no server write - and
+  `TestPathOnlyCriterionInShadowRecordsAndCompletes` - shadow mode, the verdict recorded and the completion
+  still sent, as for any other non-accept verdict.
+- `TestAShaAndCountCriterionIsNotWarned`, `TestAPathPlusCountCriterionIsNotWarned` and the table entry
+  asserting `Warnings` is empty are renamed (or rewritten) to `TestAShaAndCountCriterionIsJudged` and
+  `TestAPathPlusCountCriterionIsJudged`, which assert the judge call and the verdict instead of a warning.
+- `TestACriterionIsJudgedOnlyWhenTheBundleCarriesItsFact` gains the boundary the new rule needs: a path plus
+  this run's exit code is admitted, and a path alone is not.
+- GREEN on 2026-10-20: `go test ./internal/clientcomplete/... -count=1` and `go test ./... -count=1` in
+  `agenthub_client`, plus `go vet ./internal/clientcomplete/`.
+
 ## 2026-10-20 - the probe refusals have their own tests (branch 4genthub-min/int03-cascades)
 
 - `internal/clientservices/services_test.go`: `TestVerifyRefusesWhenTheProcessProbeCannotRun` - `Live`
