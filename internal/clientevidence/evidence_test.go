@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -858,5 +860,88 @@ func TestARefusedSubmissionPrintsNoDoneReport(t *testing.T) {
 	server.mu.Unlock()
 	if read != 0 {
 		t.Errorf("a refused submission read the board row %d time(s)", read)
+	}
+}
+
+// withLookPath pins what `tsc` resolves to, so the placeholder check needs no PATH.
+func withLookPath(t *testing.T, resolve func(string) (string, error)) {
+	t.Helper()
+	previous := lookPath
+	lookPath = resolve
+	t.Cleanup(func() { lookPath = previous })
+}
+
+// A bare `tsc` that resolves outside node_modules is npm's placeholder package: it exits 0 without
+// compiling, so the run is refused as usage and nothing is submitted. Measured 2026-10-21 on hub task
+// b7a2c44c, where that exit 0 was recorded as a passing test run.
+func TestEvidenceRefusesATscOutsideNodeModules(t *testing.T) {
+	server := newEvidenceServer(t)
+	evidenceEnv(t, server.URL, "tok")
+	withGit(t, standardGit())
+	calls := withTestCommand(t, testRun{output: "This is not the tsc command you are looking for", exitCode: 0})
+	withLookPath(t, func(string) (string, error) { return "/usr/local/bin/tsc", nil })
+
+	var stdout, stderr bytes.Buffer
+	code := runEvidence(context.Background(), []string{"--task", "t", "--base", "main", "--test", "tsc --noEmit"}, &stdout, &stderr)
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "/usr/local/bin/tsc") || !strings.Contains(stderr.String(), "node_modules") {
+		t.Errorf("stderr = %q, want the resolved path and the node_modules rule named", stderr.String())
+	}
+	if len(*calls) != 0 {
+		t.Errorf("the placeholder was run anyway: %v", *calls)
+	}
+	if server.hits() != 0 {
+		t.Errorf("a refused placeholder dialed the server %d time(s)", server.hits())
+	}
+}
+
+// `npx tsc` is the shape that installed the placeholder in the first place: with no node_modules/typescript
+// in the directory the run happens in, npx resolves the npm package and the exit code means nothing.
+func TestEvidenceRefusesNpxTscWithoutALocalTypeScript(t *testing.T) {
+	server := newEvidenceServer(t)
+	evidenceEnv(t, server.URL, "tok")
+	withGit(t, standardGit())
+	calls := withTestCommand(t, testRun{exitCode: 0})
+	empty := t.TempDir()
+	t.Chdir(empty)
+
+	var stdout, stderr bytes.Buffer
+	code := runEvidence(context.Background(), []string{"--task", "t", "--base", "main", "--test", "npx tsc --noEmit -p agenthub-frontend"}, &stdout, &stderr)
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "npx tsc") || !strings.Contains(stderr.String(), "npm ci") {
+		t.Errorf("stderr = %q, want the wrapper and the install step named", stderr.String())
+	}
+	if len(*calls) != 0 || server.hits() != 0 {
+		t.Errorf("refused run still worked: calls=%v hits=%d", *calls, server.hits())
+	}
+}
+
+// The same command with TypeScript installed locally is an ordinary run: the refusal must not cost the
+// room its typecheck.
+func TestEvidenceRunsNpxTscWithALocalTypeScript(t *testing.T) {
+	server := newEvidenceServer(t)
+	evidenceEnv(t, server.URL, "tok")
+	withGit(t, standardGit())
+	calls := withTestCommand(t, testRun{exitCode: 0})
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "node_modules", "typescript"), 0o755); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	t.Chdir(dir)
+
+	var stdout, stderr bytes.Buffer
+	code := runEvidence(context.Background(), []string{"--task", "t", "--base", "main", "--test", "npx tsc --noEmit"}, &stdout, &stderr)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr.String())
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("the typecheck ran %d time(s), want 1", len(*calls))
+	}
+	if got := strings.Join((*calls)[0], " "); got != "npx tsc --noEmit" {
+		t.Errorf("argv = %q, want the command as typed", got)
 	}
 }

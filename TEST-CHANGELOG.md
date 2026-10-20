@@ -1,3 +1,11 @@
+## 2026-10-21 - the evidence verb refuses a placeholder `tsc` (go, branch 4genthub-min/guard-imports-a-tree)
+
+`internal/clientevidence/evidence_test.go` gains three cases over `notTheCompiler`: a bare `tsc` resolving
+outside `node_modules` is usage and never runs (`withLookPath` stubs the resolution), `npx tsc` with no
+`node_modules/typescript` in the run's directory is usage, and `npx tsc` with one present runs the argv as
+typed and posts. Each refusal asserts the seam was never called and the server was never dialed, so the
+cases pin the ordering, not just the message.
+
 ## 2026-10-20 - the queue-coalesce fixture's room is not named after the retired unit (go-dev)
 
 `rust/agenthub-runtime/tests/seat_guard.rs`: `COALESCE_ROOM` is `demo-room`, not `rig`. The constant is the

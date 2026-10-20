@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -115,6 +116,55 @@ var runTestCommand = func(ctx context.Context, argv []string) (string, int, erro
 		return combined.String(), exit.ExitCode(), nil
 	}
 	return combined.String(), 0, err
+}
+
+// lookPath is the seam over PATH resolution for the one program this package has to know by name.
+var lookPath = exec.LookPath
+
+// notTheCompiler refuses a typecheck that cannot compile anything, and returns "" for every other command.
+//
+// npm has a package NAMED `tsc`. It is not TypeScript: it prints a notice and exits 0, and `npx tsc` will
+// resolve, install and run it whenever TypeScript is not installed. Measured 2026-10-21 (hub task
+// b7a2c44c): `npx tsc --noEmit -p agenthub-frontend` at the hub root exited 0 in 0.88 s having compiled
+// nothing, and the completion gate recorded the test run as passing. An exit code from that program is not
+// a test result, so the run is refused before it starts rather than submitted as one. The rule is the same
+// in both shapes: the compiler must resolve inside a node_modules, which is the only place the real one
+// lives - a bare `tsc` through LookPath, or `npx tsc` needing node_modules/typescript in the directory it
+// runs in.
+func notTheCompiler(argv []string) string {
+	wrappers := map[string]bool{"npx": true, "bunx": true, "pnpm": true, "yarn": true, "bun": true, "npm": true}
+	dir, _ := os.Getwd()
+	target := ""
+	switch {
+	case wrappers[argv[0]]:
+		// The wrapper's own noise, then the program it would run: `npx --no-install tsc`, `pnpm exec tsc`,
+		// `npm exec tsc`, `bun x tsc`.
+		noise := map[string]bool{"exec": true, "dlx": true, "run": true, "x": true, "-y": true, "--yes": true, "--no-install": true}
+		for _, word := range argv[1:] {
+			if strings.HasPrefix(word, "-") || noise[word] {
+				continue
+			}
+			target = word
+			break
+		}
+		if target != "tsc" {
+			return ""
+		}
+		if _, err := os.Stat(filepath.Join(dir, "node_modules", "typescript")); err == nil {
+			return ""
+		}
+		return fmt.Sprintf("%s tsc would run npm's placeholder package `tsc`, which prints a notice and exits 0 having compiled nothing (no node_modules/typescript in %s): install it with `npm ci` first, then the same command runs the real compiler", argv[0], dir)
+	case argv[0] == "tsc":
+		resolved, err := lookPath("tsc")
+		if err != nil {
+			return ""
+		}
+		if strings.Contains(resolved, string(filepath.Separator)+"node_modules"+string(filepath.Separator)) {
+			return ""
+		}
+		return fmt.Sprintf("`tsc` resolves to %s, outside any node_modules: npm's package of that name prints a notice and exits 0 having compiled nothing. Install TypeScript with `npm ci` and run `node_modules/.bin/tsc`, or this run is not a typecheck", resolved)
+	}
+	return ""
 }
 
 // evidenceTest is the test block. It carries the command LINE as typed, the exit code, and the failing
@@ -227,6 +277,10 @@ func Collect(ctx context.Context, base, test string) (Body, *CollectFailure) {
 			return Body{}, &CollectFailure{Usage: true, Message: "--test names no command"}
 		}
 		testArgv = argv
+		// Refused before git runs: a command that cannot be a test is a caller error whatever the range holds.
+		if refusal := notTheCompiler(argv); refusal != "" {
+			return Body{}, &CollectFailure{Usage: true, Message: refusal}
+		}
 	}
 	baseSHA, err := resolveSHA(ctx, base)
 	if err != nil {
