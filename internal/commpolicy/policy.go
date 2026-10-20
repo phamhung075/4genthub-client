@@ -211,7 +211,7 @@ func Decide(policy Policy, to string, intent Intent) Decision {
 }
 
 // LiveSet is the destinations a sending seat may reach now, keyed by seat key: the peers its own
-// `rig whoami` returns, which are the members of the rig whose sessions are up. A nil set means liveness
+// the runtime's own records return, which are the members of the room whose sessions are up. A nil set means liveness
 // was not consulted, and the policy decision then stands alone.
 type LiveSet map[string]bool
 
@@ -326,18 +326,17 @@ func writeUint(h hash.Hash, v uint64) {
 //
 // THE SET IS THE UNAUDITED SEND ROUTES AND NOTHING ELSE (architect ruling,
 // 2026-10-17): raw pane input (`4genteam input`, `tmux send-keys`,
-// `tmux paste-buffer`) and the foreign `rig` spellings, which are not this client
-// on any host. `4genteam send` IS the audited path - it builds the sender's
-// policy at send time, writes the decision line, delivers and writes the outcome
-// line (internal/clientseat/sendpolicy.go) - so flagging it flagged the only route
-// the guard skill names. The rail's `room queue create` is admitted for the same
-// reason: it records a row the daemon owns, and the row is read, not injected.
+// `tmux paste-buffer`). `4genteam send` IS the audited path - it builds the
+// sender's policy at send time, writes the decision line, delivers and writes the
+// outcome line (internal/clientseat/sendpolicy.go) - so flagging it flagged the
+// only route the guard skill names. The rail's `room queue create` is admitted for
+// the same reason: it records a row the daemon owns, and the row is read, not
+// injected.
 //
-// The retired `rig` spellings stay for a reason the host state does not change:
-// a `rig` on some other host's PATH is not this client and must never carry a
-// seat's message. On this host (measured 2026-10-15, re-measured 2026-10-17)
-// `rig` is not on PATH at all and `~/.local/bin/rig` does not exist; the client
-// is one file, `~/.local/bin/4genteam`.
+// THE PREDECESSOR'S CASE IS DELETED, NOT RENAMED (owner ruling, 2026-10-20): its
+// binary was purged, so the case protected nothing, and the switch matches the
+// second word of a `4genteam` line - a `room` case could never fire and would
+// assert a binary that does not exist.
 func BypassSuspected(known []string, observed string) bool {
 	fields := strings.Fields(observed)
 	i := 0
@@ -364,8 +363,6 @@ func BypassSuspected(known []string, observed string) bool {
 	case "4genteam":
 		// `input` writes into the pane; `send` (the audited path) and `room ...` are not flagged.
 		return sub == "input"
-	case "rig":
-		return sub == "send" || sub == "queue" || sub == "broadcast"
 	case "tmux":
 		return sub == "send-keys" || sub == "paste-buffer"
 	default:

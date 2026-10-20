@@ -133,7 +133,7 @@ const (
 	Machine Scope = "machine"
 	// Room is one service per room: the compaction supervisor, the watchdog, the seat deliverer, the idle-room
 	// guard and the budget guard.
-	Room Scope = "rig"
+	Room Scope = "room"
 )
 
 // Service is one row of 7.8: a thing that must run, where it runs, how it starts, how it is checked, and

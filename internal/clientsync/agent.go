@@ -578,7 +578,7 @@ func (d *AgentDaemon) publishRows(rows []clientservices.Health) error {
 	for _, row := range rows {
 		frame := map[string]any{
 			"type":      "safeguard",
-			"rig":       row.Room,
+			"room":      row.Room,
 			"safeguard": row.Safeguard,
 			"state":     row.State,
 			"restarts":  row.Restarts,

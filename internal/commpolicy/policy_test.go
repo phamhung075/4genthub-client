@@ -333,30 +333,17 @@ func TestBypassSuspected(t *testing.T) {
 		observed string
 		want     bool
 	}{
-		{"rig send", "rig send bob hello", true},
-		{"rig queue", "rig queue bob", true},
-		{"rig broadcast", "rig broadcast hello", true},
 		{"tmux send-keys", "tmux send-keys -t s hello Enter", true},
 		{"tmux paste-buffer", "tmux paste-buffer -t s", true},
-		{"leading env", "FOO=1 rig send bob", true},
-		{"multiple leading env", "FOO=1 BAR=2 /usr/bin/rig queue bob", true},
-		{"env value with colon", "PATH=/usr/bin:/bin rig broadcast", true},
-		{"leading path", "/usr/bin/rig send bob", true},
-		{"collapsed spaces", "rig   send bob", true},
-		{"known wrapper", "agenthub-send rig send bob", false},
 		{"known wrapper with path", "/usr/local/bin/agenthub-send x", false},
 		{"known wrapper after env", "FOO=1 agenthub-send x", false},
-		{"rig status", "rig status", false},
-		{"rig alone", "rig", false},
 		{"tmux list-sessions", "tmux list-sessions", false},
 		{"tmux alone", "tmux", false},
-		{"prefix only", "echo rig send bob", false},
 		{"empty", "", false},
 		{"case sensitive", "ROOM send bob", false},
 		{"subcommand prefix", "room sends bob", false},
 
-		// The native client, which is what a seat on this host actually types:
-		// the retired `rig` spellings above no longer name a file the client owns.
+		// The native client, which is what a seat on this host actually types.
 		// `send` is the AUDITED path and `room queue create` is admitted, so neither is a bypass;
 		// `input` writes straight into a pane and still is.
 		{"native send to a session", "4genteam send agenthub--r--bob hello", false},
@@ -415,8 +402,8 @@ func TestBypassSuspectedKnownShapeIsNotALicence(t *testing.T) {
 }
 
 func TestBypassSuspectedNilKnown(t *testing.T) {
-	if !BypassSuspected(nil, "rig send bob") {
-		t.Fatal("nil known list should still flag a direct rig send")
+	if !BypassSuspected(nil, "tmux send-keys -t s hello Enter") {
+		t.Fatal("nil known list should still flag a direct pane send")
 	}
 	if BypassSuspected(nil, "4genteam send bob hello") {
 		t.Fatal("the audited path is never flagged, even with no known list")

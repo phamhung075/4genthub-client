@@ -105,3 +105,6 @@ refusal IS tested, and the verb was verified by hand against a corrupt file in t
   (`clientrestore/tmux.go`, `clientwatch/grid.go`, `seatlog/seatlog.go`) compared the session's room
   to itself, and the worktree fixture held the room directory and the room name under the same field.
   Each was the old `rig`/`room` pair collapsing; the fixes keep the two values distinct.
+- `commpolicy.TestBypassSuspected`: the predecessor's rows are removed with the deleted case (they pinned
+  a channel no binary can use); `TestBypassSuspectedNilKnown` now proves the nil-known behaviour on
+  `tmux send-keys`. `clientsync/agent_test.go` reads the frame key `room`.

@@ -5,6 +5,12 @@ skills and docs - with a clean break and no alias. Queue row `qitem-202610202047
 
 ### Changed
 
+- **The safeguard frame key is `room`** (`clientsync/agent.go:581`), the client's one wire key the hub
+  also reads; the hub's ingest follows in the hub landing, with no client rebuilt in between (decision
+  `DECISION-2026-10-20-rig-gone.md`, Q1).
+- **`commpolicy`'s predecessor case is deleted, not renamed** (Q3): its binary was purged, it protected
+  nothing, and the switch matches the second word of a `4genteam` line, so a `room` case could never
+  fire. The rule survives in `case "tmux"`. `Scope`'s label value is `room`.
 - **The runtime wire.** `agenthub-runtime` serves `roomName` where it served `rigName`
   (`WhoamiIdentity`, `SessionEntry`; serde rename at `types.rs:258,325`), and the Go decoders moved with
   it in the same commit (`clientruntime` `WhoamiIdentity.RoomName`, `SessionEntry.RoomName`) - the
@@ -41,10 +47,8 @@ skills and docs - with a clean break and no alias. Queue row `qitem-202610202047
   `retiredverbs` table (`Program: "rig"`), `commpolicy`'s risky-command matcher, the `--rig` send
   refusal, `OPENRIG_*`/`RIGGED_*` deny prefixes, and the comments that name its commands
   (`rig ps`, `rig up`) to say what this client does not run.
-- **Two hub-owned wire keys stay `rig`**: the safeguard frame's `"rig"` key
-  (`clientsync/agent.go:581` -> `ws_mount.go:514`, stored and re-emitted with alerts) and the
-  decisions-ingest body's `rig` (`room_decisions_mount.go:344`). Renaming either alone would break
-  delivery; the client's field is `Room` and the literal is commented as the hub's key.
+- **The decisions-ingest body's `rig`** (`room_decisions_mount.go:344`) is the hub's own field with no
+  client producer; it is deleted in the hub landing (Q1), not here.
 
 ### Testing
 

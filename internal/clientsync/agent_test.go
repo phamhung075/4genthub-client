@@ -248,15 +248,15 @@ func TestSafeguardFramesOnlyAfterReadyEchoesTheCapability(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("safeguard frames = %d, want 2", len(frames))
 	}
-	withPID := []string{"age_s", "at", "pid", "restarts", "rig", "safeguard", "state", "type"}
-	withoutPID := []string{"age_s", "at", "restarts", "rig", "safeguard", "state", "type"}
+	withPID := []string{"age_s", "at", "pid", "restarts", "room", "safeguard", "state", "type"}
+	withoutPID := []string{"age_s", "at", "restarts", "room", "safeguard", "state", "type"}
 	if got := keysOf(frames[0]); !reflect.DeepEqual(got, withPID) {
 		t.Errorf("frame[0] keys = %v, want %v", got, withPID)
 	}
 	if got := keysOf(frames[1]); !reflect.DeepEqual(got, withoutPID) {
 		t.Errorf("frame[1] keys = %v, want %v", got, withoutPID)
 	}
-	if frames[0]["rig"] != "room-a" || frames[0]["safeguard"] != "compact" || frames[0]["state"] != "running" {
+	if frames[0]["room"] != "room-a" || frames[0]["safeguard"] != "compact" || frames[0]["state"] != "running" {
 		t.Errorf("frame[0] = %v, want the row's room, safeguard and state", frames[0])
 	}
 	if frames[0]["restarts"] != 2 || frames[0]["age_s"] != 1 || frames[0]["pid"] != 4321 {
