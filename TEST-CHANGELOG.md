@@ -4,7 +4,9 @@
 outside `node_modules` is usage and never runs (`withLookPath` stubs the resolution), `npx tsc` with no
 `node_modules/typescript` in the run's directory is usage, and `npx tsc` with one present runs the argv as
 typed and posts. Each refusal asserts the seam was never called and the server was never dialed, so the
-cases pin the ordering, not just the message.
+cases pin the ordering, not just the message. A fourth case runs `pnpm --dir <fixture> exec tsc` twice - once
+with `node_modules/typescript` under the flagged directory (runs once, exit 0), once with it removed (usage,
+the flagged directory named, no run) - which pins the flag being read rather than skipped.
 
 ## 2026-10-20 - the queue-coalesce fixture's room is not named after the retired unit (go-dev)
 

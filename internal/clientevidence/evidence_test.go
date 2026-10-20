@@ -945,3 +945,44 @@ func TestEvidenceRunsNpxTscWithALocalTypeScript(t *testing.T) {
 		t.Errorf("argv = %q, want the command as typed", got)
 	}
 }
+
+// A directory flag moves where the wrapper resolves from, so a typecheck that names an installed project
+// must not be refused: `pnpm --dir agenthub-frontend exec tsc` is a real typecheck, and refusing it would
+// cost the room the very command that compiles.
+func TestEvidenceReadsTheDirectoryFlagBeforeRefusing(t *testing.T) {
+	server := newEvidenceServer(t)
+	evidenceEnv(t, server.URL, "tok")
+	withGit(t, standardGit())
+	calls := withTestCommand(t, testRun{exitCode: 0})
+	root := t.TempDir()
+	installed := filepath.Join(root, "agenthub-frontend", "node_modules", "typescript")
+	if err := os.MkdirAll(installed, 0o755); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	t.Chdir(root)
+
+	var stdout, stderr bytes.Buffer
+	code := runEvidence(context.Background(), []string{"--task", "t", "--base", "main", "--test", "pnpm --dir agenthub-frontend exec tsc --noEmit"}, &stdout, &stderr)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr.String())
+	}
+	if len(*calls) != 1 {
+		t.Errorf("the typecheck ran %d time(s), want 1", len(*calls))
+	}
+
+	// The same command with nothing installed there is the placeholder again, and the refusal names the
+	// directory the flag pointed at rather than the one it started in.
+	*calls = nil
+	if err := os.RemoveAll(filepath.Join(root, "agenthub-frontend", "node_modules")); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	code = runEvidence(context.Background(), []string{"--task", "t", "--base", "main", "--test", "pnpm --dir agenthub-frontend exec tsc --noEmit"}, &stdout, &stderr)
+	if code != clientcmd.ExitUsage {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUsage, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "agenthub-frontend") || len(*calls) != 0 {
+		t.Errorf("stderr = %q, calls = %v; want the flagged directory named and no run", stderr.String(), *calls)
+	}
+}

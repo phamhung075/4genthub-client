@@ -20,14 +20,21 @@ as a usage error (exit 2, no git, no dial, nothing submitted):
   because that is where the wrapper would resolve it. Without it, the wrapper goes to the registry and runs
   the placeholder; the refusal says `npm ci` first.
 
+A wrapper's directory flag is read rather than ignored - `pnpm --dir X exec tsc`, `yarn --cwd X`, `npm
+--prefix X`, `-C X` - because it moves where the wrapper resolves from, and refusing a form that WOULD find the
+compiler is as wrong as accepting one that would not. The canonical frontend command is unaffected: `sh
+scripts/typecheck-frontend.sh` names `node_modules/.bin/tsc` by path, so it is not one of the two shapes and
+`npm run typecheck` runs a `typecheck` word, not `tsc`.
+
 Everything else passes through untouched: a real typecheck under `node_modules`, and every command that is
 not `tsc` in one of those two shapes. The rule is deliberately narrow - it does not try to judge any other
 command's exit code.
 
 Verified: `go test ./internal/clientevidence/... ./internal/clientcomplete/...` in `agenthub_client` - both
 packages ok, with `TestEvidenceRefusesATscOutsideNodeModules`,
-`TestEvidenceRefusesNpxTscWithoutALocalTypeScript` and `TestEvidenceRunsNpxTscWithALocalTypeScript` pinned to
-the three shapes (refused, refused, run exactly as typed). Smoke through the built binary: `4genteam evidence
+`TestEvidenceRefusesNpxTscWithoutALocalTypeScript`, `TestEvidenceRunsNpxTscWithALocalTypeScript` and
+`TestEvidenceReadsTheDirectoryFlagBeforeRefusing` pinned to the four shapes (refused, refused, run exactly as
+typed, run from the flagged directory / refused naming it). Smoke through the built binary: `4genteam evidence
 --task t --base main --test "npx tsc --noEmit -p agenthub-frontend"` at the hub root and again in
 `agenthub-frontend` both exit 2 with the refusal, and `--test "tsc --noEmit"` names
 `/mnt/c/Users/daihu/AppData/Roaming/npm/tsc`. The allowed shape is proven by the fixture test, since no

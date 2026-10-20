@@ -138,10 +138,30 @@ func notTheCompiler(argv []string) string {
 	switch {
 	case wrappers[argv[0]]:
 		// The wrapper's own noise, then the program it would run: `npx --no-install tsc`, `pnpm exec tsc`,
-		// `npm exec tsc`, `bun x tsc`.
+		// `npm exec tsc`, `bun x tsc`. A directory flag (`pnpm --dir X exec tsc`, `yarn --cwd X tsc`) moves
+		// where the wrapper resolves from, so it is read rather than ignored: refusing a form that would
+		// find the real compiler is as wrong as accepting one that would not.
 		noise := map[string]bool{"exec": true, "dlx": true, "run": true, "x": true, "-y": true, "--yes": true, "--no-install": true}
+		expectDir := false
 		for _, word := range argv[1:] {
-			if strings.HasPrefix(word, "-") || noise[word] {
+			if expectDir {
+				dir = filepath.Join(dir, filepath.FromSlash(word))
+				expectDir = false
+				continue
+			}
+			moved := false
+			for _, flag := range []string{"--dir", "-C", "--cwd", "--prefix"} {
+				if word == flag {
+					expectDir, moved = true, true
+					break
+				}
+				if value, ok := strings.CutPrefix(word, flag+"="); ok {
+					dir = filepath.Join(dir, filepath.FromSlash(value))
+					moved = true
+					break
+				}
+			}
+			if moved || strings.HasPrefix(word, "-") || noise[word] {
 				continue
 			}
 			target = word
