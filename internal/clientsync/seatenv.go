@@ -2,7 +2,7 @@
 // token are read from, the presence check for a seat's lock file, and the two error helpers the verbs use
 // to answer with the Python's exit codes.
 //
-// It was `statusverb.go` and half of it was the `sync status` verb. That verb is gone with the rigspec
+// It was `statusverb.go` and half of it was the `sync status` verb. That verb is gone with the roomspec
 // route it compared against, and what is left is what the surviving verbs were already reaching for.
 package clientsync
 

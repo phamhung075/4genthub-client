@@ -57,7 +57,7 @@ func TestBridgeOncePrintRedactsThroughTheEnvironment(t *testing.T) {
 			return `{"ok":true,"data":[]}` + "\n"
 		}
 		return `{"ok":true,"data":[{"canonicalSessionName":"room-a-seat-a@room-a","sessionName":"agenthub--room-a--seat-a",` +
-			`"rigName":"room-a","logicalId":"room-a.seat-a","runtime":"omp","sessionStatus":"running",` +
+			`"roomName":"room-a","logicalId":"room-a.seat-a","runtime":"omp","sessionStatus":"running",` +
 			`"agentActivity":{"state":"working"},"detail":"the token is ` + value + ` - rotate it"}]}` + "\n"
 	})
 
@@ -131,7 +131,7 @@ func TestBridgeInstallServiceAnswersHelpNotTheUnit(t *testing.T) {
 }
 
 // test_the_path_defaults_do_not_follow_home pins the Python test of that name: the pins dir and the
-// state path resolve from the ACCOUNT home, so a decoy $HOME - what the rig orchestrator gives a seat - does not move
+// state path resolve from the ACCOUNT home, so a decoy $HOME - what the room orchestrator gives a seat - does not move
 // either of them.
 func TestThePathDefaultsDoNotFollowHome(t *testing.T) {
 	decoy := t.TempDir()

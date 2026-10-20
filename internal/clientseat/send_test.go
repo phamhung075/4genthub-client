@@ -13,7 +13,7 @@ import (
 
 // A send to a seat that does not exist fails, names the target it could not reach, and never shells out to
 // `rig`. PATH is emptied so that a fallback to an external binary would show up as "is not on PATH".
-func TestTheRigSeatMessageShapeNeverShellsOutToRig(t *testing.T) {
+func TestTheRoomSeatMessageShapeNeverShellsOutToRoom(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	noRuntimeSocket(t)
 

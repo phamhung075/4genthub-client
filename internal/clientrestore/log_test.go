@@ -10,7 +10,7 @@ import (
 // TestALineLoggedWithASecretInTheEnvironmentIsWrittenWithoutIt is the LOG half of the ruling's sentinel clause
 // (rigd-boundaries.md 7.10: "a sentinel value in the token environment variable ... appears in neither the log
 // nor the event"). THE SURFACE IT COVERS IS THIS PACKAGE'S LOG WRITER - the file a seat can read at
-// ~/.config/4genthub/logs/rig-continue.log and rig-watchdog.log - and it covers it at the writer, because the verb
+// ~/.config/4genthub/logs/room-continue.log and room-watchdog.log - and it covers it at the writer, because the verb
 // that passes the value in is the part that varies: what must hold for every line, whatever the step, is that a
 // value which reached the process through its environment is not written down.
 //
@@ -20,7 +20,7 @@ func TestALineLoggedWithASecretInTheEnvironmentIsWrittenWithoutIt(t *testing.T) 
 	const sentinel = "sentinel-token-value-abc"
 	t.Setenv("AGENTHUB_TOKEN", sentinel)
 
-	file, err := os.CreateTemp(t.TempDir(), "rig-continue-*.log")
+	file, err := os.CreateTemp(t.TempDir(), "room-continue-*.log")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestALineLoggedWithASecretInTheEnvironmentIsWrittenWithoutIt(t *testing.T) 
 func TestTheLogWriterLeavesAnOrdinaryLineAlone(t *testing.T) {
 	t.Setenv("AGENTHUB_TOKEN", "sentinel-token-value-abc")
 
-	file, err := os.CreateTemp(t.TempDir(), "rig-continue-*.log")
+	file, err := os.CreateTemp(t.TempDir(), "room-continue-*.log")
 	if err != nil {
 		t.Fatal(err)
 	}

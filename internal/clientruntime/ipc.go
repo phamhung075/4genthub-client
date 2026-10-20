@@ -401,7 +401,7 @@ func (c *Client) SetSeatModel(room, seat, model string) error {
 	return err
 }
 
-// SendText delivers one message to one session. `verb` is the client verb that CARRIED the frame - the rig's
+// SendText delivers one message to one session. `verb` is the client verb that CARRIED the frame - the room's
 // say, its abort, the wake - and it is stamped onto the frame so a text a mid-turn seat cannot take is handed
 // back to this session naming the way it arrived. Blank means `send`.
 func (c *Client) SendText(session, text, verb string) error {

@@ -9,8 +9,8 @@ import (
 
 // AuditPath is one seat's audit file: the seat's own directory of the store, so every line the seat's
 // decisions produced is read in one place.
-func AuditPath(store, rig, seat string) string {
-	return filepath.Join(store, rig, seat, "audit.jsonl")
+func AuditPath(store, room, seat string) string {
+	return filepath.Join(store, room, seat, "audit.jsonl")
 }
 
 // EnsureAuditDir makes the directory the audit file lives in, 0700 because the lines record who may send

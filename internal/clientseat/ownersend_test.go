@@ -113,7 +113,7 @@ func TestSendSendsTheTextVerbatimWithNoAddedSender(t *testing.T) {
 			return roomLinksDoc("go-dev", "lead")
 		}
 		if strings.Contains(line, `"Whoami"`) {
-			return `{"ok":true,"data":{"identity":{"rigName":"4genthub-min","memberId":"go-dev",` +
+			return `{"ok":true,"data":{"identity":{"roomName":"4genthub-min","memberId":"go-dev",` +
 				`"sessionName":"agenthub--4genthub-min--go-dev"}}}` + "\n"
 		}
 		if strings.Contains(line, `"GetRoomStatus"`) {
@@ -195,7 +195,7 @@ func TestSendViaOwnerRefusesASeat(t *testing.T) {
 
 	for name, env := range map[string]string{
 		"a seat":        "demo-go-dev@demo",
-		"another rig":   "other-owner@other",
+		"another room":  "other-owner@other",
 		"no env at all": "",
 	} {
 		t.Setenv(clientguard.SessionEnv, env)

@@ -17,13 +17,13 @@ import (
 )
 
 const runtimeSessionsJSON = `[
- {"canonicalSessionName":"room-b-supervisor@room-b","sessionName":"agenthub--room-b--supervisor","rigName":"room-b","logicalId":"room-b.supervisor","sessionStatus":"running","agentActivity":{"state":"idle","source":"idle"},"runtime":"omp","model":"deepseek/deepseek-flash","transcriptPath":"/tmp/room-b/logs/supervisor.jsonl"},
- {"canonicalSessionName":"dev-owner@room-c","sessionName":"agenthub--room-c--owner","rigName":"room-c","logicalId":"dev.owner","sessionStatus":"stopped","agentActivity":{"state":"unknown"},"runtime":"omp"},
- {"logicalId":"nodot","rigName":"room-d","sessionStatus":"running"},
- {"canonicalSessionName":"room-b-supervisor@room-b","sessionName":"agenthub--room-b--supervisor","rigName":"room-b","logicalId":"room-b.supervisor","sessionStatus":"running"}
+ {"canonicalSessionName":"room-b-supervisor@room-b","sessionName":"agenthub--room-b--supervisor","roomName":"room-b","logicalId":"room-b.supervisor","sessionStatus":"running","agentActivity":{"state":"idle","source":"idle"},"runtime":"omp","model":"deepseek/deepseek-flash","transcriptPath":"/tmp/room-b/logs/supervisor.jsonl"},
+ {"canonicalSessionName":"dev-owner@room-c","sessionName":"agenthub--room-c--owner","roomName":"room-c","logicalId":"dev.owner","sessionStatus":"stopped","agentActivity":{"state":"unknown"},"runtime":"omp"},
+ {"logicalId":"nodot","roomName":"room-d","sessionStatus":"running"},
+ {"canonicalSessionName":"room-b-supervisor@room-b","sessionName":"agenthub--room-b--supervisor","roomName":"room-b","logicalId":"room-b.supervisor","sessionStatus":"running"}
 ]`
 
-func TestRigSessionCandidatesCarryTheSeatIdentity(t *testing.T) {
+func TestRoomSessionCandidatesCarryTheSeatIdentity(t *testing.T) {
 	var entries []clientruntime.SessionEntry
 	if err := json.Unmarshal([]byte(runtimeSessionsJSON), &entries); err != nil {
 		t.Fatalf("the runtime's own answer did not decode: %v", err)
@@ -43,17 +43,17 @@ func TestRigSessionCandidatesCarryTheSeatIdentity(t *testing.T) {
 	if candidates[0].name != "room-b-supervisor@room-b" {
 		t.Errorf("name = %q, want the canonical session name", candidates[0].name)
 	}
-	if candidates[0].rigName != "room-b" || candidates[0].member != "supervisor" {
-		t.Errorf("seat = %q/%q, want room-b/supervisor", candidates[0].rigName, candidates[0].member)
+	if candidates[0].roomName != "room-b" || candidates[0].member != "supervisor" {
+		t.Errorf("seat = %q/%q, want room-b/supervisor", candidates[0].roomName, candidates[0].member)
 	}
 	if candidates[0].state != SessionRunning {
 		t.Errorf("state = %q, want the runtime's own running", candidates[0].state)
 	}
 
-	// THE RIG IS THE ROOM, NOT logicalId's FIRST SEGMENT: here the pod is "dev" and the room is "room-c",
+	// THE ROOM IS THE ROOM, NOT logicalId's FIRST SEGMENT: here the pod is "dev" and the room is "room-c",
 	// which is the case that would fail if the room were read from the logicalId.
-	if candidates[1].rigName != "room-c" || candidates[1].member != "owner" {
-		t.Errorf("second seat = %q/%q, want room-c/owner", candidates[1].rigName, candidates[1].member)
+	if candidates[1].roomName != "room-c" || candidates[1].member != "owner" {
+		t.Errorf("second seat = %q/%q, want room-c/owner", candidates[1].roomName, candidates[1].member)
 	}
 	// A session the runtime reports as anything but running is STOPPED, never a running seat that may not
 	// exist; the Sessions page distinguishes a reported stop from no report at all.

@@ -1,6 +1,6 @@
 // The cloud transport: every verb that reads or writes over HTTP goes through RequestJSON, which carries
 // the Python's four refusals and its two shape checks. It used to be the `sync status` cloud half; the
-// route it was written for (`GET {ROOMS_PATH}/{room}/rigspec`) is gone, and this half is what the other
+// route it was written for (`GET {ROOMS_PATH}/{room}/roomspec`) is gone, and this half is what the other
 // verbs still need.
 package clientsync
 

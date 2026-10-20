@@ -17,12 +17,12 @@ import (
 )
 
 // briefSendTimeout is the shell's `timeout 40 rig send`. A brief is text typed into a seat's terminal
-// through the rig tool, and a seat whose terminal is wedged must not hold the whole restore open: that
+// through the room tool, and a seat whose terminal is wedged must not hold the whole restore open: that
 // seat gets "send failed" in the log and the rest of the room is briefed.
 const briefSendTimeout = 40 * time.Second
 
-// restorer is one rig's restore-and-brief: the shell's continue_rig(), with the seams a test needs. It is
-// used by `continue` for the rig the caller named and by `watchdog` when it decides a rig is dead - one
+// restorer is one room's restore-and-brief: the shell's continue_room(), with the seams a test needs. It is
+// used by `continue` for the room the caller named and by `watchdog` when it decides a room is dead - one
 // implementation, so the two verbs cannot restore differently.
 type restorer struct {
 	log    *teeLog
@@ -36,11 +36,11 @@ type restorer struct {
 	// send and wall are the two steps that reach past the daemon - the brief, and the watch wall - and
 	// they are struct fields so a test drives a whole restore with no seat, no terminal and no wall.
 	send func(ctx context.Context, session, text string) error
-	wall func(rig string) (opened bool, why string)
-	// safeguards is the rig's safeguards report - the rows `doctor` and `status` print, through the one
+	wall func(room string) (opened bool, why string)
+	// safeguards is the room's safeguards report - the rows `doctor` and `status` print, through the one
 	// computation in clientlifecycle. It is what lets a restore say whether the room it reports is
 	// supervised: `stop` leaves the seat sessions up, so the seats alone cannot answer that.
-	safeguards func(rig string) ([]clientservices.Health, error)
+	safeguards func(room string) ([]clientservices.Health, error)
 }
 
 // restoreSteps, when a test has set it, is handed the restorer newRestorer just wired, so the brief and
@@ -49,7 +49,7 @@ type restorer struct {
 // rule; it is nil everywhere but the suite.
 var restoreSteps func(*restorer)
 
-// newRestorer wires the real world: the rig tool the caller resolved, the brief directory the shell used,
+// newRestorer wires the real world: the room tool the caller resolved, the brief directory the shell used,
 // `rig send` for the brief, and this same binary for the watch wall.
 func newRestorer(log *teeLog, root string) *restorer {
 	r := &restorer{
@@ -73,9 +73,9 @@ func newRestorer(log *teeLog, root string) *restorer {
 			}
 			return nil
 		},
-		wall: func(rig string) (bool, string) { return watchWall(rig, root) },
-		safeguards: func(rig string) ([]clientservices.Health, error) {
-			return clientlifecycle.SafeguardRows(rig, root)
+		wall: func(room string) (bool, string) { return watchWall(room, root) },
+		safeguards: func(room string) ([]clientservices.Health, error) {
+			return clientlifecycle.SafeguardRows(room, root)
 		},
 	}
 	if restoreSteps != nil {
@@ -84,7 +84,7 @@ func newRestorer(log *teeLog, root string) *restorer {
 	return r
 }
 
-// restore is the shell's continue_rig() body, and it answers whether the rig ended up usable: false when
+// restore is the shell's continue_room() body, and it answers whether the room ended up usable: false when
 // the restore left no seats up, or when a brief the caller asked for is not there to send.
 //
 // The order is the shell's, and each step is load-bearing:
@@ -93,43 +93,43 @@ func newRestorer(log *teeLog, root string) *restorer {
 //     is what this verb exists to avoid;
 //  2. seats are counted from tmux AFTER the restore, because that reading - not the command's status - is
 //     what says whether the restore worked;
-//  3. no seats means the brief would go to nobody, so this aborts for that rig instead of reporting a
+//  3. no seats means the brief would go to nobody, so this aborts for that room instead of reporting a
 //     success it did not get;
-//  4. seats are not the room: the safeguards are read after the seats, and a rig whose seats are up
+//  4. seats are not the room: the safeguards are read after the seats, and a room whose seats are up
 //     while a safeguard is down answers false - `stop` leaves the sessions standing, so this is the
 //     ordinary state of a room stopped and then "continued".
-func (r *restorer) restore(rigName, brief string) bool {
-	if len(rigSessions(rigName, sessionNames(r.root))) > 0 {
-		r.log.printf("%s: already live, skipping restore", rigName)
+func (r *restorer) restore(roomName, brief string) bool {
+	if len(roomSessions(roomName, sessionNames(r.root))) > 0 {
+		r.log.printf("%s: already live, skipping restore", roomName)
 	} else {
-		r.log.printf("%s: restoring from latest snapshot (every seat resumes its own session)", rigName)
-		if err := r.revive(context.Background(), rigName); err != nil {
+		r.log.printf("%s: restoring from latest snapshot (every seat resumes its own session)", roomName)
+		if err := r.revive(context.Background(), roomName); err != nil {
 			// The shell sent this command's output to the log and did not stop on its status; the seat
 			// count is what decides, so a failed restore has to be reported here instead of silently
 			// becoming "no seats up".
-			r.log.printf("%s: restore command failed: %v", rigName, err)
+			r.log.printf("%s: restore command failed: %v", roomName, err)
 		}
 	}
-	seats := rigSeats(rigName, sessionNames(r.root))
-	r.log.printf("%s: seats live: %d", rigName, len(seats))
+	seats := roomSeats(roomName, sessionNames(r.root))
+	r.log.printf("%s: seats live: %d", roomName, len(seats))
 	if len(seats) == 0 {
-		r.log.printf("%s: no seats up, aborting for this rig", rigName)
+		r.log.printf("%s: no seats up, aborting for this room", roomName)
 		return false
 	}
 	if brief == "" {
-		r.log.printf("%s: no brief requested", rigName)
+		r.log.printf("%s: no brief requested", roomName)
 	} else {
 		body, err := os.ReadFile(brief)
 		if err != nil {
-			r.log.printf("%s: brief file missing (%s) — restored but nothing sent", rigName, brief)
+			r.log.printf("%s: brief file missing (%s) — restored but nothing sent", roomName, brief)
 			return false
 		}
-		if undelivered := r.brief(rigName, seats, string(body)); len(undelivered) > 0 {
+		if undelivered := r.brief(roomName, seats, string(body)); len(undelivered) > 0 {
 			// R3: a delivery is never reported as delivered. The seats are up but the brief the caller asked
 			// for did not arrive, so this restore did NOT complete and answers false - which is what the doc
 			// above already promised ("false when a brief the caller asked for is not there to send") and what
 			// the caller's own exit code and summary hang off. The seats that were missed are named here.
-			r.log.printf("%s: brief did not reach %s", rigName, strings.Join(undelivered, ", "))
+			r.log.printf("%s: brief did not reach %s", roomName, strings.Join(undelivered, ", "))
 			return false
 		}
 	}
@@ -137,14 +137,14 @@ func (r *restorer) restore(rigName, brief string) bool {
 	// `continue` right after it found "already live", counted the seats and ended with "done" over a room
 	// whose seven safeguards were all down (measured 2026-10-18: agent, compact, watchdog, messages,
 	// roomguard, budget and bridge missing until `heal`). A restore that did not restore supervision is
-	// not a success, so the rows are named here and the rig answers false.
+	// not a success, so the rows are named here and the room answers false.
 	//
-	// A REPORT THAT COULD NOT BE READ IS NOT A ROOM THAT IS SUPERVISED (7.12): the rig is not restored, and
+	// A REPORT THAT COULD NOT BE READ IS NOT A ROOM THAT IS SUPERVISED (7.12): the room is not restored, and
 	// the line names the probe instead of pretending either way.
-	safeguardRows, probeErr := r.safeguards(rigName)
+	safeguardRows, probeErr := r.safeguards(roomName)
 	if probeErr != nil {
 		r.log.printf("%s: supervision could not be read (%v) - not restored; run `4genteam up %s`",
-			rigName, probeErr, rigName)
+			roomName, probeErr, roomName)
 		return false
 	}
 	if down := clientservices.NotRunning(safeguardRows); len(down) > 0 {
@@ -153,74 +153,74 @@ func (r *restorer) restore(rigName, brief string) bool {
 			names = append(names, row.Safeguard)
 		}
 		r.log.printf("%s: seats live but supervision is down (%s) - not restored; run `4genteam up %s` (or `4genteam heal %s --fix`)",
-			rigName, strings.Join(names, ", "), rigName, rigName)
+			roomName, strings.Join(names, ", "), roomName, roomName)
 		return false
 	}
-	r.openWatch(rigName)
-	// The pointer names the CLIENT's own read - `4genteam ps <RIG> --nodes`, which reads the node table through
+	r.openWatch(roomName)
+	// The pointer names the CLIENT's own read - `4genteam ps <ROOM> --nodes`, which reads the node table through
 	// the runtime (RoomNodes) - and not `rig ps --nodes --room RIG`, which is the tool this cutover removes and
 	// which an operator following the old line would find missing (the gate's nit at bb4f412).
-	r.log.printf("%s: done — verify with: 4genteam ps %s --nodes", rigName, rigName)
+	r.log.printf("%s: done — verify with: 4genteam ps %s --nodes", roomName, roomName)
 	return true
 }
 
 // brief sends each seat its text: `Your seat: <seat>. <brief>`, with the seat's OWN brief
-// (briefs/<rig>/<seat>.txt) replacing the shared one, so no generic text is pushed onto a seat that has
-// its own. Both texts keep the shell's `$(cat …)` shape: trailing newlines are dropped, because the rig
+// (briefs/<room>/<seat>.txt) replacing the shared one, so no generic text is pushed onto a seat that has
+// its own. Both texts keep the shell's `$(cat …)` shape: trailing newlines are dropped, because the room
 // tool presses Enter after what it sends and a trailing newline would submit an empty prompt.
 //
 // IT RETURNS THE SEATS ITS TEXT DID NOT REACH, because a brief that was asked for and did not arrive is not a
 // success. The log line alone left the caller answering true - "done" over a seat nobody briefed - which is the
 // failure the restorer's own doc says its `false` is for: a brief the caller asked for is not there to send.
-func (r *restorer) brief(rigName string, seats []string, body string) []string {
+func (r *restorer) brief(roomName string, seats []string, body string) []string {
 	body = strings.TrimRight(body, "\n")
 	var undelivered []string
 	for _, seat := range seats {
 		// A PARKED SEAT IS NOT HANDED WORK. The brief is how a restored seat is given its next stretch of
 		// work, so a seat the budget breaker stopped is not briefed - and it counts as NOT reached, because a
 		// brief that was asked for and deliberately withheld is not a delivery (seatpark).
-		if err := seatpark.Refuse("", rigName, seat); err != nil {
-			r.log.printf("%s: %v", rigName, err)
+		if err := seatpark.Refuse("", roomName, seat); err != nil {
+			r.log.printf("%s: %v", roomName, err)
 			undelivered = append(undelivered, seat)
 			continue
 		}
 		text := "Your seat: " + seat + ". " + body
-		if own, err := os.ReadFile(filepath.Join(r.briefs, rigName, seat+".txt")); err == nil {
+		if own, err := os.ReadFile(filepath.Join(r.briefs, roomName, seat+".txt")); err == nil {
 			text = "Your seat: " + seat + ". " + strings.TrimRight(string(own), "\n")
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), briefSendTimeout)
-		err := r.send(ctx, clientruntime.SeatSessionName(rigName, seat), text)
+		err := r.send(ctx, clientruntime.SeatSessionName(roomName, seat), text)
 		cancel()
 		if err != nil {
-			r.log.printf("%s: send failed for %s", rigName, seat)
+			r.log.printf("%s: send failed for %s", roomName, seat)
 			undelivered = append(undelivered, seat)
 			continue
 		}
-		r.log.printf("%s: briefed %s", rigName, seat)
+		r.log.printf("%s: briefed %s", roomName, seat)
 	}
 	return undelivered
 }
 
-// watchEnv is the shell's RIG_CONTINUE_WATCH: 0 skips the wall, which is what keeps a headless resume -
+// watchEnv is the shell's ROOM_CONTINUE_WATCH: 0 skips the wall, which is what keeps a headless resume -
 // a seat, a cron-adjacent watchdog, an ssh session - from trying to build a terminal it does not have.
-const watchEnv = "RIG_CONTINUE_WATCH"
+const watchEnv = "ROOM_CONTINUE_WATCH"
 
-// openWatch opens the owner's watch wall for this rig, in the one fixed style the watch verb defines: the
-// wall replaces any earlier wall of the same rig, so a resume or a runtime switch never stacks them - and
+// openWatch opens the owner's watch wall for this room, in the one fixed style the watch verb defines: the
+// wall replaces any earlier wall of the same room, so a resume or a runtime switch never stacks them - and
 // that rule lives in the watch verb, not here. The shell logged a skip or a failure and carried on, and so
 // does this: the wall is the window onto the room, not part of the restore.
-func (r *restorer) openWatch(rigName string) {
+func (r *restorer) openWatch(roomName string) {
 	if os.Getenv(watchEnv) == "0" {
 		return
 	}
-	opened, why := r.wall(rigName)
+	opened, why := r.wall(roomName)
 	switch {
 	case opened:
-		r.log.printf("%s: watch wall opened", rigName)
+		r.log.printf("%s: watch wall opened", roomName)
 	case why == wallNoTerminal:
-		r.log.printf("%s: watch wall skipped (herdr or 4genteam missing)", rigName)
+		r.log.printf("%s: watch wall skipped (herdr or 4genteam missing)", roomName)
 	default:
-		r.log.printf("%s: watch wall failed (%s)", rigName, why)
+		r.log.printf("%s: watch wall failed (%s)", roomName, why)
 	}
 }
 
@@ -230,10 +230,10 @@ func (r *restorer) openWatch(rigName string) {
 const wallNoTerminal = "no terminal host"
 
 // watchWall starts this same binary's watch view, which is what the shell ran (`4genteam watch watch
-// --room RIG`: the Python's group and its `watch` sub-verb are one verb here). herdr hosts the wall, so a
+// --room ROOM`: the Python's group and its `watch` sub-verb are one verb here). herdr hosts the wall, so a
 // machine without it is a skip with a reason; the wall's own output goes to this verb's log, where the
 // shell redirected it too.
-func watchWall(rigName, root string) (bool, string) {
+func watchWall(roomName, root string) (bool, string) {
 	if _, err := execLookPath("herdr"); err != nil {
 		return false, wallNoTerminal
 	}
@@ -247,7 +247,7 @@ func watchWall(rigName, root string) (bool, string) {
 		return false, "see log"
 	}
 	defer func() { _ = out.Close() }()
-	cmd := execCommand(self, "watch", "--room", rigName)
+	cmd := execCommand(self, "watch", "--room", roomName)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, out, out
 	if err := cmd.Run(); err != nil {
 		return false, "see log"
@@ -255,7 +255,7 @@ func watchWall(rigName, root string) (bool, string) {
 	return true, ""
 }
 
-// daemonUp is the shell's daemon_up(): the runtime daemon must be up before a rig is restored - and before the
+// daemonUp is the shell's daemon_up(): the runtime daemon must be up before a room is restored - and before the
 // peak gate, which reads the room's node records from it. The start's failure is logged rather than
 // returned, the way the shell carried on: the step that needs the daemon reports what it could not do.
 func (r *restorer) daemonUp() {
@@ -265,7 +265,7 @@ func (r *restorer) daemonUp() {
 }
 
 // reviveRoom starts the stopped seats of a room the runtime holds a spec for. Each seat resumes its own saved
-// session, which is what the rig orchestrator snapshot restore did. A seat that already runs is left alone: a restart
+// session, which is what the room orchestrator snapshot restore did. A seat that already runs is left alone: a restart
 // would cycle live agents, and `continue` on a live room must change nothing. A room the runtime does not
 // know is the daemon's refusal, returned as it came.
 func reviveRoom(_ context.Context, room string) error {
@@ -302,9 +302,9 @@ func reviveRoom(_ context.Context, room string) error {
 // one home for the decision, so a restore here and a restore there cannot disagree. Its refusal is written
 // to the caller's stderr AND to this verb's log: a room left stopped for billing reasons says so in the
 // record, which is the whole point of a watchdog whose restore refuses.
-func (r *restorer) gate(rigName, verb string, allowPeak bool, stderr io.Writer) int {
+func (r *restorer) gate(roomName, verb string, allowPeak bool, stderr io.Writer) int {
 	var refusal strings.Builder
-	code := clientlifecycle.PeakGate(rigName, verb, allowPeak, io.MultiWriter(stderr, &refusal))
+	code := clientlifecycle.PeakGate(roomName, verb, allowPeak, io.MultiWriter(stderr, &refusal))
 	if code != clientcmd.ExitOK {
 		if text := strings.TrimRight(refusal.String(), "\n"); text != "" {
 			r.log.printf("%s", text)

@@ -40,7 +40,7 @@ func TestRoomNodesAnswersFromTheRuntimesRoomStatus(t *testing.T) {
 	}
 	row := nodes[0]
 	for key, want := range map[string]any{
-		"rigName": "room-a", "logicalId": "room-a.seat-1", "seat": "seat-1", "runtime": "omp",
+		"roomName": "room-a", "logicalId": "room-a.seat-1", "seat": "seat-1", "runtime": "omp",
 		"sessionStatus": "running", "lifecycleState": "running",
 	} {
 		if row[key] != want {
@@ -109,10 +109,10 @@ func TestRoomNodesTellsNoRecordsFromAFailedRead(t *testing.T) {
 // TestReadSeatActivityAsksTheRuntimeAndRefusesByDefault: the word arrives from the runtime's own session
 // list, and only `idle` (and its stored synonym) releases a destroyer; nothing else may.
 func TestReadSeatActivityAsksTheRuntimeAndRefusesByDefault(t *testing.T) {
-	const rig, seat = "rigx", "lead"
-	logical := rig + "." + seat
-	canonical := SeatSessionName(rig, seat)
-	elsewhere := "rigx.other"
+	const room, seat = "roomx", "lead"
+	logical := room + "." + seat
+	canonical := SeatSessionName(room, seat)
+	elsewhere := "roomx.other"
 
 	for _, tc := range []struct {
 		name        string
@@ -130,7 +130,7 @@ func TestReadSeatActivityAsksTheRuntimeAndRefusesByDefault(t *testing.T) {
 		{"unknown is not evidence", sessionList(sessionRow(logical, canonical, "unknown")), true, true, "unknown", false},
 		{"a word nobody has seen forbids", sessionList(sessionRow(logical, canonical, "drifting")), true, true, "drifting", false},
 		{"no activity field at all is its own answer", sessionList(sessionRowWithoutActivity(logical, canonical)), true, false, "", false},
-		{"a list without this seat cannot answer", sessionList(sessionRow(elsewhere, SeatSessionName(rig, "other"), "idle")), false, false, "", false},
+		{"a list without this seat cannot answer", sessionList(sessionRow(elsewhere, SeatSessionName(room, "other"), "idle")), false, false, "", false},
 		{"an empty list cannot answer", sessionList(), false, false, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -138,7 +138,7 @@ func TestReadSeatActivityAsksTheRuntimeAndRefusesByDefault(t *testing.T) {
 			sock, requests := fakeRuntime(t, func(string) string { return okDataResponse(tc.rows) })
 			t.Setenv(RuntimeSocketEnv, sock)
 
-			read := ReadSeatActivity(rig, seat)
+			read := ReadSeatActivity(room, seat)
 
 			if read.Read != tc.wantRead {
 				t.Fatalf("Read = %v, want %v (Word %q, Why %q)", read.Read, tc.wantRead, read.Word, read.Why)
@@ -157,7 +157,7 @@ func TestReadSeatActivityAsksTheRuntimeAndRefusesByDefault(t *testing.T) {
 			} else if read.Why == "" {
 				t.Error("a read that could not answer must say why: an unreadable activity is not the answer 'not running'")
 			}
-			if got := awaitRequest(t, requests); got != `{"action":"ListSessions","payload":{"room":"`+rig+`"}}` {
+			if got := awaitRequest(t, requests); got != `{"action":"ListSessions","payload":{"room":"`+room+`"}}` {
 				t.Errorf("frame = %q, want the room's session list", got)
 			}
 		})
@@ -170,7 +170,7 @@ func TestReadSeatActivityRefusesWhenNoRuntimeAnswers(t *testing.T) {
 	hermeticSeat(t)
 	noRuntimeSocket(t)
 
-	read := ReadSeatActivity("rigx", "lead")
+	read := ReadSeatActivity("roomx", "lead")
 
 	if read.Read {
 		t.Fatalf("a read with no runtime answered: %+v", read)

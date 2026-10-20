@@ -15,7 +15,7 @@ const feedPollInterval = time.Second
 // from every seat's session log. It never writes to a seat.
 func runFeed(ctx context.Context, s shared, out io.Writer) error {
 	root := s.stateRoot
-	seats, err := rigSeats(ctx, root, s.rig)
+	seats, err := roomSeats(ctx, root, s.room)
 	if err != nil {
 		return err
 	}
@@ -40,8 +40,8 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 	// One seat in view (a grid pane): its name and token bar are the top line, not a column.
 	var header *Header
 	if len(seats) == 1 {
-		logPath, _ := seatLog(root, s.rig, seats[0])
-		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModelOf(root, s.rig, seats[0], logPath),
+		logPath, _ := seatLog(root, s.room, seats[0])
+		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModelOf(root, s.room, seats[0], logPath),
 			func(line string) { fmt.Fprintln(out, line) })
 		if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
 			header.pane = func(title string) { _, _ = herdr(ctx, "pane", "rename", paneID, title) }
@@ -105,7 +105,7 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 		fmt.Fprintf(out, "-- following %d seats; Ctrl-C to stop\n", len(seats))
 	}
 	for _, seat := range seats {
-		logPath, _ := seatLog(root, s.rig, seat)
+		logPath, _ := seatLog(root, s.room, seat)
 		if logPath == "" {
 			continue
 		}
@@ -141,7 +141,7 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 			return nil
 		}
 		for _, seat := range seats {
-			logPath, _ := seatLog(root, s.rig, seat)
+			logPath, _ := seatLog(root, s.room, seat)
 			if logPath == "" {
 				continue
 			}

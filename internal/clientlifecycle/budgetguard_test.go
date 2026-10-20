@@ -1,4 +1,4 @@
-// The budget guard's DECISION is what these tests pin, one pass at a time and with no rig, no socket and no
+// The budget guard's DECISION is what these tests pin, one pass at a time and with no room, no socket and no
 // clock: a seat over its USD ceiling is recorded, stopped and named on the rail exactly once; a seat over the
 // call ceiling is parked only after the breach held for a second pass; limits that are off measure nothing; a
 // record that could not be written leaves the seat running and is retried; and a stop the runtime refused still
@@ -42,7 +42,7 @@ func newBudgetFixture(t *testing.T) *budgetFixture {
 		records: map[string]roombudget.Parked{},
 		limits:  roombudget.Limits{Enabled: true, USDPerSeat24h: 25, CallsPerSeatMin: 300},
 	}
-	guard := &BudgetGuard{Rig: "room-a", Lead: "lead", over: map[string]int{}}
+	guard := &BudgetGuard{Room: "room-a", Lead: "lead", over: map[string]int{}}
 	guard.Now = func() time.Time { return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC) }
 	guard.Seats = func(string) []string { return f.seats }
 	guard.Limits = func(string) (roombudget.Limits, error) { return f.limits, nil }

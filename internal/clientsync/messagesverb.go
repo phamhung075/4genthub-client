@@ -2,7 +2,7 @@
 // session, and ACKNOWLEDGE each message only after the text landed.
 //
 // THE ACK COMES LAST, AND THAT ORDER IS THE CONTRACT. Delivery is at-least-once: the cloud hands a
-// message out until a client says it arrived, so an interruption — this process dying, the rig
+// message out until a client says it arrived, so an interruption — this process dying, the room
 // refusing, the ack never reaching the cloud — means the message comes back rather than being lost.
 // The price of that is a duplicate in exactly one window, when the text landed but the ACK did not, so
 // this verb keeps a small LOCAL LEDGER of the ids it has already typed and re-acks those instead of
@@ -15,14 +15,14 @@
 // without it: naming the prompt is the caller's job, and typing an operator's message into the wrong
 // prompt is worse than not delivering it, because the wrong prompt is somebody else's. THE MACHINE-WIDE
 // FALLBACK IS DELETED RATHER THAN REPAIRED: asking `rig ps --json` which sessions this machine runs was
-// an exec of the CLI this cutover removes, so it could not survive it in any world. The rig shape
+// an exec of the CLI this cutover removes, so it could not survive it in any world. The room shape
 // (`--room R`) reads each session from the RUNTIME's own room status instead (`GetRoomStatus`, the source
-// `roomSeats` documents): it names every seat of the rig and the canonical session that seat answers to, and
+// `roomSeats` documents): it names every seat of the room and the canonical session that seat answers to, and
 // a seat that is not running is skipped rather than typed into.
 //
-// THE RIG SHAPE IS THE SUPERVISED ONE. `sync messages --room R --watch` is a child of agent, so it runs
+// THE ROOM SHAPE IS THE SUPERVISED ONE. `sync messages --room R --watch` is a child of agent, so it runs
 // one pass over every seat, writes a heartbeat per pass, and never exits on a transient failure: the
-// next pass retries whatever the cloud, the rig or one seat's session refused.
+// next pass retries whatever the cloud, the room or one seat's session refused.
 //
 // The transport is the package's own RequestJSON (cloud.go), so this verb reports the cloud's
 // refusals in the shape every other verb here does rather than in one of its own.
@@ -51,9 +51,9 @@ const messagesPath = "/api/v2/rooms/%s/seats/%s/messages"
 
 // messagesUsage is the verb's whole surface.
 const messagesUsage = `usage: 4genteam sync messages <room> <seat> [--session <name>] [--limit <n>] [--dry-run] [--out <dir>]
-       4genteam sync messages --room <rig> [--watch] [--limit <n>] [--dry-run] [--out <dir>]
+       4genteam sync messages --room <room> [--watch] [--limit <n>] [--dry-run] [--out <dir>]
 
-Pulls the text addressed to a seat — or to every seat of a rig — and puts it into that seat's own
+Pulls the text addressed to a seat — or to every seat of a room — and puts it into that seat's own
 session, one message at a time, acknowledging each ONLY after the text landed. An unacknowledged
 message is handed out again on the next run, so nothing is lost; a message this client already typed is
 re-acknowledged rather than typed twice.
@@ -64,7 +64,7 @@ which client typed the message.
 In the room-and-seat shape the session is --session <name>; the verb refuses without it rather than
 guessing which prompt to type into.
 
-In the --room shape the room is the rig itself and every seat's own session is read from the runtime's room
+In the --room shape the room is the room itself and every seat's own session is read from the runtime's room
 status (the same read the room status verb makes), which names the canonical session each running seat
 answers to; a seat that is not running is skipped, and its messages stay pending until it is back. agent
 supervises this shape with --watch: one pass every 10 s, one heartbeat per pass, and a transient failure
@@ -145,9 +145,10 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stderr, err)
 		return clientcmd.ExitUsage
 	}
-	// The rig shape is the supervised one: one pass over every seat of the rig, or the same pass
+	// The room shape is the supervised one: one pass over every seat of the room, or the same pass
 	// forever. Each seat's session is resolved inside the pass, from the machine's own node table.
-	if parsed.rig != "" {
+	if parsed.all != "" {
+		parsed.room = parsed.all
 		if parsed.watch {
 			return runMessagesWatch(ctx, baseURL, token, parsed, stdout, stderr)
 		}
@@ -161,13 +162,13 @@ func RunMessagesVerb(ctx context.Context, args []string, stdout, stderr io.Write
 	//
 	// THE MACHINE-WIDE FALLBACK IS DELETED RATHER THAN REPAIRED. Asking `rig ps --json` which sessions this machine
 	// runs was a shell-out to the CLI the cutover removes, so it could not survive it in any world, and the
-	// convenience it existed for is what the rig shape above already answers. THE MESSAGE IS THE INTERFACE HERE: this
+	// convenience it existed for is what the room shape above already answers. THE MESSAGE IS THE INTERFACE HERE: this
 	// is a contract change, so the refusal names BOTH ways to say where a message goes and what each one takes.
 	//
 	// THE !dryRun HALF IS AN ORDERING DEPENDENCY, not a second rule: the `--room` branch above RETURNS for a
-	// rig-shaped call, so this guard is only ever reached in the room-and-seat shape. A dry run needs no session
-	// because it types nothing. Move this block above the rig branch and a valid `--room` call starts being refused;
-	// TestMessagesVerbRigPassDeliversEveryRunningSeat pins that.
+	// room-shaped call, so this guard is only ever reached in the room-and-seat shape. A dry run needs no session
+	// because it types nothing. Move this block above the room branch and a valid `--room` call starts being refused;
+	// TestMessagesVerbRoomPassDeliversEveryRunningSeat pins that.
 	session := parsed.session
 	if !parsed.dryRun && session == "" {
 		fmt.Fprintf(stderr, "4genteam sync messages: name the prompt this message goes to — --room <room> delivers to every running seat of that room, or --session <name> types into one session\n")
@@ -202,7 +203,7 @@ type seatSync struct {
 
 // syncSeatMessages is one seat's whole turn: read this client's ledger, pull the waiting text, and for
 // each message type it into the session, record it, and acknowledge it LAST. The single-seat verb and
-// every seat of a supervised rig pass run this same turn, so the at-least-once order exists once.
+// every seat of a supervised room pass run this same turn, so the at-least-once order exists once.
 func syncSeatMessages(ctx context.Context, baseURL, token, room, seat, session, out string, limit int, dryRun bool, stdout, stderr io.Writer) (seatSync, error) {
 	var done seatSync
 	ledgerPath := messagesLedgerPath(out, room, seat)
@@ -266,14 +267,16 @@ func syncSeatMessages(ctx context.Context, baseURL, token, room, seat, session, 
 }
 
 // messagesArgs is one invocation of `sync messages`. The two shapes are exclusive: a room and a seat
-// (one prompt), or --room (every running seat the rig reports).
+// (one prompt), or --room (every running seat the room reports).
 type messagesArgs struct {
 	room, seat, session string
-	rig                 string
-	out                 string
-	root                string
-	limit               int
-	dryRun, watch       bool
+	// all is the --room value: every running seat of that room, one pass. It is the same name the
+	// positionals carry, so it is held apart only to keep the two shapes exclusive in the grammar.
+	all           string
+	out           string
+	root          string
+	limit         int
+	dryRun, watch bool
 }
 
 // parseMessagesArgs is the verb's argument grammar: two positionals or --room, then the flags. The
@@ -293,7 +296,7 @@ func parseMessagesArgs(args []string) (messagesArgs, error) {
 			case "--out":
 				parsed.out = args[i]
 			case "--room":
-				parsed.rig = args[i]
+				parsed.all = args[i]
 			case "--state-root":
 				parsed.root = args[i]
 			case "--limit":
@@ -321,16 +324,16 @@ func parseMessagesArgs(args []string) (messagesArgs, error) {
 		}
 	}
 	switch {
-	case parsed.rig != "" && (parsed.room != "" || parsed.seat != ""):
-		return messagesArgs{}, fmt.Errorf("name a room and a seat, or --room <rig> — not both")
-	case parsed.rig != "" && parsed.session != "":
-		return messagesArgs{}, fmt.Errorf("--session names one seat's session; with --room each seat's own session is resolved from the rig")
-	case parsed.watch && parsed.rig == "":
-		return messagesArgs{}, fmt.Errorf("--watch delivers for a rig's seats; it needs --room <rig>")
+	case parsed.all != "" && (parsed.room != "" || parsed.seat != ""):
+		return messagesArgs{}, fmt.Errorf("name a room and a seat, or --room <room> — not both")
+	case parsed.all != "" && parsed.session != "":
+		return messagesArgs{}, fmt.Errorf("--session names one seat's session; with --room each seat's own session is resolved from the room")
+	case parsed.watch && parsed.all == "":
+		return messagesArgs{}, fmt.Errorf("--watch delivers for a room's seats; it needs --room <room>")
 	case parsed.watch && parsed.dryRun:
 		return messagesArgs{}, fmt.Errorf("--dry-run reads once and exits; it cannot watch")
-	case parsed.rig == "" && (parsed.room == "" || parsed.seat == ""):
-		return messagesArgs{}, fmt.Errorf("messages needs a room and a seat, or --room <rig>")
+	case parsed.all == "" && (parsed.room == "" || parsed.seat == ""):
+		return messagesArgs{}, fmt.Errorf("messages needs a room and a seat, or --room <room>")
 	}
 	out, err := resolveSeatStore(parsed.out)
 	if err != nil {
@@ -443,7 +446,7 @@ func oneLine(text string) string {
 	return flat
 }
 
-// seatSession is one seat of a rig and the session its prompt lives in.
+// seatSession is one seat of a room and the session its prompt lives in.
 type seatSession struct {
 	seat, session string
 }
@@ -454,7 +457,7 @@ type seatSession struct {
 //
 // IT REPLACES `rig ps --nodes --room R --json`, which is where this verb failed in the field: the node table it read
 // carried logicalId/canonicalSessionName/sessionStatus, and the runtime's own room status carries the same three facts
-// (Seat, SessionName, State). The room IS the rig slug - the panel writes to the room named in the seat's address.
+// (Seat, SessionName, State). The room IS the room slug - the panel writes to the room named in the seat's address.
 var roomSeats = func(room string) ([]seatSession, error) {
 	statuses, err := clientruntime.NewClient("").GetRoomStatus(room)
 	if err != nil {
@@ -482,30 +485,30 @@ func seatSessionsFrom(statuses []clientruntime.SeatStatus) []seatSession {
 	return seats
 }
 
-// messagesPass is one delivery pass over every seat a rig reports, and the number of seats whose turn
+// messagesPass is one delivery pass over every seat a room reports, and the number of seats whose turn
 // ended in failure. The watch ignores that count — the next pass retries — while a one-shot run exits
-// non-zero on it. The room is the rig slug: the panel writes to the room named in the seat's own
-// address, and a rig and its room carry the same name.
+// non-zero on it. The room is the room slug: the panel writes to the room named in the seat's own
+// address, and a room and its room carry the same name.
 func messagesPass(ctx context.Context, baseURL, token string, parsed messagesArgs, stdout, stderr io.Writer) int {
-	seats, err := roomSeats(parsed.rig)
+	seats, err := roomSeats(parsed.all)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam sync messages: %v\n", err)
 		return 1
 	}
 	if len(seats) == 0 {
-		fmt.Fprintf(stderr, "4genteam sync messages: rig %s reports no running seat to deliver to\n", parsed.rig)
+		fmt.Fprintf(stderr, "4genteam sync messages: room %s reports no running seat to deliver to\n", parsed.all)
 		return 1
 	}
 	failed := 0
 	for _, target := range seats {
-		done, err := syncSeatMessages(ctx, baseURL, token, parsed.rig, target.seat, target.session, parsed.out, parsed.limit, parsed.dryRun, stdout, stderr)
+		done, err := syncSeatMessages(ctx, baseURL, token, parsed.all, target.seat, target.session, parsed.out, parsed.limit, parsed.dryRun, stdout, stderr)
 		if err != nil {
-			fmt.Fprintf(stderr, "4genteam sync messages: %s/%s: %v\n", parsed.rig, target.seat, err)
+			fmt.Fprintf(stderr, "4genteam sync messages: %s/%s: %v\n", parsed.all, target.seat, err)
 			failed++
 			continue
 		}
 		if done.delivered > 0 || done.reAcked > 0 || done.failed > 0 {
-			fmt.Fprintf(stdout, "%s/%s: %d delivered, %d re-acked, %d failed\n", parsed.rig, target.seat, done.delivered, done.reAcked, done.failed)
+			fmt.Fprintf(stdout, "%s/%s: %d delivered, %d re-acked, %d failed\n", parsed.all, target.seat, done.delivered, done.reAcked, done.failed)
 		}
 		if done.failed > 0 {
 			failed++
@@ -514,16 +517,16 @@ func messagesPass(ctx context.Context, baseURL, token string, parsed messagesArg
 	return failed
 }
 
-// runMessagesWatch is the shape agent supervises: deliver for every running seat of one rig, forever.
+// runMessagesWatch is the shape agent supervises: deliver for every running seat of one room, forever.
 // One pass, then one heartbeat, then one sleep. A pass never exits the process on a transient failure
-// — a stopped cloud, a missing rig or one seat's refusal must not end the child, and agent restarts a
+// — a stopped cloud, a missing room or one seat's refusal must not end the child, and agent restarts a
 // child that dies — and the heartbeat is written on EVERY pass, because a beat that only accompanies
 // activity cannot tell a hung deliverer from a quiet one.
 func runMessagesWatch(ctx context.Context, baseURL, token string, parsed messagesArgs, stdout, stderr io.Writer) int {
-	fmt.Fprintf(stdout, "%s: delivering for every running seat, one pass every %s\n", parsed.rig, clientservices.MessagesEvery)
+	fmt.Fprintf(stdout, "%s: delivering for every running seat, one pass every %s\n", parsed.all, clientservices.MessagesEvery)
 	for ctx.Err() == nil {
 		messagesPass(ctx, baseURL, token, parsed, stdout, stderr)
-		if err := clientservices.WriteHeartbeat(parsed.root, clientservices.Messages, parsed.rig); err != nil {
+		if err := clientservices.WriteHeartbeat(parsed.root, clientservices.Messages, parsed.all); err != nil {
 			fmt.Fprintf(stderr, "4genteam sync messages: writing the heartbeat: %v\n", err)
 		}
 		select {

@@ -30,30 +30,30 @@ const (
 	// budgetRowTag is the rail tag a park carries. The store keeps a closed list of tags; "status" was retired
 	// on 2026-10-17, so the park is filed as an assignment: the lead takes the act the row's next line names.
 	budgetRowTag   = "assignment"
-	budgetRunUsage = "usage: 4genteam budget-run --room RIG [--lead SEAT] [--every SECONDS] [--once] [--state-root DIR]"
+	budgetRunUsage = "usage: 4genteam budget-run --room ROOM [--lead SEAT] [--every SECONDS] [--once] [--state-root DIR]"
 )
 
 // BudgetGuard is one `budget-run`. Every reading, every stop and every write is a field, so one pass is
-// testable with no rig, no socket, no transcript and no clock.
+// testable with no room, no socket, no transcript and no clock.
 type BudgetGuard struct {
-	Rig  string
+	Room string
 	Lead string // the seat told, by its seat key: the rail's destination is that seat's session name
 	// Root is the state root the verb resolved: the heartbeat and this guard's log live under it.
 	Root string
 
 	Now    func() time.Time
-	Seats  func(rig string) []string
-	Limits func(rig string) (roombudget.Limits, error)
-	Usage  func(rig, seat string) (roombudget.Usage, bool)
+	Seats  func(room string) []string
+	Limits func(room string) (roombudget.Limits, error)
+	Usage  func(room, seat string) (roombudget.Usage, bool)
 	// SeatDir is the seat's own directory, where its guard log and its park record live. Every path below
 	// resolves through it, so one field moves the whole guard's files in a test.
-	SeatDir func(rig, seat string) string
-	Park    func(rig, seat string) error
-	Record  func(rig, seat string, parked roombudget.Parked) error
+	SeatDir func(room, seat string) string
+	Park    func(room, seat string) error
+	Record  func(room, seat string, parked roombudget.Parked) error
 	// Parked reads the record back. It is what makes a park idempotent: the record outlives this process, so a
 	// guard that restarted must not stop and file the same seat again.
-	Parked func(rig, seat string) (roombudget.Parked, bool)
-	Row    func(rig string, row clientruntime.QueueCreateInput) error
+	Parked func(room, seat string) (roombudget.Parked, bool)
+	Row    func(room string, row clientruntime.QueueCreateInput) error
 	Log    func(text string)
 
 	over     map[string]int
@@ -62,8 +62,8 @@ type BudgetGuard struct {
 
 // NewBudgetGuard is a guard wired to the real world: the room's limits file, each seat's own logs, the
 // runtime's StopSeat, and the room's rail.
-func NewBudgetGuard(rig, lead, stateRoot string, out io.Writer) *BudgetGuard {
-	g := &BudgetGuard{Rig: rig, Lead: lead, Root: stateRoot, over: map[string]int{}}
+func NewBudgetGuard(room, lead, stateRoot string, out io.Writer) *BudgetGuard {
+	g := &BudgetGuard{Room: room, Lead: lead, Root: stateRoot, over: map[string]int{}}
 	g.Now = func() time.Time { return time.Now() }
 	g.Seats = func(r string) []string {
 		// The RUNNING seats, from the runtime that runs them: a seat the runtime does not list cannot be
@@ -111,7 +111,7 @@ func NewBudgetGuard(rig, lead, stateRoot string, out io.Writer) *BudgetGuard {
 // Step is one pass: read the limits, measure each running seat, park what crossed a ceiling.
 func (g *BudgetGuard) Step(ctx context.Context) {
 	_ = ctx
-	limits, err := g.Limits(g.Rig)
+	limits, err := g.Limits(g.Room)
 	if err != nil {
 		g.Log("the room's limits could not be read, nothing is measured: " + err.Error())
 		g.beat()
@@ -127,8 +127,8 @@ func (g *BudgetGuard) Step(ctx context.Context) {
 		g.beat()
 		return
 	}
-	for _, seat := range g.Seats(g.Rig) {
-		usage, ok := g.Usage(g.Rig, seat)
+	for _, seat := range g.Seats(g.Room) {
+		usage, ok := g.Usage(g.Room, seat)
 		if !ok {
 			continue
 		}
@@ -161,23 +161,23 @@ func (g *BudgetGuard) Step(ctx context.Context) {
 // A seat that already carries a record is left alone. The record outlives this process, so a guard that
 // restarted must not stop and file the same seat again on its first pass.
 func (g *BudgetGuard) park(seat string, usage roombudget.Usage, reason string) {
-	if _, ok := g.Parked(g.Rig, seat); ok {
+	if _, ok := g.Parked(g.Room, seat); ok {
 		delete(g.over, seat)
 		return
 	}
 	parked := roombudget.Parked{Seat: seat, Reason: reason, At: g.Now().UTC().Format(time.RFC3339),
-		Cost: usage.Cost, Calls: usage.Calls, Exit: roombudget.ParkExit(g.Rig, seat)}
-	if err := g.Record(g.Rig, seat, parked); err != nil {
+		Cost: usage.Cost, Calls: usage.Calls, Exit: roombudget.ParkExit(g.Room, seat)}
+	if err := g.Record(g.Room, seat, parked); err != nil {
 		g.Log(fmt.Sprintf("%s is over its ceiling (%s) and its park record could not be written, so it was NOT "+
 			"stopped - the record is the park, and the next pass tries again: %v", seat, reason, err))
 		return
 	}
 	delete(g.over, seat)
-	if err := g.Park(g.Rig, seat); err != nil {
+	if err := g.Park(g.Room, seat); err != nil {
 		g.Log(fmt.Sprintf("%s: parked and recorded, and the stop was refused (%v); the record refuses it work "+
 			"until it is removed", seat, err))
 	}
-	if err := g.Row(g.Rig, g.row(seat, usage, reason)); err != nil {
+	if err := g.Row(g.Room, g.row(seat, usage, reason)); err != nil {
 		g.Log(fmt.Sprintf("%s: parked and recorded, and the rail row was refused: %v", seat, err))
 		return
 	}
@@ -189,15 +189,15 @@ func (g *BudgetGuard) park(seat string, usage roombudget.Usage, reason string) {
 // within its per-field cap), because the rail refuses any other shape at create.
 func (g *BudgetGuard) row(seat string, usage roombudget.Usage, reason string) clientruntime.QueueCreateInput {
 	return clientruntime.QueueCreateInput{
-		SourceSession:      "budget@" + g.Rig,
-		DestinationSession: clientruntime.SeatSessionName(g.Rig, g.Lead),
+		SourceSession:      "budget@" + g.Room,
+		DestinationSession: clientruntime.SeatSessionName(g.Room, g.Lead),
 		Summary:            fmt.Sprintf("BUDGET: seat %s parked - %s", seat, reason),
 		Body: fmt.Sprintf("facts: seat=%s; reason=%s; cost24h=%.2f USD; calls1m=%d; record=%s\n"+
 			"rule: the room budget ceiling parks a seat; the record refuses it work\n"+
 			"decision: parked; remove the record FIRST, then reseat - a reseat first stops the seat\n"+
 			"next: lead closes this row and says why the seat came back",
 			seat, reason, usage.Cost, usage.Calls,
-			roombudget.ParkedPath(g.SeatDir(g.Rig, seat))),
+			roombudget.ParkedPath(g.SeatDir(g.Room, seat))),
 		Tags: []string{budgetRowTag},
 	}
 }
@@ -205,7 +205,7 @@ func (g *BudgetGuard) row(seat string, usage roombudget.Usage, reason string) cl
 // beat is the safeguard's heartbeat, the same one idle-run writes: agent reads it to tell a guard that is
 // working from a guard that died.
 func (g *BudgetGuard) beat() {
-	if err := clientservices.WriteHeartbeat(g.Root, clientservices.Budget, g.Rig); err != nil {
+	if err := clientservices.WriteHeartbeat(g.Root, clientservices.Budget, g.Room); err != nil {
 		g.Log("cannot write the heartbeat: " + err.Error())
 	}
 }
@@ -214,7 +214,7 @@ func (g *BudgetGuard) beat() {
 // than a rendering because it is logged only when it changes.
 func (g *BudgetGuard) limitsState(limits roombudget.Limits) string {
 	if !limits.Enabled {
-		return "limits are OFF: nothing is measured (turn them on with `4genteam room limits " + g.Rig + " --on`)"
+		return "limits are OFF: nothing is measured (turn them on with `4genteam room limits " + g.Room + " --on`)"
 	}
 	return fmt.Sprintf("limits are ON: %.2f USD/24h and %d calls/min per seat", limits.USDPerSeat24h, limits.CallsPerSeatMin)
 }
@@ -244,15 +244,15 @@ func (budgetRunCommand) Run(ctx context.Context, args []string, stdout, stderr i
 	}
 	flags := flag.NewFlagSet("budget-run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	rig := flags.String("room", "", "the rig to guard (required)")
+	room := flags.String("room", "", "the room to guard (required)")
 	lead := flags.String("lead", "lead", "the seat told when a seat is parked")
 	every := flags.Int("every", int(clientservices.BudgetEvery/time.Second), "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
 	if err := flags.Parse(args); err != nil {
 		return clientcmd.ExitUsage
 	}
-	if strings.TrimSpace(*rig) == "" {
-		fmt.Fprintf(stderr, "4genteam budget-run: --room is required - there is no default rig. %s\n", budgetRunUsage)
+	if strings.TrimSpace(*room) == "" {
+		fmt.Fprintf(stderr, "4genteam budget-run: --room is required - there is no default room. %s\n", budgetRunUsage)
 		return clientcmd.ExitUsage
 	}
 	root, err := clientenv.ResolveStateRoot(rootFlag)
@@ -260,8 +260,8 @@ func (budgetRunCommand) Run(ctx context.Context, args []string, stdout, stderr i
 		fmt.Fprintf(stderr, "4genteam budget-run: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	guard := NewBudgetGuard(*rig, *lead, root, stdout)
-	guard.Log(fmt.Sprintf("guarding %s's budget: lead %s, every %ds", *rig, *lead, *every))
+	guard := NewBudgetGuard(*room, *lead, root, stdout)
+	guard.Log(fmt.Sprintf("guarding %s's budget: lead %s, every %ds", *room, *lead, *every))
 	interrupted := make(chan os.Signal, 1)
 	signal.Notify(interrupted, os.Interrupt)
 	for {
@@ -277,7 +277,7 @@ func (budgetRunCommand) Run(ctx context.Context, args []string, stdout, stderr i
 	}
 }
 
-// BudgetLogPath is the guard's log for one rig.
-func BudgetLogPath(rig, root string) string {
-	return filepath.Join(LogDir(root), "budget-guard-"+rig+".log")
+// BudgetLogPath is the guard's log for one room.
+func BudgetLogPath(room, root string) string {
+	return filepath.Join(LogDir(root), "budget-guard-"+room+".log")
 }

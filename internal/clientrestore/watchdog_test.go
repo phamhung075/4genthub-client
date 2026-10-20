@@ -21,7 +21,7 @@ import (
 var beats []string
 
 // isolate points the package's home at a temporary directory and stubs every seam the watchdog can reach:
-// no real home, no tmux, no rig. It restores them when the test ends. Everything a test sets AFTER calling
+// no real home, no tmux, no room. It restores them when the test ends. Everything a test sets AFTER calling
 // it (a per-test tmuxRead, watchdogNodesJSON) is restored by the same cleanup.
 func isolate(t *testing.T) string {
 	t.Helper()
@@ -32,8 +32,8 @@ func isolate(t *testing.T) string {
 	// machine's own log directory; the beat is recorded for the focused test that asserts it.
 	oldBeat := clientservices.WriteHeartbeat
 	beats = nil
-	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
-		beats = append(beats, safeguard+"/"+rig)
+	clientservices.WriteHeartbeat = func(root, safeguard, room string) error {
+		beats = append(beats, safeguard+"/"+room)
 		return nil
 	}
 	realHome = func() (string, error) { return home, nil }
@@ -50,20 +50,20 @@ func isolate(t *testing.T) string {
 	return home
 }
 
-// writeBrief drops <home>/.config/4genthub/briefs/<rig>.txt, which is what "a rig that has a brief" means.
-func writeBrief(t *testing.T, home, rigName string) {
+// writeBrief drops <home>/.config/4genthub/briefs/<room>.txt, which is what "a room that has a brief" means.
+func writeBrief(t *testing.T, home, roomName string) {
 	t.Helper()
 	dir := filepath.Join(home, ".config", "4genthub", "briefs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, rigName+".txt"), []byte("brief"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, roomName+".txt"), []byte("brief"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // drivePolls makes each poll answer with the next state in states ("dead" or "alive"): expected seats come
-// from the rig-JSON seam (which advances the index once per poll) and live seats from the tmux seam. A
+// from the room-JSON seam (which advances the index once per poll) and live seats from the tmux seam. A
 // call past the end repeats the last state, so a test need only name the polls it cares about.
 func drivePolls(states []string) {
 	idx := -1
@@ -87,7 +87,7 @@ func testWatcher(t *testing.T, buf *bytes.Buffer) *watcher {
 		log:      &teeLog{out: buf},
 		root:     t.TempDir(),
 		stderr:   io.Discard,
-		logPath:  "/tmp/rig-watchdog.log",
+		logPath:  "/tmp/room-watchdog.log",
 		daemonUp: func() {},
 		gate:     func(string, string, bool, io.Writer) int { return clientcmd.ExitOK },
 		restore:  func(string, string) bool { return true },
@@ -272,8 +272,8 @@ func TestWatchTwoMissesRestoreOnce(t *testing.T) {
 	}
 }
 
-// TestWatchCounterResetWhenALiveRigRecovers: a rig that comes back before acting resets the counter and says so.
-func TestWatchCounterResetWhenALiveRigRecovers(t *testing.T) {
+// TestWatchCounterResetWhenALiveRoomRecovers: a room that comes back before acting resets the counter and says so.
+func TestWatchCounterResetWhenALiveRoomRecovers(t *testing.T) {
 	isolate(t)
 	drivePolls([]string{"dead", "alive"})
 	watchPollLimit = 2
@@ -293,7 +293,7 @@ func TestWatchCounterResetWhenALiveRigRecovers(t *testing.T) {
 }
 
 // TestWatchHeartbeatOnlyEveryNPolls: the heartbeat fires on polls that are multiples of the beat and not
-// before, so a healthy rig is not silent and not chatty.
+// before, so a healthy room is not silent and not chatty.
 func TestWatchHeartbeatOnlyEveryNPolls(t *testing.T) {
 	isolate(t)
 	drivePolls([]string{"alive"})
@@ -307,7 +307,7 @@ func TestWatchHeartbeatOnlyEveryNPolls(t *testing.T) {
 		t.Errorf("heartbeats = %d, want 2 (polls 2 and 4):\n%s", got, out)
 	}
 	if strings.Contains(out, "MISS") {
-		t.Errorf("a healthy rig reported a miss:\n%s", out)
+		t.Errorf("a healthy room reported a miss:\n%s", out)
 	}
 	if !strings.Contains(out, "watching every 60s (two consecutive misses required before acting; heartbeat every 120s)") {
 		t.Errorf("missing the watching banner:\n%s", out)
@@ -315,7 +315,7 @@ func TestWatchHeartbeatOnlyEveryNPolls(t *testing.T) {
 }
 
 // TestWatchWritesOneHeartbeatPerPoll: every poll beats, not only the polls the operator's log line names,
-// so a stopped watchdog and a quiet rig cannot look the same.
+// so a stopped watchdog and a quiet room cannot look the same.
 func TestWatchWritesOneHeartbeatPerPoll(t *testing.T) {
 	isolate(t)
 	drivePolls([]string{"alive"})
@@ -328,7 +328,7 @@ func TestWatchWritesOneHeartbeatPerPoll(t *testing.T) {
 	}
 	for _, beat := range beats {
 		if beat != "watchdog/demo" {
-			t.Errorf("heartbeat = %q, want watchdog/demo (the rig-scoped heartbeat file)", beat)
+			t.Errorf("heartbeat = %q, want watchdog/demo (the room-scoped heartbeat file)", beat)
 		}
 	}
 }
@@ -368,7 +368,7 @@ func TestServerIdentityFirstWriteAndChange(t *testing.T) {
 	}
 }
 
-// TestCheckReport: a dead rig reports and exits exitDead; a healthy one is healthy and exits 0.
+// TestCheckReport: a dead room reports and exits exitDead; a healthy one is healthy and exits 0.
 func TestCheckReport(t *testing.T) {
 	isolate(t)
 	drivePolls([]string{"dead"})
@@ -435,17 +435,17 @@ func TestAllWithoutWatchIsUsage(t *testing.T) {
 	}
 }
 
-// TestCheckReportsAnyDeadRig: the shell's `for … done` exited with the LAST rig's status, so a dead rig
+// TestCheckReportsAnyDeadRoom: the shell's `for … done` exited with the LAST room's status, so a dead room
 // that was not last left the exit code at 0 - the one thing a caller that reads only the exit code acts on.
-// The aggregate makes that deterministic: any dead rig in the pass is exitDead, wherever it sits. The two
-// rigs are polled in the order the briefs sort (alpha before zulu), so the dead one is deliberately NOT
+// The aggregate makes that deterministic: any dead room in the pass is exitDead, wherever it sits. The two
+// rooms are polled in the order the briefs sort (alpha before zulu), so the dead one is deliberately NOT
 // last.
-func TestCheckReportsAnyDeadRig(t *testing.T) {
+func TestCheckReportsAnyDeadRoom(t *testing.T) {
 	home := isolate(t)
 	writeBrief(t, home, "alpha")
 	writeBrief(t, home, "zulu")
 	// The daemon expects a running seat in both, and tmux has one for zulu only: alpha is dead, and it is
-	// the FIRST rig in the pass, which is the position the shell's last-status exit code got wrong.
+	// the FIRST room in the pass, which is the position the shell's last-status exit code got wrong.
 	watchdogNodesJSON = func(string) (string, error) {
 		return `[{"lifecycleState":"running"}]`, nil
 	}
@@ -454,7 +454,7 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	code := watchdogCommand{}.Run(context.Background(), []string{"--check"}, &out, &errBuf)
 	if code != exitDead {
-		t.Fatalf("exit %d, want %d: a dead rig that is not last must still count (stderr %q)", code, exitDead, errBuf.String())
+		t.Fatalf("exit %d, want %d: a dead room that is not last must still count (stderr %q)", code, exitDead, errBuf.String())
 	}
 	for _, want := range []string{"alpha: DEAD", "zulu: healthy (daemon expects 1, tmux has 1)"} {
 		if !strings.Contains(out.String(), want) {
@@ -463,8 +463,8 @@ func TestCheckReportsAnyDeadRig(t *testing.T) {
 	}
 }
 
-// TestListingWorksWithoutRigTool: the no-argument form lists the briefs on disk and needs no rig tool.
-func TestListingWorksWithoutRigTool(t *testing.T) {
+// TestListingWorksWithoutRoomTool: the no-argument form lists the briefs on disk and needs no room tool.
+func TestListingWorksWithoutRoomTool(t *testing.T) {
 	home := isolate(t)
 	writeBrief(t, home, "alpha")
 	var out, errBuf bytes.Buffer
@@ -472,7 +472,7 @@ func TestListingWorksWithoutRigTool(t *testing.T) {
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d, want 0 (stderr %q)", code, errBuf.String())
 	}
-	if !strings.Contains(out.String(), "rig with a brief: alpha") {
+	if !strings.Contains(out.String(), "room with a brief: alpha") {
 		t.Errorf("listing did not name the brief:\n%s", out.String())
 	}
 }

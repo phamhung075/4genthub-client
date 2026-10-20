@@ -249,7 +249,7 @@ func TestHubCallCarriesTheSeatHeader(t *testing.T) {
 	t.Cleanup(func() { hubMCPPost = previous })
 
 	identity := WhoamiResponse{}
-	identity.Identity.RigName = "room-a"
+	identity.Identity.RoomName = "room-a"
 	identity.Identity.MemberId = "go-dev"
 	answer := ResolveCurrentTask(context.Background(), identity)
 

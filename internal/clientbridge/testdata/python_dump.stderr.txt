@@ -1,4 +1,4 @@
 bridge: rig ok
 bridge: herdr unavailable: RuntimeError: exit 1: {"id":"cli:api:snapshot","error":{"code":"server_not_running","message":"no herd
-bridge: seat 'owner' in rig room-c exists in pods agy and dev; rename one
-bridge: seat 'check' in rig room-c exists in pods agy and dev; rename one
+bridge: seat 'owner' in room room-c exists in pods agy and dev; rename one
+bridge: seat 'check' in room room-c exists in pods agy and dev; rename one

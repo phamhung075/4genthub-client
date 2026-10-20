@@ -475,15 +475,15 @@ impl TerminalManager {
         // the first seat's launch created it with, so every later seat came up with the first seat's
         // AGENTHUB_SEAT/ROLE/SESSION_NAME (measured: dev and reviewer ran as `lead`). A denied key is
         // dropped even when a caller supplied it: the default deny is the point, and "this seat needs to
-        // address another rig" is the case being closed.
+        // address another room" is the case being closed.
         cmd.args(pane_env_args(env_vars));
 
         // The pane command is exec'd through `env -u <key>` for every denied variable this process carries,
         // so the runner — and every agent it spawns, which is what `scrub_env` covers — starts without the
-        // live rig's addressing. Doing it at exec rather than after the fact is deliberate:
+        // live room's addressing. Doing it at exec rather than after the fact is deliberate:
         // `/proc/<pid>/environ` is the environment the kernel was given, which is where the design's
         // predicate is measured, and tmux hands a pane its session environment from the tmux *server* when
-        // the variable is not in the client's — a server the live rig may have started.
+        // the variable is not in the client's — a server the live room may have started.
         // `runtime_cmd` arrives as ONE string and tmux hands it to the shell, so the wrapper has to stay a
         // single string too: passing `env` as its own argv element makes `env` treat the whole command as a
         // program name, and the pane dies instantly (which is how the first version of this failed - visible
@@ -493,7 +493,7 @@ impl TerminalManager {
         // The tmux *client* is ours and short-lived, but it is a process of this launch and it carries the
         // daemon's environment: measured, it held the host's addressing variables while the runner and the agent
         // it starts were clean. Scrubbing it here costs nothing and leaves no process in the launch carrying
-        // the live rig's addressing.
+        // the live room's addressing.
         crate::scrub_env(&mut cmd);
         let output = cmd
             .output()

@@ -328,7 +328,7 @@ func (r *EventRedactor) envFileEvent(root any) bool {
 
 // toolRecord normalizes ONE transcript object, as the runtime wrote it, into the two things the .env
 // rule pairs on: a call with an id and an input, or the result that carries a remembered id. The
-// runtimes this client reads are measured (2026-10-18, the step-2 E2E on rig scratch-e2e-130032 and
+// runtimes this client reads are measured (2026-10-18, the step-2 E2E on room scratch-e2e-130032 and
 // the go-dev seat's own session file):
 //
 //	Claude Code  {"type":"tool_use","id":…,"input":…}, {"type":"tool_result","tool_use_id":…}

@@ -86,8 +86,8 @@ func TestUpRespawnStopsTheSupervisionThenTheDaemonBeforeTheRoomStarts(t *testing
 		*steps = append(*steps, "ensureDaemon")
 		return "/tmp/daemon.log", nil
 	}
-	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
-		*steps = append(*steps, "ensureRig")
+	ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		*steps = append(*steps, "ensureRoom")
 		return clientcmd.ExitOK
 	}
 	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
@@ -97,11 +97,11 @@ func TestUpRespawnStopsTheSupervisionThenTheDaemonBeforeTheRoomStarts(t *testing
 
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(),
-		[]string{"my-rig", "--team", writeRoomDefinition(t, "my-rig"), "--room-only", "--respawn"}, &out, &errOut)
+		[]string{"my-room", "--team", writeRoomDefinition(t, "my-room"), "--room-only", "--respawn"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d (stdout %q, stderr %q)", code, out.String(), errOut.String())
 	}
-	want := []string{"stop-agent", "live", "stop-daemon", "live", "ensureDaemon", "ensureWorktrees", "ensureRig"}
+	want := []string{"stop-agent", "live", "stop-daemon", "live", "ensureDaemon", "ensureWorktrees", "ensureRoom"}
 	if strings.Join(*steps, ",") != strings.Join(want, ",") {
 		t.Errorf("steps = %v, want %v", *steps, want)
 	}
@@ -140,7 +140,7 @@ func TestUpRespawnRefusesToStartASecondDaemon(t *testing.T) {
 
 			var out, errOut bytes.Buffer
 			code := (upCommand{}).Run(context.Background(),
-				[]string{"my-rig", "--team", writeRoomDefinition(t, "my-rig"), "--room-only", "--respawn"}, &out, &errOut)
+				[]string{"my-room", "--team", writeRoomDefinition(t, "my-room"), "--room-only", "--respawn"}, &out, &errOut)
 			if code != clientcmd.ExitUnavailable {
 				t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
 			}
@@ -160,14 +160,14 @@ func TestUpWithoutRespawnLeavesTheDaemonAlone(t *testing.T) {
 		*steps = append(*steps, "ensureDaemon")
 		return "/tmp/daemon.log", nil
 	}
-	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
-		*steps = append(*steps, "ensureRig")
+	ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+		*steps = append(*steps, "ensureRoom")
 		return clientcmd.ExitOK
 	}
 
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(),
-		[]string{"my-rig", "--team", writeRoomDefinition(t, "my-rig"), "--room-only"}, &out, &errOut)
+		[]string{"my-room", "--team", writeRoomDefinition(t, "my-room"), "--room-only"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d (stdout %q, stderr %q)", code, out.String(), errOut.String())
 	}
@@ -188,7 +188,7 @@ func TestUpRespawnReExecsItselfBeforeItStopsAnything(t *testing.T) {
 	steps := stubDaemons(t, []int{4242})
 	t.Setenv(respawnDetachedEnv, "")
 	stateDir := filepath.Join(t.TempDir(), "state")
-	teamDir := writeRoomDefinition(t, "my-rig")
+	teamDir := writeRoomDefinition(t, "my-room")
 	var detachedRoot string
 	var argv []string
 	detachRespawn = func(root string, a []string) (string, error) {
@@ -199,7 +199,7 @@ func TestUpRespawnReExecsItselfBeforeItStopsAnything(t *testing.T) {
 		t.Error("the calling process started the daemon")
 		return "", nil
 	}
-	ensureRig = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
+	ensureRoom = func(string, clientruntime.RoomSpec, string, io.Writer, io.Writer) int {
 		t.Error("the calling process started a seat")
 		return clientcmd.ExitOK
 	}
@@ -210,11 +210,11 @@ func TestUpRespawnReExecsItselfBeforeItStopsAnything(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	code := (upCommand{}).Run(context.Background(),
-		[]string{"my-rig", "--team", teamDir, "--state-root", stateDir, "--room-only", "--respawn"}, &out, &errOut)
+		[]string{"my-room", "--team", teamDir, "--state-root", stateDir, "--room-only", "--respawn"}, &out, &errOut)
 	if code != clientcmd.ExitOK {
 		t.Fatalf("exit %d (stdout %q, stderr %q)", code, out.String(), errOut.String())
 	}
-	want := []string{"up", "my-rig", "--team", teamDir, "--state-root", stateDir, "--room-only", "--respawn"}
+	want := []string{"up", "my-room", "--team", teamDir, "--state-root", stateDir, "--room-only", "--respawn"}
 	if strings.Join(argv, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("the detached run's argv = %q, want %q", argv, want)
 	}

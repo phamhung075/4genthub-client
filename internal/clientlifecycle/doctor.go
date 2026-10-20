@@ -24,10 +24,10 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
-const doctorUsage = "usage: 4genteam doctor [RIG] [--json] [--state-root DIR]"
+const doctorUsage = "usage: 4genteam doctor [ROOM] [--json] [--state-root DIR]"
 
-// doctorCommand is the report verb. It needs no rig tool: it reads files and the process table, and a
-// machine where the rig tool is missing is exactly a machine whose report matters.
+// doctorCommand is the report verb. It needs no room tool: it reads files and the process table, and a
+// machine where the room tool is missing is exactly a machine whose report matters.
 type doctorCommand struct{}
 
 func (doctorCommand) Name() string { return "doctor" }
@@ -38,9 +38,9 @@ func (doctorCommand) Summary() string {
 func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, doctorUsage,
-			"One line per safeguard row (rig, safeguard, state, age), then the tail of alerts.log.\n"+
+			"One line per safeguard row (room, safeguard, state, age), then the tail of alerts.log.\n"+
 				"Exits 0 only when every row is running; otherwise 3, naming every row that is not on stderr as\n"+
-				"`<rig> <safeguard>: <state>, age <n>s`. It is read-only: it starts nothing, restarts nothing\n"+
+				"`<room> <safeguard>: <state>, age <n>s`. It is read-only: it starts nothing, restarts nothing\n"+
 				"and signals nothing. The repair verb is `up`.")
 		return clientcmd.ExitOK
 	}
@@ -63,19 +63,19 @@ func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 		}
 	}
 	if len(rest) > 1 {
-		fmt.Fprintf(stderr, "4genteam doctor: unexpected argument %s - this verb takes one rig name, or none for every listed rig. %s\n", rest[1], doctorUsage)
+		fmt.Fprintf(stderr, "4genteam doctor: unexpected argument %s - this verb takes one room name, or none for every listed room. %s\n", rest[1], doctorUsage)
 		return clientcmd.ExitUsage
 	}
-	rig := ""
+	room := ""
 	if len(rest) == 1 {
-		rig = rest[0]
+		room = rest[0]
 	}
 	root, err := clientenv.ResolveStateRoot(rootFlag)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam doctor: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	return runDoctor(rig, root, asJSON, stdout, stderr)
+	return runDoctor(room, root, asJSON, stdout, stderr)
 }
 
 // rowsFor is the row computation as a seam, in the repo's style of a package-level variable rather than
@@ -88,17 +88,17 @@ var rowsFor = safeguardRows
 
 // SafeguardRows is the same computation for a caller outside this package - `continue` reports the rows a
 // restore did not bring up - so the second reader cannot drift from `doctor` and `status`.
-func SafeguardRows(rig, root string) ([]clientservices.Health, error) { return rowsFor(rig, root) }
+func SafeguardRows(room, root string) ([]clientservices.Health, error) { return rowsFor(room, root) }
 
 // safeguardRows is the ONE computation doctor, `status --json`, `compact`, `agent status` and `up`'s check
 // share.
 //
-// A named rig is reported on its own (with the two machine-scoped rows); no rig means EVERY rig in
+// A named room is reported on its own (with the two machine-scoped rows); no room means EVERY room in
 // agent.json's list, because that list is what "meant to run" means (7.9). A machine whose agent has never
 // run has an empty list and still gets the bridge and agent rows, which is the point: agent's own absence
 // is the loudest row there is.
-func safeguardRows(rig, root string) ([]clientservices.Health, error) {
-	// A REPORT SURFACE MAY GO ON WITHOUT THE LIST. The rigs list decides WHICH rooms get rows; a failed read
+func safeguardRows(room, root string) ([]clientservices.Health, error) {
+	// A REPORT SURFACE MAY GO ON WITHOUT THE LIST. The rooms list decides WHICH rooms get rows; a failed read
 	// leaves it empty exactly as a machine whose agent never ran does, and this verb neither writes nor acts,
 	// so the rows for the two machine-scoped safeguards still print. `agent status` says in words when the
 	// read failed; naming it here needs an error shape in the report seam, which is its own unit.
@@ -106,22 +106,22 @@ func safeguardRows(rig, root string) ([]clientservices.Health, error) {
 	// THE PROCESS PROBE IS THE OTHER CASE: a pgrep that could not run decides NO row, so its error is the
 	// caller's and is handed on untouched (7.12).
 	state, _ := clientservices.ReadAgentState()
-	rigs := reportedRigs(state.Rigs, rig)
+	rooms := reportedRooms(state.Rooms, room)
 	return clientservices.Verify(context.Background(), clientservices.Env{
 		Root:       root,
-		Rigs:       rigs,
+		Rooms:      rooms,
 		Supervised: state.Safeguards,
 	})
 }
 
-// reportedRigs is 7.2's list of the rigs a report covers: the named rig alone, or every rig agent.json
+// reportedRooms is 7.2's list of the rooms a report covers: the named room alone, or every room agent.json
 // lists, because that list is what "meant to run" means (7.9). The safeguard rows and the orphan row cover
 // the same list, so they cannot disagree about which rooms exist.
-func reportedRigs(rigs []string, rig string) []string {
-	if rig != "" {
-		return []string{rig}
+func reportedRooms(rooms []string, room string) []string {
+	if room != "" {
+		return []string{room}
 	}
-	return rigs
+	return rooms
 }
 
 // runDoctor prints the rows and decides the exit code. `--json` prints the rows instead of the lines, and
@@ -148,47 +148,47 @@ func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, c
 	return out
 }
 
-// rowReasons finds one row's reasons: the wrapper is matched on (safeguard, rig), the pair the report
+// rowReasons finds one row's reasons: the wrapper is matched on (safeguard, room), the pair the report
 // itself matches a row by.
 func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
 	seatRows []seatSkillsRow, orphanRows []orphanRow, identityRows []identityRow) []string {
 	for _, worktree := range worktreeRows {
-		if worktree.Row.Safeguard == row.Safeguard && worktree.Row.Rig == row.Rig {
+		if worktree.Row.Safeguard == row.Safeguard && worktree.Row.Room == row.Room {
 			return worktreeLines(worktree)
 		}
 	}
 	for _, clone := range cloneRows {
-		if clone.Row.Safeguard == row.Safeguard && clone.Row.Rig == row.Rig {
+		if clone.Row.Safeguard == row.Safeguard && clone.Row.Room == row.Room {
 			return cloneLines(clone)
 		}
 	}
 	for _, hooks := range hooksRows {
-		if hooks.Row.Safeguard == row.Safeguard && hooks.Row.Rig == row.Rig {
+		if hooks.Row.Safeguard == row.Safeguard && hooks.Row.Room == row.Room {
 			return hooksLines(hooks)
 		}
 	}
 	for _, seat := range seatRows {
-		if seat.Row.Safeguard == row.Safeguard && seat.Row.Rig == row.Rig {
+		if seat.Row.Safeguard == row.Safeguard && seat.Row.Room == row.Room {
 			return seatLines(seat)
 		}
 	}
 	for _, orphan := range orphanRows {
-		if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Rig == row.Rig {
+		if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Room == row.Room {
 			return orphanLines(orphan)
 		}
 	}
 	for _, identity := range identityRows {
-		if identity.Row.Safeguard == row.Safeguard && identity.Row.Rig == row.Rig {
+		if identity.Row.Safeguard == row.Safeguard && identity.Row.Room == row.Room {
 			return identityLines(identity)
 		}
 	}
 	return nil
 }
 
-func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
+func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 	// THE REFUSAL COMES FIRST (7.12): a probe that could not run decides no row, so not one row, reason or
 	// note is printed - a report that cannot say "running" must not be readable as "stopped".
-	rows, err := rowsFor(rig, root)
+	rows, err := rowsFor(room, root)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam doctor: no safeguard row was decided: %v\n", err)
 		return clientcmd.ExitUnavailable
@@ -196,22 +196,22 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	// The worktrees row (the ruling's Check): where each seat's own worktree is, and whether it is the
 	// one this client derives. It reads the same derivation `up`'s worktrees step creates, so the two
 	// cannot disagree about a path.
-	worktreeRows := worktreesRowFor(rig, root)
+	worktreeRows := worktreesRowFor(room, root)
 	for _, worktreeRow := range worktreeRows {
 		rows = append(rows, worktreeRow.Row)
 	}
 	// The two MACHINE rows (4.1's third failure and 4.4's fifth risk): the changes sitting in the shared
 	// checkout that belong to no seat, and whether the git guard is present in the hooks folder git actually
 	// runs. Both are read from the checkout `up` and the worktrees row already resolve, and neither carries a
-	// rig, so they are appended whatever rig the caller named.
-	cloneRows := cloneRowFor(rig)
+	// room, so they are appended whatever room the caller named.
+	cloneRows := cloneRowFor(room)
 	for _, clone := range cloneRows {
 		rows = append(rows, clone.Row)
 		if clone.Note != "" {
 			fmt.Fprintf(stderr, "4genteam doctor: %s\n", clone.Note)
 		}
 	}
-	hooksRows := hooksRowFor(rig)
+	hooksRows := hooksRowFor(room)
 	for _, hooks := range hooksRows {
 		rows = append(rows, hooks.Row)
 		if hooks.Row.State == clientservices.GuardAbsent {
@@ -223,11 +223,11 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	// The seats row (the ruling's one check): `running`, or `skills_stale` when a seat loaded something
 	// other than the set the runtime installed for it. It is the SAME function `up` runs, so the two cannot
 	// disagree about a seat.
-	seatRows := seatsRowFor(rig, root)
+	seatRows := seatsRowFor(room, root)
 	for _, seatRow := range seatRows {
 		rows = append(rows, seatRow.Row)
 	}
-	orphanRows := orphanRowsFor(rig)
+	orphanRows := orphanRowsFor(room)
 	for _, orphan := range orphanRows {
 		rows = append(rows, orphan.Row)
 		if orphan.Err != nil {
@@ -236,7 +236,7 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	}
 	// The identity row (ruling e2948011, 4.6): the rooms whose senders the daemon can name, and the nodes it
 	// cannot, whose messages arrive as <unknown sender> with nothing in the text to say so.
-	identityRows := identityRowFor(rig)
+	identityRows := identityRowFor(room)
 	for _, identity := range identityRows {
 		rows = append(rows, identity.Row)
 	}
@@ -302,7 +302,7 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 	for _, row := range down {
 		fmt.Fprintln(stderr, clientservices.StateLine(row))
 		for _, orphan := range orphanRows {
-			if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Rig == row.Rig {
+			if orphan.Row.Safeguard == row.Safeguard && orphan.Row.Room == row.Room {
 				for _, line := range orphanLines(orphan) {
 					fmt.Fprintln(stderr, line)
 				}
@@ -311,7 +311,7 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		// The worktrees row's own reasons, the same way: the paths that are wrong are why the row is
 		// down, and an input this client could not read is reported whether or not it is.
 		for _, worktreeRow := range worktreeRows {
-			if worktreeRow.Row.Rig != row.Rig {
+			if worktreeRow.Row.Room != row.Room {
 				continue
 			}
 			for _, line := range worktreeReasonLines(worktreeRow) {
@@ -339,7 +339,7 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		// could not read whether or not it is - a reader must be able to tell "the seats are right" from "the
 		// seats could not be looked at".
 		for _, seatRow := range seatRows {
-			if seatRow.Row.Rig != row.Rig || seatRow.Row.Safeguard != row.Safeguard {
+			if seatRow.Row.Room != row.Room || seatRow.Row.Safeguard != row.Safeguard {
 				continue
 			}
 			for _, line := range seatReasonLines(seatRow) {
@@ -348,7 +348,7 @@ func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
 		}
 		// An identity row that is down is only actionable with the node that cannot be named.
 		for _, identity := range identityRows {
-			if identity.Row.Safeguard == row.Safeguard && identity.Row.Rig == row.Rig {
+			if identity.Row.Safeguard == row.Safeguard && identity.Row.Room == row.Room {
 				for _, line := range identityReasonLines(identity) {
 					fmt.Fprintln(stderr, line)
 				}
@@ -382,10 +382,10 @@ var waitForSafeguards = waitForSafeguardsImpl
 // It returns the last report either way, so the caller names the very rows the reader will see in
 // `doctor`. A probe error is answered as itself: nothing was decided, so there is no report to wait on and
 // `up` refuses rather than calling the safeguards down (7.12).
-func waitForSafeguardsImpl(rig, root string) ([]clientservices.Health, bool, error) {
+func waitForSafeguardsImpl(room, root string) ([]clientservices.Health, bool, error) {
 	started := time.Now()
 	for {
-		rows, err := rowsFor(rig, root)
+		rows, err := rowsFor(room, root)
 		if err != nil {
 			return nil, false, err
 		}

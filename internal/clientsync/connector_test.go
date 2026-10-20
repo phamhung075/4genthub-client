@@ -153,7 +153,7 @@ func asString(v any) string {
 
 // THE TRANSPORT PROOF THE GATE COULD NOT MAKE. DialConnector wrote its upgrade request in PLAINTEXT to
 // port 443, so the TLS terminator answered `400 The plain HTTP request was sent to HTTPS port` and no
-// rig ever registered a session - while the slice that built it had passed its gate, because every case
+// room ever registered a session - while the slice that built it had passed its gate, because every case
 // in this file replaced the dialConnector seam and nothing ever dialled. These two cases dial.
 //
 // The TLS case is the acceptance. Its listener demands TLS, so a plaintext client cannot reach the

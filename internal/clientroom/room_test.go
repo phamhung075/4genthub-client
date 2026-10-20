@@ -498,7 +498,7 @@ func TestRoomStopWritesStopRoomAndNothingElse(t *testing.T) {
 			t.Errorf("the stop reported %q, which names %q: StopRoom is the whole of this verb", rendered, forbidden)
 		}
 	}
-	// The rig orchestrator's state home is NOT in that list, and the omission is deliberate: the pair this verb
+	// The room orchestrator's state home is NOT in that list, and the omission is deliberate: the pair this verb
 	// prints echoes back the --state-root the caller passed, so a substring test there would fail on the checkout
 	// path rather than on the verb. What the verb touched is the
 	// wire, and assertRequests above already pins it to one StopRoom and nothing else.
@@ -517,20 +517,20 @@ func useTempAgentState(t *testing.T, rooms ...string) string {
 	previous := clientservices.AgentStatePath
 	clientservices.AgentStatePath = func() (string, error) { return path, nil }
 	t.Cleanup(func() { clientservices.AgentStatePath = previous })
-	if err := clientservices.WriteAgentState(clientservices.AgentState{Rigs: rooms}); err != nil {
+	if err := clientservices.WriteAgentState(clientservices.AgentState{Rooms: rooms}); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-// agentRigs is the rooms-meant-to-run list for tests whose subject is not the read itself.
-func agentRigs(t *testing.T) []string {
+// agentRooms is the rooms-meant-to-run list for tests whose subject is not the read itself.
+func agentRooms(t *testing.T) []string {
 	t.Helper()
 	state, err := clientservices.ReadAgentState()
 	if err != nil {
 		t.Fatalf("ReadAgentState: %v", err)
 	}
-	return state.Rigs
+	return state.Rooms
 }
 
 // TestRoomStopDropsTheRoomFromTheRoomsMeantToRun pins the fix for a stopped room that agent kept supervising:
@@ -542,7 +542,7 @@ func TestRoomStopDropsTheRoomFromTheRoomsMeantToRun(t *testing.T) {
 	if code, _, stderr := runRoom(t, daemon.args("stop", testRoom)...); code != clientcmd.ExitOK {
 		t.Fatalf("exit %d (stderr %q)", code, stderr)
 	}
-	if got := strings.Join(agentRigs(t), ","); got != "other" {
+	if got := strings.Join(agentRooms(t), ","); got != "other" {
 		t.Errorf("rooms meant to run = %q, want only %q", got, "other")
 	}
 }
@@ -555,7 +555,7 @@ func TestRoomStopDropsTheRoomEvenWhenTheRuntimeRefusesTheStop(t *testing.T) {
 	if code, _, _ := runRoom(t, daemon.args("stop", testRoom)...); code == clientcmd.ExitOK {
 		t.Fatal("a refused StopRoom must not exit 0")
 	}
-	if rooms := agentRigs(t); len(rooms) != 0 {
+	if rooms := agentRooms(t); len(rooms) != 0 {
 		t.Errorf("rooms meant to run = %v, want none", rooms)
 	}
 }

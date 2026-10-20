@@ -74,7 +74,7 @@ func writeFile(t *testing.T, path, content string) string {
 func TestAuditScanFindsBypassAndSkipsKnownWrapper(t *testing.T) {
 	dir := t.TempDir()
 	observed := writeFile(t, filepath.Join(dir, "observed.txt"),
-		"rig send b@r hi\nFOO=1 /usr/bin/rig queue y\nseatcheck send --to b --intent task -- hi\nrig status\n")
+		"rig send b@r hi\nFOO=1 /usr/bin/rig queue y\nseatcheck send --to b --intent task -- hi\nroom status\n")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"audit-scan", "--known", "seatcheck", "--file", observed}, &stdout, &stderr)
@@ -89,7 +89,7 @@ func TestAuditScanFindsBypassAndSkipsKnownWrapper(t *testing.T) {
 
 func TestAuditScanCleanExits0(t *testing.T) {
 	dir := t.TempDir()
-	observed := writeFile(t, filepath.Join(dir, "observed.txt"), "seatcheck send --to b --intent task -- hi\nrig status\n")
+	observed := writeFile(t, filepath.Join(dir, "observed.txt"), "seatcheck send --to b --intent task -- hi\nroom status\n")
 
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"audit-scan", "--known", "seatcheck", "--file", observed}, &stdout, &stderr)

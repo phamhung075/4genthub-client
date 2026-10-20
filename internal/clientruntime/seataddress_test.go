@@ -6,15 +6,15 @@ import (
 	"testing"
 )
 
-// TestCanonicalRigSeatSplitsTheDocumentedFormAndNothingElse pins the split F-B needs: the canonical string is
+// TestCanonicalRoomSeatSplitsTheDocumentedFormAndNothingElse pins the split F-B needs: the canonical string is
 // translated, the runtime's own name is not touched, and a string that merely contains an `@` is not guessed
-// at. The dashed room is the case that matters - this rig's own name carries a dash, so the room is the part
+// at. The dashed room is the case that matters - this room's own name carries a dash, so the room is the part
 // after the LAST `@` and the seat is what remains after the room's own prefix.
-func TestCanonicalRigSeatSplitsTheDocumentedFormAndNothingElse(t *testing.T) {
+func TestCanonicalRoomSeatSplitsTheDocumentedFormAndNothingElse(t *testing.T) {
 	cases := []struct {
-		session   string
-		rig, seat string
-		ok        bool
+		session    string
+		room, seat string
+		ok         bool
 	}{
 		{"4genthub-min-lead@4genthub-min", "4genthub-min", "lead", true},
 		{"leg-solo-solo@leg-solo", "leg-solo", "solo", true},
@@ -31,10 +31,10 @@ func TestCanonicalRigSeatSplitsTheDocumentedFormAndNothingElse(t *testing.T) {
 		{"4genthub-min-lead@", "", "", false},
 	}
 	for _, c := range cases {
-		rig, seat, ok := CanonicalRigSeat(c.session)
-		if ok != c.ok || rig != c.rig || seat != c.seat {
-			t.Errorf("CanonicalRigSeat(%q) = (%q, %q, %v), want (%q, %q, %v)",
-				c.session, rig, seat, ok, c.rig, c.seat, c.ok)
+		room, seat, ok := CanonicalRoomSeat(c.session)
+		if ok != c.ok || room != c.room || seat != c.seat {
+			t.Errorf("CanonicalRoomSeat(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				c.session, room, seat, ok, c.room, c.seat, c.ok)
 		}
 	}
 }

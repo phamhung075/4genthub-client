@@ -16,7 +16,7 @@ import (
 // The cloud already knows how to carry an agent-to-human message: the dashboard stores and toasts a
 // frame whose payload.entity is 'notification', and the server replays one from the
 // missed-notification store on reconnect. What did not exist is a producer. This file is it: the
-// bridge reads the rig orchestrator rows ADDRESSED TO A HUMAN and posts one notification frame per row.
+// bridge reads the room orchestrator rows ADDRESSED TO A HUMAN and posts one notification frame per row.
 //
 // THE FRAME CONTRACT IS FIXED BY THE CONSUMER, NOT CHOSEN HERE (each line read, 2026-10-10):
 //   - POST /api/v2/broadcast/notify requires event_type, entity_type and entity_id, and takes the
@@ -36,18 +36,18 @@ import (
 // route passes the body's metadata through into the frame, and the store path reads metadata.user_id as
 // an ADDITIONAL offline target, so sending metadata would be a way to address someone else's inbox.
 const (
-	// humanDestinationPrefix addresses one rig's human. The daemon's own destination form is
-	// "human@<rig name>" - measured against a live store, which carries one such destination per rig,
-	// each naming the rig it belongs to.
+	// humanDestinationPrefix addresses one room's human. The daemon's own destination form is
+	// "human@<room name>" - measured against a live store, which carries one such destination per room,
+	// each naming the room it belongs to.
 	humanDestinationPrefix = "human@"
 	// notifyKind is the free-form kind the payload documents, for example 'notice'.
 	notifyKind = "notice"
 	// notifyMessageLimit bounds the toast text: a queue body can be a paragraph, and the frame is
 	// read by a human at a glance.
 	notifyMessageLimit = 300
-	// notifyRowsPerRig bounds one read, so a rig with a long human queue cannot make a cycle unbounded.
-	notifyRowsPerRig = 100
-	// notifyPostsPerCycle bounds one cycle's posts. A first run against a rig holding dozens of human
+	// notifyRowsPerRoom bounds one read, so a room with a long human queue cannot make a cycle unbounded.
+	notifyRowsPerRoom = 100
+	// notifyPostsPerCycle bounds one cycle's posts. A first run against a room holding dozens of human
 	// rows walks them over several cycles instead of posting all of them at once.
 	notifyPostsPerCycle = 20
 	// notifyStateLimit bounds the sent-id record, so a bridge running for months cannot grow its own
@@ -55,23 +55,23 @@ const (
 	notifyStateLimit = 500
 )
 
-// HumanRow is one the rig orchestrator queue row addressed to a human, reduced to what a notification needs.
+// HumanRow is one the room orchestrator queue row addressed to a human, reduced to what a notification needs.
 type HumanRow struct {
 	ID       string
-	Rig      string
+	Room     string
 	Source   string
 	State    string
 	Summary  string
 	BodyText string
 }
 
-// HumanDestination is the queue destination that addresses one rig's human.
-func HumanDestination(rigName string) string {
-	return humanDestinationPrefix + rigName
+// HumanDestination is the queue destination that addresses one room's human.
+func HumanDestination(roomName string) string {
+	return humanDestinationPrefix + roomName
 }
 
 // parseItems unwraps a JSON listing: a list, or an object carrying `items`. Both shapes are what the
-// rig tool prints, and one helper keeps the two readers from disagreeing about it.
+// room tool prints, and one helper keeps the two readers from disagreeing about it.
 func parseItems(output, what string) ([]any, error) {
 	var decoded any
 	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
@@ -91,7 +91,7 @@ func parseItems(output, what string) ([]any, error) {
 // HumanRowFrom reduces one raw queue item. It returns false for an item with no id, and for one whose
 // destination is NOT a human: the read is already destination-filtered, and checking it here means a
 // change to the filter cannot silently turn another seat's rows into the human's notifications.
-func HumanRowFrom(item any, rigName string) (HumanRow, bool) {
+func HumanRowFrom(item any, roomName string) (HumanRow, bool) {
 	row := dict(item)
 	id := str(row["qitemId"])
 	destination := str(row["destinationSession"])
@@ -100,7 +100,7 @@ func HumanRowFrom(item any, rigName string) (HumanRow, bool) {
 	}
 	return HumanRow{
 		ID:       id,
-		Rig:      rigName,
+		Room:     roomName,
 		Source:   str(row["sourceSession"]),
 		State:    str(row["state"]),
 		Summary:  str(row["summary"]),
@@ -136,8 +136,8 @@ func NotificationBody(row HumanRow, known map[string]string) ([]byte, bool) {
 			data["seat"] = seat
 		}
 	}
-	if row.Rig != "" {
-		data["room"] = row.Rig
+	if row.Room != "" {
+		data["room"] = row.Room
 	}
 	body, err := json.Marshal(frame)
 	if err != nil {
@@ -171,17 +171,17 @@ func notifyText(row HumanRow, known map[string]string) string {
 	return text
 }
 
-// notifyKey is the row's identity in the sent-id record: the rig plus the row id, because two rigs
+// notifyKey is the row's identity in the sent-id record: the room plus the row id, because two rooms
 // address their own humans.
 func notifyKey(row HumanRow) string {
-	return row.Rig + "/" + row.ID
+	return row.Room + "/" + row.ID
 }
 
 // humanRooms lists the rooms this machine's runtime hosts, sorted so a cycle's work is deterministic.
 func (b *Bridge) humanRooms() []string {
 	rooms, err := b.Rooms()
 	if err != nil {
-		b.note("notify-rigs", fmt.Sprintf("runtime unavailable: %v", err))
+		b.note("notify-rooms", fmt.Sprintf("runtime unavailable: %v", err))
 		return nil
 	}
 	sort.Strings(rooms)
@@ -223,7 +223,7 @@ func runtimeHumanQueue(room string) ([]any, error) {
 	if !client.Reachable() {
 		return nil, errRuntimeAbsent
 	}
-	destination, limit := HumanDestination(room), int64(notifyRowsPerRig)
+	destination, limit := HumanDestination(room), int64(notifyRowsPerRoom)
 	rows, err := client.QueueList(room, clientruntime.QueueListFilter{
 		DestinationSession: &destination, ActiveOnly: true, Limit: &limit,
 	})
@@ -253,11 +253,11 @@ func (b *Bridge) notifyHumans() {
 		return
 	}
 	posted, changed := 0, false
-	for _, rigName := range b.humanRooms() {
+	for _, roomName := range b.humanRooms() {
 		if posted >= notifyPostsPerCycle {
 			break
 		}
-		for _, row := range b.humanRows(rigName) {
+		for _, row := range b.humanRows(roomName) {
 			if posted >= notifyPostsPerCycle {
 				break
 			}

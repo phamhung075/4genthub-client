@@ -31,7 +31,7 @@ import (
 type messageCloud struct {
 	mu      sync.Mutex
 	pending []map[string]any
-	// bySeat, when set, serves one pending list PER (room, seat) the GET names - what the rig-shape
+	// bySeat, when set, serves one pending list PER (room, seat) the GET names - what the room-shape
 	// tests need, where one pass pulls several different seats' mailboxes. Left nil, every GET is
 	// answered with `pending`, which is what the single-seat tests below were written against.
 	bySeat map[string][]map[string]any
@@ -117,14 +117,14 @@ func TestMessagesVerbDeliversThenRecordsThenAcknowledges(t *testing.T) {
 	_, sent, out := messagesFixture(t, cloud, nil)
 
 	var stdout, stderr strings.Builder
-	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "rig-seat", "--out", out}, &stdout, &stderr)
+	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "room-seat", "--out", out}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
 	}
-	if got := strings.Join(*sent, ","); got != "rig-seat hello,rig-seat again" {
+	if got := strings.Join(*sent, ","); got != "room-seat hello,room-seat again" {
 		t.Fatalf("typed %q, want both messages in the order the pull returned them", got)
 	}
-	want := []string{"GET", "SEND rig-seat hello", "ACK m1", "SEND rig-seat again", "ACK m2"}
+	want := []string{"GET", "SEND room-seat hello", "ACK m1", "SEND room-seat again", "ACK m2"}
 	if got := strings.Join(cloud.seen(), " | "); got != strings.Join(want, " | ") {
 		t.Fatalf("calls = %s\nwant    %s", got, strings.Join(want, " | "))
 	}
@@ -148,7 +148,7 @@ func TestMessagesVerbDoesNotAcknowledgeWhatItDidNotDeliver(t *testing.T) {
 	_, _, out := messagesFixture(t, cloud, context.DeadlineExceeded)
 
 	var stdout, stderr strings.Builder
-	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "rig-seat", "--out", out}, &stdout, &stderr)
+	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "room-seat", "--out", out}, &stdout, &stderr)
 	if code != clientcmd.ExitRemote {
 		t.Fatalf("exit = %d, want ExitRemote: %s", code, stderr.String())
 	}
@@ -164,7 +164,7 @@ func TestMessagesVerbDoesNotAcknowledgeWhatItDidNotDeliver(t *testing.T) {
 	if len(typed) != 0 {
 		t.Errorf("ledger = %v, want nothing recorded for a message that did not land", typed)
 	}
-	if !strings.Contains(stderr.String(), "putting m1 into session rig-seat failed") {
+	if !strings.Contains(stderr.String(), "putting m1 into session room-seat failed") {
 		t.Errorf("stderr = %q, want the failing message named", stderr.String())
 	}
 }
@@ -179,7 +179,7 @@ func TestMessagesVerbReAcksWhatItAlreadyTyped(t *testing.T) {
 	}
 
 	var stdout, stderr strings.Builder
-	if code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "rig-seat", "--out", out}, &stdout, &stderr); code != 0 {
+	if code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "room-seat", "--out", out}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
 	}
 	if len(*sent) != 0 {
@@ -201,7 +201,7 @@ func TestMessagesVerbRecordsTheDeliveryBeforeTheAckCanFail(t *testing.T) {
 	_, sent, out := messagesFixture(t, cloud, nil)
 
 	var stdout, stderr strings.Builder
-	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "rig-seat", "--out", out}, &stdout, &stderr)
+	code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "room-seat", "--out", out}, &stdout, &stderr)
 	if code != clientcmd.ExitRemote {
 		t.Fatalf("exit = %d, want ExitRemote: %s", code, stderr.String())
 	}
@@ -215,7 +215,7 @@ func TestMessagesVerbRecordsTheDeliveryBeforeTheAckCanFail(t *testing.T) {
 	if _, ok := typed["m1"]; !ok {
 		t.Fatalf("ledger = %v, want m1 recorded even though the ack was refused", typed)
 	}
-	if !strings.Contains(stderr.String(), "reached session rig-seat but the ack failed") {
+	if !strings.Contains(stderr.String(), "reached session room-seat but the ack failed") {
 		t.Errorf("stderr = %q, want the delivered-but-unacked case named", stderr.String())
 	}
 }
@@ -272,7 +272,7 @@ func TestMessagesVerbRefusalsAndTheEmptyCase(t *testing.T) {
 		cloud := &messageCloud{}
 		_, _, out := messagesFixture(t, cloud, nil)
 		var stdout, stderr strings.Builder
-		if code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "rig-seat", "--out", out}, &stdout, &stderr); code != 0 {
+		if code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "room-seat", "--out", out}, &stdout, &stderr); code != 0 {
 			t.Fatalf("exit = %d, want 0: %s", code, stderr.String())
 		}
 		if !strings.Contains(stdout.String(), "nothing is waiting") {
@@ -288,7 +288,7 @@ func TestMessagesVerbAsksForThePageItWasGiven(t *testing.T) {
 	_, _, out := messagesFixture(t, cloud, nil)
 
 	var stdout, stderr strings.Builder
-	if code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "rig-seat", "--limit", "7", "--out", out}, &stdout, &stderr); code != 0 {
+	if code := RunMessagesVerb(context.Background(), []string{"dev", "coder", "--session", "room-seat", "--limit", "7", "--out", out}, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d: %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "cursor 2026-10-10T09:00:00Z|m9") {
@@ -305,7 +305,7 @@ func TestMessagesVerbAsksForThePageItWasGiven(t *testing.T) {
 //
 // IT ALSO EMPTIES PATH, and that is what makes these tests able to fail: with the stub `rig` gone and no tool on PATH,
 // a pass that went back to reading the node table cannot succeed, so a reversion is a RED test rather than a silent
-// delivery through the live rig this machine happens to be running.
+// delivery through the live room this machine happens to be running.
 func fakeRoom(t *testing.T, seats ...seatSession) {
 	t.Helper()
 	previous := roomSeats
@@ -409,7 +409,7 @@ func TestSeatSessionsFromSkipsEverySeatWithoutALivePrompt(t *testing.T) {
 // CLI the cutover deletes, so it is gone rather than repaired. The user-visible contract is the message, so the
 // message names BOTH ways to say where a message goes and what each takes.
 //
-// THE PROOF IS THE EMPTY PATH: the old resolution could not produce this answer without asking the rig, so with no
+// THE PROOF IS THE EMPTY PATH: the old resolution could not produce this answer without asking the room, so with no
 // `rig` anywhere it failed with a dial-shaped error. This refusal is produced without running anything.
 func TestMessagesVerbRequiresAFlagAndSaysSoWithoutShellingOut(t *testing.T) {
 	cloud := &messageCloud{pending: []map[string]any{message("m1", "hello")}}
@@ -434,10 +434,10 @@ func TestMessagesVerbRequiresAFlagAndSaysSoWithoutShellingOut(t *testing.T) {
 	}
 }
 
-// THE SUPERVISED SHAPE: `--room` passes over every RUNNING seat of the rig, types each seat's mail into
+// THE SUPERVISED SHAPE: `--room` passes over every RUNNING seat of the room, types each seat's mail into
 // that seat's OWN canonical session, and skips a stopped seat - or a node with no session - rather than
 // acknowledging text that no prompt will ever read.
-func TestMessagesVerbRigPassDeliversEveryRunningSeat(t *testing.T) {
+func TestMessagesVerbRoomPassDeliversEveryRunningSeat(t *testing.T) {
 	cloud := &messageCloud{bySeat: map[string][]map[string]any{
 		"4genthub-min/lead":    {message("m1", "hello lead")},
 		"4genthub-min/other":   {message("m2", "hello other")},
@@ -489,7 +489,7 @@ func TestMessagesVerbRigPassDeliversEveryRunningSeat(t *testing.T) {
 // ONE SEAT'S FAILURE DOES NOT STOP THE OTHER SEATS. The pass keeps going - a broken prompt must not
 // starve every other mailbox - the failed message stays pending for the next pass, and a ONE-SHOT run
 // exits non-zero so a human sees that a seat is not receiving.
-func TestMessagesVerbRigPassIsolatesOneSeatFailure(t *testing.T) {
+func TestMessagesVerbRoomPassIsolatesOneSeatFailure(t *testing.T) {
 	cloud := &messageCloud{bySeat: map[string][]map[string]any{
 		"4genthub-min/lead":  {message("m1", "hello lead")},
 		"4genthub-min/other": {message("m2", "hello other")},
@@ -546,8 +546,8 @@ func TestMessagesVerbWatchBeatsEachPassAndExitsOnCancel(t *testing.T) {
 	var beaten []string
 	previousBeat := clientservices.WriteHeartbeat
 	ctx, cancel := context.WithCancel(context.Background())
-	clientservices.WriteHeartbeat = func(root, safeguard, rig string) error {
-		beaten = append(beaten, safeguard+" "+rig)
+	clientservices.WriteHeartbeat = func(root, safeguard, room string) error {
+		beaten = append(beaten, safeguard+" "+room)
 		cancel()
 		return nil
 	}
@@ -569,13 +569,13 @@ func TestMessagesVerbWatchBeatsEachPassAndExitsOnCancel(t *testing.T) {
 	}
 }
 
-// THE RIG SHAPE'S GRAMMAR AND ITS EMPTY CASE: the mixtures are refused before anything is pulled, and
-// a rig with no running seat is a FAILURE - never a silent success that lets a mailbox grow unseen.
-func TestMessagesVerbRigShapeRefusals(t *testing.T) {
+// THE ROOM SHAPE'S GRAMMAR AND ITS EMPTY CASE: the mixtures are refused before anything is pulled, and
+// a room with no running seat is a FAILURE - never a silent success that lets a mailbox grow unseen.
+func TestMessagesVerbRoomShapeRefusals(t *testing.T) {
 	t.Run("the mixtures", func(t *testing.T) {
 		for _, args := range [][]string{
 			{"dev", "coder", "--room", "4genthub-min"},
-			{"--room", "4genthub-min", "--session", "rig-seat"},
+			{"--room", "4genthub-min", "--session", "room-seat"},
 			{"--watch"},
 			{"--room", "4genthub-min", "--watch", "--dry-run"},
 		} {
@@ -589,7 +589,7 @@ func TestMessagesVerbRigShapeRefusals(t *testing.T) {
 		}
 	})
 
-	t.Run("a rig with no running seat", func(t *testing.T) {
+	t.Run("a room with no running seat", func(t *testing.T) {
 		cloud := &messageCloud{}
 		_, _, out := messagesFixture(t, cloud, nil)
 		fakeRoom(t)

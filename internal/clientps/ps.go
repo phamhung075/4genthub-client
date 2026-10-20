@@ -1,5 +1,5 @@
 // Package clientps is `4genteam ps`: what a room's seats are doing right now, read from local tmux
-// sessions and each seat's own transcript. It needs no rig daemon.
+// sessions and each seat's own transcript. It needs no room daemon.
 package clientps
 
 import (
@@ -21,20 +21,20 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 )
 
-const usage = "usage: 4genteam ps [--state-root DIR] [RIG] [--nodes | --compact | --grid] [--json]"
+const usage = "usage: 4genteam ps [--state-root DIR] [ROOM] [--nodes | --compact | --grid] [--json]"
 
 // quotaMarkers are the provider messages a seat prints when it cannot answer; any of them in the
 // transcript tail means the seat is waiting at its prompt for a reason that is not its own.
 var quotaMarkers = []string{"Individual quota reached", "Out of credits", "rate limit", "usage limit"}
 
-// Seat is one tmux-backed seat of a rig.
+// Seat is one tmux-backed seat of a room.
 type Seat struct {
-	Rig     string `json:"rig"`
+	Room    string `json:"room"`
 	Member  string `json:"member"`
 	Session string `json:"session"`
 	// The node-record keys every other verb reads from `ps --nodes --room R --json`: a tmux session
 	// that exists is a running session, whatever the seat's own state (Status) says about its provider.
-	RigName       string `json:"rigName"`
+	RoomName      string `json:"roomName"`
 	LogicalID     string `json:"logicalId"`
 	CanonicalName string `json:"canonicalSessionName"`
 	SessionStatus string `json:"sessionStatus"`
@@ -52,9 +52,9 @@ type Seat struct {
 	startedAt     time.Time
 }
 
-// RigRow is the per-rig rollup.
-type RigRow struct {
-	Rig     string `json:"rig"`
+// RoomRow is the per-room rollup.
+type RoomRow struct {
+	Room    string `json:"room"`
 	Seats   int    `json:"seats"`
 	Attn    int    `json:"attention"`
 	Status  string `json:"status"`
@@ -90,7 +90,7 @@ func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer)
 		fmt.Fprintf(stderr, "4genteam ps: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUnavailable)
 	}
-	view, asJSON, rig, wantRig := "summary", false, "", false
+	view, asJSON, room, wantRoom := "summary", false, "", false
 	for _, arg := range args {
 		switch arg {
 		case "--nodes":
@@ -102,17 +102,17 @@ func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer)
 		case "--json":
 			asJSON = true
 		case "--room":
-			wantRig = true
+			wantRoom = true
 		default:
-			if wantRig {
-				rig, wantRig = arg, false
+			if wantRoom {
+				room, wantRoom = arg, false
 				continue
 			}
-			if strings.HasPrefix(arg, "-") || rig != "" {
+			if strings.HasPrefix(arg, "-") || room != "" {
 				fmt.Fprintf(stderr, "4genteam ps: unexpected argument %q\n%s\n", arg, usage)
 				return clientcmd.ExitUsage
 			}
-			rig = arg
+			room = arg
 		}
 	}
 	sessions, err := listSessions(ctx, stateRoot)
@@ -124,8 +124,8 @@ func (command) Run(ctx context.Context, args []string, stdout, stderr io.Writer)
 		// An empty answer is an answer only when it says what was looked at: the server this process would use.
 		fmt.Fprintln(stderr, "4genteam ps: no tmux sessions on the server this process would use")
 	}
-	seats := collect(stateRoot, sessions, rig)
-	if reason := emptyReason(rig, len(sessions), len(seats)); reason != "" {
+	seats := collect(stateRoot, sessions, room)
+	if reason := emptyReason(room, len(sessions), len(seats)); reason != "" {
 		fmt.Fprintf(stderr, "4genteam ps: %s\n", reason)
 	}
 	if asJSON {
@@ -181,16 +181,16 @@ func listSessions(ctx context.Context, root string) ([]session, error) {
 func collect(stateRoot string, sessions []session, only string) []Seat {
 	var seats []Seat
 	for _, s := range sessions {
-		rig, member, ok := clientruntime.ParseSeatSessionName(s.name)
-		if !ok || (only != "" && rig != only) {
+		room, member, ok := clientruntime.ParseSeatSessionName(s.name)
+		if !ok || (only != "" && room != only) {
 			continue
 		}
-		snap := clientwatch.SeatSnapshot(stateRoot, rig, member)
+		snap := clientwatch.SeatSnapshot(stateRoot, room, member)
 		seat := Seat{
-			Rig: rig, Member: member, Session: s.name, Runtime: snap.Runtime, Model: snap.Model,
+			Room: room, Member: member, Session: s.name, Runtime: snap.Runtime, Model: snap.Model,
 			Attached: s.attached, Uptime: since(s.created), Tokens: snap.ContextTokens,
 			Limit: snap.CompactLimit, LogPath: snap.LogPath, startedAt: s.created, Status: "running",
-			RigName: rig, LogicalID: rig + "." + member, CanonicalName: s.name,
+			RoomName: room, LogicalID: room + "." + member, CanonicalName: s.name,
 			SessionStatus: "running", StartupStatus: "ready",
 		}
 		if marker := quotaIn(snap.LogPath); marker != "" {
@@ -200,8 +200,8 @@ func collect(stateRoot string, sessions []session, only string) []Seat {
 		seats = append(seats, seat)
 	}
 	sort.Slice(seats, func(i, j int) bool {
-		if seats[i].Rig != seats[j].Rig {
-			return seats[i].Rig < seats[j].Rig
+		if seats[i].Room != seats[j].Room {
+			return seats[i].Room < seats[j].Room
 		}
 		return seats[i].Member < seats[j].Member
 	})
@@ -265,15 +265,15 @@ func since(t time.Time) string {
 	return fmt.Sprintf("%dd", int(d.Hours())/24)
 }
 
-func rollup(seats []Seat) []RigRow {
-	byRig := map[string]*RigRow{}
+func rollup(seats []Seat) []RoomRow {
+	byRoom := map[string]*RoomRow{}
 	var order []string
 	for _, s := range seats {
-		row, ok := byRig[s.Rig]
+		row, ok := byRoom[s.Room]
 		if !ok {
-			row = &RigRow{Rig: s.Rig, Status: "running", started: s.startedAt}
-			byRig[s.Rig] = row
-			order = append(order, s.Rig)
+			row = &RoomRow{Room: s.Room, Status: "running", started: s.startedAt}
+			byRoom[s.Room] = row
+			order = append(order, s.Room)
 		}
 		row.Seats++
 		if s.Status != "running" {
@@ -285,10 +285,10 @@ func rollup(seats []Seat) []RigRow {
 		}
 	}
 	sort.Strings(order)
-	rows := make([]RigRow, 0, len(order))
-	for _, rig := range order {
-		byRig[rig].Uptime = since(byRig[rig].started)
-		rows = append(rows, *byRig[rig])
+	rows := make([]RoomRow, 0, len(order))
+	for _, room := range order {
+		byRoom[room].Uptime = since(byRoom[room].started)
+		rows = append(rows, *byRoom[room])
 	}
 	return rows
 }
@@ -299,12 +299,12 @@ func rollup(seats []Seat) []RigRow {
 // is never `null` now, so the reason has to travel on stderr or the reader still cannot tell the two
 // apart. Silence is the answer when there is nothing to distinguish: no room was named, the server had
 // no sessions at all (Run already says so), or the room's seats are right there in the list.
-func emptyReason(rig string, sessions, seats int) string {
-	if rig == "" || sessions == 0 || seats > 0 {
+func emptyReason(room string, sessions, seats int) string {
+	if room == "" || sessions == 0 || seats > 0 {
 		return ""
 	}
-	return fmt.Sprintf("no seats for rig %s on the server this process would use (%d session(s) there, none named %s-*)",
-		rig, sessions, rig)
+	return fmt.Sprintf("no seats for room %s on the server this process would use (%d session(s) there, none named %s-*)",
+		room, sessions, room)
 }
 
 func writeJSON(stdout, stderr io.Writer, view string, seats []Seat) int {
@@ -348,17 +348,17 @@ func row(widths []int, values ...string) string {
 	return strings.TrimRight(b.String(), " ")
 }
 
-func renderSummary(w io.Writer, rows []RigRow) {
+func renderSummary(w io.Writer, rows []RoomRow) {
 	seats, attn := 0, 0
 	for _, r := range rows {
 		seats += r.Seats
 		attn += r.Attn
 	}
-	fmt.Fprintf(w, "%d rig(s) · %d seat(s) · %d need(s) attention\n\n", len(rows), seats, attn)
+	fmt.Fprintf(w, "%d room(s) · %d seat(s) · %d need(s) attention\n\n", len(rows), seats, attn)
 	widths := []int{30, 6, 5, 11, 11}
-	fmt.Fprintln(w, row(widths, "RIG", "SEATS", "ATTN", "STATUS", "UPTIME"))
+	fmt.Fprintln(w, row(widths, "ROOM", "SEATS", "ATTN", "STATUS", "UPTIME"))
 	for _, r := range rows {
-		fmt.Fprintln(w, row(widths, r.Rig, strconv.Itoa(r.Seats), strconv.Itoa(r.Attn), r.Status, r.Uptime))
+		fmt.Fprintln(w, row(widths, r.Room, strconv.Itoa(r.Seats), strconv.Itoa(r.Attn), r.Status, r.Uptime))
 	}
 }
 
@@ -369,22 +369,22 @@ func ctxCell(s Seat) string {
 	return fmt.Sprintf("%dk", s.Tokens/1000)
 }
 
-// renderNodes prints the node table. Columns whose source (the rig orchestrator registry) no longer exists are
+// renderNodes prints the node table. Columns whose source (the room orchestrator registry) no longer exists are
 // not invented: they were dropped, and the columns that remain are the ones a local read can fill.
 func renderNodes(w io.Writer, seats []Seat) {
 	widths := []int{22, 14, 34, 8, 22, 9, 11, 9, 7, 12, 30}
-	fmt.Fprintln(w, row(widths, "RIG", "MEMBER", "SESSION", "RUNTIME", "MODEL", "STATUS", "ATTACHED", "UPTIME", "CTX", "ACTIVITY", "ERROR"))
+	fmt.Fprintln(w, row(widths, "ROOM", "MEMBER", "SESSION", "RUNTIME", "MODEL", "STATUS", "ATTACHED", "UPTIME", "CTX", "ACTIVITY", "ERROR"))
 	for _, s := range seats {
-		fmt.Fprintln(w, row(widths, s.Rig, s.Member, s.Session, s.Runtime, s.Model, s.Status,
+		fmt.Fprintln(w, row(widths, s.Room, s.Member, s.Session, s.Runtime, s.Model, s.Status,
 			strconv.FormatBool(s.Attached), s.Uptime, ctxCell(s), s.Activity, s.Error))
 	}
 }
 
 func renderCompact(w io.Writer, seats []Seat) {
 	widths := []int{22, 38, 9, 14, 7, 30}
-	fmt.Fprintln(w, row(widths, "RIG", "SESSION", "STATUS", "ACTIVITY", "CTX", "REASON"))
+	fmt.Fprintln(w, row(widths, "ROOM", "SESSION", "STATUS", "ACTIVITY", "CTX", "REASON"))
 	for _, s := range seats {
-		fmt.Fprintln(w, row(widths, s.Rig, s.Session, s.Status, s.Activity, ctxCell(s), s.Error))
+		fmt.Fprintln(w, row(widths, s.Room, s.Session, s.Status, s.Activity, ctxCell(s), s.Error))
 	}
 }
 
@@ -405,7 +405,7 @@ func renderGrid(w io.Writer, seats []Seat) {
 	for _, s := range seats {
 		fmt.Fprintln(w, "┌─"+strings.Repeat("─", inner)+"─┐")
 		fmt.Fprintln(w, line(s.Member+"  ["+s.Status+"]"))
-		fmt.Fprintln(w, line(s.Rig+" · "+s.Runtime+" · "+s.Model))
+		fmt.Fprintln(w, line(s.Room+" · "+s.Runtime+" · "+s.Model))
 		fmt.Fprintln(w, line(fmt.Sprintf("ctx %s %s/%s", meter(s.Tokens, s.Limit, 20), ctxCell(s), fmt.Sprintf("%dk", s.Limit/1000))))
 		fmt.Fprintln(w, line("up "+s.Uptime+" · active "+s.Activity))
 		if s.Error != "" {

@@ -185,7 +185,7 @@ func TestSwitchAcceptsTheAgyRuntime(t *testing.T) {
 }
 
 // test_switch_runtime_only_keeps_current_model_and_prints_manual_steps.
-// The port's name for this pin said "prints manual steps"; the steps are gone (they were the rig orchestrator
+// The port's name for this pin said "prints manual steps"; the steps are gone (they were the room orchestrator
 // CLI's, and following them took the machine's safeguards down), so the name moved with the text.
 func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsTheLimit(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
@@ -204,7 +204,7 @@ func TestSwitchRuntimeOnlyKeepsCurrentModelAndPrintsTheLimit(t *testing.T) {
 		t.Errorf("a runtime change touched a seat: %v", stub.calls)
 	}
 	if strings.Contains(errOut, "rig down") || strings.Contains(errOut, "rig up") {
-		t.Errorf("stderr = %q, want no rig CLI lifecycle verb in the notice", errOut)
+		t.Errorf("stderr = %q, want no room CLI lifecycle verb in the notice", errOut)
 	}
 	if !strings.Contains(errOut, "4genteam up room1 --team") {
 		t.Errorf("stderr = %q, want the client's own pointer to the room's definition", errOut)
@@ -266,7 +266,7 @@ func TestSwitchRestartSetsTheModelThenRestartsFreshWithWarning(t *testing.T) {
 	}
 }
 
-// test_switch_runtime_change_prints_manual_steps_and_skips_rig — the port's name; the steps it printed
+// test_switch_runtime_change_prints_manual_steps_and_skips_room — the port's name; the steps it printed
 // are gone because following them took the machine's safeguards down, so this pin now asserts the limit.
 func TestSwitchRuntimeChangePrintsTheLimitAndSkipsTheSeat(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
@@ -291,13 +291,13 @@ func TestSwitchRuntimeChangePrintsTheLimitAndSkipsTheSeat(t *testing.T) {
 	}
 }
 
-// THE PIN THE 06:0xZ INCIDENT EARNED. The runtime-change notice used to print the rig CLI's own
+// THE PIN THE 06:0xZ INCIDENT EARNED. The runtime-change notice used to print the room CLI's own
 // three-line sequence. Its middle line was measured on this box to stop the MACHINE's safeguards (agent
-// reaped with its children, for every rig) and its last line could not run at all, so a reader who
-// followed it took every rig's supervisors down and could not start the room again from it. A reader
+// reaped with its children, for every room) and its last line could not run at all, so a reader who
+// followed it took every room's supervisors down and could not start the room again from it. A reader
 // cannot tell the two vocabularies apart by name - `down` and `stop` read alike - so the notice may
 // name no verb from the lead's machine-wide list (room-wide rule, 2026-10-14 06:08Z), and, since the
-// cutover removes the tool, no rig CLI verb at all.
+// cutover removes the tool, no room CLI verb at all.
 func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 	cloud := &switchCloud{occupants: []map[string]any{switchOccupant("claude-code", "old-model")}}
 	stub := &switchSeatStub{}
@@ -307,7 +307,7 @@ func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 	printed := out + errOut
 
 	machineWide := []struct{ needle, why string }{
-		{"rig down", "measured: a machine-wide safeguard stop - agent reaped with its children, for every rig"},
+		{"room down", "measured: a machine-wide safeguard stop - agent reaped with its children, for every room"},
 		{"rig up", "measured: fails with `--team DIR is required`, so the sequence cannot be finished"},
 		{"4genteam stop", "a machine-wide stop of agent and its children"},
 		{"rig launch", "a seat launch: lifecycle stays in the lead's hands"},
@@ -323,7 +323,7 @@ func TestSwitchRuntimeChangePrintsNoMachineWideVerb(t *testing.T) {
 
 	for _, needle := range []string{"rig seat", "rig remove", "rig daemon", "rig bundle", "rig export", "rig ps", "the task queue"} {
 		if strings.Contains(printed, needle) {
-			t.Errorf("the runtime-change notice prints the rig CLI verb %q, which a reader cannot run after the cutover:\n%s", needle, printed)
+			t.Errorf("the runtime-change notice prints the room CLI verb %q, which a reader cannot run after the cutover:\n%s", needle, printed)
 		}
 	}
 }
@@ -522,7 +522,7 @@ func TestSwitchPutErrorExitsOne(t *testing.T) {
 				t.Errorf("stderr = %q, want HTTP %d", errOut, status)
 			}
 			if got := stub.calls; len(got) != 0 {
-				t.Errorf("rig was called after a failed PUT: %v", got)
+				t.Errorf("room was called after a failed PUT: %v", got)
 			}
 			if strings.Contains(errOut, "test-token") {
 				t.Errorf("the token leaked: %q", errOut)
@@ -550,7 +550,7 @@ func TestSwitchUnknownSeatInCloudExitsOne(t *testing.T) {
 	}
 }
 
-// test_switch_usage_errors_exit_2: six argument errors, each a usage error with nothing sent and no rig.
+// test_switch_usage_errors_exit_2: six argument errors, each a usage error with nothing sent and no room.
 func TestSwitchUsageErrorsExitTwo(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -582,7 +582,7 @@ func TestSwitchUsageErrorsExitTwo(t *testing.T) {
 				t.Errorf("stderr = %q, want it to say %q", errOut, testCase.message)
 			}
 			if len(cloud.puts) != 0 || len(stub.calls) != 0 {
-				t.Errorf("a usage error reached the cloud (%v) or rig (%v)", cloud.puts, stub.calls)
+				t.Errorf("a usage error reached the cloud (%v) or room (%v)", cloud.puts, stub.calls)
 			}
 		})
 	}

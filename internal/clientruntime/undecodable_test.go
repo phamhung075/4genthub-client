@@ -398,7 +398,7 @@ func TestDecodableAnswersStillDecode(t *testing.T) {
 			},
 		},
 		{
-			"Whoami", okDataResponse(`{"resolved_by":"room","identity":{"rigName":"room-a","memberId":"m1",` +
+			"Whoami", okDataResponse(`{"resolved_by":"room","identity":{"roomName":"room-a","memberId":"m1",` +
 				`"runtime":"omp","sessionName":"agenthub--room-a--seat-1","logical_id":"room-a.seat-1",` +
 				`"role":"seat"},"peers":[],"edges":{"outgoing":[],"incoming":[]},` +
 				`"transcript":{"enabled":false},"a_field_this_build_has_never_heard_of":1}`),

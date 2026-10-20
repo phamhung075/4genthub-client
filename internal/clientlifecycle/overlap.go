@@ -1,4 +1,4 @@
-// The overlap detector of `rigd` (ruling section 4.5 of
+// The overlap detector of `agent` (ruling section 4.5 of
 // ai_docs/operations/client-features-for-the-dev-team.md, plan item 4). Every ten minutes, and on request, it
 // compares every seat branch against the room's base and reports two things.
 //
@@ -24,7 +24,7 @@
 //
 // AND IT DOES NOT REPEAT ITSELF: a hit is sent once, and the same file with the same seats is not reported
 // again inside the repeat window unless the set of seats changes - a third seat joining is news. The memory
-// is a file under the state root, so a restarted rigd does not start the window over.
+// is a file under the state root, so a restarted agent does not start the window over.
 package clientlifecycle
 
 import (
@@ -50,10 +50,10 @@ import (
 )
 
 const (
-	overlapUsage = "usage: 4genteam overlap RIG [--once|--every DURATION] [--base-branch BRANCH] " +
+	overlapUsage = "usage: 4genteam overlap ROOM [--once|--every DURATION] [--base-branch BRANCH] " +
 		"[--stale-after DURATION] [--state-root DIR] [--json] [--dry-run]"
 
-	// overlapEvery is how often rigd runs the scan (4.5: every ten minutes). It is a timer inside rigd's own
+	// overlapEvery is how often agent runs the scan (4.5: every ten minutes). It is a timer inside agent's own
 	// loop rather than a fourth child, because 7.1's reason for keeping supervision in one process - a second
 	// always-on process is a second thing to supervise - applies to this as much as to a keeper.
 	overlapEvery = 10 * time.Minute
@@ -75,24 +75,24 @@ const (
 // overlapDeps is what a scan touches outside its arguments, as fields so a case drives the whole detector
 // without a room, a worktree, a terminal or a clock.
 type overlapDeps struct {
-	teamDir  func(rig string) (string, error)
+	teamDir  func(room string) (string, error)
 	seats    func(dir string) ([]clientservices.SeatType, error)
 	baseName func(dir string) string
-	roomDir  func(rig string) (string, error)
+	roomDir  func(room string) (string, error)
 	mainRoot func(string) (string, error)
-	check    func(mainRoot, roomDir, rig string, seats []clientservices.SeatType) (clientworktree.CheckVerdict, error)
+	check    func(mainRoot, roomDir, room string, seats []clientservices.SeatType) (clientworktree.CheckVerdict, error)
 	git      func(dir string, args ...string) (string, error)
-	say      func(rig, seat, text string)
+	say      func(room, seat, text string)
 	now      func() time.Time
-	state    func(rig string) (string, error)
+	state    func(room string) (string, error)
 }
 
-// overlapDepsFor is the scan's production wiring, and a seam so a case drives rigd's pass without a room.
+// overlapDepsFor is the scan's production wiring, and a seam so a case drives agent's pass without a room.
 var overlapDepsFor = defaultOverlapDeps
 
 func defaultOverlapDeps(stateRoot string) *overlapDeps {
 	return &overlapDeps{
-		teamDir:  func(rig string) (string, error) { return clientservices.TeamDir("", rig) },
+		teamDir:  func(room string) (string, error) { return clientservices.TeamDir("", room) },
 		seats:    clientservices.TeamSeats,
 		baseName: overlapTeamBaseBranch,
 		roomDir:  clientworktree.RoomDir,
@@ -100,14 +100,14 @@ func defaultOverlapDeps(stateRoot string) *overlapDeps {
 		check:    clientworktree.Check,
 		git:      overlapGit,
 		// A plain message, so a seat sees the From/To envelope and knows the alert is not a colleague's note;
-		// rigSay starts it and returns without waiting, so one seat that is mid-turn cannot hold up the scan.
-		say:   func(rig, seat, text string) { rigSay(rig, seat, text, false) },
+		// roomSay starts it and returns without waiting, so one seat that is mid-turn cannot hold up the scan.
+		say:   func(room, seat, text string) { roomSay(room, seat, text, false) },
 		now:   clientservices.Now,
-		state: func(rig string) (string, error) { return filepath.Join(stateRoot, "overlap-"+rig+".json"), nil },
+		state: func(room string) (string, error) { return filepath.Join(stateRoot, "overlap-"+room+".json"), nil },
 	}
 }
 
-// overlapGit is one git read in one worktree. `-C` rather than a chdir: the scan runs in rigd, which serves
+// overlapGit is one git read in one worktree. `-C` rather than a chdir: the scan runs in agent, which serves
 // every room at once, and a process-wide working directory is state no caller of this should have to know.
 func overlapGit(dir string, args ...string) (string, error) {
 	path, err := exec.LookPath("git")
@@ -149,7 +149,7 @@ func overlapTeamBaseBranch(dir string) string {
 
 // overlapOptions is one run's inputs.
 type overlapOptions struct {
-	Rig        string
+	Room       string
 	BaseBranch string
 	StaleAfter time.Duration
 	Repeat     time.Duration
@@ -174,7 +174,7 @@ type overlapHit struct {
 
 // overlapReport is what one scan found, and what it sent.
 type overlapReport struct {
-	Rig     string         `json:"rig"`
+	Room    string         `json:"room"`
 	Base    string         `json:"base"`
 	StaleAt time.Duration  `json:"staleAfter"`
 	Hits    []overlapHit   `json:"hits"`
@@ -184,22 +184,22 @@ type overlapReport struct {
 	Sent    []string       `json:"sent"`
 }
 
-// overlapScanFor is the scan as a seam: rigd's timer, the `overlap` verb and every case go through it.
+// overlapScanFor is the scan as a seam: agent's timer, the `overlap` verb and every case go through it.
 var overlapScanFor = overlapScan
 
 // overlapScan reads every seat's branch and answers what overlaps and what has gone stale. Every step that
 // cannot read its input produces a note rather than a state: a detector that could not look has no answer to
 // give, and an empty report must not read as "nothing overlaps".
 func overlapScan(deps *overlapDeps, opts overlapOptions) overlapReport {
-	report := overlapReport{Rig: opts.Rig, StaleAt: opts.StaleAfter}
-	dir, err := deps.teamDir(opts.Rig)
+	report := overlapReport{Room: opts.Room, StaleAt: opts.StaleAfter}
+	dir, err := deps.teamDir(opts.Room)
 	if err != nil {
-		report.Notes = append(report.Notes, fmt.Sprintf("%s: its team directory cannot be resolved: %v", opts.Rig, err))
+		report.Notes = append(report.Notes, fmt.Sprintf("%s: its team directory cannot be resolved: %v", opts.Room, err))
 		return report
 	}
 	seats, err := deps.seats(dir)
 	if err != nil {
-		report.Notes = append(report.Notes, fmt.Sprintf("%s: its seats cannot be read: %v", opts.Rig, err))
+		report.Notes = append(report.Notes, fmt.Sprintf("%s: its seats cannot be read: %v", opts.Room, err))
 		return report
 	}
 	base := strings.TrimSpace(opts.BaseBranch)
@@ -210,19 +210,19 @@ func overlapScan(deps *overlapDeps, opts overlapOptions) overlapReport {
 		base = overlapDefaultBase
 	}
 	report.Base = base
-	roomDir, err := deps.roomDir(opts.Rig)
+	roomDir, err := deps.roomDir(opts.Room)
 	if err != nil {
-		report.Notes = append(report.Notes, fmt.Sprintf("%s: its room directory cannot be resolved: %v", opts.Rig, err))
+		report.Notes = append(report.Notes, fmt.Sprintf("%s: its room directory cannot be resolved: %v", opts.Room, err))
 		return report
 	}
 	mainRoot, err := deps.mainRoot("")
 	if err != nil {
-		report.Notes = append(report.Notes, fmt.Sprintf("%s: its checkout cannot be resolved: %v", opts.Rig, err))
+		report.Notes = append(report.Notes, fmt.Sprintf("%s: its checkout cannot be resolved: %v", opts.Room, err))
 		return report
 	}
-	verdict, err := deps.check(mainRoot, roomDir, opts.Rig, seats)
+	verdict, err := deps.check(mainRoot, roomDir, opts.Room, seats)
 	if err != nil {
-		report.Notes = append(report.Notes, fmt.Sprintf("%s: its worktrees cannot be read: %v", opts.Rig, err))
+		report.Notes = append(report.Notes, fmt.Sprintf("%s: its worktrees cannot be read: %v", opts.Room, err))
 		return report
 	}
 	// The seats the doctor does not show in their own worktree, by the SAME verdict the worktrees row
@@ -238,7 +238,7 @@ func overlapScan(deps *overlapDeps, opts overlapOptions) overlapReport {
 	// THE ONE DERIVATION is DerivedWorktrees: the list `up` creates and `doctor` reports, so the detector
 	// cannot invent a second path/branch rule. A seat missing from it has no address to scan.
 	worktrees := map[string]clientservices.Worktree{}
-	for _, derived := range clientservices.DerivedWorktrees(roomDir, opts.Rig, seats) {
+	for _, derived := range clientservices.DerivedWorktrees(roomDir, opts.Room, seats) {
 		worktrees[derived.SeatKey] = derived
 	}
 
@@ -395,7 +395,7 @@ type overlapRecord struct {
 }
 
 // overlapMemory is the file under the state root: the files already reported, and the stale branches already
-// reported, so a restarted rigd does not start the window over.
+// reported, so a restarted agent does not start the window over.
 type overlapMemory struct {
 	Files map[string]overlapRecord `json:"files"`
 	Stale map[string]overlapRecord `json:"stale"`
@@ -409,7 +409,7 @@ func newOverlapMemory() *overlapMemory {
 // reading and the deciding can be driven apart, which is how the hour-long silence is testable without an
 // hour.
 func overlapNotify(deps *overlapDeps, opts overlapOptions, report *overlapReport) {
-	memory, path := overlapLoad(deps, opts.Rig)
+	memory, path := overlapLoad(deps, opts.Room)
 	changed := false
 	for _, hit := range report.Hits {
 		seats := overlapSeatKeys(hit.Seats)
@@ -418,7 +418,7 @@ func overlapNotify(deps *overlapDeps, opts overlapOptions, report *overlapReport
 			continue
 		}
 		text := overlapMessage(hit)
-		overlapTell(deps, opts.Rig, seats, text)
+		overlapTell(deps, opts.Room, seats, text)
 		memory.Files[hit.File] = overlapRecord{Seats: seats, At: opts.Now}
 		report.Sent = append(report.Sent, "overlap "+hit.File+" -> "+overlapNames(overlapRecipients(seats)))
 		changed = true
@@ -429,7 +429,7 @@ func overlapNotify(deps *overlapDeps, opts overlapOptions, report *overlapReport
 			continue
 		}
 		text := overlapStaleMessage(seat, opts.StaleAfter)
-		overlapTell(deps, opts.Rig, []string{seat.Seat}, text)
+		overlapTell(deps, opts.Room, []string{seat.Seat}, text)
 		memory.Stale[seat.Seat] = overlapRecord{Seats: []string{seat.Seat}, At: opts.Now}
 		report.Sent = append(report.Sent, "stale "+seat.Seat+" -> "+overlapNames(overlapRecipients([]string{seat.Seat})))
 		changed = true
@@ -470,9 +470,9 @@ func overlapNames(seats []string) string {
 
 // overlapTell sends one message to the named seats and to the lead, and skips a seat that IS the lead so the
 // lead reads it once.
-func overlapTell(deps *overlapDeps, rig string, seats []string, text string) {
+func overlapTell(deps *overlapDeps, room string, seats []string, text string) {
 	for _, seat := range overlapRecipients(seats) {
-		deps.say(rig, seat, text)
+		deps.say(room, seat, text)
 	}
 }
 
@@ -505,9 +505,9 @@ func overlapForget(memory *overlapMemory, report *overlapReport) bool {
 
 // overlapLoad reads the memory. A file that cannot be read is started over rather than refused: the cost of
 // forgetting is one repeated report, and the cost of refusing is a detector that stops detecting.
-func overlapLoad(deps *overlapDeps, rig string) (*overlapMemory, string) {
+func overlapLoad(deps *overlapDeps, room string) (*overlapMemory, string) {
 	memory := newOverlapMemory()
-	path, err := deps.state(rig)
+	path, err := deps.state(room)
 	if err != nil {
 		return memory, ""
 	}
@@ -579,7 +579,7 @@ func overlapStaleMessage(seat overlapFacts, after time.Duration) string {
 		"or dropped.", after, seat.Seat, seat.Branch, seat.Unmerged, seat.Last.UTC().Format(time.RFC3339))
 }
 
-// ---- the verb, and rigd's timer --------------------------------------------
+// ---- the verb, and agent's timer --------------------------------------------
 
 type overlapCommand struct{}
 
@@ -598,7 +598,7 @@ func (overlapCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 				"change, and the lead decides the merge order.\n\n"+
 				"The base is the room's: team.json may name it in room.base_branch, --base-branch overrides it, and\n"+
 				"main is the fallback. One report is sent once; the same file with the same seats stays quiet for an\n"+
-				"hour unless the set changes. rigd runs this every "+overlapEvery.String()+" on its own; this verb is\n"+
+				"hour unless the set changes. agent runs this every "+overlapEvery.String()+" on its own; this verb is\n"+
 				"the run on request, one scan by default.")
 		return clientcmd.ExitOK
 	}
@@ -614,7 +614,7 @@ func (overlapCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 		return clientcmd.ExitUsage
 	}
 	if flags.NArg() < 1 {
-		fmt.Fprintf(stderr, "4genteam overlap: RIG is required. %s\n", overlapUsage)
+		fmt.Fprintf(stderr, "4genteam overlap: ROOM is required. %s\n", overlapUsage)
 		return clientcmd.ExitUsage
 	}
 	root, err := clientenv.ResolveStateRoot(*stateRoot)
@@ -622,9 +622,9 @@ func (overlapCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "4genteam overlap: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
-	rig := flags.Arg(0)
+	room := flags.Arg(0)
 	deps := overlapDepsFor(root)
-	opts := overlapOptions{Rig: rig, BaseBranch: *base, StaleAfter: *stale, Repeat: overlapRepeat}
+	opts := overlapOptions{Room: room, BaseBranch: *base, StaleAfter: *stale, Repeat: overlapRepeat}
 
 	interrupted := make(chan os.Signal, 1)
 	signal.Notify(interrupted, os.Interrupt)
@@ -661,7 +661,7 @@ func (overlapCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 // be read. The messages are shown as they were sent, so the report and the alert cannot drift apart.
 func printOverlapReport(out io.Writer, report overlapReport) {
 	fmt.Fprintf(out, "overlap %s: base %s, %d file overlap(s), %d stale seat branch(es)\n",
-		report.Rig, report.Base, len(report.Hits), len(report.Stale))
+		report.Room, report.Base, len(report.Hits), len(report.Stale))
 	for _, hit := range report.Hits {
 		fmt.Fprintf(out, "  %s\n", overlapMessage(hit))
 	}
@@ -682,7 +682,7 @@ func printOverlapReport(out io.Writer, report overlapReport) {
 // run of a detector that messages a whole room is safe to watch.
 func printOverlapPlan(out io.Writer, report overlapReport) {
 	fmt.Fprintf(out, "overlap %s: base %s, %d file overlap(s), %d stale seat branch(es) - DRY RUN, nothing sent\n",
-		report.Rig, report.Base, len(report.Hits), len(report.Stale))
+		report.Room, report.Base, len(report.Hits), len(report.Stale))
 	for _, hit := range report.Hits {
 		seats := overlapRecipients(overlapSeatKeys(hit.Seats))
 		fmt.Fprintf(out, "  would send to %s: %s\n", overlapNames(seats), overlapMessage(hit))
@@ -710,15 +710,15 @@ func printOverlapJSON(out io.Writer, report overlapReport) {
 	fmt.Fprintln(out, string(raw))
 }
 
-// overlapRigScan is rigd's own scan of one room: the same function the verb calls, with the production
+// overlapRoomScan is agent's own scan of one room: the same function the verb calls, with the production
 // wiring, so the operator's run on request and the loop can never do different things.
-func overlapRigScan(rig string, now time.Time) overlapReport {
+func overlapRoomScan(room string, now time.Time) overlapReport {
 	root, err := clientenv.ResolveStateRoot("")
 	if err != nil {
-		return overlapReport{Rig: rig, Notes: []string{"the state root cannot be resolved: " + err.Error()}}
+		return overlapReport{Room: room, Notes: []string{"the state root cannot be resolved: " + err.Error()}}
 	}
 	deps := overlapDepsFor(root)
-	opts := overlapOptions{Rig: rig, StaleAfter: overlapStaleAfter, Repeat: overlapRepeat, Now: now}
+	opts := overlapOptions{Room: room, StaleAfter: overlapStaleAfter, Repeat: overlapRepeat, Now: now}
 	report := overlapScanFor(deps, opts)
 	overlapNotify(deps, opts, &report)
 	return report
@@ -736,14 +736,14 @@ func (m *agentManager) overlapDue(now time.Time) bool {
 
 // scanOverlaps runs the overlap detector for every room agent supervises, and logs only what it SENT: a pass
 // that found nothing is not news, and a log line every ten minutes per room would bury the reports that matter.
-func (m *agentManager) scanOverlaps(rigs []string, now time.Time) {
-	for _, rig := range rigs {
-		report := overlapRigScan(rig, now)
+func (m *agentManager) scanOverlaps(rooms []string, now time.Time) {
+	for _, room := range rooms {
+		report := overlapRoomScan(room, now)
 		for _, line := range report.Sent {
-			m.log("overlap " + rig + ": " + line)
+			m.log("overlap " + room + ": " + line)
 		}
 		for _, note := range report.Notes {
-			m.log("overlap " + rig + ": not observed: " + note)
+			m.log("overlap " + room + ": not observed: " + note)
 		}
 	}
 }

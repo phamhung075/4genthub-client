@@ -104,7 +104,7 @@ func VerdictFor(allowPeak bool, getenv func(string) string) (Mode, Verdict, erro
 // and `message` is the body it prints after its own name; `err` is a caller error (a malformed
 // OFFPEAK_UTC, or an OFFPEAK_ONLY value that is neither on nor off) that the verb reports and exits 2 on.
 //
-// It takes the reading rather than making it, so each verb keeps its own rig seam and none of them
+// It takes the reading rather than making it, so each verb keeps its own room seam and none of them
 // learns to read `rig ps` a second time.
 func Check(allowPeak bool, nodes []map[string]any, getenv func(string) string) (proceed bool, message string, err error) {
 	resolved, verdict, err := VerdictFor(allowPeak, getenv)
@@ -156,7 +156,7 @@ func DeepSeekSeats(seats []Seat) []Seat {
 
 // SeatsFromNodes reads the seat name and the model out of ONE `rig ps --json --nodes --room ROOM`
 // reading, which is the reading every gated verb already takes for its own reasons: the models are in
-// the node records the rig orchestrator reports, so the gate costs no extra call and no cloud round trip.
+// the node records the room orchestrator reports, so the gate costs no extra call and no cloud round trip.
 //
 // The name is the logical id ("room.seat") when the node carries one, else the canonical session name.
 // A node with neither is skipped rather than reported as an empty seat.

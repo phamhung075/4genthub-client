@@ -69,7 +69,7 @@ func writeFile(t *testing.T, path, content string) {
 func stubRoomDir(t *testing.T, store string) {
 	t.Helper()
 	original := RoomDir
-	RoomDir = func(rig string) (string, error) { return filepath.Join(store, "rooms", rig), nil }
+	RoomDir = func(room string) (string, error) { return filepath.Join(store, "rooms", room), nil }
 	t.Cleanup(func() { RoomDir = original })
 }
 
@@ -93,8 +93,8 @@ type seatFixture struct {
 	t     *testing.T
 	main  string // the checkout whose worktrees these are
 	store string // the seat store the room lives in
-	room  string // <store>/<rig>
-	rig   string
+	room  string // <store>/<room>
+	name  string // the room's name, the directory's base
 	seats []clientservices.SeatType
 	pins  map[string]string // submodule name → the gitlink the parent records
 }
@@ -105,7 +105,7 @@ type seatFixture struct {
 func newSeatFixture(t *testing.T, seats []clientservices.SeatType) *seatFixture {
 	t.Helper()
 	requireGit(t)
-	fixture := &seatFixture{t: t, rig: "fixture-room", seats: seats, pins: map[string]string{}}
+	fixture := &seatFixture{t: t, name: "fixture-room", seats: seats, pins: map[string]string{}}
 
 	sources := filepath.Join(t.TempDir(), "sources")
 	source := filepath.Join(sources, clientSubmodule)
@@ -132,28 +132,28 @@ func newSeatFixture(t *testing.T, seats []clientservices.SeatType) *seatFixture 
 	}
 
 	skillsRoot := t.TempDir()
-	teamDir := filepath.Join(skillsRoot, "scripts", "team", fixture.rig)
+	teamDir := filepath.Join(skillsRoot, "scripts", "team", fixture.name)
 	mkdirAll(t, teamDir)
-	writeFile(t, filepath.Join(teamDir, "team.json"), teamJSON(t, fixture.rig, seats))
+	writeFile(t, filepath.Join(teamDir, "team.json"), teamJSON(t, fixture.name, seats))
 	t.Setenv(clientservices.SkillsRootEnv, skillsRoot)
 
 	fixture.store = t.TempDir()
-	fixture.room = filepath.Join(fixture.store, "rooms", fixture.rig)
+	fixture.room = filepath.Join(fixture.store, "rooms", fixture.name)
 	// The room's OWN record, which the verbs read: spec.json is what a room that exists is, and the team
 	// file above is only what creates it.
-	writeFile(t, filepath.Join(fixture.room, "spec.json"), roomSpecJSON(t, fixture.rig, seats))
+	writeFile(t, filepath.Join(fixture.room, "spec.json"), roomSpecJSON(t, fixture.name, seats))
 	stubRoomDir(t, fixture.store)
 	return fixture
 }
 
 // roomSpecJSON writes the record the runtime stores for a started room: the seats are the room's.
-func roomSpecJSON(t *testing.T, rig string, seats []clientservices.SeatType) string {
+func roomSpecJSON(t *testing.T, room string, seats []clientservices.SeatType) string {
 	t.Helper()
 	seatList := make([]map[string]string, 0, len(seats))
 	for _, seat := range seats {
 		seatList = append(seatList, map[string]string{"seat_key": seat.Key, "seat_type": seat.Type})
 	}
-	raw, err := json.MarshalIndent(map[string]any{"room": rig, "seats": seatList}, "", "  ")
+	raw, err := json.MarshalIndent(map[string]any{"room": room, "seats": seatList}, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal the room record: %v", err)
 	}
@@ -161,14 +161,14 @@ func roomSpecJSON(t *testing.T, rig string, seats []clientservices.SeatType) str
 }
 
 // teamJSON writes the room's team file in the shape clientpolicy.ReadTeam reads.
-func teamJSON(t *testing.T, rig string, seats []clientservices.SeatType) string {
+func teamJSON(t *testing.T, room string, seats []clientservices.SeatType) string {
 	t.Helper()
 	seatList := make([]map[string]string, 0, len(seats))
 	for _, seat := range seats {
 		seatList = append(seatList, map[string]string{"seat_key": seat.Key, "seat_type": seat.Type})
 	}
 	team := map[string]any{
-		"room":  map[string]string{"slug": rig},
+		"room":  map[string]string{"slug": room},
 		"seats": seatList,
 	}
 	// A room of several seats needs its links: clientteam reads the file through LoadRoomSpec, whose rule
@@ -186,7 +186,7 @@ func teamJSON(t *testing.T, rig string, seats []clientservices.SeatType) string 
 }
 
 func (f *seatFixture) derived() []clientservices.Worktree {
-	return clientservices.DerivedWorktrees(f.room, f.rig, f.seats)
+	return clientservices.DerivedWorktrees(f.room, f.name, f.seats)
 }
 
 // listRaw is the fixture's own reading of `git worktree list`, kept as git's own text so a case can
@@ -197,7 +197,7 @@ func (f *seatFixture) listRaw() string {
 
 // ensure runs the start step over the fixture's own room.
 func (f *seatFixture) ensure(out *strings.Builder) error {
-	return Ensure(f.main, f.room, f.rig, f.seats, out)
+	return Ensure(f.main, f.room, f.name, f.seats, out)
 }
 
 // entry answers the registered entry for a path, from the package's own reader.

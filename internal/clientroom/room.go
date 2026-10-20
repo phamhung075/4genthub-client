@@ -5,7 +5,7 @@
 // own rail, and `report`, `metrics` and `limits` read and set the room's own state. Each sub-verb asks the runtime
 // daemon for something the wire already carries - GetRoomStatus, StopRoom, StopSeat and RestartSeat,
 // ForceCompact - so this package is a FRAME over clientruntime.Client rather than a second implementation of
-// any of it. Nothing here shells out to tmux, and nothing here resolves the rig orchestrator's paths.
+// any of it. Nothing here shells out to tmux, and nothing here resolves the room orchestrator's paths.
 //
 // THREE RULES ARE LOAD-BEARING, and each one is the reason a line of this file looks the way it does:
 //
@@ -14,7 +14,7 @@
 //     absent they come from this machine's own environment, where the caller's HOME decides them. So every
 //     run PRINTS `<room>@<state-dir>` and the socket it used, and the room's own lines are read against it.
 //   - `stop` IS NOT "STOP SUPERVISING". It is StopRoom and nothing else: that room's own
-//     `agenthub--<room>--<seat>` sessions, and nothing under the rig orchestrator's state home - never agent, never its children
+//     `agenthub--<room>--<seat>` sessions, and nothing under the room orchestrator's state home - never agent, never its children
 //     (compact-run, watchdog, sync messages), never the bridge, never another room (design §3).
 //   - A SUB-VERB THAT DID NOT DO THE THING SAYS SO. `compact` refuses a seat that is not running BY NAME
 //     instead of printing a success line over it, and a runtime that refuses the compaction is reported in
@@ -42,7 +42,7 @@ import (
 
 // closeWatch closes the room's herdr watch workspaces, whose panes run the feed and input helpers; a var so
 // the tests need no herdr.
-var closeWatch = clientwatch.CloseRigWorkspaces
+var closeWatch = clientwatch.CloseRoomWorkspaces
 
 // peakGate is the DeepSeek peak gate `reseat` asks before it stops a seat; a var so the suite can watch when
 // it runs relative to the stop, and so the refusal path needs no real clock.
@@ -382,7 +382,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 // One request is the whole contract, and the reason is the must-not list (design §3): StopRoom kills exactly
 // the sessions of the room's own spec.json - `agenthub--<room>--<seat>`, one by one - so this verb must not
 // reach for tmux itself, must not stop agent or any of its children, and must not touch the bridge or
-// another room. the rig orchestrator's state home is never a path in this function's world at all.
+// another room. the room orchestrator's state home is never a path in this function's world at all.
 //
 // The room's directory is left in place and the report says so: spec.json, seats/ and logs/ are what makes
 // the room startable again, and deleting them is a separate verb's business, not a stop's.
@@ -404,7 +404,7 @@ func runStop(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam room stop: the rooms meant to run could not be read, so %s was NOT dropped from them and was not stopped: %v\n", inv.room, err)
 		return clientcmd.ExitRoomRefused
 	}
-	if err := clientservices.WriteAgentState(clientservices.RemoveRig(state, inv.room)); err != nil {
+	if err := clientservices.WriteAgentState(clientservices.RemoveRoom(state, inv.room)); err != nil {
 		fmt.Fprintf(stderr, "4genteam room stop: could not drop %s from the rooms meant to run: %v\n", inv.room, err)
 		return clientcmd.ExitRoomRefused
 	}
@@ -428,7 +428,7 @@ func runStop(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 //
 // A seat that is not running afterwards exits ExitPartialStart (2) with the seat's own state named: the
 // daemon answered, and the room came up short of what was asked. Exit 0 there would be the "success over a
-// no-op" this rig has already paid for.
+// no-op" this room has already paid for.
 func runReseat(args []string, stdout, stderr io.Writer) int {
 	// THE FLAG FIRST: ModeFromFlags takes `--allow-peak` out of the list wherever it sits, and the parser
 	// below refuses any flag it does not own - so the gate's flag is read here or it is a usage error.
@@ -475,7 +475,7 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 // session-scoped on the wire (ForceCompact{session}), and a seat this verb did not see is a seat it cannot
 // honestly claim to have compacted.
 //
-// THREE THINGS IT MUST NOT DO, each of them a lie this rig has already paid for:
+// THREE THINGS IT MUST NOT DO, each of them a lie this room has already paid for:
 //   - print a success line over a seat that is not running: a stopped seat has no session to inject into,
 //     nothing is asked for it, and the refusal names it so a reader knows which seat was skipped;
 //   - flatten a runtime refusal into "ok": the runtime refuses when it finds no `omp --mode rpc` child under

@@ -31,7 +31,7 @@ func (worktreeCommand) Name() string { return "worktree" }
 func (worktreeCommand) Summary() string {
 	return "the room's derived seat worktrees: list them, prune the ones nobody owns"
 }
-func (worktreeCommand) NeedsRig() bool { return false }
+func (worktreeCommand) NeedsRoom() bool { return false }
 
 const worktreeVerbs = "list, prune"
 
@@ -64,7 +64,7 @@ func (worktreeCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 }
 
 func printWorktreeUsage(w io.Writer) {
-	fmt.Fprint(w, `usage: 4genteam worktree <verb> RIG [--main DIR]
+	fmt.Fprint(w, `usage: 4genteam worktree <verb> ROOM [--main DIR]
 
 Read and clean up the room's derived seat worktrees. The list is derived from the seats of the room's
 own record (clientservices.DerivedWorktrees), so nothing here keeps a list of its own.
@@ -92,11 +92,11 @@ func newVerbFlags(name string) *flag.FlagSet {
 	return flags
 }
 
-// parseRigVerb parses a verb's flags and takes its ONE positional argument, the rig name. A missing
+// parseRoomVerb parses a verb's flags and takes its ONE positional argument, the room name. A missing
 // name, a second argument and an argument that is a flag-shaped word are all usage errors: there is no
-// default rig, and a rig name silently read out of a misplaced flag is a room this client would then
+// default room, and a room name silently read out of a misplaced flag is a room this client would then
 // read the wrong directory for.
-func parseRigVerb(flags *flag.FlagSet, args []string, usage func(io.Writer), stdout io.Writer) (string, error) {
+func parseRoomVerb(flags *flag.FlagSet, args []string, usage func(io.Writer), stdout io.Writer) (string, error) {
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			usage(stdout)
@@ -106,16 +106,16 @@ func parseRigVerb(flags *flag.FlagSet, args []string, usage func(io.Writer), std
 	}
 	switch flags.NArg() {
 	case 0:
-		return "", usageError("a rig name is required - there is no default rig")
+		return "", usageError("a room name is required - there is no default room")
 	case 1:
 	default:
-		return "", usageError(fmt.Sprintf("unexpected argument %q - this verb takes one rig name", flags.Arg(1)))
+		return "", usageError(fmt.Sprintf("unexpected argument %q - this verb takes one room name", flags.Arg(1)))
 	}
-	rig := flags.Arg(0)
-	if strings.TrimSpace(rig) == "" || strings.HasPrefix(rig, "-") {
-		return "", usageError(fmt.Sprintf("%q is not a rig name", rig))
+	room := flags.Arg(0)
+	if strings.TrimSpace(room) == "" || strings.HasPrefix(room, "-") {
+		return "", usageError(fmt.Sprintf("%q is not a room name", room))
 	}
-	return rig, nil
+	return room, nil
 }
 
 func usageError(message string) error {
@@ -130,13 +130,13 @@ var RoomDir = clientservices.RoomDir
 // roomOf is the two readings both verbs open with: the room's directory and the seats of the room's OWN
 // record. The seats come from the ONE derivation (clientservices.LiveSeats over spec.json), never from a
 // list written down here: a room that exists is read from what exists.
-func roomOf(rig string) (string, []clientservices.SeatType, error) {
-	roomDir, err := RoomDir(rig)
+func roomOf(room string) (string, []clientservices.SeatType, error) {
+	roomDir, err := RoomDir(room)
 	if err != nil {
 		return "", nil, err
 	}
 	root := filepath.Dir(filepath.Dir(roomDir))
-	seats, err := clientservices.LiveSeats(root, rig)
+	seats, err := clientservices.LiveSeats(root, room)
 	if err != nil {
 		return "", nil, err
 	}
@@ -144,9 +144,9 @@ func roomOf(rig string) (string, []clientservices.SeatType, error) {
 }
 
 // derivedIndex is the derived worktrees keyed by their cleaned path, for the two verbs' lookups.
-func derivedIndex(roomDir, rig string, seats []clientservices.SeatType) map[string]clientservices.Worktree {
+func derivedIndex(roomDir, room string, seats []clientservices.SeatType) map[string]clientservices.Worktree {
 	index := make(map[string]clientservices.Worktree, len(seats)+1)
-	for _, worktree := range clientservices.DerivedWorktrees(roomDir, rig, seats) {
+	for _, worktree := range clientservices.DerivedWorktrees(roomDir, room, seats) {
 		index[filepath.Clean(worktree.Path)] = worktree
 	}
 	return index
@@ -160,7 +160,7 @@ func describe(entry Entry) string {
 	return entry.Branch
 }
 
-const listUsage = `usage: 4genteam worktree list RIG [--main DIR]
+const listUsage = `usage: 4genteam worktree list ROOM [--main DIR]
 
 Print the room's derived seat worktrees (one line each, from the room's team.json) and every other
 entry of git worktree list, labelled foreign. It writes nothing.
@@ -175,7 +175,7 @@ options:
 func runList(args []string, stdout io.Writer) error {
 	flags := newVerbFlags("list")
 	mainFlag := flags.String("main", "", "the checkout whose worktrees these are")
-	rig, err := parseRigVerb(flags, args, func(w io.Writer) { fmt.Fprint(w, listUsage) }, stdout)
+	room, err := parseRoomVerb(flags, args, func(w io.Writer) { fmt.Fprint(w, listUsage) }, stdout)
 	if err != nil {
 		return err
 	}
@@ -183,7 +183,7 @@ func runList(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	roomDir, seats, err := roomOf(rig)
+	roomDir, seats, err := roomOf(room)
 	if err != nil {
 		return err
 	}
@@ -191,12 +191,12 @@ func runList(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	derived := derivedIndex(roomDir, rig, seats)
+	derived := derivedIndex(roomDir, room, seats)
 	present := make(map[string]Entry, len(entries))
 	for _, entry := range entries {
 		present[filepath.Clean(entry.Path)] = entry
 	}
-	for _, worktree := range clientservices.DerivedWorktrees(roomDir, rig, seats) {
+	for _, worktree := range clientservices.DerivedWorktrees(roomDir, room, seats) {
 		entry, registered := present[filepath.Clean(worktree.Path)]
 		if !registered {
 			fmt.Fprintf(stdout, "derived %s missing (not in `git worktree list`)\n", worktree.Path)
@@ -213,7 +213,7 @@ func runList(args []string, stdout io.Writer) error {
 	return nil
 }
 
-const pruneUsage = `usage: 4genteam worktree prune RIG [--main DIR]
+const pruneUsage = `usage: 4genteam worktree prune ROOM [--main DIR]
 
 Remove the worktrees the ruling names and nothing else: a direct child of /tmp whose name begins with
 wt- or gate-, and an entry git marks prunable. Removal is ` + "`git worktree remove`" + ` WITHOUT --force, so a
@@ -233,7 +233,7 @@ options:
 func runPrune(args []string, stdout io.Writer) error {
 	flags := newVerbFlags("prune")
 	mainFlag := flags.String("main", "", "the checkout whose worktrees these are")
-	rig, err := parseRigVerb(flags, args, func(w io.Writer) { fmt.Fprint(w, pruneUsage) }, stdout)
+	room, err := parseRoomVerb(flags, args, func(w io.Writer) { fmt.Fprint(w, pruneUsage) }, stdout)
 	if err != nil {
 		return err
 	}
@@ -241,7 +241,7 @@ func runPrune(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	roomDir, seats, err := roomOf(rig)
+	roomDir, seats, err := roomOf(room)
 	if err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func runPrune(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	derived := derivedIndex(roomDir, rig, seats)
+	derived := derivedIndex(roomDir, room, seats)
 	var kept []string
 	for _, entry := range entries {
 		if _, ours := derived[filepath.Clean(entry.Path)]; ours {

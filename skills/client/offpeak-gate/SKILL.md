@@ -39,7 +39,7 @@ do not `export` a token while you are there.
 
 ## The refusal, and what to do about it
 
-`4genteam up RIG`, `4genteam compact RIG`, `4genteam continue RIG`, `4genteam watchdog RIG` and
+`4genteam up ROOM`, `4genteam compact ROOM`, `4genteam continue ROOM`, `4genteam watchdog ROOM` and
 `4genteam sync respawn ROOM SEAT` are the five verbs that start or resume seats, so each runs the gate
 first. `continue` restores a stopped room and briefs its seats, and `watchdog` restores one whose tmux
 sessions vanished. The refusal looks like this and exits **3**:

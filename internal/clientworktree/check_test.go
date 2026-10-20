@@ -44,7 +44,7 @@ func TestCheckSortsTheDerivedWorktreesIntoBuckets(t *testing.T) {
 	gitIn(t, fixture.main, "worktree", "add", "--detach", foreign, "main")
 	removeTmpWorktree(t, fixture.main, foreign)
 
-	verdict, err := Check(fixture.main, fixture.room, fixture.rig, fixture.seats)
+	verdict, err := Check(fixture.main, fixture.room, fixture.name, fixture.seats)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestCheckCallsAPathThatIsNotAWorktreeWrong(t *testing.T) {
 	mkdirAll(t, path)
 	writeFile(t, filepath.Join(path, "operator.txt"), "an operator's own directory\n")
 
-	verdict, err := Check(fixture.main, fixture.room, fixture.rig, fixture.seats)
+	verdict, err := Check(fixture.main, fixture.room, fixture.name, fixture.seats)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestCheckCallsADanglingClientLinkWrong(t *testing.T) {
 	writeFile(t, filepath.Join(link, ".git"),
 		"gitdir: "+filepath.Join(fixture.main, clientSubmodule, ".git", "worktrees", "gone")+"\n")
 
-	verdict, err := Check(fixture.main, fixture.room, fixture.rig, fixture.seats)
+	verdict, err := Check(fixture.main, fixture.room, fixture.name, fixture.seats)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestCheckCallsADanglingClientLinkWrong(t *testing.T) {
 // `up` exists to change.
 func TestCheckReportsARoomThatWasNeverStarted(t *testing.T) {
 	fixture := newSeatFixture(t, []clientservices.SeatType{{Key: "lead", Type: "lead"}})
-	verdict, err := Check(fixture.main, fixture.room, fixture.rig, fixture.seats)
+	verdict, err := Check(fixture.main, fixture.room, fixture.name, fixture.seats)
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}

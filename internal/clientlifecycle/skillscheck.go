@@ -1,7 +1,7 @@
 // 7.5's skills check: the ONE check `up` runs after every seat launch and `doctor` reports on, with the
 // five codes the ruling's table names (ai_docs/core-architecture/seat-skills.md section 6).
 //
-// WHAT CHANGED SINCE THE RULING WAS WRITTEN, and why this file is not the ruling's `sync rig` check. The
+// WHAT CHANGED SINCE THE RULING WAS WRITTEN, and why this file is not the ruling's `sync room` check. The
 // ruling's dated note (2026-10-17) retires the client's delivery: at every seat start the RUNTIME resolves
 // the client's tree (`share`, then `rooms/<room>`, then `rooms/<room>/<seat>`, never `client/`) and writes
 // it under the seat's own directory, replacing what was there. The client's delivery code and its
@@ -175,7 +175,7 @@ func checkOneSeatSkills(in seatSkillInput) ([]seatSkillFailure, []seatSkillFailu
 	case in.Cwd == "" || in.Worktree == "":
 		note("the seat's cwd or its worktree was not obtainable, so F1 cwd cannot be decided")
 	case in.Cwd != in.Worktree:
-		// A REFUSAL NAMES THE WAY OUT. On a rig whose seats run in hand-made worktrees this line refuses
+		// A REFUSAL NAMES THE WAY OUT. On a room whose seats run in hand-made worktrees this line refuses
 		// `up` every time, and that is the rule working - but a refusal with no remedy is a dead end for the
 		// owner, so the two routes that put the seat in its derived worktree are named beside the finding.
 		fail(codeCwd, fmt.Sprintf("cwd %s is not its worktree %s; reseat it (`4genteam seat reseat %s --seat %s`) "+
@@ -411,11 +411,11 @@ var seatsRowFor = seatsRows
 
 // seatsRows computes the `seats` row of every room the report covers: `running`, or `skills_stale` when
 // the check found a difference.
-func seatsRows(rig, root string) []seatSkillsRow {
+func seatsRows(room, root string) []seatSkillsRow {
 	state, _ := clientservices.ReadAgentState()
-	rigs := reportedRigs(state.Rigs, rig)
-	rows := make([]seatSkillsRow, 0, len(rigs))
-	for _, name := range rigs {
+	rooms := reportedRooms(state.Rooms, room)
+	rows := make([]seatSkillsRow, 0, len(rooms))
+	for _, name := range rooms {
 		verdict := roomSkills(root, name)
 		rowState := clientservices.Running
 		if len(verdict.Failures) > 0 {
@@ -423,7 +423,7 @@ func seatsRows(rig, root string) []seatSkillsRow {
 		}
 		rows = append(rows, seatSkillsRow{
 			Row: clientservices.Health{
-				Rig:       name,
+				Room:      name,
 				Safeguard: clientservices.Seats,
 				State:     rowState,
 				AgeS:      clientservices.UnknownAge,
@@ -457,8 +457,8 @@ func roomSkillsVerdict(root, room string) seatSkillsVerdict {
 // The findings are LINES, not a verdict: reseat has no exit code for them and reports them as it reports
 // everything else. A seat the runtime does not report answers with that fact rather than an empty list, so
 // a reader can tell "nothing to report" from "nothing could be read".
-func SeatCheckLines(root, rig, seat string) []string {
-	inputs, notes := seatSkillInputs(root, rig)
+func SeatCheckLines(root, room, seat string) []string {
+	inputs, notes := seatSkillInputs(root, room)
 	var mine []seatSkillInput
 	for _, input := range inputs {
 		if input.Seat == seat {
@@ -467,7 +467,7 @@ func SeatCheckLines(root, rig, seat string) []string {
 	}
 	if len(mine) == 0 {
 		return failureLines([]seatSkillFailure{{Seat: seat, Code: codeUnobserved,
-			Detail: "the restarted seat has no record in room " + rig + ", so its checks cannot be read"}})
+			Detail: "the restarted seat has no record in room " + room + ", so its checks cannot be read"}})
 	}
 	verdict := checkSeatSkills(mine)
 	verdict.Notes = append(notes, verdict.Notes...)
@@ -487,8 +487,8 @@ func failureLines(groups ...[]seatSkillFailure) []string {
 
 // roomSeats is the runtime's view of a room's seats, as a seam so a case drives the check without a
 // daemon.
-var roomSeats = func(rig string) ([]clientruntime.SeatStatus, error) {
-	return clientruntime.NewClient("").GetRoomStatus(rig)
+var roomSeats = func(room string) ([]clientruntime.SeatStatus, error) {
+	return clientruntime.NewClient("").GetRoomStatus(room)
 }
 
 // roomSpec is the room's own record, the source of its seats' types and of the checkout the tree lives

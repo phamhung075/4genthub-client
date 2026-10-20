@@ -92,7 +92,7 @@ func TestUsageErrorsNameTheOffendingArgument(t *testing.T) {
 	}{
 		{"bundle with one positional", []string{"bundle", "room1"}, "room, seat"},
 		{"bundle with an unknown flag",
-			[]string{"bundle", "room1", "seat1", "--rig-yaml", "y", "--rig-root", "r", "--nope"}, "--nope"},
+			[]string{"bundle", "room1", "seat1", "--room-yaml", "y", "--room-root", "r", "--nope"}, "--nope"},
 		{"switch with one positional", []string{"switch", "room1"}, "room, seat"},
 		{"respawn with one positional", []string{"respawn", "room1"}, "room, seat"},
 		{"offline-install with no target", []string{"offline-install"}, "target"},

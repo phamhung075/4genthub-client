@@ -10,7 +10,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-// continue and watchdog refuse the runtime's spelling with the one sentence before a rig is read or a seat
+// continue and watchdog refuse the runtime's spelling with the one sentence before a room is read or a seat
 // is touched.
 func TestTheRuntimeSpellingIsRefusedByTheRestoreVerbs(t *testing.T) {
 	for _, command := range []clientcmd.Command{continueCommand{}, watchdogCommand{}} {

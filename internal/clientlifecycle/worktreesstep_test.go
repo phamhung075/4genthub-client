@@ -31,11 +31,11 @@ func stubWorktreeStepSeams(t *testing.T, ensure func(string, string, string, []c
 
 func TestUpWorktreesStepDerivesTheSeatsOfThisStart(t *testing.T) {
 	var (
-		gotMain, gotRoom, gotRig string
-		gotSeats                 []clientservices.SeatType
+		gotMain, gotRoomDir, gotRoom string
+		gotSeats                     []clientservices.SeatType
 	)
-	stubWorktreeStepSeams(t, func(mainRoot, roomDir, rig string, seats []clientservices.SeatType, _ io.Writer) error {
-		gotMain, gotRoom, gotRig, gotSeats = mainRoot, roomDir, rig, seats
+	stubWorktreeStepSeams(t, func(mainRoot, roomDir, room string, seats []clientservices.SeatType, _ io.Writer) error {
+		gotMain, gotRoomDir, gotRoom, gotSeats = mainRoot, roomDir, room, seats
 		return nil
 	})
 	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{
@@ -47,8 +47,8 @@ func TestUpWorktreesStepDerivesTheSeatsOfThisStart(t *testing.T) {
 	if code := ensureWorktreesImpl("demo", spec, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("the step exited %d (stderr %q)", code, errOut.String())
 	}
-	if gotMain != "/main" || gotRoom != "/state/rooms/demo" || gotRig != "demo" {
-		t.Errorf("ensure called with (%q, %q, %q), want (/main, /state/rooms/demo, demo)", gotMain, gotRoom, gotRig)
+	if gotMain != "/main" || gotRoomDir != "/state/rooms/demo" || gotRoom != "demo" {
+		t.Errorf("ensure called with (%q, %q, %q), want (/main, /state/rooms/demo, demo)", gotMain, gotRoomDir, gotRoom)
 	}
 	want := []clientservices.SeatType{{Key: "lead", Type: "lead"}, {Key: "go-dev", Type: "developer"}}
 	if len(gotSeats) != len(want) || gotSeats[0] != want[0] || gotSeats[1] != want[1] {

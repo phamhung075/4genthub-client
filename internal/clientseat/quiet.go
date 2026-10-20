@@ -1,6 +1,6 @@
 // The wait and the restart a reseat needs: the quiet wait over a seat's own activity, the activity
 // readers it uses, and the relaunch. It was `sync.go`, and the adopting half (`seat sync`, `seat watch`)
-// went with the rigspec route it adopted from - see the package doc for the sentence an operator gets.
+// went with the roomspec route it adopted from - see the package doc for the sentence an operator gets.
 package clientseat
 
 import (
@@ -18,14 +18,14 @@ import (
 )
 
 // QuietWaiter is wait_until_quiet: true once the seat is not running and its session has been still for
-// QuietSeconds, twice in a row. Every read is a field, so the suite needs no rig and no clock.
+// QuietSeconds, twice in a row. Every read is a field, so the suite needs no room and no clock.
 //
 // Activity's TWO answers are not one: the word the seat is doing, and whether the read happened at all. They are
 // separate because "" is a word a broken read and a wordless node both produce, and an unknown activity must NOT be
 // read as "not running" - see quietOnce, which is where that rule is written.
 type QuietWaiter struct {
-	Activity func(rig, seat string) (string, bool)
-	Since    func(rig, seat string) float64
+	Activity func(room, seat string) (string, bool)
+	Since    func(room, seat string) float64
 	Sleep    func(seconds float64)
 	Clock    func() float64
 
@@ -39,11 +39,11 @@ type QuietWaiter struct {
 	PollSeconds  float64
 }
 
-// NewQuietWaiter is the real one: the rig orchestrator for the activity, the seat's session files for the stillness.
+// NewQuietWaiter is the real one: the room orchestrator for the activity, the seat's session files for the stillness.
 func NewQuietWaiter(stateRoot string) QuietWaiter {
 	return QuietWaiter{
 		Activity:     seatActivity,
-		Since:        func(rig, seat string) float64 { return secondsSinceLastWrite(stateRoot, rig, seat) },
+		Since:        func(room, seat string) float64 { return secondsSinceLastWrite(stateRoot, room, seat) },
 		Sleep:        func(seconds float64) { time.Sleep(time.Duration(seconds * float64(time.Second))) },
 		Clock:        nowSeconds,
 		QuietSeconds: quietSeconds,
@@ -53,7 +53,7 @@ func NewQuietWaiter(stateRoot string) QuietWaiter {
 	}
 }
 
-func (w QuietWaiter) Wait(rig, seat string) bool {
+func (w QuietWaiter) Wait(room, seat string) bool {
 	deadline := w.Clock() + w.WaitSeconds
 	unrecognized := ""
 	blind := false
@@ -66,17 +66,17 @@ func (w QuietWaiter) Wait(rig, seat string) bool {
 	// ONCE PER REASON: a wait that polls every few seconds must not repeat itself on every poll, so each reason is
 	// said when it is first seen and never again, whichever of the two arrives first.
 	reading := func() (quiet bool) {
-		q, strange, unreadable := w.quietOnce(rig, seat)
+		q, strange, unreadable := w.quietOnce(room, seat)
 		if strange != "" && unrecognized == "" {
 			unrecognized = strange
 			w.reportf("no quiet for %s/%s: the activity word %q is not one this client recognizes, so the wait "+
 				"cannot tell an idle seat from a dead gate; it will run its full %s and leave the seat running",
-				rig, seat, strange, quietBudget())
+				room, seat, strange, quietBudget())
 		}
 		if unreadable && !blind {
 			blind = true
 			w.reportf("%s/%s: no activity could be read at all, so this wait cannot open; it will run its full "+
-				"%s and leave the seat running", rig, seat, quietBudget())
+				"%s and leave the seat running", room, seat, quietBudget())
 		}
 		return q
 	}
@@ -107,7 +107,7 @@ func (w QuietWaiter) reportf(format string, args ...any) {
 func quietBudget() string { return (time.Duration(quietWaitSeconds) * time.Second).String() }
 
 // quietOnce is ONE reading of the two clauses - the seat is not running AND its session has been still for the quiet
-// window - and the activity comparison is NOT written here: it is clientruntime's one allow-set, shared with rigIdle,
+// window - and the activity comparison is NOT written here: it is clientruntime's one allow-set, shared with roomIdle,
 // so a vocabulary change is decided once instead of being found twice.
 //
 // AN UNREADABLE ACTIVITY IS NOT "NOT RUNNING", and the seam says which is which: Activity's second answer is false
@@ -119,8 +119,8 @@ func quietBudget() string { return (time.Duration(quietWaitSeconds) * time.Secon
 // The THIRD answer is the second half of the same seam: `unreadable` is true when no activity could be read at all,
 // which is the one case the word cannot report because there is no word - and it is the case this box hits, so the
 // wait must be able to name it instead of only counting the polls.
-func (w QuietWaiter) quietOnce(rig, seat string) (quiet bool, unrecognized string, unreadable bool) {
-	activity, read := w.Activity(rig, seat)
+func (w QuietWaiter) quietOnce(room, seat string) (quiet bool, unrecognized string, unreadable bool) {
+	activity, read := w.Activity(room, seat)
 	if !read {
 		return false, "", true
 	}
@@ -128,21 +128,21 @@ func (w QuietWaiter) quietOnce(rig, seat string) (quiet bool, unrecognized strin
 	if !released {
 		return false, unrecognized, false
 	}
-	return w.Since(rig, seat) >= w.QuietSeconds, "", false
+	return w.Since(room, seat) >= w.QuietSeconds, "", false
 }
 
 func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 
 // seatActivity is seat_activity: the activity word for one seat, and it is the SECOND reader of the same answer
-// rigIdle reads - so it is a DECLARED EXCEPTION with the same retirement. Both readers now call ONE function,
+// roomIdle reads - so it is a DECLARED EXCEPTION with the same retirement. Both readers now call ONE function,
 // clientruntime.ReadSeatActivity, which asks the agent's own activity report over the client's OWN transport: the
-// rig daemon's node table today, the runtime's producer at cutover.
+// room daemon's node table today, the runtime's producer at cutover.
 //
 // WHY THE PROGRAM NAME IS GONE FROM HERE. This used to exec `rig ps --nodes --json`, resolved with
 // exec.LookPath("rig"). `rig` is not this client: where an `rig` exists at all it is a different program, and the
 // `ps` such a program serves carries `activity` (a log mtime) and NO `agentActivity` at all - and on this host the
-// lookup is DEAD outright (measured 2026-10-15, re-measured 2026-10-17: `command -v rig` prints nothing, and
-// ~/.local/bin/rig does not exist), so neither the name nor the program could ever have answered. The word
+// lookup is DEAD outright (measured 2026-10-15, re-measured 2026-10-17: `command -v room` prints nothing, and
+// ~/.local/bin/room does not exist), so neither the name nor the program could ever have answered. The word
 // therefore never arrived, quietly: a matched node
 // with no field, an empty word, a gate that can never open. Asking the daemon through the client's own transport
 // removes the question of WHICH program answered, and with it the whole class.
@@ -150,20 +150,20 @@ func nowSeconds() float64 { return float64(time.Now().UnixNano()) / 1e9 }
 // THE RE-POINT IS THE CUTOVER PRECONDITION, and it is now one function rather than two readers: when the runtime
 // grows its own producer, ReadSeatActivity's body moves and this declaration is DELETED rather than annotated.
 //
-// ITS CONSUMER IS QuietWaiter, and the direction of failure here is the SAME as rigIdle's: THIS ONE FAILS CLOSED. The
+// ITS CONSUMER IS QuietWaiter, and the direction of failure here is the SAME as roomIdle's: THIS ONE FAILS CLOSED. The
 // second value is FALSE whenever nothing could be read at all, and QuietWaiter keeps waiting on that answer instead
 // of reading it as "not running". With no daemon named in the environment and no producer yet on the runtime, every
 // call answers false and a reseat waits out its deadline and does NOT proceed - far better than proceeding past a
 // seat whose agent is mid-turn.
-func seatActivity(rig, seat string) (string, bool) {
-	read := clientruntime.ReadSeatActivity(rig, seat)
+func seatActivity(room, seat string) (string, bool) {
+	read := clientruntime.ReadSeatActivity(room, seat)
 	return read.Word, read.Read
 }
 
 // secondsSinceLastWrite is seconds_since_last_write: how long the seat's session files have been still.
 // No session at all is infinite, which the wait reads as "not quiet yet" - the Python's float("inf").
-func secondsSinceLastWrite(stateRoot, rig, seat string) float64 {
-	files, _ := filepath.Glob(filepath.Join(clientruntime.SeatSessionsDir(stateRoot, rig, seat), "*.jsonl"))
+func secondsSinceLastWrite(stateRoot, room, seat string) float64 {
+	files, _ := filepath.Glob(filepath.Join(clientruntime.SeatSessionsDir(stateRoot, room, seat), "*.jsonl"))
 	if len(files) == 0 {
 		return math.Inf(1)
 	}
@@ -189,9 +189,9 @@ func secondsSinceLastWrite(stateRoot, rig, seat string) float64 {
 // runtime installs it before the seat's runner starts. A render that cannot be read does NOT stop the restart: the
 // seat comes back on the room's own record, which is what it was already running under, and the reason is SAID
 // rather than swallowed (clientsync.SeatDocumentFor).
-var restartSeat = func(rig, seat string) error {
-	document := clientsync.SeatDocumentFor(context.Background(), rig, seat, policyNotes{})
-	_, err := clientruntime.NewClient("").RestartSeat(rig, seat, document)
+var restartSeat = func(room, seat string) error {
+	document := clientsync.SeatDocumentFor(context.Background(), room, seat, policyNotes{})
+	_, err := clientruntime.NewClient("").RestartSeat(room, seat, document)
 	return err
 }
 
@@ -209,28 +209,28 @@ func (policyNotes) Write(p []byte) (int, error) {
 //
 // THE RUNTIME TAKES THE RESTART OVER, and five pieces of the old code are DELETED rather than kept around the new call:
 //
-//   - `rig launch <rigId> <rig.seat>` becomes the runtime's RestartSeat, which is stop_seat followed by start_seat
+//   - `rig launch <roomId> <rig.seat>` becomes the runtime's RestartSeat, which is stop_seat followed by start_seat
 //     from the room's own spec - the same two steps, taken by the party that owns the session.
 //   - THE CLIENT'S OWN `tmux kill-session` AND THE 4s SLEEP are gone: the runtime's restart stops the session itself,
 //     so the client reaching into tmux was the client doing the runtime's job, and the sleep existed to let a session
 //     the client had just killed go away before asking for the launch.
-//   - `rigID` (a `rig ps --json` call that existed only to find the id argument) and `sessionComesUp` (a three-minute
+//   - `roomID` (a `rig ps --json` call that existed only to find the id argument) and `sessionComesUp` (a three-minute
 //     tmux poll) are gone with it: neither had another caller.
 //   - THE "did not respond in time" TOLERANCE IS GONE, and this is the one behaviour change worth naming: it existed
 //     because the CLI gave up after 5s while the launch landed anyway, so the code polled tmux to find out. A socket
 //     call has no such failure mode - the reply IS the outcome, or the call reports why - so a failure is now the
 //     runtime's own reason instead of being inferred from a session appearing, which is the shape that let a no-op
 //     look like a success elsewhere this evening.
-//   - THE CLIENT'S SKILL DELIVERY IS GONE (`clientseat/deliverSkills`). It copied `<store>/<rig>/rig/agents/<seat>/skills`
+//   - THE CLIENT'S SKILL DELIVERY IS GONE (`clientseat/deliverSkills`). It copied `<store>/<room>/room/agents/<seat>/skills`
 //     into the seat's own directory, a store only the removed `sync room` verb ever wrote, and it treated a missing source
 //     as a refusal - so `4genteam seat reseat`, the surviving verb that reaches relaunch, failed at that step and never
 //     restarted anything. THE RUNTIME INSTALLS THE SEAT'S SKILLS ITSELF at every start (`install_seat_skills`,
 //     `rust/agenthub-runtime/src/supervisor/mod.rs:258`, from the tree `AGENTHUB_CLIENT_SKILLS` names), so the client has
 //     nothing left to deliver and no store to read.
-func relaunch(rig, seat string) error {
-	if err := restartSeat(rig, seat); err != nil {
+func relaunch(room, seat string) error {
+	if err := restartSeat(room, seat); err != nil {
 		return &clientcmd.CodedError{
-			Message: fmt.Sprintf("could not relaunch %s/%s: %v", rig, seat, err),
+			Message: fmt.Sprintf("could not relaunch %s/%s: %v", room, seat, err),
 			Code:    ExitFailed,
 		}
 	}

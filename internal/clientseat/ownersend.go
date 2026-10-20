@@ -35,7 +35,7 @@ const (
 	ownerSendPoll = 250 * time.Millisecond
 )
 
-// ownerSendDeps is what the owner route touches outside its arguments, as fields so the suite needs no rig, no
+// ownerSendDeps is what the owner route touches outside its arguments, as fields so the suite needs no room, no
 // terminal and no wait.
 type ownerSendDeps struct {
 	sendKeys func(session, command string) error
@@ -83,8 +83,8 @@ func clipForReport(text string, limit int) string {
 
 // ownerNodeSession is the signed name of the room's owner node, `<room>-owner@<room>`: this client never puts a
 // name into a message, it types into the terminal that already carries one.
-func ownerNodeSession(rig string) string {
-	return rig + "-" + ownerMember + "@" + rig
+func ownerNodeSession(room string) string {
+	return room + "-" + ownerMember + "@" + room
 }
 
 // ownerMember is the name the ruling fixes for the room's owner node (4.6). It is named here rather than read
@@ -96,12 +96,12 @@ const ownerMember = "owner"
 // viaOwnerRefusal is the ruling's guarantee on this side (2026-10-18): --via-owner signs with the OWNER
 // NODE's terminal, so only that node may ask for it. The caller's own sender is read through the SAME
 // resolution the envelope uses - clientguard.SessionFromEnv, one identity source - and anything but
-// `<rig>-owner@<rig>` is refused before a file is written or a key is typed. The empty string means the
+// `<room>-owner@<room>` is refused before a file is written or a key is typed. The empty string means the
 // request came from the owner node itself. It is attribution, not authentication: a process that sets the
 // variable forges through plain send regardless, so this closes the documented and prompt-injected route,
 // not a hostile local process.
-func viaOwnerRefusal(rig string, getenv func(string) string) string {
-	want := ownerNodeSession(rig)
+func viaOwnerRefusal(room string, getenv func(string) string) string {
+	want := ownerNodeSession(room)
 	sender := "unset (no " + clientguard.SessionEnv + ")"
 	if session, ok := clientguard.SessionFromEnv(getenv); ok {
 		sender = session.Line()
@@ -113,9 +113,9 @@ func viaOwnerRefusal(rig string, getenv func(string) string) string {
 }
 
 // sendViaOwnerNode is method C itself: private message file, one typed command, result read back.
-func sendViaOwnerNode(deps *ownerSendDeps, rig, seat, text string, stdout, stderr io.Writer) int {
-	node := ownerNodeSession(rig)
-	target := rig + "-" + seat + "@" + rig
+func sendViaOwnerNode(deps *ownerSendDeps, room, seat, text string, stdout, stderr io.Writer) int {
+	node := ownerNodeSession(room)
+	target := room + "-" + seat + "@" + room
 
 	directory, err := os.MkdirTemp("", "4genteam-send-")
 	if err != nil {

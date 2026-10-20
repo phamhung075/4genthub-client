@@ -9,20 +9,20 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 )
 
-// THE ELEVEN-SITE CLASS, PINNED FOR THE READING. rigNodes used to shell out to `rig ps --nodes --room RIG
+// THE ELEVEN-SITE CLASS, PINNED FOR THE READING. roomNodes used to shell out to `rig ps --nodes --room RIG
 // --json`, and after this client's rename that name resolves to this binary. PATH is emptied here so the
 // assertion is about the ABSENCE of the call rather than about a message: with the exec in place the
-// function answers "rig is not on PATH" (an exec.LookPath failure), and without it the only possible
+// function answers "room is not on PATH" (an exec.LookPath failure), and without it the only possible
 // failure comes from the local runtime.
-func TestRoomNodesNeverShellsOutToRig(t *testing.T) {
+func TestRoomNodesNeverShellsOutToRoom(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
-	nodes, err := roomNodes("nosuchrig")
+	nodes, err := roomNodes("nosuchroom")
 	if err != nil && strings.Contains(err.Error(), "is not on PATH") {
 		t.Fatalf("roomNodes shelled out to `rig`: %v", err)
 	}
-	if err != nil && !strings.Contains(err.Error(), "nosuchrig") {
-		t.Errorf("the failure does not name the rig it could not read: %v", err)
+	if err != nil && !strings.Contains(err.Error(), "nosuchroom") {
+		t.Errorf("the failure does not name the room it could not read: %v", err)
 	}
 	if err == nil && len(nodes) != 0 {
 		t.Errorf("an unreadable room answered with %d node records", len(nodes))
@@ -32,14 +32,14 @@ func TestRoomNodesNeverShellsOutToRig(t *testing.T) {
 func reseatFixture(waitOK bool) (*reseatDeps, *[]string) {
 	var log []string
 	return &reseatDeps{
-		nodes: func(rig string) ([]map[string]any, error) {
+		nodes: func(room string) ([]map[string]any, error) {
 			return []map[string]any{
-				{"logicalId": rig + ".lead"}, {"logicalId": rig + ".go-dev"},
+				{"logicalId": room + ".lead"}, {"logicalId": room + ".go-dev"},
 			}, nil
 		},
-		waitQuiet: func(rig, seat string) bool { log = append(log, "wait "+seat); return waitOK },
-		relaunch:  func(rig, seat string) error { log = append(log, "relaunch "+seat); return nil },
-		checkSeat: func(rig, seat string) []string { log = append(log, "check "+seat); return nil },
+		waitQuiet: func(room, seat string) bool { log = append(log, "wait "+seat); return waitOK },
+		relaunch:  func(room, seat string) error { log = append(log, "relaunch "+seat); return nil },
+		checkSeat: func(room, seat string) []string { log = append(log, "check "+seat); return nil },
 		getenv:    func(k string) string { return map[string]string{"OFFPEAK_ONLY": "off"}[k] },
 		logf:      func(string, ...any) {},
 	}, &log
@@ -87,13 +87,13 @@ func TestReseatRefusesAnUnknownSeatBeforeTouchingAny(t *testing.T) {
 	}
 }
 
-func TestReseatTakesTheRigBeforeItsSeatFlags(t *testing.T) {
+func TestReseatTakesTheRoomBeforeItsSeatFlags(t *testing.T) {
 	var out, errOut strings.Builder
 	if code := runReseat([]string{"--seat", "lead", "r"}, &out, &errOut); code != clientcmd.ExitUsage {
-		t.Fatalf("a flag before the rig must be refused with usage, got %d", code)
+		t.Fatalf("a flag before the room must be refused with usage, got %d", code)
 	}
 	if code := runReseat([]string{"r"}, &out, &errOut); code != clientcmd.ExitUsage {
-		t.Fatalf("a rig with no --seat must be refused with usage, got %d", code)
+		t.Fatalf("a room with no --seat must be refused with usage, got %d", code)
 	}
 }
 

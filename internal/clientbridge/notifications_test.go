@@ -9,10 +9,10 @@ import (
 	"time"
 )
 
-// D3's producer: the bridge reads the rig orchestrator rows addressed to a rig's human and posts ONE
+// D3's producer: the bridge reads the room orchestrator rows addressed to a room's human and posts ONE
 // notification frame per row. These cases drive the sweep through the package's own seams - the local
 // tools are fixtures behind Runner, the notification transport is a script of answers - so nothing
-// here touches a rig, a seat or a network, and nothing sleeps.
+// here touches a room, a seat or a network, and nothing sleeps.
 
 // fixtureHumanQueue is one human-addressed row in the shape `rig queue list --json` prints.
 const fixtureHumanQueue = `[{"qitemId":"qitem-20261010120000-aaaa1111","state":"pending",` +
@@ -33,15 +33,15 @@ func decodeFrame(t *testing.T, raw []byte) (map[string]any, map[string]any) {
 	return frame, data
 }
 
-// TestHumanDestinationAddressesTheRig pins the address form the daemon's store really uses, because
-// the whole read depends on it: human@<rig name> (measured against a live store, one entry per rig).
-func TestHumanDestinationAddressesTheRig(t *testing.T) {
+// TestHumanDestinationAddressesTheRoom pins the address form the daemon's store really uses, because
+// the whole read depends on it: human@<room name> (measured against a live store, one entry per room).
+func TestHumanDestinationAddressesTheRoom(t *testing.T) {
 	if got := HumanDestination("room-a"); got != "human@room-a" {
 		t.Fatalf("HumanDestination(room-a) = %q, want human@room-a", got)
 	}
 }
 
-// TestListingParsersAcceptBothShapes: the rig tool prints a bare list, and its JSON may arrive wrapped
+// TestListingParsersAcceptBothShapes: the room tool prints a bare list, and its JSON may arrive wrapped
 // as {"items": [...]}; a reader that understood only one of them would silently see no rows.
 func TestListingParsersAcceptBothShapes(t *testing.T) {
 	for name, output := range map[string]string{

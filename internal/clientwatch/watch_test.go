@@ -15,7 +15,7 @@ import (
 )
 
 // The verb behaviour: the grid, the input panes, the lead window, and the refusals - all with the exec
-// seam faked, so nothing here needs herdr, tmux, a rig or a seat.
+// seam faked, so nothing here needs herdr, tmux, a room or a seat.
 
 func runWatchT(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
@@ -135,12 +135,12 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	sends := 0
 	// THE INVARIANT THIS ARM EXISTS FOR: a typed line is DELIVERED IN PROCESS, and not by starting a
 	// process. The shape this replaces ran `rig send <composed name>`, which after this client's rename
-	// is a self-call, and it invented the session name from a convention (`{rig}-{seat}@{rig}`) instead
+	// is a self-call, and it invented the session name from a convention (`{room}-{seat}@{room}`) instead
 	// of reading it from the seat's record - the same defect the SEAT shape's send path records as fixed.
 	var delivered []string
 	previousSend := sendLine
-	sendLine = func(_ context.Context, rig, seat, text string) error {
-		delivered = append(delivered, rig+"/"+seat+": "+text)
+	sendLine = func(_ context.Context, room, seat, text string) error {
+		delivered = append(delivered, room+"/"+seat+": "+text)
 		return nil
 	}
 	t.Cleanup(func() { sendLine = previousSend })
@@ -152,10 +152,10 @@ func TestATypedLineIsSentToItsSeatAndHideLeavesTheLoop(t *testing.T) {
 	}
 	for _, call := range fake.callsOf("rig") {
 		sends++
-		t.Errorf("the loop started a rig process: %s", strings.Join(call, " "))
+		t.Errorf("the loop started a room process: %s", strings.Join(call, " "))
 	}
 	if sends != 0 {
-		t.Errorf("rig processes = %d, want 0: the line must be delivered in process", sends)
+		t.Errorf("room processes = %d, want 0: the line must be delivered in process", sends)
 	}
 	if len(delivered) != 1 || delivered[0] != "r/lead: hello there" {
 		t.Errorf("delivered = %v, want exactly the one line to r/lead (the /hide line must not be sent)", delivered)
@@ -186,14 +186,14 @@ var testStateRoot string
 // (<root>/rooms/<room>/seats/<seat>, the layout `4genteam up` leaves), so a verb that resolves a room from
 // --room has a machine to resolve it on. It is what the existence check reads and not the live sessions: a
 // room whose seats are all stopped is still a room.
-func withSeatStore(t *testing.T, rig string, seats ...string) string {
+func withSeatStore(t *testing.T, room string, seats ...string) string {
 	t.Helper()
 	root := withStateRoot(t)
-	if err := os.MkdirAll(filepath.Join(root, "rooms", rig), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "rooms", room), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, seat := range seats {
-		if err := os.MkdirAll(filepath.Join(root, "rooms", rig, "seats", seat), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, "rooms", room, "seats", seat), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -330,7 +330,7 @@ func TestWatchOpensTheGridAndALeadWindowWithItsInput(t *testing.T) {
 // take --room go through the ONE check, which is how grid, watch and inputs are covered here: they drive
 // herdr, and herdr must not be opened from a seat's terminal, so they are covered by construction
 // rather than by a live probe.
-func TestAnUnknownRoomRefusesEveryVerbThatTakesRig(t *testing.T) {
+func TestAnUnknownRoomRefusesEveryVerbThatTakesRoom(t *testing.T) {
 	for _, verb := range []string{"feed", "grid", "watch", "inputs", "input"} {
 		t.Run(verb, func(t *testing.T) {
 			fake := newFakeExec(t)
@@ -397,7 +397,7 @@ func TestARealRoomWithNoLiveSeatsStillStreams(t *testing.T) {
 }
 
 // The doc says "Always pass --room; there is no default room" - so every verb refuses without one.
-func TestRigIsRequiredForEveryVerb(t *testing.T) {
+func TestRoomIsRequiredForEveryVerb(t *testing.T) {
 	installBareSeam(t)
 	for _, args := range [][]string{
 		{},
@@ -642,26 +642,26 @@ func installBareSeam(t *testing.T) {
 	newFakeExec(t)
 }
 
-// TestSmokeFeedReadsTheLiveRig is the phase's SMOKE, kept reproducible: it needs this machine's tmux
+// TestSmokeFeedReadsTheLiveRoom is the phase's SMOKE, kept reproducible: it needs this machine's tmux
 // seats and omp state root, so it skips unless the two variables are set. It is the only test here that
 // touches the real machine - every other test in this package runs against the fake seam.
 //
-//	WATCH_SMOKE_ROOT=~/.config/4genthub WATCH_SMOKE_RIG=<rig> go test ./internal/clientwatch/ -run Smoke -v
-func TestSmokeFeedReadsTheLiveRig(t *testing.T) {
+//	WATCH_SMOKE_ROOT=~/.config/4genthub WATCH_SMOKE_ROOM=<room> go test ./internal/clientwatch/ -run Smoke -v
+func TestSmokeFeedReadsTheLiveRoom(t *testing.T) {
 	root := os.Getenv("WATCH_SMOKE_ROOT")
-	rig := os.Getenv("WATCH_SMOKE_RIG")
-	if root == "" || rig == "" {
-		t.Skip("set WATCH_SMOKE_ROOT and WATCH_SMOKE_RIG to smoke the live view")
+	room := os.Getenv("WATCH_SMOKE_ROOM")
+	if root == "" || room == "" {
+		t.Skip("set WATCH_SMOKE_ROOT and WATCH_SMOKE_ROOM to smoke the live view")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	out := &strings.Builder{}
-	if err := runFeed(ctx, shared{rig: rig, stateRoot: root, back: 2, width: 120, lines: 3, detail: true}, out); err != nil {
+	if err := runFeed(ctx, shared{room: room, stateRoot: root, back: 2, width: 120, lines: 3, detail: true}, out); err != nil {
 		t.Fatalf("feed: %v", err)
 	}
 	captured := splitLines(out.String())
-	t.Logf("feed captured %d line(s) from %s in %s", len(captured), rig, root)
+	t.Logf("feed captured %d line(s) from %s in %s", len(captured), room, root)
 	for index, line := range captured {
 		if index >= 12 {
 			break
@@ -669,7 +669,7 @@ func TestSmokeFeedReadsTheLiveRig(t *testing.T) {
 		t.Logf("  %s", line)
 	}
 	if len(captured) == 0 {
-		t.Errorf("the feed rendered nothing; the smoke is only meaningful with a live rig")
+		t.Errorf("the feed rendered nothing; the smoke is only meaningful with a live room")
 	}
 }
 

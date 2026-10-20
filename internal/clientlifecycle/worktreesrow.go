@@ -69,14 +69,14 @@ func worktreeLines(row worktreesRow) []string {
 var worktreesRowFor = worktreesRows
 
 // worktreesRows computes the `worktrees` row of every room the report covers.
-func worktreesRows(rig, root string) []worktreesRow {
-	// The rigs a report covers are agent.json's list, the same list the safeguard rows read (7.9), so
+func worktreesRows(room, root string) []worktreesRow {
+	// The rooms a report covers are agent.json's list, the same list the safeguard rows read (7.9), so
 	// the two row families cannot disagree about which rooms exist. A failed read leaves it empty, as a
 	// machine whose agent never ran does; the row then says so in its note rather than inventing a room.
 	state, _ := clientservices.ReadAgentState()
-	rigs := reportedRigs(state.Rigs, rig)
-	rows := make([]worktreesRow, 0, len(rigs))
-	for _, name := range rigs {
+	rooms := reportedRooms(state.Rooms, room)
+	rows := make([]worktreesRow, 0, len(rooms))
+	for _, name := range rooms {
 		rows = append(rows, worktreesRowOf(name, root))
 	}
 	return rows
@@ -87,7 +87,7 @@ func worktreesRows(rig, root string) []worktreesRow {
 // no answer to give.
 func worktreesRowOf(name, root string) worktreesRow {
 	row := worktreesRow{Row: clientservices.Health{
-		Rig:       name,
+		Room:      name,
 		Safeguard: clientservices.Worktrees,
 		State:     clientservices.Running,
 		AgeS:      clientservices.UnknownAge,
@@ -156,7 +156,7 @@ func derivedPaths(worktrees []clientservices.Worktree) []string {
 	return paths
 }
 
-// worktreeRoomDir is a room's own directory, the one `rigLaunchSpec` calls roomDir, and it is
+// worktreeRoomDir is a room's own directory, the one `roomLaunchSpec` calls roomDir, and it is
 // clientworktree.RoomDir: the ONE resolution, the same function the two worktree verbs call, so `up`,
 // `doctor` and the verbs cannot disagree about where a room is. It stays a variable so a case drives the
 // row without the machine's store; it takes its value at package init, so a case that redirects the row

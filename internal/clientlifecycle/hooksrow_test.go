@@ -109,8 +109,8 @@ func TestTheHooksRowNamesTheFolderAndTheGuard(t *testing.T) {
 	if row.Row.State != clientservices.Running {
 		t.Errorf("state = %q, want %q", row.Row.State, clientservices.Running)
 	}
-	if row.Row.Rig != "" {
-		t.Errorf("rig = %q, want the machine's row to carry no rig", row.Row.Rig)
+	if row.Row.Room != "" {
+		t.Errorf("room = %q, want the machine's row to carry no room", row.Row.Room)
 	}
 	if len(hooksReasonLines(row)) != 0 {
 		t.Errorf("reasons = %v, want none while the guard is in force", hooksReasonLines(row))

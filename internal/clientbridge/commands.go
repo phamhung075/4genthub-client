@@ -29,7 +29,7 @@ func Commands() []clientcmd.Command {
 type bridgeCommand struct{}
 
 func (bridgeCommand) Name() string    { return "bridge" }
-func (bridgeCommand) Summary() string { return "report this machine and its rigs to the cloud" }
+func (bridgeCommand) Summary() string { return "report this machine and its rooms to the cloud" }
 
 func (c bridgeCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -255,7 +255,7 @@ func bridgeInstallService(stdout, stderr io.Writer) int {
 		return clientcmd.ExitRemote
 	}
 	_, _ = fmt.Fprintf(stdout, `[Unit]
-Description=4genthub the rig orchestrator status bridge
+Description=4genthub the room orchestrator status bridge
 After=network-online.target
 
 [Service]

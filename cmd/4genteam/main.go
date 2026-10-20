@@ -187,5 +187,5 @@ func usage(w io.Writer) {
 		_, _ = io.WriteString(w, "  "+cmd.Name()+"\t"+cmd.Summary()+"\n")
 	}
 	_, _ = io.WriteString(w, "  version\tthe client's own version\n")
-	_, _ = io.WriteString(w, "\nA command that needs rig and cannot reach it exits non-zero with the reason; nothing downgrades silently.\n")
+	_, _ = io.WriteString(w, "\nA command that needs room and cannot reach it exits non-zero with the reason; nothing downgrades silently.\n")
 }

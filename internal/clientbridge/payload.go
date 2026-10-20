@@ -1,10 +1,10 @@
 // Package clientbridge is the Go home of the retired Python bridge script: it reports THIS machine and its
-// rigs to the cloud. It is the half of the one-client consolidation that talks outward, and it is
+// rooms to the cloud. It is the half of the one-client consolidation that talks outward, and it is
 // deliberately built the same way the Python was - one allow-list builder, one payload shape, one
 // place that starts a local tool - so the parity test can compare them field by field.
 //
 // WHAT LEAVES THIS MACHINE IS AN ALLOW-LIST, NOT A COPY. Every outgoing object is built by naming its
-// fields here; nothing is marshalled straight off the rig orchestrator structures, so a new field in
+// fields here; nothing is marshalled straight off the room orchestrator structures, so a new field in
 // `rig ps` cannot become a new field in a report by accident.
 package clientbridge
 
@@ -21,7 +21,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
 
-// The states and runtimes a report may carry. Anything else reads `unknown`, so an the rig orchestrator value
+// The states and runtimes a report may carry. Anything else reads `unknown`, so an the room orchestrator value
 // this client has not seen is reported as unknown rather than passed through.
 var (
 	seatStates    = map[string]bool{"running": true, "idle": true, "blocked": true, "stopped": true, "unknown": true}
@@ -92,14 +92,14 @@ func dict(value any) map[string]any {
 	return map[string]any{}
 }
 
-// SeatState maps one the rig orchestrator node to the four states the cloud accepts. The rules are the Python
+// SeatState maps one the room orchestrator node to the four states the cloud accepts. The rules are the Python
 // ones, kept whole because each had a measurement behind it:
 //
 //   - a stopped or exited session, or a detached/recoverable lifecycle, is stopped;
 //   - a live session whose runtime hook is gone reads stopped (agent died outside `rig seat stop`),
 //     which the reason discriminates - and the reason is runtime-dependent, which is why the
 //     respawn path requires the reading to hold rather than acting on one sample;
-//   - `attention_required` is deliberately NOT blocked: the rig orchestrator uses it for a dead agent AND a busy
+//   - `attention_required` is deliberately NOT blocked: the room orchestrator uses it for a dead agent AND a busy
 //     seat, so it cannot tell them apart and the agent's own activity is the truth source;
 //   - needs_input, or a failed/attention-required startup, is blocked.
 func SeatState(node map[string]any) string {
@@ -123,7 +123,7 @@ func SeatState(node map[string]any) string {
 	return "unknown"
 }
 
-// SeatName is the member id of a node: the rig orchestrator ids never contain a dot, so "<pod>.<member>" splits
+// SeatName is the member id of a node: the room orchestrator ids never contain a dot, so "<pod>.<member>" splits
 // at the first one.
 func SeatName(node map[string]any) string {
 	logical := str(node["logicalId"])
@@ -205,15 +205,15 @@ func DuplicateMessage(room, seat string, pods []string) string {
 	}
 	sortStrings(names)
 	if len(names) == 1 {
-		return fmt.Sprintf("seat '%s' in rig %s is listed twice in pod %s; rename one", seat, room, names[0])
+		return fmt.Sprintf("seat '%s' in room %s is listed twice in pod %s; rename one", seat, room, names[0])
 	}
-	return fmt.Sprintf("seat '%s' in rig %s exists in pods %s and %s; rename one",
+	return fmt.Sprintf("seat '%s' in room %s exists in pods %s and %s; rename one",
 		seat, room, strings.Join(names[:len(names)-1], ", "), names[len(names)-1])
 }
 
-// BuildSeats turns the rig orchestrator nodes into reported seats. It returns the seats, how many nodes had a name
+// BuildSeats turns the room orchestrator nodes into reported seats. It returns the seats, how many nodes had a name
 // this client will not report, and one message per duplicated seat key - the duplicates are warned
-// about rather than dropped, because a seat listed twice in a rig is something a human must fix.
+// about rather than dropped, because a seat listed twice in a room is something a human must fix.
 //
 // A seat whose pin could not be read ends the build with an error naming the seat and the file (7.12): the
 // report is all-or-nothing, because a seat sent with an empty hash is a seat the server records as
@@ -227,7 +227,7 @@ func BuildSeats(nodes []any, known map[string]string, pinsDir string, stripDetai
 	invalid := 0
 	for _, raw := range nodes {
 		node := dict(raw)
-		room, seat := str(node["rigName"]), SeatName(node)
+		room, seat := str(node["roomName"]), SeatName(node)
 		if !namePattern.MatchString(room) || !namePattern.MatchString(seat) {
 			invalid++
 			continue

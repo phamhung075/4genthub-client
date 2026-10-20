@@ -1,4 +1,4 @@
-// Package clientservices is the client's health report: ONE row per safeguard per rig, computed from
+// Package clientservices is the client's health report: ONE row per safeguard per room, computed from
 // the heartbeat files and the process table, exactly as section 7.2 of
 // ai_docs/core-architecture/agent-boundaries.md rules.
 //
@@ -14,10 +14,10 @@
 //  2. HEARTBEAT. A live process whose heartbeat is older than its threshold (7.4), or whose heartbeat
 //     pid is not the live pid, is silent.
 //  3. LOG TIMESTAMPS ARE NEVER AUTHORITATIVE. The compaction supervisor logs only when it acts, so on a
-//     quiet rig a healthy supervisor writes nothing and its log age proves nothing.
+//     quiet room a healthy supervisor writes nothing and its log age proves nothing.
 //
 // The package also owns the two file conventions the report stands on - the heartbeat files
-// (<LogDir>/heartbeat/<safeguard>-<rig>.json) and agent's local state file (agent.json) - and the log
+// (<LogDir>/heartbeat/<safeguard>-<room>.json) and agent's local state file (agent.json) - and the log
 // directory itself, so a child in any other package can write a beat without copying the XDG rule.
 package clientservices
 
@@ -46,7 +46,6 @@ const (
 	Budget = "budget"
 	Bridge = "bridge"
 	Agent  = "agent"
-	Rigd   = "rigd"
 	// OrphanHandoffs is 7.11's row about WORK rather than about a child: the pending handoffs whose
 	// destination seat is not running. It carries no process, so its rows have no pid and no heartbeat.
 	OrphanHandoffs = "orphan_handoffs"
@@ -97,7 +96,7 @@ const (
 	// SECONDS, which is the documented default.
 	WatchdogInterval = 60 * time.Second
 	// MessagesEvery is the seat deliverer's pass interval, 10 s: one pass over every running seat of one
-	// rig, then one heartbeat, then this sleep - the cast of `sync messages --room R --watch`.
+	// room, then one heartbeat, then this sleep - the cast of `sync messages --room R --watch`.
 	MessagesEvery = 10 * time.Second
 	// RoomGuardEvery is the idle guard's pass interval, 30 s.
 	RoomGuardEvery = 30 * time.Second
@@ -110,31 +109,31 @@ const (
 	AgentHeartbeat = 25 * time.Second
 )
 
-// Safeguards is the list a report walks: the rig-scoped rows first, then the two machine-scoped rows.
-// One bridge per machine and one agent per machine, which is why those two carry no rig.
+// Safeguards is the list a report walks: the room-scoped rows first, then the two machine-scoped rows.
+// One bridge per machine and one agent per machine, which is why those two carry no room.
 func Safeguards() []string {
 	return []string{Compact, Watchdog, Messages, RoomGuard, Budget, Bridge, Agent}
 }
 
-// RigScoped reports whether a safeguard runs once per rig rather than once per machine. It decides both
-// the heartbeat file's name and whether the row carries a rig at all.
-func RigScoped(safeguard string) bool {
+// RoomScoped reports whether a safeguard runs once per room rather than once per machine. It decides both
+// the heartbeat file's name and whether the row carries a room at all.
+func RoomScoped(safeguard string) bool {
 	return safeguard == Compact || safeguard == Watchdog || safeguard == Messages || safeguard == RoomGuard ||
 		safeguard == Budget
 }
 
-// Scope is WHERE a service runs: once per MACHINE, or once per RIG. It is 7.8's second column, and
-// RigScoped answers the same question for the safeguard rows: the table below carries the answer as DATA,
+// Scope is WHERE a service runs: once per MACHINE, or once per ROOM. It is 7.8's second column, and
+// RoomScoped answers the same question for the safeguard rows: the table below carries the answer as DATA,
 // and a test holds the table and that predicate together so the heartbeat file's name cannot come from one
-// answer while the row's rig comes from the other.
+// answer while the row's room comes from the other.
 type Scope string
 
 const (
 	// Machine is one service for the whole machine: one bridge, one agent.
 	Machine Scope = "machine"
-	// Rig is one service per rig: the compaction supervisor, the watchdog, the seat deliverer, the idle-room
+	// Room is one service per room: the compaction supervisor, the watchdog, the seat deliverer, the idle-room
 	// guard and the budget guard.
-	Rig Scope = "rig"
+	Room Scope = "rig"
 )
 
 // Service is one row of 7.8: a thing that must run, where it runs, how it starts, how it is checked, and
@@ -146,8 +145,8 @@ const (
 // ruling: clientservices imports no lifecycle or restore package, so a start body can only be a
 // package-level seam var that the command layer assigns, and a row with no seam yet carries nil.
 //
-// Check is the row's report. A scope-Rig row's Check is handed an Env whose Rigs holds exactly the one rig
-// it is for (Env.forRig); a scope-Machine row is handed the caller's env as it is and reads no rig.
+// Check is the row's report. A scope-Room row's Check is handed an Env whose Rooms holds exactly the one room
+// it is for (Env.forRoom); a scope-Machine row is handed the caller's env as it is and reads no room.
 type Service struct {
 	Name      string
 	Scope     Scope
@@ -156,30 +155,30 @@ type Service struct {
 	RestartBy string
 }
 
-// Obligatory is 7.8's table, in the report's own order: the rig-scoped rows per rig first, then the two
+// Obligatory is 7.8's table, in the report's own order: the room-scoped rows per room first, then the two
 // machine-scoped rows. The order is data rather than a comment because Verify walks it: a table whose
 // literal order drifts from the report's prints a report nobody asked for, so a test asserts the order.
 var Obligatory = []Service{
-	{Name: Compact, Scope: Rig, Check: safeguardCheck(Compact), RestartBy: Agent},
-	{Name: Watchdog, Scope: Rig, Check: safeguardCheck(Watchdog), RestartBy: Agent},
-	{Name: Messages, Scope: Rig, Check: safeguardCheck(Messages), RestartBy: Agent},
-	{Name: RoomGuard, Scope: Rig, Check: safeguardCheck(RoomGuard), RestartBy: Agent},
-	{Name: Budget, Scope: Rig, Check: safeguardCheck(Budget), RestartBy: Agent},
+	{Name: Compact, Scope: Room, Check: safeguardCheck(Compact), RestartBy: Agent},
+	{Name: Watchdog, Scope: Room, Check: safeguardCheck(Watchdog), RestartBy: Agent},
+	{Name: Messages, Scope: Room, Check: safeguardCheck(Messages), RestartBy: Agent},
+	{Name: RoomGuard, Scope: Room, Check: safeguardCheck(RoomGuard), RestartBy: Agent},
+	{Name: Budget, Scope: Room, Check: safeguardCheck(Budget), RestartBy: Agent},
 	{Name: Bridge, Scope: Machine, Check: safeguardCheck(Bridge), RestartBy: Agent},
 	// Nothing LOCAL restarts agent: `up` starts it, and its own death is reported rather than repaired.
 	{Name: Agent, Scope: Machine, Check: safeguardCheck(Agent), RestartBy: ""},
 }
 
 // safeguardCheck binds one row's name to the precedence of 7.2, which is verifyRow: the table holds the
-// check as a function, and the function is exactly the computation every reader already had. The rig comes
-// from the env the walk hands it (Env.forRig), and a machine-scoped name reads none.
+// check as a function, and the function is exactly the computation every reader already had. The room comes
+// from the env the walk hands it (Env.forRoom), and a machine-scoped name reads none.
 func safeguardCheck(name string) func(context.Context, Env) (Health, error) {
 	return func(_ context.Context, env Env) (Health, error) {
-		rig := ""
-		if RigScoped(name) && len(env.Rigs) > 0 {
-			rig = env.Rigs[0]
+		room := ""
+		if RoomScoped(name) && len(env.Rooms) > 0 {
+			room = env.Rooms[0]
 		}
-		return verifyRow(env, name, rig)
+		return verifyRow(env, name, room)
 	}
 }
 
@@ -211,21 +210,21 @@ func DefaultSilentAfter(safeguard string) time.Duration {
 }
 
 // Pattern is the command line that identifies a safeguard's process, as `pgrep -f` takes it. The
-// rig-scoped patterns name the rig, so a report for one rig can never be answered by another rig's
+// room-scoped patterns name the room, so a report for one room can never be answered by another room's
 // child; the machine patterns are anchored to the start of the command line so a shell or an editor
 // whose text merely contains them is not mistaken for the process.
-func Pattern(safeguard, rig string) string {
+func Pattern(safeguard, room string) string {
 	switch safeguard {
 	case Compact:
-		return "compact-run --room " + rig
+		return "compact-run --room " + room
 	case Watchdog:
-		return "^[^ ]*4genteam watchdog " + rig + " --watch"
+		return "^[^ ]*4genteam watchdog " + room + " --watch"
 	case RoomGuard:
-		return "^[^ ]*4genteam idle-run --room " + rig
+		return "^[^ ]*4genteam idle-run --room " + room
 	case Budget:
-		return "^[^ ]*4genteam budget-run --room " + rig
+		return "^[^ ]*4genteam budget-run --room " + room
 	case Messages:
-		return "^[^ ]*4genteam sync messages --room " + rig + " --watch"
+		return "^[^ ]*4genteam sync messages --room " + room + " --watch"
 	case Bridge:
 		return "^[^ ]*4genteam bridge run"
 	case Agent:
@@ -258,12 +257,12 @@ func HeartbeatDir(root string) string {
 	return filepath.Join(LogDir(root), "heartbeat")
 }
 
-// HeartbeatPath is one child's heartbeat file: <root>/logs/heartbeat/<safeguard>-<rig>.json, and
+// HeartbeatPath is one child's heartbeat file: <root>/logs/heartbeat/<safeguard>-<room>.json, and
 // <safeguard>.json for the two machine-scoped safeguards - 7.2 names agent's own file `agent.json`.
-func HeartbeatPath(root, safeguard, rig string) string {
+func HeartbeatPath(root, safeguard, room string) string {
 	name := safeguard
-	if rig != "" {
-		name = safeguard + "-" + rig
+	if room != "" {
+		name = safeguard + "-" + room
 	}
 	return filepath.Join(HeartbeatDir(root), name+".json")
 }
@@ -293,8 +292,8 @@ var WriteHeartbeat = writeHeartbeatFile
 // 0600, not 0644: a heartbeat is state under the state root like any other file there, and an explicit mode is
 // the one thing the process umask (`clientenv.RestrictUmask`) cannot clamp - 0644 here stayed 0644 whatever the
 // umask said. Measured 2026-10-16: the guard heartbeats were world-readable with everything else.
-func writeHeartbeatFile(root, safeguard, rig string) error {
-	path := HeartbeatPath(root, safeguard, rig)
+func writeHeartbeatFile(root, safeguard, room string) error {
+	path := HeartbeatPath(root, safeguard, room)
 	body, err := json.Marshal(Heartbeat{PID: os.Getpid(), At: Now().UTC()})
 	if err != nil {
 		return err
@@ -324,8 +323,8 @@ func writeHeartbeatFile(root, safeguard, rig string) error {
 
 // ReadHeartbeat reads a child's last beat. A missing or unreadable file answers false, which the report
 // reads as "no beat": never as a fresh one - an unreadable beat must not look like a live child.
-func ReadHeartbeat(root, safeguard, rig string) (Heartbeat, bool) {
-	path := HeartbeatPath(root, safeguard, rig)
+func ReadHeartbeat(root, safeguard, room string) (Heartbeat, bool) {
+	path := HeartbeatPath(root, safeguard, room)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Heartbeat{}, false
@@ -387,14 +386,14 @@ func Probe() error {
 	return nil
 }
 
-// Health is ONE row of 7.2, and the field set is the ruling's exactly: rig, safeguard, state, pid,
+// Health is ONE row of 7.2, and the field set is the ruling's exactly: room, safeguard, state, pid,
 // started_at, restarts, last_beat_at, age_s. Nothing else is added, because a reader that has to know
 // which of two sources a field came from cannot use the row.
 //
 // age_s is -1 when there is no heartbeat at all: an age that has no measurement is reported as unknown
 // rather than as zero, which would read as a beat that just arrived.
 type Health struct {
-	Rig        string `json:"rig"`
+	Room       string `json:"room"`
 	Safeguard  string `json:"safeguard"`
 	State      string `json:"state"`
 	PID        int    `json:"pid"`
@@ -407,19 +406,19 @@ type Health struct {
 // UnknownAge is the age_s of a row whose safeguard has no heartbeat file to measure.
 const UnknownAge = -1
 
-// Env is what a caller supplies to Verify: the rigs agent supervises, what agent recorded about them, and
+// Env is what a caller supplies to Verify: the rooms agent supervises, what agent recorded about them, and
 // the silence thresholds to judge with. Everything else the report needs it reads itself - the heartbeat
 // files, the process table and the clock - because those are the three sources the ruling names.
 type Env struct {
 	// Root is the state root the caller resolved: the heartbeat files are read under it and nowhere
 	// else, so a reader pointed at another tree reports that tree.
 	Root string
-	// Rigs are the rigs of agent.json's `rigs` list: the rooms that are meant to run. A rig not in the
+	// Rooms are the rooms of agent.json's `rooms` list: the rooms that are meant to run. A room not in the
 	// list is stopped on purpose and has no report.
-	Rigs []string
+	Rooms []string
 	// Supervised is agent's own record, from agent.json: the fields pgrep and a heartbeat CANNOT know -
 	// restarts, started_at, and the failing state a restart loop decides. A row is matched by
-	// (safeguard, rig).
+	// (safeguard, room).
 	Supervised []Health
 	// Thresholds overrides 7.4's per-safeguard defaults. agent fills it from the flags it launched each
 	// child with; `doctor`, which has no launch flags, leaves it empty and gets the defaults.
@@ -433,9 +432,9 @@ func (e Env) threshold(safeguard string) time.Duration {
 	return DefaultSilentAfter(safeguard)
 }
 
-func (e Env) recorded(safeguard, rig string) (Health, bool) {
+func (e Env) recorded(safeguard, room string) (Health, bool) {
 	for _, row := range e.Supervised {
-		if row.Safeguard == safeguard && row.Rig == rig {
+		if row.Safeguard == safeguard && row.Room == room {
 			return row, true
 		}
 	}
@@ -456,22 +455,22 @@ func Verify(ctx context.Context, env Env) ([]Health, error) {
 	_ = ctx
 	size := 0
 	for _, service := range Obligatory {
-		if service.Scope == Rig {
-			size += len(env.Rigs)
+		if service.Scope == Room {
+			size += len(env.Rooms)
 			continue
 		}
 		size++
 	}
 	rows := make([]Health, 0, size)
-	// RIG-MAJOR, not service-major: a reader comparing two rooms wants each room's rows together, so the
-	// outer walk is the rigs and the inner walk is the table. The table's own order still decides where each
-	// row sits inside a rig, and where the two machine rows sit after every rig's.
-	for _, rig := range env.Rigs {
+	// ROOM-MAJOR, not service-major: a reader comparing two rooms wants each room's rows together, so the
+	// outer walk is the rooms and the inner walk is the table. The table's own order still decides where each
+	// row sits inside a room, and where the two machine rows sit after every room's.
+	for _, room := range env.Rooms {
 		for _, service := range Obligatory {
-			if service.Scope != Rig {
+			if service.Scope != Room {
 				continue
 			}
-			row, err := service.Check(ctx, env.forRig(rig))
+			row, err := service.Check(ctx, env.forRoom(room))
 			if err != nil {
 				return nil, err
 			}
@@ -491,24 +490,24 @@ func Verify(ctx context.Context, env Env) ([]Health, error) {
 	return rows, nil
 }
 
-// forRig is the env Verify hands a rig-scoped row: the same env, carrying the one rig that row is for. The
+// forRoom is the env Verify hands a room-scoped row: the same env, carrying the one room that row is for. The
 // slice is replaced on a COPY of the struct, so the caller's own env is untouched. This is the only channel
 // by which a table row learns which rig it is reporting on, because Service.Check takes the env and nothing
 // else.
-func (e Env) forRig(rig string) Env {
-	e.Rigs = []string{rig}
+func (e Env) forRoom(room string) Env {
+	e.Rooms = []string{room}
 	return e
 }
 
 // verifyRow is the precedence of 7.2, once, for one safeguard. A probe that could not run answers an
 // error rather than a row: there is no verdict to report when the process reading it starts from is
 // missing (7.12).
-func verifyRow(env Env, safeguard, rig string) (Health, error) {
-	row := Health{Rig: rig, Safeguard: safeguard, AgeS: UnknownAge}
-	if recorded, ok := env.recorded(safeguard, rig); ok {
+func verifyRow(env Env, safeguard, room string) (Health, error) {
+	row := Health{Room: room, Safeguard: safeguard, AgeS: UnknownAge}
+	if recorded, ok := env.recorded(safeguard, room); ok {
 		row.StartedAt, row.Restarts = recorded.StartedAt, recorded.Restarts
 	}
-	beat, hasBeat := ReadHeartbeat(env.Root, safeguard, rig)
+	beat, hasBeat := ReadHeartbeat(env.Root, safeguard, room)
 	age := time.Duration(0)
 	if hasBeat {
 		age = Now().Sub(beat.At)
@@ -516,7 +515,7 @@ func verifyRow(env Env, safeguard, rig string) (Health, error) {
 		row.AgeS = int(age.Seconds())
 		row.PID = beat.PID
 	}
-	live, err := Live(Pattern(safeguard, rig))
+	live, err := Live(Pattern(safeguard, room))
 	if err != nil {
 		return Health{}, err
 	}
@@ -526,7 +525,7 @@ func verifyRow(env Env, safeguard, rig string) (Health, error) {
 	// while it is momentarily alive, rather than reading `running` until the next death. The dead case
 	// keeps its own branch below, where a dead-and-failing row still reads failing.
 	if len(live) > 0 {
-		if recorded, ok := env.recorded(safeguard, rig); ok && recorded.State == Failing {
+		if recorded, ok := env.recorded(safeguard, room); ok && recorded.State == Failing {
 			row.State = Failing
 			row.PID = live[0]
 			return row, nil
@@ -537,7 +536,7 @@ func verifyRow(env Env, safeguard, rig string) (Health, error) {
 		// The PROCESS decides, and a dead process is stopped whatever its heartbeat says. `failing` is
 		// the one state only agent can decide: it counted the deaths.
 		row.State = Stopped
-		if recorded, ok := env.recorded(safeguard, rig); ok && recorded.State == Failing {
+		if recorded, ok := env.recorded(safeguard, room); ok && recorded.State == Failing {
 			row.State = Failing
 		}
 	case !hasBeat:
@@ -558,14 +557,14 @@ func verifyRow(env Env, safeguard, rig string) (Health, error) {
 	return row, nil
 }
 
-// StateLine is one row as the operator reads it: `<rig> <safeguard>: <state>, age <n>s`, which is the
+// StateLine is one row as the operator reads it: `<room> <safeguard>: <state>, age <n>s`, which is the
 // line 7.5 requires `doctor` to print on stderr for every row that is not running.
 //
-// The two machine-scoped safeguards carry no rig, and the line then names the safeguard alone rather
+// The two machine-scoped safeguards carry no room, and the line then names the safeguard alone rather
 // than opening with a space. A row with no heartbeat prints `age unknown` instead of `age 0s`, because
 // zero is a measurement and this is the absence of one.
 func StateLine(row Health) string {
-	name := strings.TrimSpace(row.Rig + " " + row.Safeguard)
+	name := strings.TrimSpace(row.Room + " " + row.Safeguard)
 	age := fmt.Sprintf("%ds", row.AgeS)
 	if row.AgeS == UnknownAge {
 		age = "unknown"

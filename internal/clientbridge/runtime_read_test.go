@@ -49,12 +49,12 @@ func fakeRuntimeSocket(t *testing.T, handler func(line string) string) {
 	t.Setenv(clientruntime.RuntimeSocketEnv, sock)
 }
 
-// TestRuntimeNodesAreTheSeatsEveryHostedRoomReports: the room is both the rig id and the rig name, the
+// TestRuntimeNodesAreTheSeatsEveryHostedRoomReports: the room is both the room id and the room name, the
 // seat's own diagnostic text arrives as the node's latestError, and the activity word is the node's.
 func TestRuntimeNodesAreTheSeatsEveryHostedRoomReports(t *testing.T) {
 	fakeRuntimeSocket(t, func(string) string {
 		return `{"ok":true,"data":[{"canonicalSessionName":"lab-dev@lab","sessionName":"agenthub--lab--dev",` +
-			`"rigName":"lab","logicalId":"lab.dev","runtime":"omp","sessionStatus":"running",` +
+			`"roomName":"lab","logicalId":"lab.dev","runtime":"omp","sessionStatus":"running",` +
 			`"agentActivity":{"state":"needs_input"},"detail":"waiting on a dialog"}]}` + "\n"
 	})
 	nodes, err := runtimeNodes()
@@ -72,8 +72,8 @@ func TestRuntimeNodesAreTheSeatsEveryHostedRoomReports(t *testing.T) {
 	if got.Room != "lab" || got.Seat != "dev" || got.State != "blocked" || got.Runtime != "omp" || got.Detail != "waiting on a dialog" {
 		t.Fatalf("seat = %+v, want lab/dev blocked on omp carrying its detail", got)
 	}
-	if rooms := RigRooms(nodes); !reflect.DeepEqual(rooms, []rigRoom{{"lab", "lab"}}) {
-		t.Fatalf("rooms = %v, want the room as its own rig id", rooms)
+	if rooms := Rooms(nodes); !reflect.DeepEqual(rooms, []reportedRoom{{"lab", "lab"}}) {
+		t.Fatalf("rooms = %v, want the room as its own room id", rooms)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestRuntimeLinksAreTheRoomsDeclaredEdges(t *testing.T) {
 	if !strings.Contains(asked, `"GetRoomLinks"`) || !strings.Contains(asked, `"room":"lab"`) {
 		t.Fatalf("frame = %q, want GetRoomLinks for room lab", asked)
 	}
-	if want := []rigEdge{{"dev", "qa", "delegates_to"}}; !reflect.DeepEqual(edges, want) {
+	if want := []roomEdge{{"dev", "qa", "delegates_to"}}; !reflect.DeepEqual(edges, want) {
 		t.Fatalf("edges = %v, want %v", edges, want)
 	}
 }

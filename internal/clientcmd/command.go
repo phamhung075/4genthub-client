@@ -33,7 +33,7 @@ const (
 	// the retired Python seat client: EXIT_BEHIND = 4 - the first draft of the Go status core used 1, and the
 	// verification its own comment asked for caught it.
 	ExitBehind = 4
-	// ExitRemote is a failure talking to the cloud or to the rig: the verb ran and the remote did not
+	// ExitRemote is a failure talking to the cloud or to the room: the verb ran and the remote did not
 	// answer as it should. It is the bridge's reporting failure and NOT the client script's
 	// EXIT_FAILED (3); the two scripts numbered their failures differently, so it is named here.
 	//
@@ -60,7 +60,7 @@ const (
 
 // CodedError is the Python client scripts' SyncError: a message plus the exit code the process should
 // end with, so a failure deep in a helper carries its own code to the top instead of every layer
-// re-deciding. The Python raises it from inside the helpers (fetch_rigspec, read_lock, request_json)
+// re-deciding. The Python raises it from inside the helpers (fetch_roomspec, read_lock, request_json)
 // and its main() unwraps `err.code`; this is the same shape, which is why the codes above live beside
 // it rather than in the packages that raise them.
 type CodedError struct {

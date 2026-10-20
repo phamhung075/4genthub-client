@@ -29,17 +29,17 @@ type stuckFixture struct {
 	runtimes  map[string]string
 	state     string
 	dir       string
-	rig       string
+	room      string
 	now       time.Time
 }
 
-const stuckFixtureRig = "demo"
+const stuckFixtureRoom = "demo"
 
 func stuckFixtureFor(t *testing.T) *stuckFixture {
 	t.Helper()
 	fixture := &stuckFixture{
 		t:        t,
-		rig:      stuckFixtureRig,
+		room:     stuckFixtureRoom,
 		now:      time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC),
 		state:    filepath.Join(t.TempDir(), "stuck.json"),
 		dir:      t.TempDir(),
@@ -58,11 +58,11 @@ func stuckFixtureFor(t *testing.T) *stuckFixture {
 			return fixture.logs[seat], runtime
 		},
 		writeAt: stuckWriteAt,
-		say: func(rig, seat, text string) {
-			fixture.sent = append(fixture.sent, rig+"/"+seat+": "+text)
+		say: func(room, seat, text string) {
+			fixture.sent = append(fixture.sent, room+"/"+seat+": "+text)
 		},
-		escalate: func(rig string, finding stuckFinding, open time.Duration) (string, error) {
-			fixture.escalated = append(fixture.escalated, rig+": "+stuckEscalationText(rig, finding, open))
+		escalate: func(room string, finding stuckFinding, open time.Duration) (string, error) {
+			fixture.escalated = append(fixture.escalated, room+": "+stuckEscalationText(room, finding, open))
 			return "qitem-escalated-1", nil
 		},
 		now:   func() time.Time { return fixture.now },
@@ -94,7 +94,7 @@ func (f *stuckFixture) seatWithoutALog(name, runtime string) {
 
 func (f *stuckFixture) scan() stuckReport {
 	f.t.Helper()
-	options := stuckOptions{Rig: f.rig, Now: f.now, IdleAfter: stuckIdleAfter, EscalateAfter: stuckEscalateAfter}
+	options := stuckOptions{Room: f.room, Now: f.now, IdleAfter: stuckIdleAfter, EscalateAfter: stuckEscalateAfter}
 	report := stuckScanFor(f.deps, options)
 	stuckNotify(f.deps, options, &report)
 	return report
@@ -113,7 +113,7 @@ func (f *stuckFixture) at(offset time.Duration) {
 }
 
 func (f *stuckFixture) sendsTo(seat string) []string {
-	prefix := f.rig + "/" + seat + ": "
+	prefix := f.room + "/" + seat + ": "
 	var out []string
 	for _, line := range f.sent {
 		if strings.HasPrefix(line, prefix) {
@@ -125,7 +125,7 @@ func (f *stuckFixture) sendsTo(seat string) []string {
 
 func (f *stuckFixture) queueRow(id string, destination string) stuckRow {
 	row := stuckRow{
-		QitemID: id, Destination: f.rig + "-" + destination + "@" + f.rig, State: stuckInProgress,
+		QitemID: id, Destination: f.room + "-" + destination + "@" + f.room, State: stuckInProgress,
 		Summary: "the row's own one line", Updated: f.now.Add(-2 * time.Hour).UTC().Format(time.RFC3339),
 	}
 	f.rows = append(f.rows, row)
@@ -367,10 +367,10 @@ func TestStuckAssigneesAreTheBareSeatKeys(t *testing.T) {
 	}
 }
 
-// The documented order is `stuck RIG [flags]`, and flag.Parse stops at the first non-flag argument. This
-// case exists because the SMOKE RUN of the built binary showed `stuck RIG --dry-run` taking the report
+// The documented order is `stuck ROOM [flags]`, and flag.Parse stops at the first non-flag argument. This
+// case exists because the SMOKE RUN of the built binary showed `stuck ROOM --dry-run` taking the report
 // branch instead: a dry run that is not dry, which for a verb that alerts means it SENDS.
-func TestStuckReadsItsRigBeforeOrAfterItsFlags(t *testing.T) {
+func TestStuckReadsItsRoomBeforeOrAfterItsFlags(t *testing.T) {
 	fixture := stuckFixtureFor(t)
 	fixture.seat(overlapLeadSeat, fixture.now)
 	fixture.queueRow("qitem-late", "go-dev")
@@ -402,17 +402,17 @@ func TestStuckReadsItsRigBeforeOrAfterItsFlags(t *testing.T) {
 
 	var stdout, stderr strings.Builder
 	if code := (stuckCommand{}).Run(context.Background(), []string{"--dry-run"}, &stdout, &stderr); code != clientcmd.ExitUsage {
-		t.Errorf("no rig name: exit %d, want a usage error", code)
+		t.Errorf("no room name: exit %d, want a usage error", code)
 	}
 	stdout.Reset()
 	stderr.Reset()
 	if code := (stuckCommand{}).Run(context.Background(), []string{"demo", "other", "--dry-run"}, &stdout, &stderr); code != clientcmd.ExitUsage {
-		t.Errorf("two rig names: exit %d, want a usage error", code)
+		t.Errorf("two room names: exit %d, want a usage error", code)
 	}
 }
 
-// The scan rides rigd's own loop on a ten-minute timer, and its first pass runs: a room `up` adds while
-// rigd runs is looked at on the next pass rather than ten minutes later.
+// The scan rides agent's own loop on a ten-minute timer, and its first pass runs: a room `up` adds while
+// agent runs is looked at on the next pass rather than ten minutes later.
 func TestStuckDueRunsTheFirstPassAndThenEveryTenMinutes(t *testing.T) {
 	manager := &agentManager{}
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)

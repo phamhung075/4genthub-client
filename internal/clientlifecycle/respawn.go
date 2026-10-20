@@ -110,7 +110,7 @@ const respawnDetachedEnv = "FOURGENTEAM_UP_RESPAWN_DETACHED"
 // runtime daemon's log is.
 func respawnLogPath(stateDir string) string { return filepath.Join(stateDir, "up-respawn.log") }
 
-// respawnArgv is the detached run's argv: this verb, this rig, and every flag this run was given. The
+// respawnArgv is the detached run's argv: this verb, this room, and every flag this run was given. The
 // state root is named EXPLICITLY because the child is a new session rather than a continuation of the
 // caller's shell, and the root must not be re-derived from an environment the caller set for itself.
 var respawnArgv = func(name, teamDir, stateDir string, allowPeak, roomOnly bool) []string {

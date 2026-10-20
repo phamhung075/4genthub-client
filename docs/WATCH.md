@@ -9,12 +9,12 @@ It needs `herdr` (the terminal provider the panes live in) and the room's seats 
 ## Open it
 
 ```bash
-4genteam watch --room <RIG>                        # the seat grid, plus the lead window
-4genteam grid  --room <RIG>                        # only the grid
-4genteam feed  --room <RIG> [--seat <SEAT> ...]    # one merged stream, for a plain terminal or ssh
+4genteam watch --room <ROOM>                        # the seat grid, plus the lead window
+4genteam grid  --room <ROOM>                        # only the grid
+4genteam feed  --room <ROOM> [--seat <SEAT> ...]    # one merged stream, for a plain terminal or ssh
 ```
 
-Always pass `--room`; there is no default room. `4genteam up <RIG>` opens the same wall as part of
+Always pass `--room`; there is no default room. `4genteam up <ROOM>` opens the same wall as part of
 the lifecycle, so the view is there whenever the room is brought back up.
 
 Run the verb again for a fresh view. Each one closes the workspaces it owns and rebuilds them, so
@@ -25,13 +25,13 @@ layout lives in the client, not in saved terminal state, so it cannot drift.
 
 | Workspace | Holds |
 |---|---|
-| `<RIG> grid` | one pane per live seat, in the owner's layout by default: the lead in one tall pane on the left, the next two seats stacked in the column to its right, every remaining seat side by side along the bottom - no pane left empty. Seats are read in the wall's order (lead, architect, go-dev, fe-dev, reviewer, then any other seat by name). `--cols N` keeps the older equal-columns grid instead. Each pane runs that seat's own feed |
-| `<RIG> lead` | the lead's detailed feed on top, with a `lead > input` pane under it: a line typed there is sent to the lead |
+| `<ROOM> grid` | one pane per live seat, in the owner's layout by default: the lead in one tall pane on the left, the next two seats stacked in the column to its right, every remaining seat side by side along the bottom - no pane left empty. Seats are read in the wall's order (lead, architect, go-dev, fe-dev, reviewer, then any other seat by name). `--cols N` keeps the older equal-columns grid instead. Each pane runs that seat's own feed |
+| `<ROOM> lead` | the lead's detailed feed on top, with a `lead > input` pane under it: a line typed there is sent to the lead |
 
 `4genteam watch` and `4genteam grid` print `grid: <n> seats in <cols> columns`; the default layout
 prints the 2 of its two columns, with the bottom row spanning both.
 
-A pane exists for every seat the room is running (they come from the rig's live tmux sessions).
+A pane exists for every seat the room is running (they come from the room's live tmux sessions).
 The feed reads a seat's newest session log — the omp state directory under
 `~/.config/4genthub/` first, else the seat's Claude Code project log. A runtime the client has no
 log reader for (`codex`, `agy`) keeps its pane and its header and shows no events.
@@ -78,7 +78,7 @@ time on a line is the seat's own record time, so replayed lines keep their real 
 
 | Option | Effect |
 |---|---|
-| `--room <RIG>` | the room to watch; always pass it |
+| `--room <ROOM>` | the room to watch; always pass it |
 | `--state-root DIR` | the omp state root the session logs are read from: the flag, else `~/.config/4genthub` |
 | `--seat SEAT` | which seat: for `feed` and `inputs`, limit the view to this seat, repeatable; for `input`, the seat to send to, required |
 | `--cols N` | grid columns (default 2); `grid` and `watch` only |
@@ -96,9 +96,9 @@ time on a line is the seat's own record time, so replayed lines keep their real 
 The grid panes are read-only. An input pane is the way to talk to a seat from the grid:
 
 ```bash
-4genteam inputs open --room <RIG>                # one "<SEAT> > input" pane under every seat pane
-4genteam inputs open --room <RIG> --seat <SEAT>  # only that seat gets one
-4genteam inputs hide --room <RIG>                # close them again
+4genteam inputs open --room <ROOM>                # one "<SEAT> > input" pane under every seat pane
+4genteam inputs open --room <ROOM> --seat <SEAT>  # only that seat gets one
+4genteam inputs hide --room <ROOM>                # close them again
 ```
 
 A line typed there is sent to the seat with `4genteam send <session> 'message'`, so it goes through the
@@ -114,8 +114,8 @@ older than the replay is not in the pane — start the view again with a larger 
 ## Verify it, and what to do when it is silent
 
 ```bash
-herdr workspace list      # look for "<RIG> grid" and "<RIG> lead"
-4genteam ps <RIG> --nodes   # one row per seat, with its lifecycle and activity
+herdr workspace list      # look for "<ROOM> grid" and "<ROOM> lead"
+4genteam ps <ROOM> --nodes   # one row per seat, with its lifecycle and activity
 ```
 
 Run these from the shell that started `herdr`: it resolves its server from the home directory of
@@ -129,13 +129,13 @@ If nothing appears, check those two first: a stopped seat has no pane, and a mis
 - **Never press Ctrl-C or type into a raw `tmux attach` pane of a seat.** The seat's runner reads
   standard input: Ctrl-C aborts the work it is doing, and typed text becomes a chat message from
   you to that agent. Use `4genteam inputs` or the lead window's input pane instead.
-- `rig terminal open <RIG>` (one raw tile per seat) is the **secondary** view: use it to see a
-  seat's own screen, never as the default way to watch a room.
+- A seat's own screen is the **secondary** view: read it to see what that seat is doing,
+  never as the default way to watch a room.
 - Every pane runs the client with `exec`, so when that client exits, the pane closes. That is why
   `q`, Ctrl-D or Ctrl-C in a pane ends the pane rather than leaving a dead one; reopen the view
   with the verb.
 - A pane does not pick up a change while it runs: it started with the code and settings it read at
-  launch. Reopen the view — and restart the compaction supervisor with `4genteam compact <RIG>` —
+  launch. Reopen the view — and restart the compaction supervisor with `4genteam compact <ROOM>` —
   after changing the client or a `COMPACT_*` value.
 - Keep backticks, apostrophes and `$` out of anything you type into an input pane: your own shell
   expands a backtick substitution before the client ever sees the text.

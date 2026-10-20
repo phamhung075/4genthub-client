@@ -94,7 +94,7 @@ func ResolveCurrentTask(ctx context.Context, identity WhoamiResponse) any {
 	if token == "" {
 		return "unavailable (AGENTHUB_TOKEN is unset, so the hub was not asked)"
 	}
-	room := strings.TrimSpace(identity.Identity.RigName)
+	room := strings.TrimSpace(identity.Identity.RoomName)
 	seat := strings.TrimSpace(identity.Identity.MemberId)
 	if room == "" || seat == "" {
 		return "unavailable (this seat's identity names no room/seat)"

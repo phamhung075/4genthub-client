@@ -20,7 +20,7 @@ import (
 
 type LinkKind string
 
-// Edge kinds accepted by the rig orchestrator. Only delegates_to and spawned_by affect
+// Edge kinds accepted by the room orchestrator. Only delegates_to and spawned_by affect
 // launch order, and edges never route messages.
 const (
 	KindDelegatesTo      LinkKind = "delegates_to"
@@ -119,7 +119,7 @@ const (
 
 // allowedKinds maps a message intent to the link kinds that authorize it.
 // spawned_by and can_observe never authorize a send; can_observe grants reading
-// output via rig capture/transcript, not sending.
+// output via room capture/transcript, not sending.
 var allowedKinds = map[Intent][]LinkKind{
 	IntentTask:       {KindDelegatesTo},
 	IntentEscalation: {KindEscalatesTo},
@@ -147,7 +147,7 @@ func LicensedIntents(kind LinkKind) []Intent {
 // reported in: allowedKinds is a map, so iteration order cannot be the answer a refusal prints.
 var intentsInOrder = []Intent{IntentTask, IntentEscalation, IntentReport, IntentQuestion, IntentNotice}
 
-// ValidKind reports whether kind is one of the five the rig orchestrator edge kinds.
+// ValidKind reports whether kind is one of the five the room orchestrator edge kinds.
 func ValidKind(kind LinkKind) bool {
 	switch kind {
 	case KindDelegatesTo, KindSpawnedBy, KindCanObserve, KindCollaboratesWith, KindEscalatesTo:

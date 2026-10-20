@@ -13,7 +13,7 @@ import (
 )
 
 // The feed renderer's contract, ported from tests/test_watch_tools.py test-for-test. Every test here
-// is a pure function call: no herdr, no tmux, no rig, no seat.
+// is a pure function call: no herdr, no tmux, no room, no seat.
 
 func sessionLine(role string, content any) string {
 	payload := map[string]any{"message": map[string]any{"role": role, "content": content}}
@@ -432,10 +432,10 @@ func workingDirKey() string {
 }
 
 // seatsFromTmux makes `tmux list-sessions` answer with one session per seat.
-func (f *fakeExec) seatsFromTmux(rig string, seats []string) {
+func (f *fakeExec) seatsFromTmux(room string, seats []string) {
 	names := []string{}
 	for _, seat := range seats {
-		names = append(names, "agenthub--"+rig+"--"+seat)
+		names = append(names, "agenthub--"+room+"--"+seat)
 	}
 	f.on("tmux list-sessions -F #{session_name}", strings.Join(names, "\n"))
 }
@@ -454,7 +454,7 @@ func sortedCalls(calls [][]string) []string {
 }
 
 func TestAgyTranscriptEventsAndTokens(t *testing.T) {
-	plannerJSON := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","input_tokens":21000,"cache_read_tokens":500,"output_tokens":250,"thinking":"Need to check rig whoami","tool_calls":[{"name":"run_command","args":{"CommandLine":"rig whoami --json","Cwd":"/home"}}],"content":"Running identity check"}`
+	plannerJSON := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","input_tokens":21000,"cache_read_tokens":500,"output_tokens":250,"thinking":"Need to check room whoami","tool_calls":[{"name":"run_command","args":{"CommandLine":"room whoami --json","Cwd":"/home"}}],"content":"Running identity check"}`
 	rendered := events(plannerJSON, 200, true, 25)
 	if len(rendered) < 3 {
 		t.Fatalf("expected at least 3 rendered events (think, say, toolCall), got %d: %v", len(rendered), rendered)
@@ -463,13 +463,13 @@ func TestAgyTranscriptEventsAndTokens(t *testing.T) {
 	hasSay := false
 	hasTool := false
 	for _, line := range rendered {
-		if strings.Contains(line, "~ think") && strings.Contains(line, "Need to check rig whoami") {
+		if strings.Contains(line, "~ think") && strings.Contains(line, "Need to check room whoami") {
 			hasThink = true
 		}
 		if strings.Contains(line, "▸ say") && strings.Contains(line, "Running identity check") {
 			hasSay = true
 		}
-		if strings.Contains(line, "run_command") && strings.Contains(line, "rig whoami --json") {
+		if strings.Contains(line, "run_command") && strings.Contains(line, "room whoami --json") {
 			hasTool = true
 		}
 	}

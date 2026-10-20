@@ -21,7 +21,7 @@ func TestTheRuntimeSpellingIsRefusedBeforeAnyLifecycleAction(t *testing.T) {
 		ran = append(ran, "ensureDaemon")
 		return "", nil
 	}
-	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
+	recordRoomFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
 
 	for _, name := range []string{"up", "idle-run", "budget-run"} {

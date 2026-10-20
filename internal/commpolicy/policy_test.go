@@ -352,15 +352,15 @@ func TestBypassSuspected(t *testing.T) {
 		{"tmux alone", "tmux", false},
 		{"prefix only", "echo rig send bob", false},
 		{"empty", "", false},
-		{"case sensitive", "RIG send bob", false},
-		{"subcommand prefix", "rig sends bob", false},
+		{"case sensitive", "ROOM send bob", false},
+		{"subcommand prefix", "room sends bob", false},
 
 		// The native client, which is what a seat on this host actually types:
 		// the retired `rig` spellings above no longer name a file the client owns.
 		// `send` is the AUDITED path and `room queue create` is admitted, so neither is a bypass;
 		// `input` writes straight into a pane and still is.
 		{"native send to a session", "4genteam send agenthub--r--bob hello", false},
-		{"native send by rig and seat", "4genteam send 4genthub-min bob hello", false},
+		{"native send by room and seat", "4genteam send 4genthub-min bob hello", false},
 		{"native send absolute", "/usr/local/bin/4genteam send bob hello", false},
 		{"native send after env", "AGENTHUB_URL=http://x 4genteam send bob hello", false},
 		{"native collapsed spaces", "4genteam   send bob hello", false},

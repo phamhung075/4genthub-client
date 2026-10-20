@@ -34,7 +34,7 @@ const (
 	// a seat commits in its own worktree. 4.1's third measured failure was a generated file and eleven
 	// landing-branch files sitting changed there with no seat owning them, and nothing read the checkout at
 	// all. Like Worktrees it is about a FACT rather than a process, and it is the MACHINE's row: every
-	// room's worktrees are registered in one checkout, so it carries no rig.
+	// room's worktrees are registered in one checkout, so it carries no room.
 	Clone = "clone"
 	// Hooks is `doctor`'s row about the hooks folder GIT actually runs for the checkout, and whether the
 	// client's git guard is installed in it. 4.4's fifth risk is the reason it exists: a hook can be
@@ -48,7 +48,7 @@ const (
 const GuardMarker = "4genteam git guard"
 
 // SkillsRootEnv names the OpenRig checkout: the SAME variable `team publish-skills` reads as its
-// library root, so one variable points at the repository whose `scripts/team/<rig>/team.json` this
+// library root, so one variable points at the repository whose `scripts/team/<room>/team.json` this
 // client uses.
 const SkillsRootEnv = "OPENRIG_SKILLS_ROOT"
 
@@ -68,8 +68,8 @@ type Worktree struct {
 }
 
 // seatWorktree is the ONE path/branch rule, and DerivedWorktrees is its only caller.
-func seatWorktree(roomDir, rig, key, seatType string) Worktree {
-	worktree := Worktree{SeatKey: key, Path: filepath.Join(roomDir, "wt", key), Branch: rig + "/" + key}
+func seatWorktree(roomDir, room, key, seatType string) Worktree {
+	worktree := Worktree{SeatKey: key, Path: filepath.Join(roomDir, "wt", key), Branch: room + "/" + key}
 	if seatType == "reviewer" {
 		// Detached: a reviewer never commits, so it has no branch to be on.
 		worktree.Branch = ""
@@ -80,7 +80,7 @@ func seatWorktree(roomDir, rig, key, seatType string) Worktree {
 // DerivedWorktrees is the ONE list, in the order a report and a start step read it: the seats of the
 // room in their own order, then the room's integration worktree when the room has a lead. A seat whose
 // key is empty is skipped: it has no address, so it has no path.
-func DerivedWorktrees(roomDir, rig string, seats []SeatType) []Worktree {
+func DerivedWorktrees(roomDir, room string, seats []SeatType) []Worktree {
 	out := make([]Worktree, 0, len(seats)+1)
 	hasLead := false
 	for _, seat := range seats {
@@ -90,10 +90,10 @@ func DerivedWorktrees(roomDir, rig string, seats []SeatType) []Worktree {
 		if seat.Type == "lead" {
 			hasLead = true
 		}
-		out = append(out, seatWorktree(roomDir, rig, seat.Key, seat.Type))
+		out = append(out, seatWorktree(roomDir, room, seat.Key, seat.Type))
 	}
 	if hasLead {
-		out = append(out, seatWorktree(roomDir, rig, Integration, ""))
+		out = append(out, seatWorktree(roomDir, room, Integration, ""))
 	}
 	return out
 }
@@ -102,7 +102,7 @@ func DerivedWorktrees(roomDir, rig string, seats []SeatType) []Worktree {
 // worktree verbs use: the seat store (a machine-level location) plus the room name. It is a variable
 // so a test drives the verbs over its own store, in the repo's style of a package-level seam rather
 // than an interface added for testing.
-var RoomDir = func(rig string) (string, error) {
+var RoomDir = func(room string) (string, error) {
 	root := clientenv.DefaultStateRoot()
 	if root == "" {
 		return "", &clientcmd.CodedError{
@@ -110,7 +110,7 @@ var RoomDir = func(rig string) (string, error) {
 			Code:    clientcmd.ExitUsage,
 		}
 	}
-	return filepath.Join(root, "rooms", rig), nil
+	return filepath.Join(root, "rooms", room), nil
 }
 
 // LiveSeats reads the room's OWN record - spec.json, the file the runtime wrote from the definition and
@@ -132,17 +132,17 @@ func LiveSeats(root, room string) ([]SeatType, error) {
 // passed one, else $OPENRIG_SKILLS_ROOT - the OpenRig checkout a room's `scripts/team/<rig>/team.json`
 // lives in. A room whose definition is neither is refused by name, with both ways to point at it,
 // never derived from nothing.
-func TeamDir(flagValue, rig string) (string, error) {
+func TeamDir(flagValue, room string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
 	}
 	if root := os.Getenv(SkillsRootEnv); root != "" {
-		return filepath.Join(root, "scripts", "team", rig), nil
+		return filepath.Join(root, "scripts", "team", room), nil
 	}
 	return "", &clientcmd.CodedError{
 		Message: fmt.Sprintf(
-			"cannot find the room's team file for rig %q: pass --team DIR or set %s",
-			rig, SkillsRootEnv),
+			"cannot find the room's team file for room %q: pass --team DIR or set %s",
+			room, SkillsRootEnv),
 		Code: clientcmd.ExitUsage,
 	}
 }

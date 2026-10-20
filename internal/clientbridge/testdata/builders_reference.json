@@ -42,7 +42,7 @@
         "a",
         "b"
       ],
-      "expect": "seat 'lead' in rig rig exists in pods a and b; rename one"
+      "expect": "seat 'lead' in room rig exists in pods a and b; rename one"
     },
     {
       "room": "rig",
@@ -51,7 +51,7 @@
         "a",
         "a"
       ],
-      "expect": "seat 'lead' in rig rig is listed twice in pod a; rename one"
+      "expect": "seat 'lead' in room rig is listed twice in pod a; rename one"
     },
     {
       "room": "rig",
@@ -60,7 +60,7 @@
         "",
         "b"
       ],
-      "expect": "seat 'lead' in rig rig exists in pods (no pod) and b; rename one"
+      "expect": "seat 'lead' in room rig exists in pods (no pod) and b; rename one"
     }
   ],
   "machine_id_cases": [

@@ -21,34 +21,34 @@ import (
 // and ExitPeak follow.
 const ExitRestoreFailed = 1
 
-const continueUsage = "usage: 4genteam continue [--state-root DIR] [RIG [BRIEF|--no-brief] | --all] " + clientoffpeak.ModeFlagUsage
+const continueUsage = "usage: 4genteam continue [--state-root DIR] [ROOM [BRIEF|--no-brief] | --all] " + clientoffpeak.ModeFlagUsage
 
 // continueListingUsage is the shell's own no-argument usage line, kept in its shape (the script printed
-// it with its own name twice, rig-continue.sh:96, so this prints this binary's name and the verb). It is a
+// it with its own name twice, room-continue.sh:96, so this prints this binary's name and the verb). It is a
 // constant of its own rather than continueUsage inside a "Usage: %s", because continueUsage already opens
 // with "usage: " and the pair would print "Usage: usage: ...".
-const continueListingUsage = "Usage: 4genteam continue <rig> [brief-file|--no-brief]   |   4genteam continue --all"
+const continueListingUsage = "Usage: 4genteam continue <room> [brief-file|--no-brief]   |   4genteam continue --all"
 
 type continueCommand struct{}
 
 func (continueCommand) Name() string { return "continue" }
 func (continueCommand) Summary() string {
-	return "restore a stopped rig from its latest snapshot and brief its seats"
+	return "restore a stopped room from its latest snapshot and brief its seats"
 }
 
 func (continueCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		printHelp(stdout, continueUsage,
-			"Restores a stopped rig from its latest snapshot (every seat resumes its own session) and sends each\n"+
-				"seat its brief. The rig is the parameter: its seats are discovered from tmux at run time.\n\n"+
-				"  The SEATS are what this verb restores. Supervision (agent and its children) is `up`'s: a rig\n"+
+			"Restores a stopped room from its latest snapshot (every seat resumes its own session) and sends each\n"+
+				"seat its brief. The room is the parameter: its seats are discovered from tmux at run time.\n\n"+
+				"  The SEATS are what this verb restores. Supervision (agent and its children) is `up`'s: a room\n"+
 				"  whose seats are up while a safeguard is down is reported NOT restored and exits 1, with the\n"+
 				"  safeguards named - `stop` stops agent and its children and leaves the sessions standing.\n\n"+
-				"  BRIEF  a file whose text every seat gets; default <home>/.config/4genthub/briefs/<rig>.txt\n"+
-				"         <home>/.config/4genthub/briefs/<rig>/<seat>.txt replaces it for that seat\n"+
-				"  --all  every stopped rig that has a brief; the run exits non-zero when a rig it visited is\n"+
+				"  BRIEF  a file whose text every seat gets; default <home>/.config/4genthub/briefs/<room>.txt\n"+
+				"         <home>/.config/4genthub/briefs/<room>/<seat>.txt replaces it for that seat\n"+
+				"  --all  every stopped room that has a brief; the run exits non-zero when a room it visited is\n"+
 				"         not up (its restore failed, or the peak gate refused it)\n"+
-				"  no argument  list the rigs and the briefs on disk\n\n"+
+				"  no argument  list the rooms and the briefs on disk\n\n"+
 				"  --state-root DIR  the state root to read and write (default <home>/.config/4genthub): the\n"+
 				"         briefs, the logs and the tmux server asked are all this root's\n\n"+
 				"The DeepSeek peak gate runs BEFORE a restore: with "+clientoffpeak.ModeEnv+" on (the default) a\n"+
@@ -70,8 +70,8 @@ func (continueCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 	return runContinue(allowPeak, root, rest, stdout, stderr)
 }
 
-// runContinue dispatches the shell's own three cases: nothing (list), --all, and one rig with an optional
-// brief. `--all` is a rig-name-shaped argument, so it is only recognised in the rig's position - a brief
+// runContinue dispatches the shell's own three cases: nothing (list), --all, and one room with an optional
+// brief. `--all` is a room-name-shaped argument, so it is only recognised in the room's position - a brief
 // FILE is never read as a flag, which is the one place the shell's `case` and this can disagree.
 func runContinue(allowPeak bool, root string, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -90,9 +90,9 @@ func runContinue(allowPeak bool, root string, args []string, stdout, stderr io.W
 		}
 		return continueAll(allowPeak, root, log, stderr)
 	}
-	rigName := args[0]
-	if strings.HasPrefix(rigName, "-") {
-		fmt.Fprintf(stderr, "4genteam continue: unknown argument %s. %s\n", rigName, continueUsage)
+	roomName := args[0]
+	if strings.HasPrefix(roomName, "-") {
+		fmt.Fprintf(stderr, "4genteam continue: unknown argument %s. %s\n", roomName, continueUsage)
 		return clientcmd.ExitUsage
 	}
 	brief, noBrief, code := briefArgument(args[1:], stderr)
@@ -100,12 +100,12 @@ func runContinue(allowPeak bool, root string, args []string, stdout, stderr io.W
 		return code
 	}
 	if brief == "" && !noBrief {
-		// The default: <home>/.config/4genthub/briefs/<rig>.txt. It is resolved here rather than in the
+		// The default: <home>/.config/4genthub/briefs/<room>.txt. It is resolved here rather than in the
 		// caller so the help, the listing and this default cannot name three different files.
-		brief = defaultBrief(root, rigName)
+		brief = defaultBrief(root, roomName)
 	}
 	restore := newRestorer(log, root)
-	return continueOne(restore, rigName, brief, allowPeak, stderr)
+	return continueOne(restore, roomName, brief, allowPeak, stderr)
 }
 
 // briefArgument reads the shell's optional second argument: `--no-brief` means restore only, anything
@@ -119,7 +119,7 @@ func briefArgument(args []string, stderr io.Writer) (brief string, noBrief bool,
 	switch args[0] {
 	case "--no-brief":
 		if len(args) > 1 {
-			fmt.Fprintf(stderr, "4genteam continue: unexpected argument %s - this verb takes one rig and one brief. %s\n",
+			fmt.Fprintf(stderr, "4genteam continue: unexpected argument %s - this verb takes one room and one brief. %s\n",
 				args[1], continueUsage)
 			return "", false, clientcmd.ExitUsage
 		}
@@ -130,43 +130,43 @@ func briefArgument(args []string, stderr io.Writer) (brief string, noBrief bool,
 		return "", false, clientcmd.ExitUsage
 	}
 	if len(args) > 1 {
-		fmt.Fprintf(stderr, "4genteam continue: unexpected argument %s - this verb takes one rig and one brief. %s\n",
+		fmt.Fprintf(stderr, "4genteam continue: unexpected argument %s - this verb takes one room and one brief. %s\n",
 			args[1], continueUsage)
 		return "", false, clientcmd.ExitUsage
 	}
 	return args[0], false, clientcmd.ExitOK
 }
 
-// defaultBrief is the shell's `$BRIEFDIR/<rig>.txt`, in the root the verb resolved.
-func defaultBrief(root, rigName string) string {
-	return filepath.Join(briefDir(root), rigName+".txt")
+// defaultBrief is the shell's `$BRIEFDIR/<room>.txt`, in the root the verb resolved.
+func defaultBrief(root, roomName string) string {
+	return filepath.Join(briefDir(root), roomName+".txt")
 }
 
-// continueOne restores and briefs one rig: the shell's continue_rig(), preceded by the daemon and the
+// continueOne restores and briefs one room: the shell's continue_room(), preceded by the daemon and the
 // gate.
 //
 // THE GATE RUNS ONLY WHEN A RESTORE WILL HAPPEN, and it is placed after the session read that decides
-// that, because a refusal exists to stop seats starting: a rig that is already live has nothing to
+// that, because a refusal exists to stop seats starting: a room that is already live has nothing to
 // start, and its brief is text to seats that are already running. The daemon comes first despite that,
 // because the room's models are read through it.
-func continueOne(restore *restorer, rigName, brief string, allowPeak bool, stderr io.Writer) int {
+func continueOne(restore *restorer, roomName, brief string, allowPeak bool, stderr io.Writer) int {
 	restore.daemonUp()
-	if len(rigSessions(rigName, sessionNames(restore.root))) == 0 {
-		if code := restore.gate(rigName, "continue", allowPeak, stderr); code != clientcmd.ExitOK {
+	if len(roomSessions(roomName, sessionNames(restore.root))) == 0 {
+		if code := restore.gate(roomName, "continue", allowPeak, stderr); code != clientcmd.ExitOK {
 			return code
 		}
 	}
-	if restore.restore(rigName, brief) {
+	if restore.restore(roomName, brief) {
 		return clientcmd.ExitOK
 	}
 	return ExitRestoreFailed
 }
 
-// continueAll is the shell's --all: every rig that has a brief, one at a time, and one rig's failure does
-// not stop the others - the shell's `|| true` inside the loop, kept, because a rig that is not on DeepSeek
+// continueAll is the shell's --all: every room that has a brief, one at a time, and one room's failure does
+// not stop the others - the shell's `|| true` inside the loop, kept, because a room that is not on DeepSeek
 // must still be restored while a refused or broken one is not. What the shell did NOT do is let the loop
-// decide the exit code: it ended 0 however many rigs failed, so a caller reading only the code could not
-// tell a run that resumed every room from one that resumed none. The run visits every rig and then
+// decide the exit code: it ended 0 however many rooms failed, so a caller reading only the code could not
+// tell a run that resumed every room from one that resumed none. The run visits every room and then
 // reports, the same shape `watchdog --all --check` uses.
 func continueAll(allowPeak bool, root string, log *teeLog, stderr io.Writer) int {
 	dir := briefDir(root)
@@ -179,28 +179,28 @@ func continueAll(allowPeak bool, root string, log *teeLog, stderr io.Writer) int
 	restore.daemonUp()
 	var notUp []string
 	for _, brief := range briefs {
-		rigName := strings.TrimSuffix(filepath.Base(brief), ".txt")
-		if len(rigSessions(rigName, sessionNames(root))) == 0 {
-			if code := restore.gate(rigName, "continue", allowPeak, stderr); code != clientcmd.ExitOK {
-				// A refusal for one rig is not a reason to skip the others: the room it refused stays
-				// stopped, and a room that is not on DeepSeek is restored normally. It is still a rig this
+		roomName := strings.TrimSuffix(filepath.Base(brief), ".txt")
+		if len(roomSessions(roomName, sessionNames(root))) == 0 {
+			if code := restore.gate(roomName, "continue", allowPeak, stderr); code != clientcmd.ExitOK {
+				// A refusal for one room is not a reason to skip the others: the room it refused stays
+				// stopped, and a room that is not on DeepSeek is restored normally. It is still a room this
 				// run did not bring up, so it is named in the report below.
-				notUp = append(notUp, rigName)
+				notUp = append(notUp, roomName)
 				continue
 			}
 		}
-		if !restore.restore(rigName, brief) {
-			notUp = append(notUp, rigName)
+		if !restore.restore(roomName, brief) {
+			notUp = append(notUp, roomName)
 		}
 	}
 	if len(notUp) > 0 {
-		log.printf("--all: %d of %d rigs did not complete: %s", len(notUp), len(briefs), strings.Join(notUp, ", "))
+		log.printf("--all: %d of %d rooms did not complete: %s", len(notUp), len(briefs), strings.Join(notUp, ", "))
 		return ExitRestoreFailed
 	}
 	return clientcmd.ExitOK
 }
 
-// briefsOnDisk is the shell's `$BRIEFDIR/*.txt`, sorted so `--all` visits the rigs in a fixed order
+// briefsOnDisk is the shell's `$BRIEFDIR/*.txt`, sorted so `--all` visits the rooms in a fixed order
 // rather than in whatever order the directory hands them over.
 func briefsOnDisk(dir string) []string {
 	found, err := filepath.Glob(filepath.Join(dir, "*.txt"))
@@ -215,7 +215,7 @@ func briefsOnDisk(dir string) []string {
 // briefs are the files on disk, and the room list is the runtime's own (ListAllRooms, with each room's seat
 // states). When the runtime cannot be read the section says so on one line rather than printing an empty list.
 func list(root string, stdout, stderr io.Writer) int {
-	fmt.Fprintln(stdout, "Rigs that can be continued:")
+	fmt.Fprintln(stdout, "Rooms that can be continued:")
 	client := clientruntime.NewClient("")
 	rooms, err := client.ListAllRooms()
 	if err != nil {

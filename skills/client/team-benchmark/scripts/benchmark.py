@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Measure a room's last N hours: where each seat's tool calls go, and what its commits produced.
 
-Reads <state-root>/rooms/<rig>/seats/<seat>/tool-calls.jsonl and `git log` of the hub and the client.
-Prints the tables and appends one JSON line to <state-root>/benchmarks/<rig>.jsonl, so the next run
+Reads <state-root>/rooms/<room>/seats/<seat>/tool-calls.jsonl and `git log` of the hub and the client.
+Prints the tables and appends one JSON line to <state-root>/benchmarks/<room>.jsonl, so the next run
 can show the change against the previous one. Reads no .env and no token.
 """
 import argparse, collections, datetime as d, json, os, re, subprocess
@@ -43,9 +43,9 @@ def file_kind(p):
     return 'other'
 
 
-def seat_calls(state, rig, hours):
+def seat_calls(state, room, hours):
     cut = d.datetime.now(d.timezone.utc) - d.timedelta(hours=hours)
-    root = f'{state}/rooms/{rig}/seats'
+    root = f'{state}/rooms/{room}/seats'
     out = {}
     for seat in sorted(os.listdir(root)):
         path = f'{root}/{seat}/tool-calls.jsonl'
@@ -84,18 +84,18 @@ def pct(n, total):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('rig')
+    ap.add_argument('room')
     ap.add_argument('--hours', type=int, default=24)
     ap.add_argument('--state-root', default=os.path.expanduser('~/.config/4genthub'))
     ap.add_argument('--hub', default='.')
     ap.add_argument('--client', default='agenthub_client')
     a = ap.parse_args()
 
-    seats = seat_calls(a.state_root, a.rig, a.hours)
+    seats = seat_calls(a.state_root, a.room, a.hours)
     result = {'at': d.datetime.now(d.timezone.utc).isoformat(timespec='seconds'), 'hours': a.hours,
               'seats': seats, 'hub': commit_lines(a.hub, a.hours), 'client': commit_lines(a.client, a.hours)}
 
-    hist = f'{a.state_root}/benchmarks/{a.rig}.jsonl'
+    hist = f'{a.state_root}/benchmarks/{a.room}.jsonl'
     prev = None
     if os.path.exists(hist):
         rows = open(hist).read().strip().splitlines()
@@ -104,7 +104,7 @@ def main():
     with open(hist, 'a') as f:
         f.write(json.dumps(result) + '\n')
 
-    print(f'{a.rig}, last {a.hours}h (share of tool calls)')
+    print(f'{a.room}, last {a.hours}h (share of tool calls)')
     for seat, s in seats.items():
         n = s['calls']
         cols = ' '.join(f'{k}={pct(s.get(k, 0), n)}' for k in ('chat', 'board', 'git', 'write', 'test', 'read', 'shell'))

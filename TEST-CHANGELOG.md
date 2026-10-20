@@ -87,3 +87,21 @@ refusal IS tested, and the verb was verified by hand against a corrupt file in t
 - GREEN on 2026-10-20 after the rebase onto `c21e702`: `cargo test --offline` in
   `rust/agenthub-runtime` - 192 + 1 + 20 + 1 passed, 0 failed; `launch_env_tests` 12 passed,
   the five above among them, in 0.3 s.
+
+## 2026-10-20 — the client says room (rig -> room)
+
+- Identifiers, fixtures and expectations follow the rename in the same commit: `rig`/`Rig`/`RIG`
+  identifiers become `room`/`Room`/`ROOM` across `internal/**/*_test.go`, and every test name that
+  carried the old word is renamed with its behaviour (`TestRoomSessionsReadsOnlyThisRoomsSeats`,
+  `TestAgentRunsTheDetectorEveryTenMinutes`, ...).
+- `internal/clientbridge/testdata/rig_ps.json` -> `room_ps.json`, with the captured node document's
+  `rigId`/`rigName` keys renamed `roomId`/`roomName` - it is the runtime's own document, whose serde
+  keys moved with it.
+- `internal/clientbridge/testdata/python_dump.stderr.txt` and `builders_reference.json`: the captured
+  Python wording ("in rig X") follows the Go message to "in room X", since the parity tests compare
+  the Go text against the capture.
+- Fixed in the code, not re-pinned: `sendToSession`'s inner declaration shadowed the outer room
+  (`if room, key, ok := ...`), `stuckSeat` compared a variable to itself, three room readers
+  (`clientrestore/tmux.go`, `clientwatch/grid.go`, `seatlog/seatlog.go`) compared the session's room
+  to itself, and the worktree fixture held the room directory and the room name under the same field.
+  Each was the old `rig`/`room` pair collapsing; the fixes keep the two values distinct.

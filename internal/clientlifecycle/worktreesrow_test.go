@@ -16,7 +16,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientworktree"
 )
 
-// writeDemoRoom writes the live record the row reads for rig "demo" - the room's own spec.json, the
+// writeDemoRoom writes the live record the row reads for room "demo" - the room's own spec.json, the
 // file the runtime wrote from the definition - and returns the state root it lives under: the test
 // drives the real resolution rather than replacing it.
 func writeDemoRoom(t *testing.T, seats string) string {
@@ -64,7 +64,7 @@ func TestWorktreesRowFailsOnlyOnAWrongDerivedPath(t *testing.T) {
 	if row.Row.State != clientservices.WorktreesWrong {
 		t.Errorf("state = %q, want %q", row.Row.State, clientservices.WorktreesWrong)
 	}
-	if row.Row.Safeguard != clientservices.Worktrees || row.Row.Rig != "demo" {
+	if row.Row.Safeguard != clientservices.Worktrees || row.Row.Room != "demo" {
 		t.Errorf("row = %+v, want the worktrees row for demo", row.Row)
 	}
 	if got := clientservices.NotRunning([]clientservices.Health{row.Row}); len(got) != 1 {
@@ -128,7 +128,7 @@ func TestDoctorPrintsTheWorktreesRowAndItsReasons(t *testing.T) {
 	worktreesRowFor = func(string, string) []worktreesRow {
 		return []worktreesRow{{
 			Row: clientservices.Health{
-				Rig: "demo", Safeguard: clientservices.Worktrees,
+				Room: "demo", Safeguard: clientservices.Worktrees,
 				State: clientservices.WorktreesWrong, AgeS: clientservices.UnknownAge,
 			},
 			Wrong: []string{"/room/wt/go-dev"},

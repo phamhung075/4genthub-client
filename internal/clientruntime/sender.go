@@ -28,7 +28,7 @@ type SendOptions struct {
 	Sender string
 	// Verb is the client verb that CARRIED this frame, stamped onto it so a text a mid-turn seat cannot take
 	// is handed back naming the way it arrived. Blank means the `send` verb; the carriers whose own name is
-	// not `send` name themselves here (a rig's say, its abort, the wake, sync messages).
+	// not `send` name themselves here (a room's say, its abort, the wake, sync messages).
 	Verb string
 }
 

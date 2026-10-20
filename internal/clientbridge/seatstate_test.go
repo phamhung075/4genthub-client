@@ -109,7 +109,7 @@ func TestRuntimeMappingKeepsEverySupportedRuntime(t *testing.T) {
 	known, pinsDir := map[string]string{}, t.TempDir()
 	seat := func(rt string) []any {
 		return []any{map[string]any{
-			"rigName":       "eng",
+			"roomName":      "eng",
 			"logicalId":     "dev.solo",
 			"runtime":       rt,
 			"agentActivity": map[string]any{"state": "idle"},

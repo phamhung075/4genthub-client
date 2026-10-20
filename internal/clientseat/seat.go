@@ -3,7 +3,7 @@
 //
 // WHAT IS NOT HERE ANY MORE. `seat status`, `seat sync` and `seat watch` compared each local seat's pin
 // with the hash the cloud serves, and the route that served that hash
-// (`GET /api/v2/rooms/{room}/rigspec`) was deleted server-side (cbc51bae). The client's fetch went with
+// (`GET /api/v2/rooms/{room}/roomspec`) was deleted server-side (cbc51bae). The client's fetch went with
 // it, so the three verbs are gone rather than kept to print an error - a verb that can only fail is a
 // deprecation shim, and this repo's rule is a clean break. The operator's sentence is in the CHANGELOG
 // entry this change carries.
@@ -55,7 +55,7 @@ func (seatCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 		return clientcmd.ExitUsage
 	}
 	if args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "usage: 4genteam seat reseat RIG --seat NAME [--seat NAME]...")
+		fmt.Fprintln(stdout, "usage: 4genteam seat reseat ROOM --seat NAME [--seat NAME]...")
 		fmt.Fprintln(stdout, "\nreseat waits for each named seat to go quiet and restarts it, so the seat comes back")
 		fmt.Fprintln(stdout, "on what it is pinned to. The wait's rules are shared with the runtime's own path.")
 		return clientcmd.ExitOK

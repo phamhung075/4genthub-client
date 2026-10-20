@@ -710,7 +710,7 @@ fn an_ordinary_touch_or_mkdir_stays_the_seat_s_own() {
 }
 
 /// A SEAT DOES NOT RAISE ITS OWN CEILING. The verb writes the room's limits THROUGH the client, so it never names a
-/// file and no path rule can see it: measured 2026-10-16 at 6492b77, `4genteam room limits <rig> --usd 999` was
+/// file and no path rule can see it: measured 2026-10-16 at 6492b77, `4genteam room limits <room> --usd 999` was
 /// allowed while every FILE shape against the same ceiling (rm, sed -i, truncate -s 0, dd, the write tool) was
 /// refused. Reading the ceilings stays the seat's business.
 #[test]
@@ -772,16 +772,16 @@ fn an_empty_value_in_a_prefix_is_still_a_prefix() {
 
 // ---- queue-coalesce ------------------------------------------------------------------------------------------
 
-const COALESCE_RIG: &str = "rig";
-const COALESCE_LEAD: &str = "agenthub--rig--lead";
-const COALESCE_SEAT: &str = "agenthub--rig--dev";
+const COALESCE_ROOM: &str = "rig";
+const COALESCE_LEAD: &str = "agenthub--room--lead";
+const COALESCE_SEAT: &str = "agenthub--room--dev";
 
-/// A room of this run's own holding the rows a case needs: the store at `<root>/rooms/<rig>/queue.sqlite`, the
-/// seat dir three levels under it (`rooms/<rig>/seats/dev`), and one row per tuple - the id, the state, the source,
+/// A room of this run's own holding the rows a case needs: the store at `<root>/rooms/<room>/queue.sqlite`, the
+/// seat dir three levels under it (`rooms/<room>/seats/dev`), and one row per tuple - the id, the state, the source,
 /// the destination, the tags as the JSON the store holds, and the row's age in seconds.
 fn room_with_rows(tag: &str, rows: &[(&str, &str, &str, &str, &str, u64)]) -> PathBuf {
     let root = fresh_dir(tag);
-    let room = root.join("rooms").join(COALESCE_RIG);
+    let room = root.join("rooms").join(COALESCE_ROOM);
     let seat = room.join("seats").join("dev");
     std::fs::create_dir_all(&seat).unwrap();
     let db = rusqlite::Connection::open(room.join("queue.sqlite")).unwrap();
@@ -815,7 +815,7 @@ fn create_verdict(seat: &Path, extra: &str) -> Option<String> {
         COALESCE_SEAT,
         "run_command",
         serde_json::json!({
-            "CommandLine": format!("4genteam room queue create {COALESCE_RIG} --to {COALESCE_LEAD} --summary again {extra}")
+            "CommandLine": format!("4genteam room queue create {COALESCE_ROOM} --to {COALESCE_LEAD} --summary again {extra}")
         }),
     )
 }
@@ -913,7 +913,7 @@ fn the_coalesce_rule_reads_the_store_s_state_source_destination_tag_and_window()
                 "destination",
                 "pending",
                 COALESCE_SEAT,
-                "agenthub--rig--reviewer"
+                "agenthub--room--reviewer"
             ),
             "--tag finding"
         ),
@@ -928,7 +928,7 @@ fn the_coalesce_rule_reads_the_store_s_state_source_destination_tag_and_window()
     );
     assert_eq!(
         create_verdict(
-            &other("source", "pending", "agenthub--rig--fe-dev", COALESCE_LEAD),
+            &other("source", "pending", "agenthub--room--fe-dev", COALESCE_LEAD),
             "--tag finding"
         ),
         None
@@ -937,10 +937,10 @@ fn the_coalesce_rule_reads_the_store_s_state_source_destination_tag_and_window()
     assert_eq!(create_verdict(&pending("untagged", 60), ""), None);
     let seat = pending("verb", 60);
     for cmd in [
-        "4genteam room queue list rig".to_string(),
-        format!("4genteam room queue show rig {id}"),
-        format!("4genteam room queue update rig {id} --note still owed"),
-        "4genteam room queue close rig qitem-20261017070000-cccccccccccc --reason no-follow-on"
+        "4genteam room queue list room".to_string(),
+        format!("4genteam room queue show room {id}"),
+        format!("4genteam room queue update room {id} --note still owed"),
+        "4genteam room queue close room qitem-20261017070000-cccccccccccc --reason no-follow-on"
             .to_string(),
     ] {
         assert_eq!(

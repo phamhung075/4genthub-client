@@ -7,7 +7,7 @@ import (
 )
 
 // THE ONE ACTIVITY READ. Both idle readers - clientseat's QuietWaiter (through seatActivity) and clientlifecycle's
-// rigIdleReason - ask this function and nothing else, so the question "is this seat at its prompt?" has ONE
+// roomIdleReason - ask this function and nothing else, so the question "is this seat at its prompt?" has ONE
 // implementation. The word is the seat's own activity report as the runtime serves it (`agentActivity.state` on
 // the session list), asked over the runtime socket.
 //
@@ -29,17 +29,17 @@ type SeatActivity struct {
 
 // ReadSeatActivity answers one seat's activity word from the runtime's session list.
 //
-// The seat is matched by the logical id the readers already key on (`<rig>.<seat>`) or by the record-derived
+// The seat is matched by the logical id the readers already key on (`<room>.<seat>`) or by the record-derived
 // session name (SeatSessionName). A list whose rows carry neither refuses rather than answering for the wrong
 // seat - a read that cannot say WHICH seat it read is not a reading.
-func ReadSeatActivity(rig, seat string) SeatActivity {
-	entries, err := NewClient("").ListSessions(rig)
+func ReadSeatActivity(room, seat string) SeatActivity {
+	entries, err := NewClient("").ListSessions(room)
 	if err != nil {
 		return SeatActivity{Read: false, Why: "the activity read could not ask the runtime at " + DefaultSocketPath() + ": " + err.Error()}
 	}
-	canonical := SeatSessionName(rig, seat)
+	canonical := SeatSessionName(room, seat)
 	for _, entry := range entries {
-		if entry.LogicalID != rig+"."+seat && entry.SessionName != canonical && entry.CanonicalSessionName != canonical {
+		if entry.LogicalID != room+"."+seat && entry.SessionName != canonical && entry.CanonicalSessionName != canonical {
 			continue
 		}
 		if entry.AgentActivity.State == "" {
@@ -49,7 +49,7 @@ func ReadSeatActivity(rig, seat string) SeatActivity {
 		}
 		return SeatActivity{Word: entry.AgentActivity.State, Present: true, Read: true}
 	}
-	return SeatActivity{Read: false, Why: "the activity read answered no record for " + rig + "/" + seat}
+	return SeatActivity{Read: false, Why: "the activity read answered no record for " + room + "/" + seat}
 }
 
 // RoomNodes is the ONE reading of a room's node records, over the runtime socket: a
@@ -89,7 +89,7 @@ func RoomNodes(room string) ([]map[string]any, bool, error) {
 			model = *seat.Model
 		}
 		nodes = append(nodes, map[string]any{
-			"rigName":   room,
+			"roomName":  room,
 			"logicalId": fmt.Sprintf("%s.%s", room, seat.Seat),
 			"seat":      seat.Seat,
 			// canonicalSessionName is the session the runtime hosts the seat under.

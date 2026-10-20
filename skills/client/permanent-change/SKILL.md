@@ -32,8 +32,8 @@ read, a guard is enforced.
    done is "committed in that file". Never a `guide` alone.
 3. **Commit by pathspec with a test or a guard** where the change is checkable; add the changelog file.
 4. **Deliver:** push the client, bump the hub pin, push the hub (the lead pushes after the gate; client first),
-   rebuild with `./scripts/build.sh --no-test` when code changed, then `4genteam room reseat <rig> <seat>` for each affected seat.
-5. **Prove delivery:** read the installed copy under `~/.config/4genthub/rooms/<rig>/seats/<seat>/skills`
+   rebuild with `./scripts/build.sh --no-test` when code changed, then `4genteam room reseat <room> <seat>` for each affected seat.
+5. **Prove delivery:** read the installed copy under `~/.config/4genthub/rooms/<room>/seats/<seat>/skills`
    (or its `AGENTS.md`) and confirm the new text is there. A change not found there did not ship.
 6. **Prove effect:** after at least 24 hours with no other change to that seat's workflow, rerun
    `team-benchmark` and compare. Keep the change only if the metric moved; otherwise revert by a commit.

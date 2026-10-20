@@ -28,7 +28,7 @@ const (
 	stallNudges = 3
 	// verdictQuestion is the one question the room is asked when it has gone quiet.
 	verdictQuestion = "go"
-	idleRunUsage    = "usage: 4genteam idle-run --room RIG [--lead SEAT] [--quiet SECONDS] [--stall SECONDS] [--every SECONDS] [--once] [--state-root DIR]"
+	idleRunUsage    = "usage: 4genteam idle-run --room ROOM [--lead SEAT] [--quiet SECONDS] [--stall SECONDS] [--every SECONDS] [--once] [--state-root DIR]"
 )
 
 const stallText = "You went quiet in the middle of a job. Continue where you stopped: check the working tree for what " +
@@ -41,10 +41,10 @@ type stallState struct {
 	told   bool
 }
 
-// IdleGuard is one `idle-run`. Every external reading is a field, so one pass is testable with no rig, no
+// IdleGuard is one `idle-run`. Every external reading is a field, so one pass is testable with no room, no
 // tmux, no Jev and no waiting.
 type IdleGuard struct {
-	Rig  string
+	Room string
 	Lead string
 	// Root is the state root the verb resolved: the heartbeat and this guard's log live under it.
 	Root  string
@@ -52,16 +52,16 @@ type IdleGuard struct {
 	Stall float64 // a seat that is not idle but logs nothing this long: it is stuck
 
 	Now       func() float64
-	Seats     func(rig string) []string
-	SeatLog   func(rig, seat string) (string, string)
+	Seats     func(room string) []string
+	SeatLog   func(room, seat string) (string, string)
 	Modified  func(path string) float64
-	Idle      func(rig, seat string) bool
-	Say       func(rig, seat, text string, raw bool)
-	Interrupt func(rig, seat string)
-	Active    func(rig string) ([]clientruntime.QueueRow, error)
+	Idle      func(room, seat string) bool
+	Say       func(room, seat, text string, raw bool)
+	Interrupt func(room, seat string)
+	Active    func(room string) ([]clientruntime.QueueRow, error)
 	Ask       func(ctx context.Context, summary, detail string, q clientjev.Question) (clientjev.Selection, float64, error)
 	// Wake is the off-peak gate every automatic message to a seat passes; false holds the message back.
-	Wake func(rig string) (bool, string)
+	Wake func(room string) (bool, string)
 	Log  func(text string)
 
 	State   map[string]*stallState
@@ -74,26 +74,26 @@ type IdleGuard struct {
 }
 
 // NewIdleGuard is a guard wired to the real world.
-func NewIdleGuard(rig, lead string, quiet, stall int, stateRoot string, out io.Writer) *IdleGuard {
-	g := &IdleGuard{Rig: rig, Lead: lead, Root: stateRoot, Quiet: float64(quiet), Stall: float64(stall), State: map[string]*stallState{}}
+func NewIdleGuard(room, lead string, quiet, stall int, stateRoot string, out io.Writer) *IdleGuard {
+	g := &IdleGuard{Room: room, Lead: lead, Root: stateRoot, Quiet: float64(quiet), Stall: float64(stall), State: map[string]*stallState{}}
 	g.Now = func() float64 { return float64(time.Now().UnixNano()) / 1e9 }
-	g.Seats = func(rig string) []string { return seatlog.RigSeats(stateRoot, rig) }
+	g.Seats = func(room string) []string { return seatlog.RoomSeats(stateRoot, room) }
 	// seatlog.SeatLog is the ONE resolver: it reads the newer of the omp session and the agy transcript,
 	// so the stall clock cannot count an agy seat from the omp-era file it left behind (the false alarm
 	// raised three times on 2026-10-17).
 	g.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	g.Modified = modTime
-	g.Idle = rigIdle
+	g.Idle = roomIdle
 	// The idle guard's nudges are latched and retried by its own clock, so a transport refusal is not this
 	// guard's signal: the supervisor's resume is the one send whose loss must keep its witness.
-	g.Say = func(rig, seat, text string, raw bool) { _ = rigSay(rig, seat, text, raw) }
-	g.Interrupt = func(rig, seat string) { tmuxInterrupt(stateRoot, rig, seat) }
-	g.Active = func(rig string) ([]clientruntime.QueueRow, error) {
-		return clientruntime.NewClient("").QueueList(rig, clientruntime.QueueListFilter{ActiveOnly: true})
+	g.Say = func(room, seat, text string, raw bool) { _ = roomSay(room, seat, text, raw) }
+	g.Interrupt = func(room, seat string) { tmuxInterrupt(stateRoot, room, seat) }
+	g.Active = func(room string) ([]clientruntime.QueueRow, error) {
+		return clientruntime.NewClient("").QueueList(room, clientruntime.QueueListFilter{ActiveOnly: true})
 	}
 	g.Ask = askJev
-	g.Wake = func(rig string) (bool, string) {
-		nodes, ok, err := rigNodes(rig)
+	g.Wake = func(room string) (bool, string) {
+		nodes, ok, err := roomNodes(room)
 		if err != nil {
 			return false, "the room's node records could not be read: " + err.Error()
 		}
@@ -135,8 +135,8 @@ func (g *IdleGuard) Step(ctx context.Context) {
 	now := g.Now()
 	idleAll, newest, counted := true, 0.0, 0
 	silence := map[string]float64{}
-	for _, seat := range g.Seats(g.Rig) {
-		path, _ := g.SeatLog(g.Rig, seat)
+	for _, seat := range g.Seats(g.Room) {
+		path, _ := g.SeatLog(g.Room, seat)
 		if path == "" {
 			continue
 		}
@@ -154,7 +154,7 @@ func (g *IdleGuard) Step(ctx context.Context) {
 		if silence[seat] < g.Stall {
 			state.count, state.told = 0, false
 		}
-		if g.Idle(g.Rig, seat) {
+		if g.Idle(g.Room, seat) {
 			continue
 		}
 		idleAll = false
@@ -165,7 +165,7 @@ func (g *IdleGuard) Step(ctx context.Context) {
 	if idleAll && counted > 0 && now-newest >= g.Quiet && newest > g.decided {
 		g.decide(ctx, silence, newest)
 	}
-	if err := clientservices.WriteHeartbeat(g.Root, clientservices.RoomGuard, g.Rig); err != nil {
+	if err := clientservices.WriteHeartbeat(g.Root, clientservices.RoomGuard, g.Room); err != nil {
 		g.Log("cannot write the heartbeat: " + err.Error())
 	}
 }
@@ -175,22 +175,22 @@ func (g *IdleGuard) nudge(seat string, silent, now float64, state *stallState) {
 	if now-state.nudged < g.Stall {
 		return
 	}
-	if ok, why := g.Wake(g.Rig); !ok {
+	if ok, why := g.Wake(g.Room); !ok {
 		g.Log(fmt.Sprintf("%s: stuck %.0fs, nudge held: %s", seat, silent, why))
 		return
 	}
 	state.nudged = now
 	if state.count >= stallNudges {
 		if !state.told && seat != g.Lead {
-			g.Say(g.Rig, g.Lead, fmt.Sprintf("%s has logged nothing for %.0f minutes and ignored %d nudges. "+
+			g.Say(g.Room, g.Lead, fmt.Sprintf("%s has logged nothing for %.0f minutes and ignored %d nudges. "+
 				"Look at it: reseat it, or reassign its work.", seat, silent/60, stallNudges), false)
 			state.told = true
 			g.Log(fmt.Sprintf("%s: stuck %.0fs after %d nudges, lead told", seat, silent, stallNudges))
 		}
 		return
 	}
-	g.Interrupt(g.Rig, seat)
-	g.Say(g.Rig, seat, stallText, false)
+	g.Interrupt(g.Room, seat)
+	g.Say(g.Room, seat, stallText, false)
 	state.count++
 	g.Log(fmt.Sprintf("%s: stuck %.0fs, told to continue (%d of %d)", seat, silent, state.count, stallNudges))
 }
@@ -198,7 +198,7 @@ func (g *IdleGuard) nudge(seat string, silent, now float64, state *stallState) {
 // decide asks Jev, once per quiet, whether the room should carry on, and tells the lead the answer.
 func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newest float64) {
 	g.decided = newest
-	rows, err := g.Active(g.Rig)
+	rows, err := g.Active(g.Room)
 	if err != nil {
 		g.Log("room quiet, the rail could not be read: " + err.Error())
 		return
@@ -210,7 +210,7 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 	}
 	g.asked, g.hasAsked = signature, true
 	var detail strings.Builder
-	fmt.Fprintf(&detail, "Every seat of room %s is idle; the newest activity was %.0f minutes ago.\n", g.Rig, (g.Now()-newest)/60)
+	fmt.Fprintf(&detail, "Every seat of room %s is idle; the newest activity was %.0f minutes ago.\n", g.Room, (g.Now()-newest)/60)
 	fmt.Fprintf(&detail, "Open rail items (pending, in-progress, blocked): %d\n", len(rows))
 	for i, row := range rows {
 		if i == 10 {
@@ -231,7 +231,7 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 			{ID: "continue", Label: "Continue: open work remains and the lead should assign the next item", Recommended: recommended == "continue"},
 			{ID: "stop", Label: "Stop: the work is finished or waits on the owner, so start nothing new", Recommended: recommended == "stop"},
 		}}
-	pick, threshold, askErr := g.Ask(ctx, "room "+g.Rig+" has gone idle", detail.String(), question)
+	pick, threshold, askErr := g.Ask(ctx, "room "+g.Room+" has gone idle", detail.String(), question)
 	var message string
 	switch {
 	case askErr != nil:
@@ -246,11 +246,11 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 		message = fmt.Sprintf("The room went idle. Jev decided to STOP (confidence %.2f). Start no new work: report the result to the owner.\n%s",
 			pick.Confidence, detail.String())
 	}
-	if ok, why := g.Wake(g.Rig); !ok {
+	if ok, why := g.Wake(g.Room); !ok {
 		g.Log("room idle, message to the lead held: " + why)
 		return
 	}
-	g.Say(g.Rig, g.Lead, message, false)
+	g.Say(g.Room, g.Lead, message, false)
 	g.Log(fmt.Sprintf("room idle: lead told (%s, %.2f)", pick.OptionID, pick.Confidence))
 }
 
@@ -288,7 +288,7 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 	}
 	flags := flag.NewFlagSet("idle-run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	rig := flags.String("room", "", "the rig to guard (required)")
+	room := flags.String("room", "", "the room to guard (required)")
 	lead := flags.String("lead", "lead", "the seat told what Jev decided")
 	quiet := flags.Int("quiet", 300, "seconds every seat must be idle before Jev is asked")
 	stall := flags.Int("stall", 900, "seconds a working seat may log nothing before it is told to continue")
@@ -297,8 +297,8 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 	if err := flags.Parse(args); err != nil {
 		return clientcmd.ExitUsage
 	}
-	if strings.TrimSpace(*rig) == "" {
-		fmt.Fprintf(stderr, "4genteam idle-run: --room is required - there is no default rig. %s\n", idleRunUsage)
+	if strings.TrimSpace(*room) == "" {
+		fmt.Fprintf(stderr, "4genteam idle-run: --room is required - there is no default room. %s\n", idleRunUsage)
 		return clientcmd.ExitUsage
 	}
 	root, err := clientenv.ResolveStateRoot(rootFlag)
@@ -306,8 +306,8 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintf(stderr, "4genteam idle-run: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	guard := NewIdleGuard(*rig, *lead, *quiet, *stall, root, stdout)
-	guard.Log(fmt.Sprintf("guarding %s: lead %s, quiet %ds, stall %ds", *rig, *lead, *quiet, *stall))
+	guard := NewIdleGuard(*room, *lead, *quiet, *stall, root, stdout)
+	guard.Log(fmt.Sprintf("guarding %s: lead %s, quiet %ds, stall %ds", *room, *lead, *quiet, *stall))
 	interrupted := make(chan os.Signal, 1)
 	signal.Notify(interrupted, os.Interrupt)
 	for {
@@ -323,7 +323,7 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 	}
 }
 
-// IdleLogPath is the guard's log for one rig.
-func IdleLogPath(rig, root string) string {
-	return filepath.Join(LogDir(root), "idle-guard-"+rig+".log")
+// IdleLogPath is the guard's log for one room.
+func IdleLogPath(room, root string) string {
+	return filepath.Join(LogDir(root), "idle-guard-"+room+".log")
 }

@@ -39,7 +39,7 @@ func StateSubdir(home, name string) string {
 	return filepath.Join(configDir(home), name)
 }
 
-// RealHome is the account's home directory from the passwd entry, NOT $HOME. the rig orchestrator launches a seat
+// RealHome is the account's home directory from the passwd entry, NOT $HOME. the room orchestrator launches a seat
 // with HOME pointed at the seat's own state directory, so resolving from the environment would make a
 // machine-level path a function of which seat happens to run the client - the doubled path seat_policy's
 // real_home() exists to avoid.
@@ -179,7 +179,7 @@ func SeatStoreRefusal(err error, outFlag string) error {
 // than in a verb package because several verbs default to it, and because it is a MACHINE-level location:
 // resolved from the real home, it is the same inside a seat and out.
 //
-// Two reasons it answers "" and NEVER a relative path: the rig orchestrator launches a seat with HOME pointed at the
+// Two reasons it answers "" and NEVER a relative path: the room orchestrator launches a seat with HOME pointed at the
 // seat's own state directory, so resolving from the environment would make the store a function of which
 // seat runs the client; and a relative store would make the tree a function of the working directory, so
 // a client run from a checkout could read whatever tree happened to sit under it. Callers refuse with

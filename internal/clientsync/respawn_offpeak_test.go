@@ -12,7 +12,7 @@ import (
 
 // deadDeepSeekNode is room1.alpha's record when its agent has died AND it runs a DeepSeek model: the one
 // record where a respawn would start DeepSeek work, which at peak is what the gate refuses.
-const deadDeepSeekNode = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1",` +
+const deadDeepSeekNode = `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","roomName":"room1",` +
 	`"model":"deepseek/deepseek-flash","sessionStatus":"agent_exited"}`
 
 // respawnGateEnv pins the clock and leaves the setting unset, with the machine's holiday file kept out.
@@ -27,9 +27,9 @@ func respawnGateEnv(t *testing.T, pin string) {
 // to the seat's own record - and the refusal must land before the dead-reading wait, or a caller who asked to
 // wait --after-seconds would sit through it and then be refused anyway.
 func TestRespawnRefusesADeepSeekSeatAtPeakBeforeAnyWait(t *testing.T) {
-	rigRan := poisonRig(t)
-	stub := &rigStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
-	stubRig(t, stub)
+	roomRan := poisonRoom(t)
+	stub := &roomStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
+	stubRoom(t, stub)
 	respawnGateEnv(t, "2026-10-09 02:00")
 
 	var stdout, stderr bytes.Buffer
@@ -53,7 +53,7 @@ func TestRespawnRefusesADeepSeekSeatAtPeakBeforeAnyWait(t *testing.T) {
 	if got := stub.reads; got != 1 {
 		t.Errorf("took %d readings, want 1: the gate refuses before the dead reading is waited out", got)
 	}
-	if rigRan() {
+	if roomRan() {
 		t.Error("it ran `rig` anyway")
 	}
 }
@@ -76,9 +76,9 @@ func TestRespawnPassesADeepSeekSeatThroughTheGateWhenTheCheckIsOff(t *testing.T)
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rigRan := poisonRig(t)
-			stub := &rigStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
-			stubRig(t, stub)
+			roomRan := poisonRoom(t)
+			stub := &roomStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
+			stubRoom(t, stub)
 			t.Setenv(clientoffpeak.HolidaysEnv, "")
 			t.Setenv(clientoffpeak.PinEnv, c.pin)
 			t.Setenv(clientoffpeak.ModeEnv, c.modeEnv)
@@ -96,7 +96,7 @@ func TestRespawnPassesADeepSeekSeatThroughTheGateWhenTheCheckIsOff(t *testing.T)
 			if strings.Contains(stderr.String(), "PEAK:") {
 				t.Errorf("the gate refused a seat it was told to let through:\n%s", stderr.String())
 			}
-			if rigRan() {
+			if roomRan() {
 				t.Error("it ran `rig`")
 			}
 		})
@@ -107,11 +107,11 @@ func TestRespawnPassesADeepSeekSeatThroughTheGateWhenTheCheckIsOff(t *testing.T)
 // local runtime reaches the launch leg at any hour - which is what keeps this verb's gate honest outside the
 // peak windows.
 func TestRespawnPassesALocalSeatThroughTheGateAtPeak(t *testing.T) {
-	localNode := `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","rigName":"room1",` +
+	localNode := `{"logicalId":"room1.alpha","canonicalSessionName":"room1-alpha@room1","roomName":"room1",` +
 		`"model":"claude-code/sonnet","sessionStatus":"agent_exited"}`
-	rigRan := poisonRig(t)
-	stub := &rigStub{answers: []string{"[" + localNode + "]"}}
-	stubRig(t, stub)
+	roomRan := poisonRoom(t)
+	stub := &roomStub{answers: []string{"[" + localNode + "]"}}
+	stubRoom(t, stub)
 	respawnGateEnv(t, "2026-10-09 02:00")
 
 	var stdout, stderr bytes.Buffer
@@ -127,7 +127,7 @@ func TestRespawnPassesALocalSeatThroughTheGateAtPeak(t *testing.T) {
 	if strings.Contains(stderr.String(), "PEAK:") {
 		t.Errorf("a local seat was refused at peak:\n%s", stderr.String())
 	}
-	if rigRan() {
+	if roomRan() {
 		t.Error("it ran `rig`")
 	}
 }
@@ -136,9 +136,9 @@ func TestRespawnPassesALocalSeatThroughTheGateAtPeak(t *testing.T) {
 // argument it does not know, so the name this package used to invent is a caller error rather than a
 // silent no-op.
 func TestRespawnRefusesAFlagItDoesNotTake(t *testing.T) {
-	rigRan := poisonRig(t)
-	stub := &rigStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
-	stubRig(t, stub)
+	roomRan := poisonRoom(t)
+	stub := &roomStub{answers: []string{"[" + deadDeepSeekNode + "]"}}
+	stubRoom(t, stub)
 
 	var stdout, stderr bytes.Buffer
 	code := RunRespawnVerb(context.Background(), []string{"room1", "alpha", "--any-time"}, &stdout, &stderr)
@@ -148,7 +148,7 @@ func TestRespawnRefusesAFlagItDoesNotTake(t *testing.T) {
 	if !strings.Contains(stderr.String(), "--any-time") {
 		t.Errorf("the refusal did not name the argument: %q", stderr.String())
 	}
-	if rigRan() {
+	if roomRan() {
 		t.Error("it ran `rig` anyway")
 	}
 }

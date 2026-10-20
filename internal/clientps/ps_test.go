@@ -23,7 +23,7 @@ func TestCollectReadsANativeRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	seats := collect(root, []session{{name: "agenthub--R--S"}, {name: "plain-session"}, {name: "R-S@R"}, {name: "agenthub--R"}}, "")
-	if len(seats) != 1 || seats[0].Rig != "R" || seats[0].Member != "S" || seats[0].Runtime != "omp" || seats[0].LogPath != log {
+	if len(seats) != 1 || seats[0].Room != "R" || seats[0].Member != "S" || seats[0].Runtime != "omp" || seats[0].LogPath != log {
 		t.Fatalf("got %+v", seats)
 	}
 }
@@ -42,7 +42,7 @@ func TestQuotaIn(t *testing.T) {
 }
 
 func TestRollupCountsAttention(t *testing.T) {
-	rows := rollup([]Seat{{Rig: "a", Status: "running"}, {Rig: "a", Status: "quota"}})
+	rows := rollup([]Seat{{Room: "a", Status: "running"}, {Room: "a", Status: "quota"}})
 	if len(rows) != 1 || rows[0].Seats != 2 || rows[0].Attn != 1 || rows[0].Status != "attention" {
 		t.Fatalf("got %+v", rows)
 	}
@@ -75,17 +75,17 @@ func TestNodeRecordKeys(t *testing.T) {
 func TestANamedRoomThatMatchedNothingSaysSo(t *testing.T) {
 	for _, tc := range []struct {
 		what            string
-		rig             string
+		room            string
 		sessions, seats int
 		wantNamed       string
 	}{
-		{what: "a named room with no live seats", rig: "leg-solo", sessions: 3, wantNamed: "leg-solo"},
+		{what: "a named room with no live seats", room: "leg-solo", sessions: 3, wantNamed: "leg-solo"},
 		{what: "no room named", sessions: 3},
-		{what: "no sessions at all", rig: "leg-solo"},
-		{what: "the named room's seats are right there", rig: "leg-solo", sessions: 1, seats: 1},
+		{what: "no sessions at all", room: "leg-solo"},
+		{what: "the named room's seats are right there", room: "leg-solo", sessions: 1, seats: 1},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
-			reason := emptyReason(tc.rig, tc.sessions, tc.seats)
+			reason := emptyReason(tc.room, tc.sessions, tc.seats)
 			if tc.wantNamed == "" {
 				if reason != "" {
 					t.Fatalf("got %q, want silence", reason)

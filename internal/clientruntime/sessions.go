@@ -9,7 +9,7 @@
 // the connector able to read its own machine.
 //
 // THE KEYS ARE THE CLI'S, deliberately. The consumer parses ONE shape - `canonicalSessionName` first (the
-// name a person passes to `--session`), then `rigName`, `logicalId` and `sessionStatus` - and the runtime
+// name a person passes to `--session`), then `roomName`, `logicalId` and `sessionStatus` - and the runtime
 // serves exactly those spellings, so no second parser was needed on the client side. The json tags below ARE
 // that contract: renaming one without renaming the runtime's serde rename makes every native session
 // invisible to the connector while the runtime still looks healthy.
@@ -21,7 +21,7 @@ import "errors"
 type SessionEntry struct {
 	CanonicalSessionName string          `json:"canonicalSessionName"`
 	SessionName          string          `json:"sessionName"`
-	RigName              string          `json:"rigName"`
+	RoomName             string          `json:"roomName"`
 	LogicalID            string          `json:"logicalId"`
 	SessionStatus        string          `json:"sessionStatus"`
 	AgentActivity        SessionActivity `json:"agentActivity"`

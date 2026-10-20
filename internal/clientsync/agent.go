@@ -85,7 +85,7 @@ type AgentDaemonOptions struct {
 	Log func(string)
 	// Rows is every row the supervision half currently reports, for the re-send after each `ready` (7.3).
 	Rows func() []clientservices.Health
-	// Pending TAKES the state changes since the last call: latest wins per (safeguard, rig), which is the
+	// Pending TAKES the state changes since the last call: latest wins per (safeguard, room), which is the
 	// frame's own contract - no seq, no cursor, no ack.
 	Pending func() []clientservices.Health
 
@@ -116,7 +116,7 @@ type sessionStream struct {
 }
 
 // AgentDaemon is the socket half of agent. Every external read is a field so a test drives the whole loop
-// with a scripted socket and no rig, no cloud and no waiting.
+// with a scripted socket and no room, no cloud and no waiting.
 type AgentDaemon struct {
 	opts AgentDaemonOptions
 
@@ -140,7 +140,7 @@ type AgentDaemon struct {
 	connected  time.Time
 }
 
-// NewAgentDaemon wires the real world: the daemon reads the rig tool and the clock, and holds one redactor
+// NewAgentDaemon wires the real world: the daemon reads the room tool and the clock, and holds one redactor
 // for the whole stream, because the .env rule pairs a tool call with its result ACROSS events.
 func NewAgentDaemon(opts AgentDaemonOptions) *AgentDaemon {
 	daemon := &AgentDaemon{
@@ -164,8 +164,8 @@ func NewAgentDaemon(opts AgentDaemonOptions) *AgentDaemon {
 	// `rig transcript` and `rig capture`; the last two are not verbs the installed client has at all
 	// ("4genteam: unknown command transcript"), so wherever `rig` resolved to that client agent could not
 	// read a transcript or a pane. The session list is the runtime's, which answers one entry per seat of
-	// every room it hosts - the same set `--nodes --all-rigs` was asked for, from the daemon that owns it.
-	daemon.Sessions = rigSessionCandidates
+	// every room it hosts - the same set `--nodes --all-rooms` was asked for, from the daemon that owns it.
+	daemon.Sessions = roomSessionCandidates
 	daemon.Transcript = func(ctx context.Context, session string) (string, error) {
 		answer, err := clientruntime.NewClient("").Transcript(session, transcriptTail)
 		if err != nil {
@@ -293,8 +293,8 @@ func (d *AgentDaemon) hello() (Ready, error) {
 func (d *AgentDaemon) resendAll(ctx context.Context) error {
 	candidates, err := d.Sessions(ctx)
 	if err != nil {
-		// A rig that cannot be read is not a dead socket: the socket is what the credential wants, and
-		// the next pass reads the rigs again.
+		// A room that cannot be read is not a dead socket: the socket is what the credential wants, and
+		// the next pass reads the rooms again.
 		d.opts.Log(fmt.Sprintf("cannot read the local sessions: %v", err))
 	}
 	for _, candidate := range candidates {
@@ -359,7 +359,7 @@ func (d *AgentDaemon) streamFor(candidate sessionCandidate) *sessionStream {
 	if stream == nil {
 		stream = &sessionStream{
 			key: candidate.name, name: candidate.name,
-			room: candidate.rigName, seat: candidate.member,
+			room: candidate.roomName, seat: candidate.member,
 			source: SourceTranscript,
 		}
 		d.sessions[candidate.name] = stream
@@ -546,7 +546,7 @@ func (d *AgentDaemon) pruneWithheld(dir string) {
 	}
 }
 
-// safeFileName is a session name as one path component: a session key is already a rig-qualified name,
+// safeFileName is a session name as one path component: a session key is already a room-qualified name,
 // and everything that is not one of those characters is replaced rather than escaped, so no key can name
 // a path outside the store.
 func safeFileName(key string) string {
@@ -578,7 +578,7 @@ func (d *AgentDaemon) publishRows(rows []clientservices.Health) error {
 	for _, row := range rows {
 		frame := map[string]any{
 			"type":      "safeguard",
-			"rig":       row.Rig,
+			"rig":       row.Room,
 			"safeguard": row.Safeguard,
 			"state":     row.State,
 			"restarts":  row.Restarts,

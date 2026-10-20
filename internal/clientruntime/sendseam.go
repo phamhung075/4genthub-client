@@ -12,9 +12,9 @@ import (
 // is missing (a half-named seat names no session, which is the contract the transport seam relied on).
 //
 // It is derived, not looked up, because the runtime derives it the same way (`ipc.go`, and the runtime side's
-// own session naming): a verb that has a RIG and a SEAT must be able to address the session without first
+// own session naming): a verb that has a ROOM and a SEAT must be able to address the session without first
 // asking the room for its status, which costs a round trip and fails for a seat the room has not reported.
-// The room is the RIG here, which is what `--state-dir`/the socket's own rooms call it.
+// The room is the ROOM here, which is what `--state-dir`/the socket's own rooms call it.
 func SeatSessionName(room, seat string) string {
 	if room == "" || seat == "" {
 		return ""

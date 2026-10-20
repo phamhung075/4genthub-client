@@ -18,12 +18,12 @@ its own skills path.
 - pulls a room's seats from the 4genthub server and pins them (`sync`, `seat`),
 - starts a room's local stack — daemon, seats, status bridge, compaction supervisor, watch view (`up`),
 - keeps each running seat's context small by compacting it (`compact`, `compact-run`),
-- reports this machine's rigs and seat status to the server (`bridge`),
+- reports this machine's rooms and seat status to the server (`bridge`),
 - shows the whole room live in a terminal grid (`watch`, `grid`, `feed`, `inputs`, `input`),
 - creates the cloud room from a definition and pushes a project's MCP servers and skills as modules
   (`team`), prints the per-seat policy the hub renders (`policy`), and sends friction reports (`feedback`).
 
-The server is hosted. The seats run in the rig orchestrator (local) and are not part of this
+The server is hosted. The seats run in the room orchestrator (local) and are not part of this
 repository.
 
 ## Requirements (check each before you start)
@@ -31,7 +31,7 @@ repository.
 | Need | Check |
 |---|---|
 | A 4genthub account key | you hold a value for `AGENTHUB_TOKEN` |
-| rig daemon on `127.0.0.1:7433` | `rig ps` answers |
+| the room's local stack, for the watch view | `4genteam status ROOM` names the supervisor |
 | `herdr` and `tmux`, for the watch view | `herdr --version`, `tmux -V` |
 | Go 1.26 or newer, only to build from source | `go version` |
 | Rust toolchain, only for the force-compaction helper | `cargo --version` |
@@ -64,7 +64,7 @@ or, from a checkout, which is also what you do to verify a change:
 
 ```bash
 go build -o 4genteam ./cmd/4genteam        # builds the one binary
-go test ./...                              # the client's own tests; no server, rig or network
+go test ./...                              # the client's own tests; no server, room or network
 install -m 0755 4genteam ~/.local/bin/
 ```
 
@@ -123,10 +123,10 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 
 | Command | Does |
 |---|---|
-| `sync` | pull and inspect resolved seats: `status`, `pull`, `messages`, `connector`, `rig`, `bundle`, `switch`, `install-checker`, `offline-install`, `respawn` |
-| `bridge` | report this machine and its rigs to the cloud |
-| `up` | start the local stack for a rig: daemon, seats, bridge, supervisor, UI |
-| `compact` | (re)start the compaction supervisor for a rig, detached |
+| `sync` | pull and inspect resolved seats: `status`, `pull`, `messages`, `connector`, `bundle`, `switch`, `install-checker`, `offline-install`, `respawn` |
+| `bridge` | report this machine and its rooms to the cloud |
+| `up` | start the local stack for a room: daemon, seats, bridge, supervisor, UI |
+| `compact` | (re)start the compaction supervisor for a room, detached |
 | `compact-run` | the compaction supervisor loop, in the foreground (what `compact` starts) |
 | `doctor` | report every safeguard (compact, watchdog, bridge, agent); read-only |
 | `agent` | the always-on client: stream local sessions, supervise the safeguards |
@@ -149,13 +149,13 @@ Every command answers `--help`. This is the list the binary itself prints (`4gen
 | `evidence` | submit evidence for a task |
 | `complete` | complete a task after the local Jev gate (evidence, deterministic checks, acceptance criteria) |
 | `decide` | ask one step of the seat/lead/owner decision ladder, answered by Jev on this machine |
-| `continue` | restore a stopped rig from its latest snapshot and brief its seats; no argument lists the rigs and the briefs, `--all` walks every rig that has one |
-| `watchdog` | notice when a rig's tmux seats have vanished and restore it: `--check` reports, `--watch SECONDS` restores after two dead polls, `--self-test` exercises the rule |
+| `continue` | restore a stopped room from its latest snapshot and brief its seats; no argument lists the rooms and the briefs, `--all` walks every room that has one |
+| `watchdog` | notice when a room's tmux seats have vanished and restore it: `--check` reports, `--watch SECONDS` restores after two dead polls, `--self-test` exercises the rule |
 | `seatcheck` | the seat-side checker (also reachable as `seatcheck` via argv[0]) |
 | `version` | the client's own version |
 
 There is no default team and no default inventory: `team apply` needs `--team`, `publish-skills`
-needs `--inventory`. A command that needs the rig and cannot reach it exits non-zero with the reason;
+needs `--inventory`. A command that needs the room and cannot reach it exits non-zero with the reason;
 nothing downgrades silently.
 
 ## Configuration
@@ -226,7 +226,7 @@ now, or wait and the gate opens by itself
 
 `--allow-peak` is the one flag this check adds: it skips the check for one run and wins over the
 setting in the environment or the env file, and each verb keeps its own arguments beside it. An
-argument a verb does not know is refused by name rather than read as the rig name. A room with no
+argument a verb does not know is refused by name rather than read as the room name. A room with no
 `deepseek/` seat is never refused, and neither is one whose seats cannot be read — a reading that
 fails is not a refusal, and the verb's own error says what is wrong. A verb with nothing to start or
 resume is not gated either: `continue` on an already live room briefs its seats and restores nothing.
@@ -239,8 +239,8 @@ The same procedure packaged for an agent that runs the client itself is
 ```bash
 4genteam --help                 # exit 0, lists the commands
 4genteam version                # the binary's own version
-go test ./...                   # from a checkout: the client's tests, no server, rig or network
-rig ps --nodes                  # after `rig up`: every seat running, none parked
+go test ./...                   # from a checkout: the client's tests, no server, room or network
+4genteam ps                     # every seat this machine runs, none parked
 4genteam status ROOM            # the supervisor's process and last log lines
 ```
 
@@ -255,7 +255,7 @@ Run from the project's directory. `ROOM` is the room's name on the server.
 4genteam up ROOM            # starts the full lifecycle: daemon, seats, supervisor, bridge and watch view
 ```
 
-`sync room` is GONE (2026-10-15): it read the cloud's `GET /api/v2/rooms/{room}/rigspec`, which the server
+`sync room` is GONE (2026-10-15): it read the cloud's `GET /api/v2/rooms/{room}/roomspec`, which the server
 deleted, and a verb kept only to fail would be a deprecation shim. What it did for a NEW room - link the
 provider's env file, write the room's seat files - now comes from the room's own definition and the
 launcher: `4genteam up ROOM --team DIR`. See the CHANGELOG entry for the operator's sentence.
@@ -314,21 +314,21 @@ the options and the rules are in [docs/WATCH.md](docs/WATCH.md), which is also t
 The loader reads the tree by one rule: **a directory holding `SKILL.md` is a skill, and a directory
 without one is a seat folder.** So `skills/rooms/<room>/<name>` is a room-level skill when it holds
 `SKILL.md`, and the seat folder `<name>` when it does not. A shared or client skill reads generic — no
-rig, seat, host or personal path; a room or seat skill may name its own room or seat, because that is
+room, seat, host or personal path; a room or seat skill may name its own room or seat, because that is
 what it is scoped to.
 
 `docs/AGENT-SETUP.md` describes how a skill gets to a seat.
 
 ### The skills for the LLM that runs the client
 
-`skills/client/` is read by the LLM that operates `4genteam` and the rig, not by a seat, so a seat's
+`skills/client/` is read by the LLM that operates `4genteam` and the room, not by a seat, so a seat's
 delivery never installs it:
 
 | Skill | Use it to |
 |---|---|
 | [`install`](skills/client/install/SKILL.md) | audit environment, detect missing configs/keys, run doctor, onboard PC |
 | [`watch-team`](skills/client/watch-team/SKILL.md) | open the live seat grid and the lead window |
-| [`rig-runtime-switch`](skills/client/rig-runtime-switch/SKILL.md) | move a whole rig to another runtime when a provider is capped |
+| [`room-runtime-switch`](skills/client/room-runtime-switch/SKILL.md) | move a whole room to another runtime when a provider is capped |
 | [`seat-runtime-switch`](skills/client/seat-runtime-switch/SKILL.md) | move one seat to another runtime or model, check it, brief it |
 | [`spawn-team`](skills/client/spawn-team/SKILL.md) | continue or spawn an agent team |
 | [`offpeak-gate`](skills/client/offpeak-gate/SKILL.md) | decide whether DeepSeek seats may start at off-peak billing |
@@ -366,6 +366,6 @@ This tree is the one source of skills. A project does not keep its own copy.
 - Do not add a fallback to a path outside this repository. The client takes the project from the
   current directory and everything else from its env file or an argument.
 - A change to behavior needs a Go test beside the package it changes, and the suite must stay free of
-  network, rig and seat dependencies: `go test ./...`.
-- The client names no private path, host, person or rig: a default that points at one team belongs in
+  network, room and seat dependencies: `go test ./...`.
+- The client names no private path, host, person or room: a default that points at one team belongs in
   an argument or the env file, not in the code.
