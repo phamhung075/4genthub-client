@@ -11,12 +11,12 @@ Removal here means a rename: `mv -n "<file>" "<file>.obsolete"`. The file is out
 
 - Removing temp files, build artifacts, old code, deprecated tests
 - After refactoring (keep backup during testing)
-- Any situation where a recursive forced `rm` is refused by the pre-tool hook or by this rig's seat policy
+- Any situation where a recursive forced `rm` is refused by the pre-tool hook or by this room's seat policy
 - Need reversible "deletion"
 
 ## What Actually Enforces This
 
-**Enforced by**: the PreToolUse hook `.claude/hooks/pre_tool_use.py` — `CommandValidator._is_dangerous_command()` and its `dangerous_rm_patterns` list — plus this rig's seat policy, which refuses a recursive forced `rm` for every seat. Both of them refuse; neither gives you a removal tool. **There is no `safe-rm` binary in this tree — do not call one**, and this skill adds no script: the rename below is the whole mechanism.
+**Enforced by**: the PreToolUse hook `.claude/hooks/pre_tool_use.py` — `CommandValidator._is_dangerous_command()` and its `dangerous_rm_patterns` list — plus this room's seat policy, which refuses a recursive forced `rm` for every seat. Both of them refuse; neither gives you a removal tool. **There is no `safe-rm` binary in this tree — do not call one**, and this skill adds no script: the rename below is the whole mechanism.
 
 | Issue | Solution |
 |-------|----------|
@@ -67,7 +67,7 @@ mv -n "<file>" "<file>.obsolete"     # one named file; -n never overwrites an ex
 1. Mark obsolete → `mv -n <file> <file>.obsolete` (one named file at a time)
 2. Verify works → `npm test && npm run build`
 3. Review periodic → `find . -name "*.obsolete"`
-4. Permanent delete (when confident) → `/bin/rm <file>.obsolete` (a single named file; a renamed *directory* needs a recursive delete, which this rig's policy refuses — leave that one to a human in a plain terminal)
+4. Permanent delete (when confident) → `/bin/rm <file>.obsolete` (a single named file; a renamed *directory* needs a recursive delete, which this room's policy refuses — leave that one to a human in a plain terminal)
 
 ## When NOT to Use
 

@@ -57,13 +57,13 @@ Stale worktrees (`/tmp/wt-*`, `/tmp/gate-*`, prunable entries in `git worktree l
 
 ## Ruled (architect, 2026-10-11: `ai_docs/core-architecture/seat-worktrees.md`)
 
-- **Your worktree and branch:** `<roomDir>/wt/<seat>` on `<rig>/<seat>`, for example `4genthub-min/go-dev`. The reviewer's worktree is detached. Your client code lives in exactly one place, `<roomDir>/wt/<seat>/agenthub_client`, on the branch you commit to: `<rig>/<seat>` for a seat that has none, and the lane branch a seat migrated off `<roomDir>/wt/<seat>-client` kept - a second copy at `<seat>-client` is the pre-derivation layout, and `up` removes it, clean only, so the branch survives. `.claude` is not a submodule here and is never linked. Never run `git submodule update` there.
+- **Your worktree and branch:** `<roomDir>/wt/<seat>` on `<room>/<seat>`, for example `4genthub-min/go-dev`. The reviewer's worktree is detached. Your client code lives in exactly one place, `<roomDir>/wt/<seat>/agenthub_client`, on the branch you commit to: `<room>/<seat>` for a seat that has none, and the lane branch a seat migrated off `<roomDir>/wt/<seat>-client` kept - a second copy at `<seat>-client` is the pre-derivation layout, and `up` removes it, clean only, so the branch survives. `.claude` is not a submodule here and is never linked. Never run `git submodule update` there.
 - **The commit form (owner, pathspec fleet-wide, 2026-10-17):** commit by pathspec and do not stage first - `git commit -m "..." -- <paths>`; a new file gets `git add -N -- <new>` first, then the same pathspec commit. `git add -A`, `git add .` and `commit -a` stay forbidden.
-- **Ready for a gate:** tell the lead your tip as `<rig>/<seat>=<sha>`.
+- **Ready for a gate:** tell the lead your tip as `<room>/<seat>=<sha>`.
 - **The merge routine (the lead's):**
-  1. The lead merges each ready tip `--no-ff` into `<rig>/integration`.
+  1. The lead merges each ready tip `--no-ff` into `<room>/integration`.
   2. The reviewer gates its tip `C`. The verdict names `C`, the main tip `M`, every `branch=sha` it contains, the commands run, and each result.
   3. The lead checks that integration = `C` and main = `M`, then runs `git merge --ff-only C` in the main checkout.
   4. The lead re-checks that main = `C`.
-- **On a conflict:** the lead aborts and returns the item to you. Run `git merge <rig>/integration` on your branch, resolve it there, and name your new tip.
+- **On a conflict:** the lead aborts and returns the item to you. Run `git merge <room>/integration` on your branch, resolve it there, and name your new tip.
 - **After a land that contains your tip:** run `git merge --ff-only main` before your next edit.

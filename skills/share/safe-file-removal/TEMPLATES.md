@@ -9,7 +9,7 @@ Copy-paste commands. Replace `[PLACEHOLDERS]` with actual values. Every removal 
 | **Single file** | `mv -n "[PATH_TO_FILE]" "[PATH_TO_FILE].obsolete"` |
 | **A directory** | `mv -n "[PATH_TO_DIR]" "[PATH_TO_DIR].obsolete"` |
 | **Several files** | one command per file, run them in sequence |
-| **Never** | a recursive forced `rm` — refused by the hook and by this rig's seat policy |
+| **Never** | a recursive forced `rm` — refused by the hook and by this room's seat policy |
 
 **Example**:
 ```bash
@@ -77,7 +77,7 @@ find logs/ -type f -mtime +30 | while read -r f; do mv -n "$f" "$f.obsolete"; do
 | **Delete one named file** | `/bin/rm [FILENAME].obsolete` |
 | **Delete old (7+ days), one at a time** | `find . -name "*.obsolete" -mtime +7 \| while read -r f; do /bin/rm "$f"; done` |
 
-A renamed **directory** still needs a recursive delete, which this rig's policy refuses — leave that one to a human in a plain terminal.
+A renamed **directory** still needs a recursive delete, which this room's policy refuses — leave that one to a human in a plain terminal.
 
 ## Scripting
 

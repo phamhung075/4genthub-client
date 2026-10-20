@@ -187,7 +187,7 @@ du -sh $(find . -name "*.obsolete" 2>/dev/null)
 
 ### The Enforcement
 ```bash
-# The refusal comes from the hook's pattern list and from this rig's seat policy.
+# The refusal comes from the hook's pattern list and from this room's seat policy.
 grep -nE "dangerous_rm_patterns|_is_dangerous_command" .claude/hooks/pre_tool_use.py
 ```
 

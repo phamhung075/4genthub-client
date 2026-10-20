@@ -1,6 +1,6 @@
 # Safe File Removal Examples
 
-Real-world patterns for removing a file reversibly — rename it to `.obsolete` instead of deleting it. This is what replaces a recursive forced `rm`, which the pre-tool hook and this rig's seat policy both refuse. There is no `safe-rm` binary; every command below is plain `mv -n`, one named file at a time.
+Real-world patterns for removing a file reversibly — rename it to `.obsolete` instead of deleting it. This is what replaces a recursive forced `rm`, which the pre-tool hook and this room's seat policy both refuse. There is no `safe-rm` binary; every command below is plain `mv -n`, one named file at a time.
 
 ## Pattern Summary
 
@@ -160,7 +160,7 @@ git commit -m "chore: remove sensitive config from repo"
 ```bash
 # Agent attempts a recursive forced delete → REFUSED
 rm -rf old_dir/
-# Refused: the hook's dangerous_rm_patterns match it, and this rig's seat policy refuses it for every seat
+# Refused: the hook's dangerous_rm_patterns match it, and this room's seat policy refuses it for every seat
 
 # Agent renames instead → SUCCEEDS, and stays recoverable
 mv -n old_dir old_dir.obsolete
@@ -206,7 +206,7 @@ ls old_dir.obsolete
 
 ## Integration with Hooks
 
-**Enforced by**: the PreToolUse hook `.claude/hooks/pre_tool_use.py` — `CommandValidator._is_dangerous_command()` and its `dangerous_rm_patterns` list — plus this rig's seat policy, which refuses a recursive forced `rm` for every seat.
+**Enforced by**: the PreToolUse hook `.claude/hooks/pre_tool_use.py` — `CommandValidator._is_dangerous_command()` and its `dangerous_rm_patterns` list — plus this room's seat policy, which refuses a recursive forced `rm` for every seat.
 
 **Flow**: Agent tries a recursive forced `rm` → refused → renames to `.obsolete` → user reviews → restores or deletes
 
