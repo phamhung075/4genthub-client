@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 )
@@ -339,6 +341,73 @@ func TestRoomReseatCarriesTheHubsPolicyDocument(t *testing.T) {
 	assertRequests(t, daemon,
 		`{"action":"StopSeat","payload":{"room":"room-a","seat":"lead"}}`,
 		`{"action":"RestartSeat","payload":{"policy_document":`+string(installed)+`,"room":"room-a","seat":"lead"}}`)
+}
+
+// TestRoomReseatRefusesAtPeakBeforeTheSeatIsStopped. A restart is a launch, so the gate decides BEFORE the
+// stop: the daemon's own recorded frames are the proof of the order - the room's seats are read to decide,
+// and a refusal leaves nothing to stop. A gate that ran after StopSeat would record that frame here.
+func TestRoomReseatRefusesAtPeakBeforeTheSeatIsStopped(t *testing.T) {
+	// 2026-10-09 02:00 is inside 01:00-04:00 UTC on a Friday; the setting is the default (on).
+	t.Setenv(clientoffpeak.HolidaysEnv, "")
+	t.Setenv(clientoffpeak.PinEnv, "2026-10-09 02:00")
+	t.Setenv(clientoffpeak.ModeEnv, "")
+
+	daemon := newFakeDaemon(t, map[string]string{
+		"GetRoomStatus": okData("[" + deepSeekSeatJSON("lead") + "]"),
+		"StopSeat":      okData("null"),
+		"RestartSeat":   okData(seatJSON("lead", "omp", "running")),
+	})
+	// THE GATE'S OWN READING IS THE DEFAULT CLIENT, whose socket is the environment's, not this verb's flag:
+	// without this line the decision would be taken over the machine's daemon instead of the fake.
+	t.Setenv(clientruntime.RuntimeSocketEnv, daemon.socket)
+
+	code, stdout, stderr := runRoom(t, daemon.args("reseat", testRoom, "lead")...)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, stderr)
+	}
+	// ONE FRAME, and it is the decision: no StopSeat, no RestartSeat.
+	assertRequests(t, daemon, `{"action":"GetRoomStatus","payload":{"room":"room-a"}}`)
+	if !strings.Contains(stdout, "room: "+testRoom+"@"+daemon.stateDir) {
+		t.Errorf("stdout = %q, want the pair printed before the refusal", stdout)
+	}
+	for _, want := range []string{"lead: deepseek/deepseek-flash", "PEAK", clientoffpeak.FlagAllowPeak, clientoffpeak.ModeEnv + "=" + clientoffpeak.ValueOff} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the refusal does not name %q:\n%s", want, stderr)
+		}
+	}
+}
+
+// TestRoomReseatProceedsAtPeakWithTheFlag is the refusal's control: the flag passes the same peak room through
+// the same two frames, so the test above is the gate refusing and not the room being unrunnable.
+func TestRoomReseatProceedsAtPeakWithTheFlag(t *testing.T) {
+	t.Setenv(clientoffpeak.HolidaysEnv, "")
+	t.Setenv(clientoffpeak.PinEnv, "2026-10-09 02:00")
+	t.Setenv(clientoffpeak.ModeEnv, "")
+	t.Setenv("AGENTHUB_URL", "http://127.0.0.1:1")
+	t.Setenv("AGENTHUB_TOKEN", "tok")
+
+	daemon := newFakeDaemon(t, map[string]string{
+		"GetRoomStatus": okData("[" + deepSeekSeatJSON("lead") + "]"),
+		"StopSeat":      okData("null"),
+		"RestartSeat":   okData(seatJSON("lead", "omp", "running")),
+	})
+	t.Setenv(clientruntime.RuntimeSocketEnv, daemon.socket)
+
+	args := append(daemon.args("reseat", testRoom, "lead"), clientoffpeak.FlagAllowPeak)
+	code, _, stderr := runRoom(t, args...)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	assertRequests(t, daemon,
+		`{"action":"GetRoomStatus","payload":{"room":"room-a"}}`,
+		`{"action":"StopSeat","payload":{"room":"room-a","seat":"lead"}}`,
+		`{"action":"RestartSeat","payload":{"room":"room-a","seat":"lead"}}`)
+}
+
+// deepSeekSeatJSON is one seat whose model is DeepSeek's, the shape the gate reads the model out of.
+func deepSeekSeatJSON(seat string) string {
+	return `{"room":"` + testRoom + `","seat":"` + seat + `","session_name":"agenthub--` + testRoom + `--` + seat +
+		`","runtime":"omp","state":"running","model":"deepseek/deepseek-flash"}`
 }
 
 // TestRoomReseatReportsASeatThatDidNotComeBack pins the partial case: the daemon answered, the seat is not

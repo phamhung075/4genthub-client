@@ -3,6 +3,7 @@ package clientheal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,11 +14,17 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
+	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
-const usage = "usage: 4genteam heal ROOM [--check] [--json] [--state-root DIR] [--socket PATH]"
+const usage = "usage: 4genteam heal ROOM [--check] [--json] " + clientoffpeak.ModeFlagUsage + " [--state-root DIR] [--socket PATH]"
+
+// peakGate is the DeepSeek peak gate heal asks before it restarts a seat; a var so the suite can date the
+// run without waiting for a real peak window.
+var peakGate = clientlifecycle.PeakGate
 
 // Commands registers the verb.
 func Commands() []clientcmd.Command { return []clientcmd.Command{healCommand{}} }
@@ -35,6 +42,10 @@ func (healCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stdout, "Checks one room: the env file has the keys a seat needs, every seat is running, holds them and has\n"+
 			"its MCP config, and every safeguard runs. Each finding is fixed (reseat a seat, `up` for the safeguards)\n"+
 			"and checked again; what only the owner can fix is reported with its cause. --check fixes nothing.\n"+
+			"A restart is a launch, so the DeepSeek peak gate runs before a seat is reseated: with "+
+			clientoffpeak.ModeEnv+" on\n(the default) a room whose seats run a deepseek/ model leaves its down seats to"+
+			" the operator until off-peak, as an unfixed finding\nnaming the seat, and "+clientoffpeak.FlagAllowPeak+
+			" reseats them now.\n"+
 			"Exit 0 when the room is clean or every finding was fixed, 3 when something is left.")
 		return clientcmd.ExitOK
 	}
@@ -50,6 +61,10 @@ func (healCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintf(stderr, "4genteam heal: %v\n", rootErr)
 		return clientcmd.CodeOf(rootErr, clientcmd.ExitUsage)
 	}
+	// THE GATE'S FLAG LEAVES THE LIST BEFORE THE FLAG SET SEES IT: every other dash-word below is routed into a
+	// set that refuses what it does not own, so `--allow-peak` read any later would be a usage error instead of
+	// the operator's override.
+	allowPeak, args := clientoffpeak.ModeFromFlags(args)
 	var flagArgs, rest []string
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -76,7 +91,7 @@ func (healCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 	}
 	room := rest[0]
 	client := clientruntime.NewClient(*socket)
-	findings, probeErr := Run(room, machineDeps(root, client, !*check))
+	findings, probeErr := Run(room, machineDeps(root, client, !*check, allowPeak, stderr))
 	if probeErr != nil {
 		// NOTHING IS APPLIED ON A REPORT THAT WAS NOT READ (7.12): the probe is named, this verb exits 3, and
 		// the json is not printed - an empty finding list would read as "clean".
@@ -104,12 +119,18 @@ func (healCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 	return clientcmd.ExitOK
 }
 
-func machineDeps(root string, client *clientruntime.Client, fix bool) Deps {
+func machineDeps(root string, client *clientruntime.Client, fix, allowPeak bool, stderr io.Writer) Deps {
 	return Deps{
 		StateRoot: root,
 		Fix:       fix,
 		Seats:     client.GetRoomStatus,
 		Reseat: func(room, seat string) error {
+			// THE GATE BEFORE THE STOP: heal's repair is a stop and a restart, and a restart is a launch that
+			// bills at peak. A refusal returns before StopSeat, so the seat is left exactly as the run found it,
+			// and the error is what the finding carries - by seat name, as "unfixed", which is the exit-3 path.
+			if err := gateRestart(room, allowPeak, stderr); err != nil {
+				return err
+			}
 			if err := client.StopSeat(room, seat); err != nil {
 				return err
 			}
@@ -148,6 +169,22 @@ func machineDeps(root string, client *clientruntime.Client, fix bool) Deps {
 			return ""
 		},
 	}
+}
+
+// gateRestart is the peak gate heal asks before it stops and restarts a seat.
+//
+// It writes the refusal to the caller's stderr AND returns it as an error: the stderr line is what an
+// operator watching the run sees, and the error is what the finding carries - so the seat is named, the
+// finding reads "unfixed", and the verb exits 3 rather than reporting a repair it did not make.
+func gateRestart(room string, allowPeak bool, stderr io.Writer) error {
+	var refusal strings.Builder
+	if code := peakGate(room, "heal", allowPeak, io.MultiWriter(stderr, &refusal)); code != clientcmd.ExitOK {
+		if text := strings.TrimSpace(refusal.String()); text != "" {
+			return errors.New(text)
+		}
+		return fmt.Errorf("the peak gate refused with exit %d and gave no reason", code)
+	}
+	return nil
 }
 
 func lastLine(text string) string {

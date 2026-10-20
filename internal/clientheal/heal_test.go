@@ -2,10 +2,14 @@ package clientheal
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
+	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
@@ -198,5 +202,89 @@ func TestAProbeErrorRefusesTheHeal(t *testing.T) {
 	}
 	if len(r.reseats) != 0 || r.upCalls != 0 {
 		t.Errorf("a refused run still applied repairs: reseats %v up calls %d", r.reseats, r.upCalls)
+	}
+}
+
+// stubGate replaces the gate heal asks, and puts the real one back when the test ends.
+func stubGate(t *testing.T, gate func(name, verb string, allowPeak bool, stderr io.Writer) int) {
+	t.Helper()
+	real := peakGate
+	peakGate = gate
+	t.Cleanup(func() { peakGate = real })
+}
+
+// TestHealsGateRefusesBeforeTheStop is the order, observed rather than argued: the client is pointed at a
+// socket nothing listens on, so a StopSeat that ran would come back as a dial error NAMING that path. The
+// refusal that comes back instead is the gate's, and the socket path is absent from it - the stop never ran.
+func TestHealsGateRefusesBeforeTheStop(t *testing.T) {
+	var asked []string
+	stubGate(t, func(name, verb string, allowPeak bool, stderr io.Writer) int {
+		asked = append(asked, name+"|"+verb+"|"+strconv.FormatBool(allowPeak))
+		fmt.Fprintf(stderr, "4genteam %s: PEAK right now\n", verb)
+		return clientcmd.ExitUnavailable
+	})
+	socket := filepath.Join(t.TempDir(), "absent.sock")
+	deps := machineDeps(t.TempDir(), clientruntime.NewClient(socket), true, false, io.Discard)
+
+	err := deps.Reseat("room-a", "lead")
+	if err == nil {
+		t.Fatal("a refused reseat answered no error, so the finding would read fixed")
+	}
+	if !contains(err.Error(), "PEAK right now") {
+		t.Errorf("error = %q, want the gate's own refusal", err)
+	}
+	if contains(err.Error(), socket) {
+		t.Errorf("error = %q names the socket: the stop ran before the gate refused", err)
+	}
+	if len(asked) != 1 || asked[0] != "room-a|heal|false" {
+		t.Errorf("the gate was asked %v, want one room-a/heal with the flag off", asked)
+	}
+}
+
+// TestTheFlagIsWhatHealsGateSees is the control: with --allow-peak the same call passes the gate and reaches
+// the stop, which is what the absent-socket error below proves - the run moved PAST the gate.
+func TestTheFlagIsWhatHealsGateSees(t *testing.T) {
+	var asked []string
+	stubGate(t, func(name, verb string, allowPeak bool, stderr io.Writer) int {
+		asked = append(asked, name+"|"+verb+"|"+strconv.FormatBool(allowPeak))
+		return clientcmd.ExitOK
+	})
+	socket := filepath.Join(t.TempDir(), "absent.sock")
+	deps := machineDeps(t.TempDir(), clientruntime.NewClient(socket), true, true, io.Discard)
+
+	err := deps.Reseat("room-a", "lead")
+	if err == nil || !contains(err.Error(), socket) {
+		t.Fatalf("error = %v, want the stop's dial refusal at %s (the gate passed)", err, socket)
+	}
+	if len(asked) != 1 || asked[0] != "room-a|heal|true" {
+		t.Errorf("the gate was asked %v, want one room-a/heal with the flag ON", asked)
+	}
+}
+
+// TestARefusedRestartIsAnUnfixedFindingNamingTheSeat. The verb's exit rule counts every finding that is not
+// "fixed", so the refusal has to land as one: the seat's own target, the gate's words in the detail, and the
+// result "unfixed" rather than a repaired room reported over a seat left down.
+func TestARefusedRestartIsAnUnfixedFindingNamingTheSeat(t *testing.T) {
+	r := newRoom(t, "AGENTHUB_URL=u\nAGENTHUB_TOKEN=t\n")
+	r.seats["lead"] = "stopped"
+	d := r.deps(t, true)
+	d.Reseat = func(_, seat string) error {
+		r.reseats = append(r.reseats, seat)
+		return errors.New("4genteam heal: 1 seat(s) run a DeepSeek model (r.lead: deepseek/deepseek-flash) and DeepSeek bills at PEAK right now")
+	}
+
+	findings := healRun(t, "r", d)
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want the one stopped seat", findings)
+	}
+	got := findings[0]
+	if got.Check != "seat-down" || got.Target != "r/lead" {
+		t.Errorf("finding = %+v, want seat-down on r/lead", got)
+	}
+	if got.Result != "unfixed" {
+		t.Errorf("result = %q, want unfixed: the exit rule counts exactly these", got.Result)
+	}
+	if !contains(got.Detail, "reseat failed:") || !contains(got.Detail, "PEAK right now") {
+		t.Errorf("detail = %q, want the fix named and the gate's refusal carried", got.Detail)
 	}
 }

@@ -32,6 +32,8 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
+	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
@@ -41,6 +43,10 @@ import (
 // closeWatch closes the room's herdr watch workspaces, whose panes run the feed and input helpers; a var so
 // the tests need no herdr.
 var closeWatch = clientwatch.CloseRigWorkspaces
+
+// peakGate is the DeepSeek peak gate `reseat` asks before it stops a seat; a var so the suite can watch when
+// it runs relative to the stop, and so the refusal path needs no real clock.
+var peakGate = clientlifecycle.PeakGate
 
 // Commands is what the dispatcher registers from this package: one verb, `room`, whose Run switches over the
 // sub-verbs in roomVerbs - the shape clientseat and clientteam already register, so the dispatcher's own list
@@ -104,7 +110,7 @@ const groupUsage = "usage: 4genteam room (status ROOM | stop ROOM | reseat ROOM 
 var subUsages = map[string]string{
 	"status":  "usage: 4genteam room status ROOM [--state-root DIR] [--socket PATH]",
 	"stop":    "usage: 4genteam room stop ROOM [--state-root DIR] [--socket PATH]",
-	"reseat":  "usage: 4genteam room reseat ROOM SEAT [--state-root DIR] [--socket PATH]",
+	"reseat":  "usage: 4genteam room reseat ROOM SEAT " + clientoffpeak.ModeFlagUsage + " [--state-root DIR] [--socket PATH]",
 	"compact": "usage: 4genteam room compact ROOM [--state-root DIR] [--socket PATH]",
 	"queue":   queueGroupUsage,
 	"report":  reportUsage,
@@ -136,7 +142,10 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "`unknown` is a seat that published no freshness stamp: unknown quiet time is NOT zero seconds.")
 	fmt.Fprintln(out, "stop sends StopRoom: exactly that room's own sessions. The room's directory (spec.json, seats/,")
 	fmt.Fprintln(out, "logs/) is LEFT IN PLACE so the room can be started again; nothing outside the room is touched.")
-	fmt.Fprintln(out, "reseat sends StopSeat then RestartSeat for one seat, in that order.")
+	fmt.Fprintln(out, "reseat sends StopSeat then RestartSeat for one seat, in that order. A restart is a launch, so")
+	fmt.Fprintln(out, "the DeepSeek peak gate runs first: with "+clientoffpeak.ModeEnv+" on (the default) a room whose seats")
+	fmt.Fprintln(out, "run a deepseek/ model is refused at peak BEFORE the seat is stopped, and "+clientoffpeak.FlagAllowPeak+" skips")
+	fmt.Fprintln(out, "the check for this run. A refused reseat leaves the seat running.")
 	fmt.Fprintln(out, "compact asks the runtime to compact each RUNNING seat (the protocol's compact is session-scoped,")
 	fmt.Fprintln(out, "so ForceCompact takes the session name). A seat that is not running is refused by name, and a")
 	fmt.Fprintln(out, "runtime refusal is reported in its own words; both exit 2, because a compact that did not happen")
@@ -421,11 +430,21 @@ func runStop(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 // daemon answered, and the room came up short of what was asked. Exit 0 there would be the "success over a
 // no-op" this rig has already paid for.
 func runReseat(args []string, stdout, stderr io.Writer) int {
+	// THE FLAG FIRST: ModeFromFlags takes `--allow-peak` out of the list wherever it sits, and the parser
+	// below refuses any flag it does not own - so the gate's flag is read here or it is a usage error.
+	allowPeak, args := clientoffpeak.ModeFromFlags(args)
 	inv, code, ok := parseInvocation("reseat", args, 2, stdout, stderr)
 	if !ok {
 		return code
 	}
 	inv.printPair(stdout)
+	// A RESTART IS A LAUNCH, so the peak gate runs BEFORE the stop: a refusal here leaves the seat exactly
+	// as it was, which is the difference between a refusal and a room left down that nobody asked to stop.
+	// The gate is the exported one (room records, and an unreadable reading refuses in words), and its code
+	// is returned unchanged - 3 for a refusal, 2 for a schedule this client cannot read.
+	if code := peakGate(inv.room, "room reseat", allowPeak, stderr); code != clientcmd.ExitOK {
+		return code
+	}
 	// THE DOCUMENT BEFORE THE STOP, so the seat is down for the hub round trip and nothing more. This is the
 	// act that installs a policy change, so the render is fetched and travels on the restart frame; a fetch
 	// that fails is SAID and the seat comes back on the room's own record rather than not coming back at all
