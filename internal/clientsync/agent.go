@@ -576,6 +576,9 @@ func (d *AgentDaemon) publishRows(rows []clientservices.Health) error {
 		return nil
 	}
 	for _, row := range rows {
+		// `at` is 2.2's socket time format, unix millis - the shape of `ping.t`. The hub reads it through
+		// wsOptUnixMillis, which takes integer numbers only and drops a string, leaving
+		// room_safeguards.last_beat_at NULL on every row.
 		frame := map[string]any{
 			"type":      "safeguard",
 			"room":      row.Room,
@@ -583,7 +586,7 @@ func (d *AgentDaemon) publishRows(rows []clientservices.Health) error {
 			"state":     row.State,
 			"restarts":  row.Restarts,
 			"age_s":     row.AgeS,
-			"at":        d.Now().UTC().Format(time.RFC3339),
+			"at":        d.Now().UnixMilli(),
 		}
 		// pid is optional in the frame (7.3): a row whose process is gone has no pid to name, and a zero
 		// would read as a process at pid 0.

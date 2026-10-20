@@ -9,6 +9,15 @@ uses (room dir, queue create, the fixture's own paths) take the new value.
 
 Track test suite changes, fixes, and improvements for the client.
 
+## 2026-10-21 - the safeguard frame's stamp is a number in millis (branch 4genthub-min/frame-at-millis)
+
+`internal/clientsync/agent_test.go`, `TestSafeguardFramesOnlyAfterReadyEchoesTheCapability`: the case
+pinned the frame's key set only, so an RFC3339 string satisfied it while the hub dropped the value and
+stored `last_beat_at` NULL. It now asserts `at` is an `int64` equal to the harness clock's `UnixMilli()`.
+Written before the fix and observed RED against it:
+`frame[0] at = string 2026-10-11T12:00:00Z, want a unix-millisecond number`. GREEN after:
+`go test ./internal/clientsync/ -count=1` -> ok.
+
 ## 2026-10-20 - a path-only criterion is a refusal, not a warning (branch 4genthub-min/int03-cascades)
 
 - `internal/clientcomplete/complete_test.go`: `TestAPathOnlyCriterionIsWarnedAndStillJudged` is deleted with
