@@ -143,11 +143,17 @@ func (b *Bridge) read(key string, argv []string, parse func(string) ([]any, erro
 // BuildPayload reads the local state and builds what would be sent. The seats and the topology come from
 // the agenthub runtime (Nodes, Links); herdr is read through the Runner, the one seam that cannot start a
 // shell.
-func (b *Bridge) BuildPayload() Payload {
+//
+// A seat whose pin could not be read answers an error and no payload (7.12): the seats report is
+// all-or-nothing, so a cycle that could not read one pin sends nothing and records the reason.
+func (b *Bridge) BuildPayload() (Payload, error) {
 	nodes := b.readNodes()
 	agents := b.read("herdr", []string{"herdr", "api", "snapshot"}, ParseHerdrAgents)
 
-	seats, invalid, duplicates := BuildSeats(nodes, b.Known, b.PinsDir, b.stripDetail)
+	seats, invalid, duplicates, err := BuildSeats(nodes, b.Known, b.PinsDir, b.stripDetail)
+	if err != nil {
+		return Payload{}, err
+	}
 	if invalid > 0 {
 		b.note("invalid", fmt.Sprintf("skipped %d seat(s) with invalid names", invalid))
 	}
@@ -160,7 +166,7 @@ func (b *Bridge) BuildPayload() Payload {
 		Seats:      seats,
 		Agents:     BuildAgents(agents),
 		Edges:      BuildEdges(RigRooms(nodes), b.readEdges),
-	}
+	}, nil
 }
 
 // readEdges reads one room's links, and reads a room it cannot read as having no edges.
@@ -314,7 +320,12 @@ func (b *Bridge) Cycle(ctx context.Context) time.Duration {
 	// with a pid that exits with it, and verifyRow would publish `silent` - a fresh beat whose pid is
 	// not live - until the daemon's next beat. Measured 2026-10-17: six such false alerts in ninety
 	// minutes, every one of them a `bridge once` from a test suite. The beat is the loop's (Run).
-	payload := b.BuildPayload()
+	payload, err := b.BuildPayload()
+	if err != nil {
+		// THE SEATS REPORT IS NOT SENT, AND THE NOTE NAMES THE FILE (7.12). A cycle that appended the payload
+		// without the seat whose pin it could not read would publish "no pin" for a seat that has one.
+		return b.fail(fmt.Sprintf("4genteam bridge: %v; the seats report was NOT sent", err))
+	}
 	for where, record := range b.LocalRecord(payload.Seats) {
 		if record.SinceLastInSync == "changed" {
 			b.note("changed:"+where, fmt.Sprintf(

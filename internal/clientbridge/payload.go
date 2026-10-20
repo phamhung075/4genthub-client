@@ -160,24 +160,32 @@ func SeatDetail(node map[string]any) string {
 	return strings.Join(kept, "; ")
 }
 
-// PinnedHash reads the hash the client pinned for a seat, or empty. A pin exists only once the client
-// has pulled that seat, so an empty hash is the honest answer for a seat no client has adopted - and
-// a parity fixture with no pinned seat would exercise this field as always-empty.
-func PinnedHash(pinsDir, room, seat string) string {
-	raw, err := os.ReadFile(filepath.Join(pinsDir, room, seat, "pinned.json"))
+// PinnedHash reads the hash the client pinned for a seat. A pin exists only once the client has pulled
+// that seat, so a MISSING pinned.json answers ("", nil) - that absence is what the probe itself observed -
+// and a parity fixture with no pinned seat exercises the field as always-empty.
+//
+// Everything else is an error naming the file (7.12): a pinned.json that could not be read, that is not
+// json, or that carries something which is not a hash. It used to answer "" to all four, which put "no pin"
+// on the wire for a file the bridge could not read - the server then stored the absence as the seat's pin.
+func PinnedHash(pinsDir, room, seat string) (string, error) {
+	path := filepath.Join(pinsDir, room, seat, "pinned.json")
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("%s: %w", path, err)
 	}
 	var lock struct {
 		Hash string `json:"hash"`
 	}
 	if err := json.Unmarshal(raw, &lock); err != nil {
-		return ""
+		return "", fmt.Errorf("%s: %w", path, err)
 	}
 	if !hashPattern.MatchString(lock.Hash) {
-		return ""
+		return "", fmt.Errorf("%s: %q is not a hash", path, lock.Hash)
 	}
-	return lock.Hash
+	return lock.Hash, nil
 }
 
 // DuplicateMessage names the pods a duplicated seat key was found in, in the Python's wording, so an
@@ -207,9 +215,13 @@ func DuplicateMessage(room, seat string, pods []string) string {
 // this client will not report, and one message per duplicated seat key - the duplicates are warned
 // about rather than dropped, because a seat listed twice in a rig is something a human must fix.
 //
+// A seat whose pin could not be read ends the build with an error naming the seat and the file (7.12): the
+// report is all-or-nothing, because a seat sent with an empty hash is a seat the server records as
+// unpinned.
+//
 // Detail is redacted here, with the same call the server-side scanner shares: stripDetail is the
 // Python's degradation after a 422, where the cloud refused the text as secret-bearing.
-func BuildSeats(nodes []any, known map[string]string, pinsDir string, stripDetail bool) ([]SeatStatus, int, []string) {
+func BuildSeats(nodes []any, known map[string]string, pinsDir string, stripDetail bool) ([]SeatStatus, int, []string, error) {
 	seats := make([]SeatStatus, 0, len(nodes))
 	podsOf := map[string][]string{}
 	invalid := 0
@@ -234,9 +246,13 @@ func BuildSeats(nodes []any, known map[string]string, pinsDir string, stripDetai
 		if !runtimes[runtime] {
 			runtime = "unknown"
 		}
+		hash, err := PinnedHash(pinsDir, room, seat)
+		if err != nil {
+			return nil, 0, nil, fmt.Errorf("seat %s pin could not be read: %w", key, err)
+		}
 		seats = append(seats, SeatStatus{
 			Room: room, Seat: seat, State: SeatState(node), Runtime: runtime,
-			Hash: PinnedHash(pinsDir, room, seat), Detail: detail, Redacted: redacted,
+			Hash: hash, Detail: detail, Redacted: redacted,
 		})
 	}
 	duplicates := make([]string, 0)
@@ -247,7 +263,7 @@ func BuildSeats(nodes []any, known map[string]string, pinsDir string, stripDetai
 		}
 	}
 	sortStrings(duplicates)
-	return seats, invalid, duplicates
+	return seats, invalid, duplicates, nil
 }
 
 // BuildAgents turns raw herdr agents into reported ones, dropping any whose name or pane id fails its

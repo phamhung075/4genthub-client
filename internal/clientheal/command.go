@@ -76,7 +76,13 @@ func (healCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 	}
 	room := rest[0]
 	client := clientruntime.NewClient(*socket)
-	findings := Run(room, machineDeps(root, client, !*check))
+	findings, probeErr := Run(room, machineDeps(root, client, !*check))
+	if probeErr != nil {
+		// NOTHING IS APPLIED ON A REPORT THAT WAS NOT READ (7.12): the probe is named, this verb exits 3, and
+		// the json is not printed - an empty finding list would read as "clean".
+		fmt.Fprintf(stderr, "4genteam heal: no safeguard row was decided: %v\n", probeErr)
+		return clientcmd.ExitUnavailable
+	}
 	if *asJSON {
 		body, _ := json.MarshalIndent(findings, "", "  ")
 		fmt.Fprintln(stdout, string(body))
@@ -114,7 +120,7 @@ func machineDeps(root string, client *clientruntime.Client, fix bool) Deps {
 			return err
 		},
 		ProcEnv: procEnv,
-		Rows: func(room string) []clientservices.Health {
+		Rows: func(room string) ([]clientservices.Health, error) {
 			state, _ := clientservices.ReadAgentState()
 			return clientservices.Verify(context.Background(), clientservices.Env{Root: root, Rigs: []string{room}, Supervised: state.Safeguards})
 		},

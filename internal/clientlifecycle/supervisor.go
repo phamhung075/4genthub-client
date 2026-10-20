@@ -639,13 +639,23 @@ func SupervisorStatus(name, root string, stdout, stderr io.Writer) {
 	fmt.Fprintln(stdout, strings.Join(tail, "\n"))
 }
 
-// stopPattern is pkill -f in one place. False means nothing matched OR pkill is not here; both are
-// "not running" from the caller's point of view. A var so a test asserts WHAT would be signalled
-// without signalling it - the difference between testing stop and stopping the machine's services.
-var stopPattern = func(pattern string) bool {
+// stopPattern is pkill -f in one place. It answers (matched, error): pkill exit 1 - "nothing matched" -
+// is the absence the probe itself observed and answers false with no error; a pkill that is not on PATH,
+// or that refused the pattern, answers an error and the caller refuses to report a stop it never made
+// (7.12). A var so a test asserts WHAT would be signalled without signalling it - the difference between
+// testing stop and stopping the machine's services.
+var stopPattern = func(pattern string) (bool, error) {
 	path, err := exec.LookPath("pkill")
 	if err != nil {
-		return false
+		return false, fmt.Errorf("pkill: %w", err)
 	}
-	return exec.Command(path, "-f", pattern).Run() == nil
+	err = exec.Command(path, "-f", pattern).Run()
+	if err == nil {
+		return true, nil
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("pkill -f %q: %w", pattern, err)
 }

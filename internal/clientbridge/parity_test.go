@@ -112,7 +112,10 @@ func TestPayloadParityWithThePythonBridge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	seats, invalid, duplicates := BuildSeats(nodes, nil, pinsDir, false)
+	seats, invalid, duplicates, err := BuildSeats(nodes, nil, pinsDir, false)
+	if err != nil {
+		t.Fatalf("BuildSeats refused: %v", err)
+	}
 	if invalid != 0 {
 		t.Errorf("invalid=%d, want 0: the fixture has only well-formed names", invalid)
 	}

@@ -14,7 +14,7 @@ func init() { closeWatch = func(context.Context, string) error { return nil } }
 
 func TestStopClosesTheRigsWatchWorkspaces(t *testing.T) {
 	restoreAll(t)
-	stopPattern = func(string) bool { return true }
+	stopPattern = func(string) (bool, error) { return true, nil }
 	var closed []string
 	previous := closeWatch
 	closeWatch = func(_ context.Context, rig string) error { closed = append(closed, rig); return nil }

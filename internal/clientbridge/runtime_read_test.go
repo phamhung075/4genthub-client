@@ -61,7 +61,10 @@ func TestRuntimeNodesAreTheSeatsEveryHostedRoomReports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runtimeNodes: %v", err)
 	}
-	seats, invalid, _ := BuildSeats(nodes, nil, t.TempDir(), false)
+	seats, invalid, _, err := BuildSeats(nodes, nil, t.TempDir(), false)
+	if err != nil {
+		t.Fatalf("BuildSeats refused: %v", err)
+	}
 	if invalid != 0 || len(seats) != 1 {
 		t.Fatalf("seats = %v invalid = %d, want one valid seat", seats, invalid)
 	}
@@ -101,7 +104,10 @@ func TestAMachineWithoutARuntimeReportsNoSeatsAndSaysWhy(t *testing.T) {
 	bridge := NewBridge("pc-1", t.TempDir(), 0, nil, nil, nil, t.TempDir(), filepath.Join(t.TempDir(), "sync.json"),
 		func(line string) { notes = append(notes, line) })
 	bridge.Runner = func(_ context.Context, argv ...string) (string, error) { return "", errors.New("absent") }
-	payload := bridge.BuildPayload()
+	payload, err := bridge.BuildPayload()
+	if err != nil {
+		t.Fatalf("BuildPayload refused: %v", err)
+	}
 	if len(payload.Seats) != 0 || len(payload.Edges) != 0 {
 		t.Fatalf("payload = %+v, want no seats and no edges", payload)
 	}

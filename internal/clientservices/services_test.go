@@ -8,6 +8,7 @@ package clientservices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,7 @@ func newReportFixture(t *testing.T) *reportFixture {
 		AgentStatePath = previousStatePath
 	})
 	Now = func() time.Time { return fixture.at }
-	Live = func(pattern string) []int { return fixture.live[pattern] }
+	Live = func(pattern string) ([]int, error) { return fixture.live[pattern], nil }
 	AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
 	return fixture
 }
@@ -63,7 +64,11 @@ func (f *reportFixture) beat(safeguard, rig string, age time.Duration, pid int) 
 func (f *reportFixture) row(safeguard, rig string, env Env) Health {
 	f.t.Helper()
 	env.Root = f.root
-	for _, row := range Verify(context.Background(), env) {
+	rows, err := Verify(context.Background(), env)
+	if err != nil {
+		f.t.Fatalf("Verify refused: %v", err)
+	}
+	for _, row := range rows {
 		if row.Safeguard == safeguard && row.Rig == rig {
 			return row
 		}
@@ -385,7 +390,10 @@ func TestStateLineIsTheLineSevenFiveRequires(t *testing.T) {
 // deliverer per listed rig, and exactly one bridge and one agent, in a stable order.
 func TestTheReportWalksTheListedRigsAndTheTwoMachineRows(t *testing.T) {
 	f := newReportFixture(t)
-	rows := Verify(context.Background(), Env{Root: f.root, Rigs: []string{"demo", "other"}})
+	rows, err := Verify(context.Background(), Env{Root: f.root, Rigs: []string{"demo", "other"}})
+	if err != nil {
+		t.Fatalf("Verify refused: %v", err)
+	}
 	var order []string
 	for _, row := range rows {
 		order = append(order, strings.TrimSpace(row.Rig+" "+row.Safeguard))
@@ -427,5 +435,25 @@ func TestTheObligatoryTableAgreesWithTheScopeRule(t *testing.T) {
 	}
 	if len(Obligatory) != len(Safeguards()) {
 		t.Errorf("table carries %d rows, the report lists %d safeguards", len(Obligatory), len(Safeguards()))
+	}
+}
+
+// TestVerifyRefusesWhenTheProcessProbeCannotRun: a pgrep that never ran is NOT "no processes". The walk
+// answers NO rows and the probe's own error (7.12) - before this it answered every row `stopped` from a
+// process table nobody had read, which is what made `doctor` a false report and `respawn` a second daemon.
+func TestVerifyRefusesWhenTheProcessProbeCannotRun(t *testing.T) {
+	previous := Live
+	Live = func(string) ([]int, error) { return nil, errors.New("pgrep: not found") }
+	t.Cleanup(func() { Live = previous })
+
+	rows, err := Verify(context.Background(), Env{Root: t.TempDir(), Rigs: []string{"demo"}})
+	if err == nil {
+		t.Fatalf("Verify decided %d row(s) from a probe that could not run", len(rows))
+	}
+	if rows != nil {
+		t.Errorf("Verify answered %d row(s) beside its error, want none: a partial report reads as complete", len(rows))
+	}
+	if !strings.Contains(err.Error(), "pgrep") {
+		t.Errorf("error %q does not name the probe", err)
 	}
 }

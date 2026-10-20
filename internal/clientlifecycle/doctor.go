@@ -81,11 +81,14 @@ func (doctorCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 // rowsFor is the row computation as a seam, in the repo's style of a package-level variable rather than
 // an interface added for testing: every verb that READS the report goes through it, so a test drives a
 // verb's decision without producing processes or heartbeat files.
+//
+// It answers (rows, error), and an error means the probe could not run: no row was decided and the verb
+// refuses, naming the probe (7.12). A nil error carries every row the report covers.
 var rowsFor = safeguardRows
 
 // SafeguardRows is the same computation for a caller outside this package - `continue` reports the rows a
 // restore did not bring up - so the second reader cannot drift from `doctor` and `status`.
-func SafeguardRows(rig, root string) []clientservices.Health { return rowsFor(rig, root) }
+func SafeguardRows(rig, root string) ([]clientservices.Health, error) { return rowsFor(rig, root) }
 
 // safeguardRows is the ONE computation doctor, `status --json`, `compact`, `agent status` and `up`'s check
 // share.
@@ -94,11 +97,14 @@ func SafeguardRows(rig, root string) []clientservices.Health { return rowsFor(ri
 // agent.json's list, because that list is what "meant to run" means (7.9). A machine whose agent has never
 // run has an empty list and still gets the bridge and agent rows, which is the point: agent's own absence
 // is the loudest row there is.
-func safeguardRows(rig, root string) []clientservices.Health {
+func safeguardRows(rig, root string) ([]clientservices.Health, error) {
 	// A REPORT SURFACE MAY GO ON WITHOUT THE LIST. The rigs list decides WHICH rooms get rows; a failed read
 	// leaves it empty exactly as a machine whose agent never ran does, and this verb neither writes nor acts,
 	// so the rows for the two machine-scoped safeguards still print. `agent status` says in words when the
 	// read failed; naming it here needs an error shape in the report seam, which is its own unit.
+	//
+	// THE PROCESS PROBE IS THE OTHER CASE: a pgrep that could not run decides NO row, so its error is the
+	// caller's and is handed on untouched (7.12).
 	state, _ := clientservices.ReadAgentState()
 	rigs := reportedRigs(state.Rigs, rig)
 	return clientservices.Verify(context.Background(), clientservices.Env{
@@ -180,7 +186,13 @@ func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRow
 }
 
 func runDoctor(rig, root string, asJSON bool, stdout, stderr io.Writer) int {
-	rows := rowsFor(rig, root)
+	// THE REFUSAL COMES FIRST (7.12): a probe that could not run decides no row, so not one row, reason or
+	// note is printed - a report that cannot say "running" must not be readable as "stopped".
+	rows, err := rowsFor(rig, root)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam doctor: no safeguard row was decided: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
 	// The worktrees row (the ruling's Check): where each seat's own worktree is, and whether it is the
 	// one this client derives. It reads the same derivation `up`'s worktrees step creates, so the two
 	// cannot disagree about a path.
@@ -368,18 +380,22 @@ var waitForSafeguards = waitForSafeguardsImpl
 // longest `up` may reasonably attribute to a slow start.
 //
 // It returns the last report either way, so the caller names the very rows the reader will see in
-// `doctor`.
-func waitForSafeguardsImpl(rig, root string) ([]clientservices.Health, bool) {
+// `doctor`. A probe error is answered as itself: nothing was decided, so there is no report to wait on and
+// `up` refuses rather than calling the safeguards down (7.12).
+func waitForSafeguardsImpl(rig, root string) ([]clientservices.Health, bool, error) {
 	started := time.Now()
 	for {
-		rows := rowsFor(rig, root)
+		rows, err := rowsFor(rig, root)
+		if err != nil {
+			return nil, false, err
+		}
 		if clientservices.AllRunning(rows) {
-			return rows, true
+			return rows, true, nil
 		}
 		elapsed := time.Since(started)
 		for _, row := range clientservices.NotRunning(rows) {
 			if elapsed >= clientservices.DefaultSilentAfter(row.Safeguard) {
-				return rows, false
+				return rows, false, nil
 			}
 		}
 		time.Sleep(safeguardWaitGap)

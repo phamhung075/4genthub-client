@@ -130,7 +130,7 @@ type world struct {
 	tmux  func() []string
 	// safeguards is the rig's row report the restorer reads; every row is up unless a test says otherwise,
 	// because the report is not what most tests are about.
-	safeguards func(rig string) []clientservices.Health
+	safeguards func(rig string) ([]clientservices.Health, error)
 	// listFails makes the runtime refuse the room list: the read that failed.
 	listFails bool
 }
@@ -190,7 +190,7 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 			w.walls = append(w.walls, rig)
 			return true, ""
 		}
-		r.safeguards = func(rig string) []clientservices.Health { return w.safeguards(rig) }
+		r.safeguards = func(rig string) ([]clientservices.Health, error) { return w.safeguards(rig) }
 	}
 	t.Cleanup(func() { restoreSteps = previousSteps })
 	return w
@@ -198,7 +198,7 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 
 // allRunningRows is the room's seven safeguards, every row up: the state a healthy rig is in, so a test
 // that is not about the report never has to build one.
-func allRunningRows(rig string) []clientservices.Health {
+func allRunningRows(rig string) ([]clientservices.Health, error) {
 	rows := make([]clientservices.Health, 0, len(clientservices.Safeguards()))
 	for _, safeguard := range clientservices.Safeguards() {
 		rowRig := ""
@@ -207,7 +207,7 @@ func allRunningRows(rig string) []clientservices.Health {
 		}
 		rows = append(rows, clientservices.Health{Rig: rowRig, Safeguard: safeguard, State: clientservices.Running})
 	}
-	return rows
+	return rows, nil
 }
 
 // record notes one runtime step the restorer took, in order.
@@ -317,14 +317,17 @@ func TestALiveRigIsNotRestoredAndItsSeatsAreBriefed(t *testing.T) {
 // say done, and must still deliver the brief to the seats that are alive.
 func TestALiveRigWhoseSupervisionIsDownIsNotRestored(t *testing.T) {
 	w := newWorld(t, staticSessions("agenthub--rig-a--alpha"), plainNodes())
-	w.safeguards = func(rig string) []clientservices.Health {
-		rows := allRunningRows(rig)
+	w.safeguards = func(rig string) ([]clientservices.Health, error) {
+		rows, err := allRunningRows(rig)
+		if err != nil {
+			return nil, err
+		}
 		for i := range rows {
 			if rows[i].Safeguard == clientservices.Compact || rows[i].Safeguard == clientservices.Agent {
 				rows[i].State = clientservices.Stopped
 			}
 		}
-		return rows
+		return rows, nil
 	}
 	brief := w.brief("rig-a.txt", "Take the next board row.\n")
 

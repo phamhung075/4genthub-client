@@ -3,6 +3,7 @@ package clientlifecycle
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -25,22 +26,22 @@ func stubDaemons(t *testing.T, live []int) *[]string {
 	var steps []string
 	previousLive, previousStop := clientservices.Live, stopPattern
 	t.Cleanup(func() { clientservices.Live, stopPattern = previousLive, previousStop })
-	clientservices.Live = func(pattern string) []int {
+	clientservices.Live = func(pattern string) ([]int, error) {
 		steps = append(steps, "live")
 		if len(live) == 0 {
-			return nil
+			return nil, nil
 		}
 		out := append([]int(nil), live...)
-		return out
+		return out, nil
 	}
-	stopPattern = func(pattern string) bool {
+	stopPattern = func(pattern string) (bool, error) {
 		if strings.Contains(pattern, "agenthub-runtime") {
 			steps = append(steps, "stop-daemon")
 			live = nil
 		} else {
 			steps = append(steps, "stop-agent")
 		}
-		return true
+		return true, nil
 	}
 	return &steps
 }
@@ -120,9 +121,9 @@ func TestUpRespawnRefusesToStartASecondDaemon(t *testing.T) {
 			steps := stubDaemons(t, []int{4242})
 			if c.signals {
 				// Signalled, but still there when the window runs out.
-				clientservices.Live = func(string) []int { *steps = append(*steps, "live"); return []int{4242} }
+				clientservices.Live = func(string) ([]int, error) { *steps = append(*steps, "live"); return []int{4242}, nil }
 			} else {
-				stopPattern = func(string) bool { return false }
+				stopPattern = func(string) (bool, error) { return false, nil }
 			}
 			previousWindow := respawnWindow
 			respawnWindow = 0
@@ -211,7 +212,7 @@ func TestRespawnDaemonReplacesARealProcessForTheRoot(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			if len(clientservices.Live(daemonPattern(stateDir))) > 0 {
+			if live, err := clientservices.Live(daemonPattern(stateDir)); err == nil && len(live) > 0 {
 				return
 			}
 			time.Sleep(20 * time.Millisecond)
@@ -230,10 +231,33 @@ func TestRespawnDaemonReplacesARealProcessForTheRoot(t *testing.T) {
 	if !respawnDaemon(mine, &out, &errOut) {
 		t.Fatalf("respawnDaemon refused: %s", errOut.String())
 	}
-	if live := clientservices.Live(daemonPattern(mine)); len(live) != 0 {
+	if live, err := clientservices.Live(daemonPattern(mine)); err != nil || len(live) != 0 {
 		t.Errorf("the daemon for this root is still running: %v", live)
 	}
-	if live := clientservices.Live(daemonPattern(other)); len(live) == 0 {
+	if live, err := clientservices.Live(daemonPattern(other)); err != nil || len(live) == 0 {
 		t.Error("the daemon for another state root was stopped as well")
+	}
+}
+
+// TestRespawnRefusesWhenTheProbeCannotRun: the empty process table a missing pgrep used to answer is what
+// reached `return true` here, and `up --respawn` then started a SECOND daemon for a state root that already
+// had one. The refusal is on stderr, nothing is signalled, and nothing is started (7.12).
+func TestRespawnRefusesWhenTheProbeCannotRun(t *testing.T) {
+	restoreAll(t)
+	clientservices.Live = func(string) ([]int, error) { return nil, errors.New("pgrep: not found") }
+	signalled := false
+	stopPattern = func(string) (bool, error) { signalled = true; return true, nil }
+	started := false
+	ensureDaemon = func(string, io.Writer) (string, error) { started = true; return "/tmp/daemon.log", nil }
+
+	var out, errOut bytes.Buffer
+	if respawnDaemon(t.TempDir(), &out, &errOut) {
+		t.Fatalf("respawnDaemon reported the daemon replaced from a probe that could not run")
+	}
+	if signalled || started {
+		t.Errorf("a refused respawn signalled the daemon (%v) or started one (%v)", signalled, started)
+	}
+	if !strings.Contains(errOut.String(), "pgrep") || out.Len() != 0 {
+		t.Errorf("stdout = %q stderr = %q, want the refusal naming the probe and no daemon line", out.String(), errOut.String())
 	}
 }

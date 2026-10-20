@@ -492,7 +492,10 @@ func TestAnUnreadableRecordReadsAsEmptyRatherThanInventingAHash(t *testing.T) {
 	}
 	f.bridge.state = ReadSyncState(f.bridge.StatePath)
 
-	payload := f.bridge.BuildPayload()
+	payload, err := f.bridge.BuildPayload()
+	if err != nil {
+		t.Fatalf("BuildPayload refused: %v", err)
+	}
 	record := f.bridge.LocalRecord(payload.Seats)
 	if len(record) == 0 {
 		t.Fatalf("the fixture reported no seats to compare: %+v", payload.Seats)
@@ -594,7 +597,10 @@ func TestTheRecordSurvivesARestartAndNamesAChangedSeat(t *testing.T) {
 			t.Errorf("the changed seat's note does not carry %s: %q", want, logged)
 		}
 	}
-	payload := restarted.bridge.BuildPayload()
+	payload, err := restarted.bridge.BuildPayload()
+	if err != nil {
+		t.Fatalf("BuildPayload refused: %v", err)
+	}
 	note := restarted.bridge.LocalRecord(payload.Seats)["room-a/seat-a"]
 	if note.Running != "run999" || note.LastInSync != "cloud456" || note.SinceLastInSync != "changed" {
 		t.Errorf("the local record reads %+v, want running=run999 last_in_sync=cloud456 since=changed", note)
@@ -814,5 +820,27 @@ func TestTheTokenNeverAppearsInANoteOrInTheError(t *testing.T) {
 	}
 	if g.bridge.backoff == 0 {
 		t.Error("a transport failure cost no backoff, so the loop would retry at full speed")
+	}
+}
+
+// TestACycleSendsNothingWhenASeatPinCouldNotBeRead: the seats report is all-or-nothing (7.12). A pin the
+// build could not read ends the cycle BEFORE the send, so the server never stores "no pin" for a seat that
+// has one - and the note names the file, which is the only place an operator can see why the report stopped.
+func TestACycleSendsNothingWhenASeatPinCouldNotBeRead(t *testing.T) {
+	f := newFixture(t, step{code: 200})
+	pins := filepath.Join(f.bridge.PinsDir, "room-a", "seat-a")
+	if err := os.MkdirAll(pins, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pins, "pinned.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	f.cycle()
+	if len(f.bodies) != 0 {
+		t.Fatalf("the cycle sent %d report(s), want none: %s", len(f.bodies), f.bodies[0])
+	}
+	if !strings.Contains(f.logged(), "pinned.json") || !strings.Contains(f.logged(), "NOT sent") {
+		t.Errorf("notes = %q, want the refusal naming the file", f.logged())
 	}
 }

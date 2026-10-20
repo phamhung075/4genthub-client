@@ -24,6 +24,7 @@ package clientservices
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -137,8 +138,9 @@ const (
 )
 
 // Service is one row of 7.8: a thing that must run, where it runs, how it starts, how it is checked, and
-// what restarts it. Check returns the EXISTING Health row, so AllRunning, NotRunning and StateLine keep
-// working untouched.
+// what restarts it. Check returns the EXISTING Health row, and an error when the probe the row is decided
+// from could not run at all (7.12) - a row is either read or refused, never defaulted to `stopped`.
+// AllRunning, NotRunning and StateLine keep working untouched.
 //
 // Start is nil for a row whose start lives outside this package. The import direction is measured in the
 // ruling: clientservices imports no lifecycle or restore package, so a start body can only be a
@@ -150,7 +152,7 @@ type Service struct {
 	Name      string
 	Scope     Scope
 	Start     func(ctx context.Context, env Env) error
-	Check     func(ctx context.Context, env Env) Health
+	Check     func(ctx context.Context, env Env) (Health, error)
 	RestartBy string
 }
 
@@ -171,8 +173,8 @@ var Obligatory = []Service{
 // safeguardCheck binds one row's name to the precedence of 7.2, which is verifyRow: the table holds the
 // check as a function, and the function is exactly the computation every reader already had. The rig comes
 // from the env the walk hands it (Env.forRig), and a machine-scoped name reads none.
-func safeguardCheck(name string) func(context.Context, Env) Health {
-	return func(_ context.Context, env Env) Health {
+func safeguardCheck(name string) func(context.Context, Env) (Health, error) {
+	return func(_ context.Context, env Env) (Health, error) {
 		rig := ""
 		if RigScoped(name) && len(env.Rigs) > 0 {
 			rig = env.Rigs[0]
@@ -238,7 +240,9 @@ func Pattern(safeguard, rig string) string {
 var (
 	// Now is the clock every age and every silent decision is measured against.
 	Now = time.Now
-	// Live returns the pids whose command line matches pattern.
+	// Live returns the pids whose command line matches pattern, and an error when the probe itself could
+	// not run: pgrep's own "nothing matched" is (nil, nil), and every other failure is the caller's to
+	// refuse on (7.12).
 	Live = livePIDs
 	// LogDir is where the client's logs live: <root>/logs, for the root its caller RESOLVED once per run
 	// (clientenv.ResolveStateRoot). It is the ONE computation of that path in the client, so the
@@ -338,15 +342,27 @@ func ReadHeartbeat(root, safeguard, rig string) (Heartbeat, bool) {
 
 // livePIDs runs the one process lookup the report has: pgrep -f, whose pids are parsed rather than
 // whose exit status is trusted (pgrep answers 1 for "none found", which is not a failure here).
-func livePIDs(pattern string) []int {
+//
+// A PROBE THAT COULD NOT RUN IS NOT AN ABSENCE (7.12). pgrep exiting 1 observed the absence itself and
+// answers (nil, nil); every other failure - no pgrep on PATH, a pgrep that refused the pattern - answers
+// an error naming the probe, and the caller refuses rather than reporting "no processes". The two were
+// one answer before, and `respawnDaemon` read it as "the daemon is not running" and started a second.
+func livePIDs(pattern string) ([]int, error) {
 	if pattern == "" {
-		return nil
+		return nil, nil
 	}
 	path, err := exec.LookPath("pgrep")
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("pgrep: %w", err)
 	}
-	out, _ := exec.Command(path, "-f", pattern).Output()
+	out, err := exec.Command(path, "-f", pattern).Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("pgrep -f %q: %w", pattern, err)
+	}
 	var pids []int
 	for _, field := range strings.Fields(string(out)) {
 		pid, err := strconv.Atoi(field)
@@ -355,7 +371,20 @@ func livePIDs(pattern string) []int {
 		}
 		pids = append(pids, pid)
 	}
-	return pids
+	return pids, nil
+}
+
+// Probe answers whether the process probe the client stands on can run at all: pgrep for every read of
+// the process table and pkill for every stop. It is the one preflight `up` takes before it touches the
+// daemon, agent or a seat, because every step after it needs one of the two - and a verb that cannot look
+// must say so instead of acting on "nothing is running".
+func Probe() error {
+	for _, tool := range []string{"pgrep", "pkill"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			return fmt.Errorf("%s: %w", tool, err)
+		}
+	}
+	return nil
 }
 
 // Health is ONE row of 7.2, and the field set is the ruling's exactly: rig, safeguard, state, pid,
@@ -419,7 +448,11 @@ func (e Env) recorded(safeguard, rig string) (Health, bool) {
 // It walks Obligatory - the ONE list of what a report covers and in what order - so a service added to the
 // table is reported without a second edit here. The states, the lines and the decisions are untouched; only
 // which of the two lists the walk reads has changed.
-func Verify(ctx context.Context, env Env) []Health {
+//
+// IT STOPS AT THE FIRST PROBE ERROR AND ANSWERS NO ROWS (7.12). A partial report is the failure this
+// replaces: four rows decided from a probe that could not run, and every one of them reading `stopped`.
+// A caller that cannot take a report refuses in words, naming the probe.
+func Verify(ctx context.Context, env Env) ([]Health, error) {
 	_ = ctx
 	size := 0
 	for _, service := range Obligatory {
@@ -435,17 +468,27 @@ func Verify(ctx context.Context, env Env) []Health {
 	// row sits inside a rig, and where the two machine rows sit after every rig's.
 	for _, rig := range env.Rigs {
 		for _, service := range Obligatory {
-			if service.Scope == Rig {
-				rows = append(rows, service.Check(ctx, env.forRig(rig)))
+			if service.Scope != Rig {
+				continue
 			}
+			row, err := service.Check(ctx, env.forRig(rig))
+			if err != nil {
+				return nil, err
+			}
+			rows = append(rows, row)
 		}
 	}
 	for _, service := range Obligatory {
-		if service.Scope == Machine {
-			rows = append(rows, service.Check(ctx, env))
+		if service.Scope != Machine {
+			continue
 		}
+		row, err := service.Check(ctx, env)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, row)
 	}
-	return rows
+	return rows, nil
 }
 
 // forRig is the env Verify hands a rig-scoped row: the same env, carrying the one rig that row is for. The
@@ -457,8 +500,10 @@ func (e Env) forRig(rig string) Env {
 	return e
 }
 
-// verifyRow is the precedence of 7.2, once, for one safeguard.
-func verifyRow(env Env, safeguard, rig string) Health {
+// verifyRow is the precedence of 7.2, once, for one safeguard. A probe that could not run answers an
+// error rather than a row: there is no verdict to report when the process reading it starts from is
+// missing (7.12).
+func verifyRow(env Env, safeguard, rig string) (Health, error) {
 	row := Health{Rig: rig, Safeguard: safeguard, AgeS: UnknownAge}
 	if recorded, ok := env.recorded(safeguard, rig); ok {
 		row.StartedAt, row.Restarts = recorded.StartedAt, recorded.Restarts
@@ -471,7 +516,10 @@ func verifyRow(env Env, safeguard, rig string) Health {
 		row.AgeS = int(age.Seconds())
 		row.PID = beat.PID
 	}
-	live := Live(Pattern(safeguard, rig))
+	live, err := Live(Pattern(safeguard, rig))
+	if err != nil {
+		return Health{}, err
+	}
 	// 7.2, as ruled 2026-10-11 (architect 3fa2125d): the precedence is stopped -> failing -> silent ->
 	// running, and `failing` BEATS A LIVE PROCESS. agent counted the deaths inside its window, and a fresh
 	// heartbeat does not undo a crash loop - so a child agent calls failing is reported failing here even
@@ -481,7 +529,7 @@ func verifyRow(env Env, safeguard, rig string) Health {
 		if recorded, ok := env.recorded(safeguard, rig); ok && recorded.State == Failing {
 			row.State = Failing
 			row.PID = live[0]
-			return row
+			return row, nil
 		}
 	}
 	switch {
@@ -507,7 +555,7 @@ func verifyRow(env Env, safeguard, rig string) Health {
 		row.State = Running
 		row.PID = beat.PID
 	}
-	return row
+	return row, nil
 }
 
 // StateLine is one row as the operator reads it: `<rig> <safeguard>: <state>, age <n>s`, which is the

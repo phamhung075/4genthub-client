@@ -411,12 +411,12 @@ func TestUpRefusesAndNamesTheSafeguardsThatDidNotComeUp(t *testing.T) {
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "record"); return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "agent"); return true }
-	waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
+	waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
 		ran = append(ran, "wait")
 		return []clientservices.Health{
 			{Rig: "demo", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
 			{Rig: "demo", Safeguard: clientservices.Agent, State: clientservices.Running, AgeS: 1},
-		}, false
+		}, false, nil
 	}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	openUI = func(io.Writer) { ran = append(ran, "ui") }
@@ -452,7 +452,7 @@ func TestStartAgentLeavesARunningAuthorityAlone(t *testing.T) {
 		spawned++
 		return diedChild{}, nil
 	}
-	agentRunning = func() int { return 4242 }
+	agentRunning = func() (int, error) { return 4242, nil }
 
 	var out, errOut bytes.Buffer
 	if !startAgent("/srv/state", &out, &errOut) {

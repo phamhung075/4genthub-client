@@ -96,7 +96,7 @@ func TestAnUnreadableNodeListIsANote(t *testing.T) {
 // node is unnamed.
 func TestDoctorPrintsTheIdentityRowAndItsNode(t *testing.T) {
 	rows, orphans, identities := rowsFor, orphanRowsFor, identityRowFor
-	rowsFor = func(string, string) []clientservices.Health { return nil }
+	rowsFor = func(string, string) ([]clientservices.Health, error) { return nil, nil }
 	orphanRowsFor = func(string) []orphanRow { return nil }
 	identityRowFor = func(string) []identityRow {
 		return []identityRow{{

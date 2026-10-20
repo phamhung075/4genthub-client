@@ -39,14 +39,17 @@ type Deps struct {
 	// ProcEnv answers the environment keys that have a non-empty value in the seat's running process, and
 	// false when the process cannot be found or this machine cannot read it.
 	ProcEnv func(room, seat string) (map[string]bool, bool)
-	Rows    func(room string) []clientservices.Health
-	Up      func(room string) error
-	Cause   func() string
-	Fix     bool
+	// Rows is the room's safeguard report. Its error is the process probe's (7.12): a run that could not read
+	// it refuses in words rather than healing a report nobody decided.
+	Rows  func(room string) ([]clientservices.Health, error)
+	Up    func(room string) error
+	Cause func() string
+	Fix   bool
 }
 
-// Run checks one room and returns every finding.
-func Run(room string, d Deps) []Finding {
+// Run checks one room and returns every finding. An error is the safeguard report's: the process probe
+// could not run, so no safeguard finding was decided and no repair built on it is applied (7.12).
+func Run(room string, d Deps) ([]Finding, error) {
 	var out []Finding
 	envKeys, envErr := envFileKeys(filepath.Join(d.StateRoot, ".env"))
 	if envErr != nil {
@@ -59,12 +62,16 @@ func Run(room string, d Deps) []Finding {
 	}
 	seats, err := d.Seats(room)
 	if err != nil {
-		return append(out, Finding{Check: "runtime", Target: room, Detail: err.Error(), Result: "left"})
+		return append(out, Finding{Check: "runtime", Target: room, Detail: err.Error(), Result: "left"}), nil
 	}
 	for _, seat := range seats {
 		out = append(out, checkSeat(room, seat, envKeys, d)...)
 	}
-	return append(out, checkSafeguards(room, d)...)
+	safeguards, err := checkSafeguards(room, d)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, safeguards...), nil
 }
 
 func checkSeat(room string, seat clientruntime.SeatStatus, envKeys map[string]bool, d Deps) []Finding {
@@ -108,10 +115,14 @@ func checkSeat(room string, seat clientruntime.SeatStatus, envKeys map[string]bo
 	return out
 }
 
-func checkSafeguards(room string, d Deps) []Finding {
-	down := clientservices.NotRunning(d.Rows(room))
+func checkSafeguards(room string, d Deps) ([]Finding, error) {
+	rows, err := d.Rows(room)
+	if err != nil {
+		return nil, err
+	}
+	down := clientservices.NotRunning(rows)
 	if len(down) == 0 {
-		return nil
+		return nil, nil
 	}
 	names := make([]string, 0, len(down))
 	for _, row := range down {
@@ -119,13 +130,17 @@ func checkSafeguards(room string, d Deps) []Finding {
 	}
 	finding := apply(d, Finding{Check: "safeguards", Target: room, Detail: "not running: " + strings.Join(names, ", "), Fix: "up"},
 		func() error { return d.Up(room) },
-		func() bool { return len(clientservices.NotRunning(d.Rows(room))) == 0 })
+		func() bool {
+			// A RE-CHECK THAT COULD NOT READ IS NOT A FIX (7.12); the finding stays unfixed instead.
+			fresh, err := d.Rows(room)
+			return err == nil && len(clientservices.NotRunning(fresh)) == 0
+		})
 	if finding.Result == "unfixed" {
 		if cause := d.Cause(); cause != "" {
 			finding.Detail += "; last cause: " + cause
 		}
 	}
-	return []Finding{finding}
+	return []Finding{finding}, nil
 }
 
 // apply runs the fix when the run may, then re-checks. Without --fix the finding says what it would do.

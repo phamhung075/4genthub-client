@@ -117,7 +117,10 @@ func TestRuntimeMappingKeepsEverySupportedRuntime(t *testing.T) {
 	}
 	for _, rt := range []string{"claude-code", "codex", "agy", "omp", "terminal"} {
 		t.Run(rt, func(t *testing.T) {
-			seats, invalid, duplicates := BuildSeats(seat(rt), known, pinsDir, false)
+			seats, invalid, duplicates, err := BuildSeats(seat(rt), known, pinsDir, false)
+			if err != nil {
+				t.Fatalf("BuildSeats refused: %v", err)
+			}
 			if len(seats) != 1 || invalid != 0 || len(duplicates) != 0 {
 				t.Fatalf("BuildSeats = %d seats, %d invalid, %d duplicates, want 1, 0, 0", len(seats), invalid, len(duplicates))
 			}
@@ -127,7 +130,10 @@ func TestRuntimeMappingKeepsEverySupportedRuntime(t *testing.T) {
 		})
 	}
 	t.Run("a runtime outside the set reads unknown", func(t *testing.T) {
-		seats, _, _ := BuildSeats(seat("weird-runtime"), known, pinsDir, false)
+		seats, _, _, err := BuildSeats(seat("weird-runtime"), known, pinsDir, false)
+		if err != nil {
+			t.Fatalf("BuildSeats refused: %v", err)
+		}
 		if len(seats) != 1 {
 			t.Fatalf("BuildSeats returned %d seats, want 1", len(seats))
 		}

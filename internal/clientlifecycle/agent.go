@@ -136,9 +136,18 @@ func runAgent(ctx context.Context, root string, stdout, stderr io.Writer) int {
 
 	var supervise sync.WaitGroup
 	supervise.Add(1)
+	// A PROBE THAT COULD NOT RUN ENDS THE SUPERVISION (7.12). The loop answers an error when pgrep could not
+	// be read at all: no child was adopted, none was started, and the pass that would have decided either
+	// from an empty process table never runs. The refusal is printed once, on stderr, and the daemon exits
+	// 3 - the detached children it may already have keep running, and 7.3's dead-man is what reports it.
+	refused := make(chan error, 1)
 	go func() {
 		defer supervise.Done()
-		manager.supervise(ctx)
+		if err := manager.supervise(ctx); err != nil {
+			fmt.Fprintf(stderr, "4genteam agent: refusing to supervise: %v\n", err)
+			refused <- err
+			cancel()
+		}
 	}()
 
 	code := daemon.Run(ctx)
@@ -147,6 +156,9 @@ func runAgent(ctx context.Context, root string, stdout, stderr io.Writer) int {
 	cancel()
 	manager.shutdown()
 	supervise.Wait()
+	if len(refused) > 0 {
+		return clientcmd.ExitUnavailable
+	}
 	return code
 }
 
@@ -218,22 +230,27 @@ func newAgentManager(root string, log func(string)) *agentManager {
 
 // supervise is the loop: one pass a second, re-reading agent.json each time so a room `up` adds while agent
 // runs is picked up without restarting anything.
-func (m *agentManager) supervise(ctx context.Context) {
+//
+// It returns the pass's error and stops: a probe that could not run is not a pass to repeat, because
+// repeating it would keep deciding "nothing is running" from a process table nobody read.
+func (m *agentManager) supervise(ctx context.Context) error {
 	for {
 		if ctx.Err() != nil {
-			return
+			return nil
 		}
-		m.pass()
+		if err := m.pass(); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-time.After(agentPass):
 		}
 	}
 }
 
 // pass is one turn: bring the children in line with the listed rigs, then report what changed.
-func (m *agentManager) pass() {
+func (m *agentManager) pass() error {
 	// AGENT BEATS ITSELF ON EVERY PASS, and it does so HERE rather than on the socket, because the process
 	// must read `running` while the cloud is unreachable: a beat that needs the network would make an
 	// offline-but-healthy agent look dead, and 7.3 has a separate dead-man for the socket.
@@ -246,7 +263,9 @@ func (m *agentManager) pass() {
 	}
 	specs := agentSpecs(state.Rigs, m.root)
 	now := clientservices.Now()
-	m.reconcile(specs, now)
+	if err := m.reconcile(specs, now); err != nil {
+		return err
+	}
 	// THE TWO DETECTORS RIDE THIS LOOP (ruling 4.5 and plan item 5: every ten minutes), on their own timers
 	// rather than as more children, because 7.1's reason for keeping supervision in one process is that a
 	// second always-on process is a second thing to supervise. Two timers rather than one because the two
@@ -257,14 +276,18 @@ func (m *agentManager) pass() {
 	if m.stuckDue(now) {
 		m.scanStuck(state.Rigs, now)
 	}
-	rows := clientservices.Verify(context.Background(), clientservices.Env{
+	rows, err := clientservices.Verify(context.Background(), clientservices.Env{
 		Root:       m.root,
 		Rigs:       state.Rigs,
 		Supervised: m.recorded(),
 		Thresholds: m.thresholds(),
 	})
+	if err != nil {
+		return err
+	}
 	m.report(rows)
 	m.persist(rows)
+	return nil
 }
 
 // agentSpecs is the child list of 7.1: a compaction supervisor, a watchdog and a seat-message deliverer
@@ -320,12 +343,15 @@ func agentSpecs(rigs []string, root string) []agentSpec {
 }
 
 // reconcile starts what is missing, adopts what is already running, and stops what a rig that left the
-// list no longer needs.
-func (m *agentManager) reconcile(specs []agentSpec, now time.Time) {
+// list no longer needs. The first probe error ends the pass: nothing is adopted, nothing is started, and
+// nothing is stopped from a process table nobody read (7.12).
+func (m *agentManager) reconcile(specs []agentSpec, now time.Time) error {
 	wanted := map[string]bool{}
 	for _, spec := range specs {
 		wanted[spec.safeguard+" "+spec.rig] = true
-		m.ensure(spec, now)
+		if err := m.ensure(spec, now); err != nil {
+			return err
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -340,6 +366,7 @@ func (m *agentManager) reconcile(specs []agentSpec, now time.Time) {
 		}
 		delete(m.children, key)
 	}
+	return nil
 }
 
 // ensure is one child's turn: adopt a live process, restart a dead one when its backoff has elapsed.
@@ -348,15 +375,22 @@ func (m *agentManager) reconcile(specs []agentSpec, now time.Time) {
 // SIGKILLed; spawning a second copy would put two supervisors on one rig. A live process matching the
 // child's command line is therefore adopted rather than duplicated, and liveness is read from the SAME
 // pgrep the report uses, so agent and `doctor` can never disagree about who is running.
-func (m *agentManager) ensure(spec agentSpec, now time.Time) {
+//
+// A PROBE ERROR IS NOT "NOT RUNNING" (7.12). It is returned before any decision is taken, so the child is
+// neither adopted nor spawned and the caller ends the pass. The old spelling read the error as an empty
+// process table, and one missing pgrep started a second supervision tree.
+func (m *agentManager) ensure(spec agentSpec, now time.Time) error {
 	key := spec.safeguard + " " + spec.rig
+	live, err := clientservices.Live(clientservices.Pattern(spec.safeguard, spec.rig))
+	if err != nil {
+		return err
+	}
 	m.mu.Lock()
 	child := m.children[key]
 	if child == nil {
 		child = &agentChild{spec: spec, nextTry: now}
 		m.children[key] = child
 	}
-	live := clientservices.Live(clientservices.Pattern(spec.safeguard, spec.rig))
 	if len(live) > 0 {
 		if child.pid != live[0] {
 			child.pid, child.startedAt = live[0], now
@@ -364,7 +398,7 @@ func (m *agentManager) ensure(spec agentSpec, now time.Time) {
 		}
 		child.prune(now)
 		m.mu.Unlock()
-		return
+		return nil
 	}
 	// Not running. A child agent believed was alive has just died: that is the death, counted once, on the
 	// pass that misses it.
@@ -374,11 +408,12 @@ func (m *agentManager) ensure(spec agentSpec, now time.Time) {
 	}
 	if now.Before(child.nextTry) {
 		m.mu.Unlock()
-		return
+		return nil
 	}
 	child.nextTry = now.Add(agentRestartCap)
 	m.mu.Unlock()
 	m.start(child, now)
+	return nil
 }
 
 // start spawns one child and waits out the start grace through awaitStart, the same start every other verb
@@ -652,18 +687,31 @@ func recordRig(rig string, stderr io.Writer) bool {
 
 // agentRunning is the process half of agent's own row, through the same pattern the report uses. It is a
 // variable so a test drives a verb's decision without a process on this machine.
-var agentRunning = func() int {
-	live := clientservices.Live(clientservices.Pattern(clientservices.Agent, ""))
-	if len(live) == 0 {
-		return 0
+//
+// The error is the probe's, not an absence (7.12): a pgrep that could not run used to answer 0, and 0 was
+// read as "agent is not running" by a verb that then started a second one.
+var agentRunning = func() (int, error) {
+	live, err := clientservices.Live(clientservices.Pattern(clientservices.Agent, ""))
+	if err != nil {
+		return 0, err
 	}
-	return live[0]
+	if len(live) == 0 {
+		return 0, nil
+	}
+	return live[0], nil
 }
 
 // startAgent starts the supervision authority, once: a running agent is LEFT ALONE, because `up` is the
 // idempotent repair verb (7.5) and a second agent would be two restart authorities.
 func startAgent(root string, stdout, stderr io.Writer) bool {
-	if pid := agentRunning(); pid != 0 {
+	pid, err := agentRunning()
+	if err != nil {
+		// NOT STARTED ON A PROBE THE VERB COULD NOT TAKE (7.12): "cannot see agent" is not "agent is not
+		// running", and the second is the only fact a second start may be built on.
+		fmt.Fprintf(stderr, "4genteam up: nothing was started or stopped: %v\n", err)
+		return false
+	}
+	if pid != 0 {
 		fmt.Fprintf(stdout, "agent: already running, pid %d\n", pid)
 		return true
 	}
@@ -686,12 +734,23 @@ func startAgent(root string, stdout, stderr io.Writer) bool {
 // stopAgent stops the authority and, through its own shutdown, its children. The stop is machine-wide, so
 // the rig name is named as staying listed rather than used to pick a target: `stop` is not room intent
 // (7.9), and a verb that silently dropped its argument would be worse than one that says why it ignores it.
-func stopAgent(rig string, stdout io.Writer) {
-	if stopPattern(clientservices.Pattern(clientservices.Agent, "")) {
-		fmt.Fprintf(stdout, "agent: stopped with its children (a machine-wide stop; rig %s stays listed)\n", rig)
-		return
+//
+// IT ANSWERS THIS VERB'S EXIT CODE (7.12). A pkill that could not run is not "nothing matched": the caller
+// gets 3 and the word NOT, never the `was not running` line that let `4genteam stop` exit 0 on a stop it
+// never attempted. `verb` is the caller's spelling (`stop`, `up`), so the refusal names the command the
+// operator ran.
+func stopAgent(verb, rig string, stdout, stderr io.Writer) int {
+	stopped, err := stopPattern(clientservices.Pattern(clientservices.Agent, ""))
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam %s: agent was NOT stopped: %v\n", verb, err)
+		return clientcmd.ExitUnavailable
 	}
-	fmt.Fprintln(stdout, "agent: was not running")
+	if !stopped {
+		fmt.Fprintln(stdout, "agent: was not running")
+		return clientcmd.ExitOK
+	}
+	fmt.Fprintf(stdout, "agent: stopped with its children (a machine-wide stop; rig %s stays listed)\n", rig)
+	return clientcmd.ExitOK
 }
 
 // runAgentStatus is `4genteam agent status`: the safeguard rows, the listed rigs, and the per-session
@@ -717,7 +776,14 @@ func runAgentStatus(args []string, root string, stdout, stderr io.Writer) int {
 		// could not be read".
 		fmt.Fprintf(stderr, "4genteam agent status: the rooms meant to run could not be read, so the rigs list below is empty for that reason: %v\n", stateErr)
 	}
-	rows := rowsFor("", root)
+	rows, err := rowsFor("", root)
+	if err != nil {
+		// A READING VERB KEEPS ITS EXIT (7.12): the rows could not be decided, so none is printed and the
+		// probe is named on stderr. The rigs list and the counts are unrelated readings and still print.
+		fmt.Fprintf(stderr, "4genteam agent status: no safeguard row was decided: %v\n", err)
+		fmt.Fprintf(stdout, "rigs: %s\n", strings.Join(state.Rigs, ", "))
+		return clientcmd.ExitOK
+	}
 	withheld := withheldCounts()
 	if asJSON {
 		body, err := json.MarshalIndent(map[string]any{

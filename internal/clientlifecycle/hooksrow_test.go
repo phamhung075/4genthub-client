@@ -198,7 +198,7 @@ func TestGuardsUnderFindsOnlyTheMarkedFiles(t *testing.T) {
 // is switched off.
 func TestDoctorPrintsTheHooksRowAndItsFolder(t *testing.T) {
 	rows, worktrees, clones, hooks, orphans := rowsFor, worktreesRowFor, cloneRowFor, hooksRowFor, orphanRowsFor
-	rowsFor = func(string, string) []clientservices.Health { return nil }
+	rowsFor = func(string, string) ([]clientservices.Health, error) { return nil, nil }
 	worktreesRowFor = func(string, string) []worktreesRow { return nil }
 	cloneRowFor = func(string) []cloneRow { return nil }
 	orphanRowsFor = func(string) []orphanRow { return nil }

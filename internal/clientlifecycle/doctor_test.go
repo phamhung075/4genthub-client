@@ -80,7 +80,7 @@ func newHealthFixture(t *testing.T, listedRigs []string) *healthFixture {
 
 	fixture := &healthFixture{t: t, root: root, at: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), live: map[string][]int{}}
 	clientservices.Now = func() time.Time { return fixture.at }
-	clientservices.Live = func(pattern string) []int { return fixture.live[pattern] }
+	clientservices.Live = func(pattern string) ([]int, error) { return fixture.live[pattern], nil }
 
 	state := clientservices.AgentState{}
 	for _, rig := range listedRigs {
@@ -325,7 +325,10 @@ func TestKilledOrSilentSafeguardIsNamedAndDoctorRefuses(t *testing.T) {
 			}
 
 			// (a) the report names it, with the age of its last beat.
-			rows := rowsFor("demo", fixture.root)
+			rows, err := rowsFor("demo", fixture.root)
+			if err != nil {
+				t.Fatalf("rowsFor refused: %v", err)
+			}
 			got := row(t, rows, c.safeguard, c.rig)
 			if got.State != wantState {
 				t.Errorf("row = %+v, want state %q", got, wantState)
@@ -391,7 +394,11 @@ func TestAStaleBeatFromAnotherPidIsSilent(t *testing.T) {
 	fixture.live[clientservices.Pattern(clientservices.Compact, "demo")] = []int{7777}
 	fixture.beat(clientservices.Compact, "demo", time.Second, 4101)
 
-	got := row(t, rowsFor("demo", fixture.root), clientservices.Compact, "demo")
+	rows, err := rowsFor("demo", fixture.root)
+	if err != nil {
+		t.Fatalf("rowsFor refused: %v", err)
+	}
+	got := row(t, rows, clientservices.Compact, "demo")
 	if got.State != clientservices.Silent {
 		t.Errorf("row = %+v, want silent: the live pid is not the beat's pid", got)
 	}
@@ -412,7 +419,10 @@ func TestEverySafeguardRunningIsExitOKAndARunningRow(t *testing.T) {
 	fixture := newHealthFixture(t, []string{"demo"})
 	fixture.everythingRunning()
 
-	rows := rowsFor("demo", fixture.root)
+	rows, err := rowsFor("demo", fixture.root)
+	if err != nil {
+		t.Fatalf("rowsFor refused: %v", err)
+	}
 	for _, want := range []struct{ safeguard, rig string }{
 		{clientservices.Compact, "demo"},
 		{clientservices.Watchdog, "demo"},
@@ -458,7 +468,10 @@ func TestDoctorWithoutARigReportsEveryListedRoom(t *testing.T) {
 	fixture := newHealthFixture(t, []string{"demo", "other"})
 	fixture.running(clientservices.Agent, "", 4104)
 
-	rows := rowsFor("", fixture.root)
+	rows, err := rowsFor("", fixture.root)
+	if err != nil {
+		t.Fatalf("rowsFor refused: %v", err)
+	}
 	for _, want := range []struct{ safeguard, rig string }{
 		{clientservices.Compact, "demo"},
 		{clientservices.Watchdog, "demo"},
@@ -524,9 +537,9 @@ func TestDoctorIsReadOnly(t *testing.T) {
 		did = append(did, "spawn "+strings.Join(args, " "))
 		return diedChild{}, nil
 	}
-	stopPattern = func(pattern string) bool {
+	stopPattern = func(pattern string) (bool, error) {
 		did = append(did, "signal "+pattern)
-		return true
+		return true, nil
 	}
 	// A NODE READ IS NOT AN ACTION, and the identity row makes one: the recorder names it so the assertion
 	// below can tell the two apart, rather than forbidding the read the report has to make.
@@ -578,5 +591,25 @@ func TestDoctorJSONCarriesTheReasonsTheLinesShow(t *testing.T) {
 	}
 	if got := reasons[strings.TrimSpace("demo "+clientservices.Compact)]; len(got) != 0 {
 		t.Errorf("a healthy row carries reasons %q", got)
+	}
+}
+
+// TestDoctorRefusesWhenTheProcessProbeCannotRun: a pgrep that could not run decides no row, so `doctor`
+// prints no row, reason or note - a report that cannot say "running" must not be readable as "stopped" -
+// names the probe on stderr, and exits 3 (7.12).
+func TestDoctorRefusesWhenTheProcessProbeCannotRun(t *testing.T) {
+	fixture := newHealthFixture(t, []string{"demo"})
+	fixture.everythingRunning()
+	clientservices.Live = func(string) ([]int, error) { return nil, errors.New("pgrep: not found") }
+
+	code, out, stderr := doctor(t, fixture, "demo")
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("doctor exited %d, want %d: a probe that could not run is not a healthy machine", code, clientcmd.ExitUnavailable)
+	}
+	if !strings.Contains(stderr, "no safeguard row was decided") || !strings.Contains(stderr, "pgrep") {
+		t.Errorf("stderr = %q, want the refusal naming the probe", stderr)
+	}
+	if strings.Contains(out, ": stopped") || strings.Contains(out, ": running") || strings.Contains(out, ": silent") {
+		t.Errorf("stdout carries a safeguard row on a report that was never read: %q", out)
 	}
 }

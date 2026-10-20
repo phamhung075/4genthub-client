@@ -123,7 +123,7 @@ func TestWorktreesRowNotesAnUnreadableRoomRecord(t *testing.T) {
 // is down. The three computations are seams, so no case needs a daemon, a room or a repository.
 func TestDoctorPrintsTheWorktreesRowAndItsReasons(t *testing.T) {
 	rows, worktrees, orphans := rowsFor, worktreesRowFor, orphanRowsFor
-	rowsFor = func(string, string) []clientservices.Health { return nil }
+	rowsFor = func(string, string) ([]clientservices.Health, error) { return nil, nil }
 	orphanRowsFor = func(string) []orphanRow { return nil }
 	worktreesRowFor = func(string, string) []worktreesRow {
 		return []worktreesRow{{

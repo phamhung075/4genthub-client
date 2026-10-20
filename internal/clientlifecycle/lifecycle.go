@@ -322,12 +322,22 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
 		return clientcmd.ExitRoomRefused
 	}
+	// THE PROCESS PROBE RUNS FIRST, BEFORE THE DAEMON, AGENT OR A SEAT (7.12). Every step below reads or
+	// signals processes - `--respawn` stops the daemon and agent, `startAgent` decides whether to start,
+	// and the start grace waits on the report - so a machine whose pgrep or pkill cannot run would act on
+	// "nothing is running" and start a second copy of what is already there. Refusing here starts nothing.
+	if err := clientservices.Probe(); err != nil {
+		fmt.Fprintf(stderr, "4genteam up: nothing was started or stopped: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
 	// --respawn REPLACES THE DAEMON, and it does so BEFORE the reachability read below can reuse it: the
 	// daemon is nobody's child and keeps running the binary it was started with, so a build that renamed a
 	// new one into place changes nothing until the old process is gone. Agent goes first because it is the
 	// restart authority: a watchdog left running would restore the seats of the room being cycled.
 	if respawn {
-		stopAgent(name, stdout)
+		if code := stopAgent("up", name, stdout, stderr); code != clientcmd.ExitOK {
+			return code
+		}
 		if !respawnDaemon(stateDir, stdout, stderr) {
 			return clientcmd.ExitUnavailable
 		}
@@ -378,7 +388,13 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	// 7.5: the SAME check `doctor` makes, run after agent's start grace and BEFORE the watch view, the UI
 	// and herdr. A safeguard that did not come up is named here, with the line a reader will see in
 	// `doctor`, rather than discovered hours later on a quiet rig.
-	rows, ok := waitSafeguards(name, stateDir)
+	rows, ok, err := waitSafeguards(name, stateDir)
+	if err != nil {
+		// THE PREFLIGHT ABOVE MAKES THIS A RACE, and it is still refused rather than treated as a report of
+		// dead children: the start grace could not decide a row, so it cannot name one as down (7.12).
+		fmt.Fprintf(stderr, "4genteam up: no safeguard row was decided: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
 	if !ok {
 		reportDown(rows, stderr)
 		return clientcmd.ExitUnavailable
@@ -937,8 +953,14 @@ func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 		return clientcmd.ExitUnavailable
 	}
 	// WITH NO AUTHORITY THERE IS NO SUPERVISOR, and saying so is this verb's whole job now: it is exactly
-	// the silence the owner's incident was made of.
-	if agentRunning() == 0 {
+	// the silence the owner's incident was made of. A probe that could not run is refused by name instead
+	// (7.12): "cannot see agent" is not "agent is not running".
+	pid, err := agentRunning()
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam compact: no safeguard row was decided: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
+	if pid == 0 {
 		fmt.Fprintf(stderr, "4genteam compact: agent is not running, and the compaction supervisor is agent's child now - start it with `4genteam up %s`, or compact the room's seats through the runtime with `4genteam room compact %s`.\n", name, name)
 		return clientcmd.ExitUnavailable
 	}
@@ -947,7 +969,12 @@ func (compactCommand) Run(_ context.Context, args []string, stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "4genteam compact: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	rows := clientservices.NotRunning(rowsFor(name, root))
+	report, err := rowsFor(name, root)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam compact: no safeguard row was decided: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
+	rows := clientservices.NotRunning(report)
 	for _, row := range rows {
 		if row.Safeguard == clientservices.Compact {
 			fmt.Fprintln(stderr, clientservices.StateLine(row))
@@ -984,7 +1011,9 @@ func (stopCommand) Run(ctx context.Context, args []string, stdout, stderr io.Wri
 	if !ok {
 		return clientcmd.ExitUsage
 	}
-	stopAgent(name, stdout)
+	if code := stopAgent("stop", name, stdout, stderr); code != clientcmd.ExitOK {
+		return code
+	}
 	if err := closeWatch(ctx, name); err != nil {
 		fmt.Fprintf(stderr, "4genteam stop: the watch workspaces of %s could not be closed: %v\n", name, err)
 	}
@@ -1030,7 +1059,14 @@ func (statusCommand) Run(_ context.Context, args []string, stdout, stderr io.Wri
 		fmt.Fprintf(stderr, "4genteam status: %v\n", err)
 		return clientcmd.ExitUsage
 	}
-	rows := rowsFor(name, root)
+	rows, err := rowsFor(name, root)
+	if err != nil {
+		// A PURE READER KEEPS ITS EXIT (7.12): no row was decided, so none is printed and the probe is named
+		// on stderr. The supervisor line is skipped too - it is the same probe, and it would name the cause
+		// a second time.
+		fmt.Fprintf(stderr, "4genteam status: no safeguard row was decided: %v\n", err)
+		return clientcmd.ExitOK
+	}
 	if asJSON {
 		body, err := json.MarshalIndent(rows, "", "  ")
 		if err != nil {

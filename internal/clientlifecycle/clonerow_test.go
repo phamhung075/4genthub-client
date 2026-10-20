@@ -108,7 +108,7 @@ func TestParseChangedPathsReadsThePorcelainStates(t *testing.T) {
 // state. (The reasons field on the JSON rows is batch 5's change, on its own lane; main's --json is the rows.)
 func TestDoctorPrintsTheCloneRowAndItsPaths(t *testing.T) {
 	rows, worktrees, clones, orphans, hooks := rowsFor, worktreesRowFor, cloneRowFor, orphanRowsFor, hooksRowFor
-	rowsFor = func(string, string) []clientservices.Health { return nil }
+	rowsFor = func(string, string) ([]clientservices.Health, error) { return nil, nil }
 	worktreesRowFor = func(string, string) []worktreesRow { return nil }
 	orphanRowsFor = func(string) []orphanRow { return nil }
 	hooksRowFor = func(string) []hooksRow { return nil }

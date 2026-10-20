@@ -205,7 +205,13 @@ func bridgeOnce(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if switches["print"] {
 		bridge := NewBridge(id, root, time.Duration(DefaultInterval*float64(time.Second)), nil, nil,
 			known, pins, state, noteTo(stderr))
-		payload := bridge.BuildPayload()
+		payload, probeErr := bridge.BuildPayload()
+		if probeErr != nil {
+			// EXIT 3, NOTHING ON STDOUT (7.12): a printed report missing a seat is a report a reader takes as
+			// complete, and the pin it could not read would print as "no pin".
+			_, _ = fmt.Fprintf(stderr, "4genteam bridge: %v; the seats report was NOT sent\n", probeErr)
+			return clientcmd.ExitUnavailable
+		}
 		payload.LocalRecord = bridge.LocalRecord(payload.Seats)
 		encoded, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {

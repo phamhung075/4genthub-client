@@ -2,6 +2,38 @@
 
 Track test suite changes, fixes, and improvements for the client.
 
+## 2026-10-20 - the probe refusals have their own tests (branch 4genthub-min/int03-cascades)
+
+- `internal/clientservices/services_test.go`: `TestVerifyRefusesWhenTheProcessProbeCannotRun` - `Live`
+  answers an error and `Verify` must answer NO rows beside it (a partial report reads as complete).
+- `internal/clientlifecycle/doctor_test.go`: `TestDoctorRefusesWhenTheProcessProbeCannotRun` - exit 3,
+  the refusal names `pgrep`, and stdout carries no `: stopped`/`: running`/`: silent` line.
+- `internal/clientlifecycle/lifecycle_test.go`: `TestUpRefusesBeforeTheDaemonWhenTheProbeCannotRun`
+  gives the verb a `PATH` holding no pgrep and asserts exit 3 with no step recorded - the preflight runs
+  before the daemon, which is the order the ruling fixes; `TestStopRefusesWhenTheSignalProbeCannotRun`
+  asserts exit 3, no `was not running` and that `closeWatch` is never reached.
+- `internal/clientlifecycle/respawn_test.go`: `TestRespawnRefusesWhenTheProbeCannotRun` - `Live` errors,
+  `respawnDaemon` answers false, nothing is signalled, nothing is started.
+- `internal/clientheal/heal_test.go`: `TestAProbeErrorRefusesTheHeal` - `Rows` errors, `Run` answers the
+  error and no findings, and no repair was applied.
+- `internal/clientbridge/pinnedhash_test.go`: `TestAMalformedPinRefusesTheSeatsReport` drives three
+  unreadable pins (shape, garbage, truncated) through `BuildSeats` and requires an error naming
+  `pinned.json`; `TestPinnedHashUsedWhenValid` keeps its parity halves and now asserts the malformed pin
+  is an ERROR rather than `""`, with the missing-file `("", nil)` case beside it.
+- `internal/clientbridge/runloop_test.go`: `TestACycleSendsNothingWhenASeatPinCouldNotBeRead` drives a
+  cycle with a corrupt pin in the fixture's own pin dir and asserts no body was sent and the note names
+  the file.
+
+Every existing seam was widened to the new `(value, error)` signatures (`Live`, `stopPattern`,
+`agentRunning`, `waitSafeguards`, `rowsFor`, `Rows`, `BuildSeats`, `BuildPayload`, `PinnedHash`, `Run`);
+no assertion was relaxed, and `healRun` was added so a case that should fail on a probe error refuses
+instead of reading `nil` as clean.
+
+NOT DONE, deliberately: a permanent test of `bridge once --print`'s refusal. The verb resolves its pins
+store from `clientenv.RealHome()` (the passwd entry, not `$HOME`), so a test would write the operator's
+real `~/.config/4genthub/seats/.../pinned.json`. The branch is four lines over `BuildPayload`, whose
+refusal IS tested, and the verb was verified by hand against a corrupt file in that store.
+
 ## 2026-10-19 - the watch feed has a timing gate (branch 4genthub-min/perf-06-feed-timing)
 
 - `internal/clientwatch/feed_timing_test.go` (new): `TestFeedWritesEachLineWithinOnePoll` starts

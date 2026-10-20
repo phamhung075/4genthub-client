@@ -40,7 +40,7 @@ type restorer struct {
 	// safeguards is the rig's safeguards report - the rows `doctor` and `status` print, through the one
 	// computation in clientlifecycle. It is what lets a restore say whether the room it reports is
 	// supervised: `stop` leaves the seat sessions up, so the seats alone cannot answer that.
-	safeguards func(rig string) []clientservices.Health
+	safeguards func(rig string) ([]clientservices.Health, error)
 }
 
 // restoreSteps, when a test has set it, is handed the restorer newRestorer just wired, so the brief and
@@ -74,7 +74,7 @@ func newRestorer(log *teeLog, root string) *restorer {
 			return nil
 		},
 		wall: func(rig string) (bool, string) { return watchWall(rig, root) },
-		safeguards: func(rig string) []clientservices.Health {
+		safeguards: func(rig string) ([]clientservices.Health, error) {
 			return clientlifecycle.SafeguardRows(rig, root)
 		},
 	}
@@ -138,7 +138,16 @@ func (r *restorer) restore(rigName, brief string) bool {
 	// whose seven safeguards were all down (measured 2026-10-18: agent, compact, watchdog, messages,
 	// roomguard, budget and bridge missing until `heal`). A restore that did not restore supervision is
 	// not a success, so the rows are named here and the rig answers false.
-	if down := clientservices.NotRunning(r.safeguards(rigName)); len(down) > 0 {
+	//
+	// A REPORT THAT COULD NOT BE READ IS NOT A ROOM THAT IS SUPERVISED (7.12): the rig is not restored, and
+	// the line names the probe instead of pretending either way.
+	safeguardRows, probeErr := r.safeguards(rigName)
+	if probeErr != nil {
+		r.log.printf("%s: supervision could not be read (%v) - not restored; run `4genteam up %s`",
+			rigName, probeErr, rigName)
+		return false
+	}
+	if down := clientservices.NotRunning(safeguardRows); len(down) > 0 {
 		names := make([]string, 0, len(down))
 		for _, row := range down {
 			names = append(names, row.Safeguard)

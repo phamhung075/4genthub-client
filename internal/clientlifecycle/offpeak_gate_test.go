@@ -57,8 +57,8 @@ func stubWholeUp(t *testing.T) *[]string {
 	// asserts whether the RESUME ran, so these two are stubbed to no-ops that cannot touch this machine.
 	recordRigFor = func(string, io.Writer) bool { return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { return true }
-	waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
-		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
+	waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
+		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true, nil
 	}
 	// The gate passes only for a `up` that may report, so the credentials the missing-env refusal would
 	// otherwise catch are set here and never printed.
@@ -241,9 +241,9 @@ func TestCompactProceedsWhenTheCheckIsOff(t *testing.T) {
 				return diedChild{}, nil
 			}
 			SupervisorStartGrace = time.Millisecond
-			agentRunning = func() int { return 4242 }
-			rowsFor = func(string, string) []clientservices.Health {
-				return []clientservices.Health{{Rig: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}
+			agentRunning = func() (int, error) { return 4242, nil }
+			rowsFor = func(string, string) ([]clientservices.Health, error) {
+				return []clientservices.Health{{Rig: "room-alpha", Safeguard: clientservices.Compact, State: clientservices.Running}}, nil
 			}
 			rigNodes = func(string) ([]map[string]any, bool, error) { return deepSeekRoomNode(), true, nil }
 			gateEnv(t, c.pin)

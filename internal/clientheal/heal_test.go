@@ -40,11 +40,11 @@ func (r *room) deps(t *testing.T, fix bool) Deps {
 			return nil
 		},
 		ProcEnv: func(_, seat string) (map[string]bool, bool) { keys, ok := r.env[seat]; return keys, ok },
-		Rows: func(string) []clientservices.Health {
+		Rows: func(string) ([]clientservices.Health, error) {
 			if r.down {
-				return []clientservices.Health{{Rig: "r", Safeguard: "agent", State: "stopped"}}
+				return []clientservices.Health{{Rig: "r", Safeguard: "agent", State: "stopped"}}, nil
 			}
-			return []clientservices.Health{{Rig: "r", Safeguard: "agent", State: "running"}}
+			return []clientservices.Health{{Rig: "r", Safeguard: "agent", State: "running"}}, nil
 		},
 		Up: func(string) error {
 			r.upCalls++
@@ -81,6 +81,17 @@ func results(findings []Finding) map[string]string {
 	return out
 }
 
+// healRun is Run for a case that expects a report: a probe error is a failure of the case, and the test
+// that drives the refusal calls Run itself.
+func healRun(t *testing.T, room string, d Deps) []Finding {
+	t.Helper()
+	findings, err := Run(room, d)
+	if err != nil {
+		t.Fatalf("Run(%s) refused: %v", room, err)
+	}
+	return findings
+}
+
 func TestACleanRoomHasNoFindings(t *testing.T) {
 	r := newRoom(t, "AGENTHUB_URL=u\nAGENTHUB_TOKEN=t\n")
 	for _, seat := range []string{"dev", "lead"} {
@@ -88,7 +99,7 @@ func TestACleanRoomHasNoFindings(t *testing.T) {
 		r.env[seat] = map[string]bool{"AGENTHUB_URL": true, "AGENTHUB_TOKEN": true}
 		_ = os.WriteFile(filepath.Join(clientruntime.SeatDir(r.root, "r", seat), "mcp.json"), []byte("{}"), 0o600)
 	}
-	if got := Run("r", r.deps(t, true)); len(got) != 0 {
+	if got := healRun(t, "r", r.deps(t, true)); len(got) != 0 {
 		t.Fatalf("findings on a clean room: %+v", got)
 	}
 }
@@ -97,7 +108,7 @@ func TestASeatMissingTheEnvOrItsMcpConfigIsReseatedAndChecked(t *testing.T) {
 	r := newRoom(t, "AGENTHUB_URL=u\nAGENTHUB_TOKEN=t\n")
 	r.seats["dev"], r.seats["lead"] = "running", "stopped"
 	r.env["dev"] = map[string]bool{"AGENTHUB_URL": true} // the token never reached it
-	got := results(Run("r", r.deps(t, true)))
+	got := results(healRun(t, "r", r.deps(t, true)))
 	for _, key := range []string{"seat-env r/dev", "seat-down r/lead"} {
 		if got[key] != "fixed" {
 			t.Errorf("%s = %q, want fixed (all: %v)", key, got[key], got)
@@ -112,7 +123,7 @@ func TestASeatWithoutItsMcpConfigIsReseated(t *testing.T) {
 		r.env[seat] = map[string]bool{"AGENTHUB_URL": true, "AGENTHUB_TOKEN": true}
 	}
 	_ = os.WriteFile(filepath.Join(clientruntime.SeatDir(r.root, "r", "lead"), "mcp.json"), []byte("{}"), 0o600)
-	got := results(Run("r", r.deps(t, true)))
+	got := results(healRun(t, "r", r.deps(t, true)))
 	if got["seat-mcp r/dev"] != "fixed" || len(got) != 1 {
 		t.Fatalf("got %v", got)
 	}
@@ -121,7 +132,7 @@ func TestASeatWithoutItsMcpConfigIsReseated(t *testing.T) {
 func TestCheckOnlyChangesNothing(t *testing.T) {
 	r := newRoom(t, "AGENTHUB_URL=u\nAGENTHUB_TOKEN=t\n")
 	r.seats["dev"], r.seats["lead"] = "stopped", "stopped"
-	got := results(Run("r", r.deps(t, false)))
+	got := results(healRun(t, "r", r.deps(t, false)))
 	if got["seat-down r/dev"] != "would-fix" || len(r.reseats) != 0 {
 		t.Fatalf("a check-only run acted: %v reseats=%v", got, r.reseats)
 	}
@@ -132,7 +143,7 @@ func TestAMissingKeyIsLeftAndNeverPrinted(t *testing.T) {
 	for _, seat := range []string{"dev", "lead"} {
 		r.seats[seat] = "running"
 	}
-	findings := Run("r", r.deps(t, true))
+	findings := healRun(t, "r", r.deps(t, true))
 	if results(findings)["env-key AGENTHUB_TOKEN"] != "left" {
 		t.Fatalf("an empty token must be left for the owner: %+v", findings)
 	}
@@ -150,7 +161,7 @@ func TestASafeguardThatStaysDownNamesItsCause(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(clientruntime.SeatDir(r.root, "r", seat), "mcp.json"), []byte("{}"), 0o600)
 	}
 	r.down = true
-	findings := Run("r", r.deps(t, true))
+	findings := healRun(t, "r", r.deps(t, true))
 	if len(findings) != 1 || findings[0].Result != "unfixed" || r.upCalls != 1 {
 		t.Fatalf("findings=%+v up=%d", findings, r.upCalls)
 	}
@@ -168,4 +179,24 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// TestAProbeErrorRefusesTheHeal: the safeguard report is the run's evidence, so a pgrep that could not run
+// refuses the whole heal rather than reading as "nothing is down" (7.12). It answers an error and NO
+// findings - an empty list is what a clean room looks like, and a repair is never applied on it.
+func TestAProbeErrorRefusesTheHeal(t *testing.T) {
+	r := newRoom(t, "")
+	d := r.deps(t, true)
+	d.Rows = func(string) ([]clientservices.Health, error) { return nil, errors.New("pgrep: not found") }
+
+	findings, err := Run("r", d)
+	if err == nil {
+		t.Fatalf("Run healed a room from a probe that could not run: %v", findings)
+	}
+	if findings != nil {
+		t.Errorf("Run answered %d finding(s) beside its error, want none", len(findings))
+	}
+	if len(r.reseats) != 0 || r.upCalls != 0 {
+		t.Errorf("a refused run still applied repairs: reseats %v up calls %d", r.reseats, r.upCalls)
+	}
 }

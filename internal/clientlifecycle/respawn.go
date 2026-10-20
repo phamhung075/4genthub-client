@@ -44,25 +44,47 @@ func daemonPattern(stateDir string) string {
 // the caller must not start a second one.
 func respawnDaemon(stateDir string, stdout, stderr io.Writer) bool {
 	pattern := daemonPattern(stateDir)
-	pids := clientservices.Live(pattern)
+	// A PROBE THAT COULD NOT RUN IS NOT "the daemon is not running" (7.12). The empty-pids branch below is
+	// what `up --respawn` used to walk on a missing pgrep, reaching `return true` and starting the second
+	// daemon this whole step exists to prevent; the refusal is on stderr and touches nothing.
+	pids, err := clientservices.Live(pattern)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: the runtime daemon was not touched: %v\n", err)
+		return false
+	}
 	if len(pids) == 0 {
 		fmt.Fprintln(stdout, "daemon: was not running")
 		return true
 	}
 	fmt.Fprintf(stdout, "daemon: stopping %v so the installed binary serves %s\n", pids, stateDir)
-	if !stopPattern(pattern) {
+	stopped, err := stopPattern(pattern)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: the runtime daemon was not touched: %v\n", err)
+		return false
+	}
+	if !stopped {
 		fmt.Fprintf(stderr, "4genteam up: the runtime daemon %v did not accept the stop signal; "+
 			"refusing to start a second daemon for %s\n", pids, stateDir)
 		return false
 	}
 	deadline := time.Now().Add(respawnWindow)
 	for time.Now().Before(deadline) {
-		if len(clientservices.Live(pattern)) == 0 {
+		live, err := clientservices.Live(pattern)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam up: the runtime daemon was not touched: %v\n", err)
+			return false
+		}
+		if len(live) == 0 {
 			return true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	live, err := clientservices.Live(pattern)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: the runtime daemon was not touched: %v\n", err)
+		return false
+	}
 	fmt.Fprintf(stderr, "4genteam up: the runtime daemon %v is still running %s after the stop signal; "+
-		"refusing to start a second daemon for %s\n", clientservices.Live(pattern), respawnWindow, stateDir)
+		"refusing to start a second daemon for %s\n", live, respawnWindow, stateDir)
 	return false
 }

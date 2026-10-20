@@ -107,8 +107,8 @@ func restoreAll(t *testing.T) {
 	// own state file.
 	recordRigFor = func(string, io.Writer) bool { return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { return true }
-	waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
-		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
+	waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
+		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true, nil
 	}
 }
 
@@ -193,9 +193,9 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	}
 	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
 	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
-	waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
+	waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
 		ran = append(ran, "waitSafeguards")
-		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true
+		return []clientservices.Health{{Safeguard: clientservices.Agent, State: clientservices.Running}}, true, nil
 	}
 	runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 	openUI = func(io.Writer) { ran = append(ran, "openUI") }
@@ -277,9 +277,9 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 			}
 			recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
 			startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
-			waitSafeguards = func(string, string) ([]clientservices.Health, bool) {
+			waitSafeguards = func(string, string) ([]clientservices.Health, bool, error) {
 				ran = append(ran, "waitSafeguards")
-				return nil, true
+				return nil, true, nil
 			}
 			runWatchView = func(string, io.Writer) { ran = append(ran, "watch") }
 			openUI = func(io.Writer) { ran = append(ran, "openUI") }
@@ -428,9 +428,9 @@ func TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition(t *testing.T) {
 func TestStopSignalsAgentAndSaysTheStopIsMachineWide(t *testing.T) {
 	var patterns []string
 	restoreAll(t)
-	stopPattern = func(pattern string) bool {
+	stopPattern = func(pattern string) (bool, error) {
 		patterns = append(patterns, pattern)
-		return true
+		return true, nil
 	}
 
 	var out, errOut bytes.Buffer
@@ -487,7 +487,7 @@ func TestCompactSpawnsNothingAndRefusesWithoutTheAuthority(t *testing.T) {
 		spawned = append(spawned, strings.Join(args, " "))
 		return diedChild{}, nil
 	}
-	agentRunning = func() int { return 0 }
+	agentRunning = func() (int, error) { return 0, nil }
 
 	var out, errOut bytes.Buffer
 	code := (compactCommand{}).Run(context.Background(), []string{"some-rig"}, &out, &errOut)
@@ -514,12 +514,12 @@ func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 		spawned = append(spawned, strings.Join(args, " "))
 		return diedChild{}, nil
 	}
-	agentRunning = func() int { return 4242 }
-	rowsFor = func(string, string) []clientservices.Health {
+	agentRunning = func() (int, error) { return 4242, nil }
+	rowsFor = func(string, string) ([]clientservices.Health, error) {
 		return []clientservices.Health{
 			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Running, PID: 99, AgeS: 3},
 			{Rig: "some-rig", Safeguard: clientservices.Watchdog, State: clientservices.Silent, AgeS: 400},
-		}
+		}, nil
 	}
 
 	var out, errOut bytes.Buffer
@@ -539,11 +539,11 @@ func TestCompactReportsTheRowWhenTheAuthorityRuns(t *testing.T) {
 // stderr in the same words `doctor` uses.
 func TestCompactNamesTheRowWhenTheSupervisorIsNotRunning(t *testing.T) {
 	restoreAll(t)
-	agentRunning = func() int { return 4242 }
-	rowsFor = func(string, string) []clientservices.Health {
+	agentRunning = func() (int, error) { return 4242, nil }
+	rowsFor = func(string, string) ([]clientservices.Health, error) {
 		return []clientservices.Health{
 			{Rig: "some-rig", Safeguard: clientservices.Compact, State: clientservices.Stopped, AgeS: 31},
-		}
+		}, nil
 	}
 
 	var out, errOut bytes.Buffer
@@ -808,5 +808,61 @@ func TestPeakGateSaysWhenItDidNotRunForARoomItHasNoRecordsOf(t *testing.T) {
 				t.Errorf("%s: the gate's silence is not ended - stderr %q does not name %q", verb, errOut.String(), want)
 			}
 		}
+	}
+}
+
+// TestUpRefusesBeforeTheDaemonWhenTheProbeCannotRun: every step of `up` reads or signals processes, so a
+// machine whose pgrep/pkill cannot run is refused BEFORE the daemon, the agent or a seat (7.12). The check
+// is the real one - PATH holds no pgrep - and the assertion is that nothing ran at all.
+func TestUpRefusesBeforeTheDaemonWhenTheProbeCannotRun(t *testing.T) {
+	restoreAll(t)
+	t.Setenv("PATH", filepath.Join(t.TempDir(), "empty"))
+	// The seams below are recorders: if the preflight ever moved behind them, the test names the step that
+	// ran instead of starting the machine's own daemon.
+	var ran []string
+	ensureDaemon = func(string, io.Writer) (string, error) {
+		ran = append(ran, "ensureDaemon")
+		return "/tmp/daemon.log", nil
+	}
+	recordRigFor = func(string, io.Writer) bool { ran = append(ran, "recordRig"); return true }
+	startAuthority = func(string, io.Writer, io.Writer) bool { ran = append(ran, "startAgent"); return true }
+
+	var out, errOut bytes.Buffer
+	code := (upCommand{}).Run(context.Background(), []string{"demo", "--team", writeRoomDefinition(t, "demo")}, &out, &errOut)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("up exited %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
+	}
+	if len(ran) != 0 {
+		t.Errorf("up ran %v on a probe it could not read, want nothing started", ran)
+	}
+	if !strings.Contains(errOut.String(), "nothing was started or stopped") || !strings.Contains(errOut.String(), "pgrep") {
+		t.Errorf("stderr = %q, want the refusal naming the probe", errOut.String())
+	}
+}
+
+// TestStopRefusesWhenTheSignalProbeCannotRun: a pkill that could not run is not "nothing matched". `stop`
+// exits 3 and says the agent was NOT stopped, and it never prints the `was not running` line that used to
+// make the verb exit 0 on a stop it never attempted (7.12).
+func TestStopRefusesWhenTheSignalProbeCannotRun(t *testing.T) {
+	restoreAll(t)
+	stopPattern = func(string) (bool, error) { return false, errors.New("pkill: not found") }
+	closed := false
+	previousClose := closeWatch
+	closeWatch = func(context.Context, string) error { closed = true; return nil }
+	t.Cleanup(func() { closeWatch = previousClose })
+
+	var out, errOut bytes.Buffer
+	code := (stopCommand{}).Run(context.Background(), []string{"my-rig"}, &out, &errOut)
+	if code != clientcmd.ExitUnavailable {
+		t.Fatalf("stop exited %d, want %d (stderr %q)", code, clientcmd.ExitUnavailable, errOut.String())
+	}
+	if strings.Contains(out.String(), "was not running") {
+		t.Errorf("stdout = %q, want no `was not running`: nothing was signalled", out.String())
+	}
+	if !strings.Contains(errOut.String(), "agent was NOT stopped") || !strings.Contains(errOut.String(), "pkill") {
+		t.Errorf("stderr = %q, want the refusal naming the probe", errOut.String())
+	}
+	if closed {
+		t.Error("stop closed the watch workspaces on a stop it never carried out")
 	}
 }
