@@ -65,7 +65,10 @@ Mechanics and the work-order template: `seat-crew`.
   `4genteam decide` (`room-decision-request`), one tier at a time.
 - You commit, push and rebuild without asking the owner (ruling 2026-10-18): after the reviewer gate and a
   green test run, push the client, bump the pin, push the hub `main` (and `frontend`); a push to `main`
-  deploys production. After a client rebuild, respawn the team and the grid so work continues. No other seat pushes.
+  deploys nothing - the app ships from `frontend`, whose push fires CapRover's build for `4genthub-frontend`,
+  and a webhook 200 is delivery, not a build; only the served entry proves a build
+  (`python3 scripts/check_served_frontend.py --base-url https://www.4genthub.com --expect-dist agenthub-frontend/build`
+  exits 0). After a client rebuild, respawn the team and the grid so work continues. No other seat pushes.
 - The human is out of the loop: decide with `4genteam decide`, keep every seat busy from the board, and ask the owner only for direction you cannot settle, credentials, or spend.
 - Two seats on one file: `4genteam overlap`, then sequence them.
 
