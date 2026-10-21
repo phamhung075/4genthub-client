@@ -178,7 +178,7 @@ type upCommand struct{}
 
 func (upCommand) Name() string { return "up" }
 func (upCommand) Summary() string {
-	return "start the local stack for a room: daemon, seats, agent (which starts the bridge and the supervisor), UI"
+	return "start the local stack for a room: daemon, seats, agent (which starts the bridge and the supervisor), watch view"
 }
 
 func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
@@ -186,7 +186,7 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 		printHelp(stdout, upUsage,
 			"The runtime daemon, this room's room and its seats, and then the safeguards: agent,\n"+
 				"which owns the compaction supervisor, the watchdog, the seat-message deliverer and the status\n"+
-				"bridge, and finally the watch view and the UI.\n"+
+				"bridge, and finally the watch view. It does not open the web UI: `4genteam ui` does that.\n"+
 				"The room's seats come from the room's OWN record once it exists: --team DIR names the local team\n"+
 				"definition that CREATES the room (team.json, no default, no cloud round trip), and without it up\n"+
 				"starts the room from its own spec.json - the file the runtime wrote from that definition. That is\n"+
@@ -438,8 +438,8 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 		return clientcmd.ExitUnavailable
 	}
 
+	// No browser: `up` runs on every respawn, and the web UI is `4genteam ui`, opened when a person wants it.
 	runWatchView(name, stderr)
-	openUI(stderr)
 	if os.Getenv("HERDR_ENV") == "" {
 		return runHerdr(stdout, stderr)
 	}
