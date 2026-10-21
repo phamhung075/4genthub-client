@@ -59,6 +59,14 @@ if [ -n "${AGENTHUB_SEAT:-}" ]; then
   exit 2
 fi
 
+# `4genteam stop` is MACHINE-WIDE (agent and its children for every room), so a mistyped room would stop
+# supervision everywhere, close nothing, and let `up` fail on the unknown room. The room's own record is
+# the test, and it fails closed: no record, no stop.
+[ -f "$state_root/rooms/$room/spec.json" ] || {
+  echo "respawn.sh: no room record at $state_root/rooms/$room/spec.json; a stop is machine-wide, so a mistyped room would stop every room" >&2
+  exit 2
+}
+
 started=$(date +%s)
 step() { printf '\n== %s (+%ss)\n' "$1" "$(($(date +%s) - started))"; }
 
@@ -71,14 +79,32 @@ seat_sessions() { room_tmux ls -F '#{session_name} #{session_created}' 2>/dev/nu
 # Every exported credential-shaped name, as `env -u NAME` pairs, so the env file is what the client reads.
 clean_env=(env)
 while read -r name; do
-  case "$name" in *TOKEN* | *KEY* | *SECRET* | *PASSWORD* | *PASSWD* | *CREDENTIAL*) clean_env+=(-u "$name") ;; esac
+  case "$name" in
+    COMPACT_HARD_TOKENS | COMPACT_LIMIT_TOKENS | COMPACT_WARN_TOKENS) continue ;;
+    *TOKEN* | *KEY* | *SECRET* | *PASSWORD* | *PASSWD* | *CREDENTIAL*) clean_env+=(-u "$name") ;;
+  esac
 done < <(compgen -e)
 
-# The peak gate refuses `up` anyway; checking first saves a build that could not be used.
-if [ ${#peak[@]} -eq 0 ] && "$bin" offpeak 2>/dev/null | head -1 | grep -q '^PEAK'; then
-  "$bin" offpeak | head -2 >&2
-  echo "respawn.sh: it is PEAK; rerun off-peak, or pass --allow-peak" >&2
-  exit 3
+# The peak gate refuses `up` anyway; checking first saves a build, a stop and the session closes that
+# could not be used. `4genteam offpeak` ANSWERS with its status - exit 0 off-peak, 1 at peak - so the
+# status is read directly: a pipeline takes the rightmost non-zero status under pipefail and would
+# answer 1 at peak whatever the output said.
+if [ ${#peak[@]} -eq 0 ]; then
+  offpeak_rc=0
+  offpeak_out=$("$bin" offpeak 2>&1) || offpeak_rc=$?
+  case $offpeak_rc in
+    0) ;;
+    1)
+      printf '%s\n' "$offpeak_out" >&2
+      echo "respawn.sh: it is PEAK; rerun off-peak, or pass --allow-peak" >&2
+      exit 3
+      ;;
+    *)
+      printf '%s\n' "$offpeak_out" >&2
+      echo "respawn.sh: 4genteam offpeak answered $offpeak_rc, so the peak gate cannot be read" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 if [ "$build" -eq 1 ]; then
@@ -99,31 +125,45 @@ echo "$closed session(s) closed"
 
 step "up $room --respawn (secrets from the env file only)"
 log=$state_root/up-respawn.log
-"${clean_env[@]}" "$bin" up "$room" --respawn --state-root "$state_root" "${peak[@]}"
+up_rc=0
+"${clean_env[@]}" "$bin" up "$room" --respawn --state-root "$state_root" "${peak[@]}" || up_rc=$?
+# A failed up still gets the log printed and the verify run below: the failure is what those two exist to
+# explain, so neither may be skipped by set -e exiting at this line.
+if [ "$up_rc" -ne 0 ]; then
+  echo "respawn.sh: up $room --respawn exited $up_rc" >&2
+fi
 
 # `up --respawn` re-execs itself in a new session and returns at once, so a seat that calls it survives
-# its own restart (clientlifecycle/respawn.go). Wait for that detached `up` - argv[1] is `up` and its
-# environment carries FOURGENTEAM_UP_RESPAWN_DETACHED=1. The agent it starts inherits the same marker and
-# never exits, so the marker alone is not the test.
+# its own restart (clientlifecycle/respawn.go). Wait for that detached `up` - argv[1] is `up`, argv[2] is
+# THIS room (respawnArgv writes `up ROOM ... --respawn`), and its environment carries
+# FOURGENTEAM_UP_RESPAWN_DETACHED=1. The agent it starts inherits the same marker and never exits, so the
+# marker alone is not the test; and another room's detached up writes the same per-state-root log, so the
+# room is what tells this run's restart from a stranger's.
 detached_up() {
-  local p
+  local p argv
   for p in $(pgrep -x 4genteam || true); do
-    [ "$(tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null | sed -n 2p)" = up ] || continue
+    argv=$(tr '\0' '\n' <"/proc/$p/cmdline" 2>/dev/null) || continue
+    [ "$(printf '%s\n' "$argv" | sed -n 2p)" = up ] || continue
+    [ "$(printf '%s\n' "$argv" | sed -n 3p)" = "$room" ] || continue
     tr '\0' '\n' <"/proc/$p/environ" 2>/dev/null | grep -qx 'FOURGENTEAM_UP_RESPAWN_DETACHED=1' && echo "$p"
   done
   return 0
 }
 waited=0
-while [ -n "$(detached_up)" ]; do
+while [ "$up_rc" -eq 0 ] && [ -n "$(detached_up)" ]; do
   [ "$waited" -lt 900 ] || { echo "respawn.sh: the detached up is still running after 900s; see $log" >&2; exit 1; }
   [ $((waited % 30)) -ne 0 ] || echo "waiting for the detached up (${waited}s; seats prove themselves, a cold cache takes longer)"
   sleep 5
   waited=$((waited + 5))
 done
 # The detached run truncates its log (O_TRUNC), so after the wait the whole file is this run's.
-grep -vE ': kept$|^(state dir|socket): ' "$log" 2>/dev/null || true
+if [ -f "$log" ]; then
+  grep -vE ': kept$|^(state dir|socket): ' "$log" 2>/dev/null || true
+else
+  echo "respawn.sh: no $log was written" >&2
+fi
 
-if [ "$reseat" -eq 1 ]; then
+if [ "$reseat" -eq 1 ] && [ "$up_rc" -eq 0 ]; then
   step "reseat"
   while read -r session _; do
     seat=${session#"$prefix"}
@@ -132,8 +172,10 @@ if [ "$reseat" -eq 1 ]; then
   done < <(seat_sessions)
 fi
 
-step "watch"
-"$bin" watch --room "$room" 2>&1 | tail -1
+if [ "$up_rc" -eq 0 ]; then
+  step "watch"
+  "$bin" watch --room "$room" 2>&1 | tail -1
+fi
 
 # Verify: every seat session was created by this run, so no seat kept an old process or an old environment.
 step "verify"
@@ -160,4 +202,5 @@ if [ "$stale" -gt 0 ]; then
   echo "respawn.sh: $stale of $count seat(s) still run a process from before this run" >&2
   exit 1
 fi
+[ "$up_rc" -eq 0 ] || { echo "respawn.sh: up failed (exit $up_rc); see $log" >&2; exit 1; }
 echo "respawned $room: $count fresh seat(s) in $(($(date +%s) - started))s"

@@ -16,16 +16,19 @@ Run it, read its last line, and report it. Do not repeat its steps by hand.
 ## What it does, in order
 
 1. Refuses inside a seat (`AGENTHUB_SEAT` set): closing the room's sessions would close the caller.
-2. Refuses at DeepSeek PEAK before building (exit 3), unless `--allow-peak` is given. That flag is the
-   owner's call, never a default.
-3. `scripts/build.sh --no-test`: installs `~/.local/bin/4genteam` and `agenthub-runtime` from THIS checkout.
-4. `4genteam stop ROOM`: agent and its children stop.
-5. Closes every `agenthub--ROOM--*` session on the room's own tmux server (`<state-root>/tmux`).
-6. `4genteam up ROOM --respawn`, with every credential-shaped variable unset from the shell, so
-   `~/.config/4genthub/.env` is the only source of secrets. The detached `up` is waited out.
-7. `4genteam room reseat ROOM SEAT` for every seat, then `4genteam watch --room ROOM`.
-8. Verifies that every seat session was created by this run and that as many came back as were closed.
+2. Refuses a room with no `<state-root>/rooms/ROOM/spec.json` (exit 2, naming the room). `4genteam stop` is
+   MACHINE-WIDE, so a mistyped room would stop supervision for every room.
+3. Refuses at DeepSeek PEAK before building (exit 3), unless `--allow-peak` is given. That flag is the
+   owner's call, never a default. The answer is `4genteam offpeak`'s exit status: 0 off-peak, 1 at peak.
+4. `scripts/build.sh --no-test`: installs `~/.local/bin/4genteam` and `agenthub-runtime` from THIS checkout.
+5. `4genteam stop ROOM`: agent and its children stop.
+6. Closes every `agenthub--ROOM--*` session on the room's own tmux server (`<state-root>/tmux`).
+7. `4genteam up ROOM --respawn`, with every credential-shaped variable unset from the shell, so
+   `~/.config/4genthub/.env` is the only source of secrets. The detached `up` of THIS room is waited out.
+8. `4genteam room reseat ROOM SEAT` for every seat, then `4genteam watch --room ROOM`.
+9. Verifies that every seat session was created by this run and that as many came back as were closed.
    The last line is `respawned ROOM: N fresh seat(s) in Ts`. Otherwise it exits 1 and names the stale seat or the log.
+   A failed `up` still prints the log and runs this step before the script exits non-zero.
 
 ## Flags
 
@@ -60,4 +63,8 @@ that is what gets installed. To run an unlanded branch, run the script from that
   `<state-root>/up-respawn.log`, then `4genteam ps ROOM --nodes`.
 - `STALE <seat>`: that seat kept a process from before the run. Close its session on the room's tmux
   server and run the script again with `--no-build`.
+- `up ROOM --respawn exited N`: the restart itself failed. The log is printed above; fix the cause and
+  rerun. The verify step still ran, so a missing seat is named too.
+- Exit 2: a mistyped room (no `rooms/ROOM/spec.json`), two rooms, an unknown flag or a missing value -
+  nothing was built or stopped. Check the room name against `4genteam room list`.
 - Exit 3: PEAK. Wait for off-peak (`4genteam offpeak`) or ask the owner for `--allow-peak`.
