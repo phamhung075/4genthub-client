@@ -234,37 +234,6 @@ func TestTheEntryGuardsTheSeatAndIsASilentNoOpOutsideOne(t *testing.T) {
 	}
 }
 
-// TestTheClaudeEntryIsNotWrittenWhileTheAssetHasNoMode is the gate's blocker: the shipped guard dispatches no
-// `--claude-hook`, so an entry would exit 0 answering nothing while the report called it guarded. The row is a row;
-// the write waits for the mode.
-func TestTheClaudeEntryIsNotWrittenWhileTheAssetHasNoMode(t *testing.T) {
-	if guardCarriesClaudeHook {
-		t.Skip("the constant is true on this branch: the gate's case applies only while the asset has no mode")
-	}
-	runtimeOnPath(t, "claude")
-	home := homeWith(t, ".claude/settings.json", claudeFile)
-	hooks, err := InstallRuntimeHooks(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hooks) != 1 || hooks[0].Runtime != "claude" {
-		t.Fatalf("claude is on this machine, so one row: %+v", hooks)
-	}
-	if hooks[0].EntryPresent || hooks[0].Guards() {
-		t.Errorf("no entry is placed for a mode the guard does not answer: %+v", hooks[0])
-	}
-	if !strings.Contains(hooks[0].Note, "--claude-hook") || !strings.Contains(hooks[0].Note, "none is written") {
-		t.Errorf("the note names the missing mode and that nothing was written, got %q", hooks[0].Note)
-	}
-	body, err := os.ReadFile(filepath.Join(home, ".claude/settings.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(body) != claudeFile {
-		t.Errorf("the owner's settings are untouched byte for byte:\ngot  %q\nwant %q", body, claudeFile)
-	}
-}
-
 // TestTheClaudeGateMatchesTheRuntimesFlag is the two-language constant: the rust supervisor decides the same fact in
 // `GUARD_HAS_CLAUDE_HOOK`, and a branch that moved one side only would ship a writer that disagrees with the asset.
 func TestTheClaudeGateMatchesTheRuntimesFlag(t *testing.T) {

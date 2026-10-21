@@ -1,3 +1,11 @@
+## 2026-10-21 - the claude entry's unconditional skip is deleted
+
+`internal/clientguard/runtimes_test.go`: `TestTheClaudeEntryIsNotWrittenWhileTheAssetHasNoMode` returned
+`t.Skip` whenever `guardCarriesClaudeHook` was true, and the constant is true on this branch because the shipped
+asset answers `--claude-hook`, so the case asserted nothing on any run. Deleted rather than re-pinned; the
+replacement is the ruling's one test (`RULING-2026-10-21-claude-guard-writer` §5), which arrives with the change
+that removes the claude writer. `go test ./internal/clientguard/` green after the deletion.
+
 ## 2026-10-21 - main's rev-9 asset flips the claude gate, and the two cases that called claude unguarded move
 
 Merging client main `185cb47e` brings `rust/agenthub-runtime/assets/seat-guard.ts` at 1267 lines (sha256
