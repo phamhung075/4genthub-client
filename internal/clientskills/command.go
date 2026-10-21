@@ -7,7 +7,6 @@ package clientskills
 import (
 	"context"
 	"encoding/json"
-
 	"fmt"
 	"io"
 	"os"
@@ -250,10 +249,8 @@ func evidenceResolver(room, root string) (Resolver, string) {
 			if !queueUp {
 				return Resolution{Reason: "queue not reachable"}
 			}
-			if _, err := client.QueueShow(room, id); err != nil {
-				return Resolution{Checked: true, Reason: err.Error()}
-			}
-			return Resolution{Checked: true, Found: true}
+			_, err := client.QueueShow(room, id)
+			return queueLookup(id, err)
 		case shaPattern.MatchString(id):
 			if !gitUp {
 				return Resolution{Reason: "not a git worktree"}
@@ -268,6 +265,25 @@ func evidenceResolver(room, root string) (Resolver, string) {
 		}
 	}
 	return resolver, strings.Join(notes, "; ")
+}
+
+// absentRow is the word the daemon's answer carries for a row it does not have. Measured 2026-10-21:
+// `unknown qitem_id 'qitem-…'`. It is the ONE error shape that means "checked and absent"; every other error
+// is a lookup that could not be made, and the two must not be read as the same fact.
+const absentRow = "unknown qitem_id"
+
+// queueLookup turns one QueueShow answer into a Resolution. A nil error is FOUND; the daemon's own
+// "unknown qitem_id" is CHECKED and ABSENT; anything else (a broken pipe, a refused call, a payload the client
+// could not parse) is UNCHECKED with the reason - an id nobody could look up is not evidence that a record is
+// broken, which is what the S1 verdict's minor finding measured.
+func queueLookup(id string, err error) Resolution {
+	if err == nil {
+		return Resolution{Checked: true, Found: true}
+	}
+	if strings.Contains(err.Error(), absentRow) {
+		return Resolution{Checked: true, Reason: err.Error()}
+	}
+	return Resolution{Reason: "the row could not be looked up: " + err.Error()}
 }
 
 // railRows hands the census the room's rows, because the census reads no socket: the runtime's own reader

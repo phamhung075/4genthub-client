@@ -1,6 +1,7 @@
 package clientskills
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,5 +145,40 @@ func TestSignalParsingAcceptsSilenceAndRefusesUnknownKinds(t *testing.T) {
 	}
 	if _, err := parseSignals([]byte("---\nsignals:\n  - guard:\n---\n")); err == nil {
 		t.Fatal("a signal with no value was accepted")
+	}
+}
+
+// TestATrailingSecondRecordIsRefused: one value per file. A second value is a record written twice or two
+// pasted together, and acting on the first while dropping the rest is how a decision goes silently missing
+// (the S1 verdict's trailing-JSON finding).
+func TestATrailingSecondRecordIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, SkillFile), "---\nname: x\n---\nbody\n")
+	writeFile(t, filepath.Join(dir, RecordFile),
+		"{\"state\":\"provisional\"}\n{\"state\":\"trusted\"}\n")
+
+	_, present, err := ReadRecord(dir)
+	if err == nil {
+		t.Fatalf("a record with a second JSON value was accepted (present=%v)", present)
+	}
+	if !strings.Contains(err.Error(), "more than one record") {
+		t.Fatalf("the refusal must say what it found: %v", err)
+	}
+}
+
+// TestAQueueLookupThatCouldNotBeMadeIsNotBroken: the daemon's own "unknown qitem_id" is CHECKED and absent;
+// anything else is a lookup nobody could make, and reading it as broken would fail a record for a broken pipe
+// (the S1 verdict's minor finding).
+func TestAQueueLookupThatCouldNotBeMadeIsNotBroken(t *testing.T) {
+	absent := queueLookup("qitem-1", errors.New("unknown qitem_id 'qitem-1'"))
+	if !absent.Checked || absent.Found {
+		t.Fatalf("the daemon's absent row must read checked-and-absent: %+v", absent)
+	}
+	broken := queueLookup("qitem-1", errors.New("dial unix: connection refused"))
+	if broken.Checked || broken.Found {
+		t.Fatalf("a failed lookup must read unchecked: %+v", broken)
+	}
+	if !strings.Contains(broken.Reason, "could not be looked up") {
+		t.Fatalf("the unchecked answer must say why: %q", broken.Reason)
 	}
 }

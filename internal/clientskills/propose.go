@@ -59,7 +59,9 @@ var callerWorktree = func(room string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	roomDir, err := clientservices.RoomDir(room)
+	// RoomDir takes the root this verb resolved, never one it re-derives: the seat's worktree is read under
+	// the same store as everything else the proposal touched (the RoomDir rule, 2026-10-21).
+	roomDir, err := clientservices.RoomDir(root, room)
 	if err != nil {
 		return "", err
 	}

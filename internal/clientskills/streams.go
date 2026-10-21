@@ -91,7 +91,7 @@ func (e Evidence) Unread(stream string) bool {
 func LoadEvidence(stateRoot, room, repo string) Evidence {
 	var evidence Evidence
 
-	evidence.add(readGuard(repo, &evidence))
+	evidence.add(readGuard(repo, stateRoot, room, &evidence))
 	evidence.add(readSends(stateRoot, room, &evidence))
 	evidence.add(readJev(stateRoot, &evidence))
 	evidence.add(readTools(stateRoot, room, &evidence))
@@ -221,31 +221,79 @@ type Occurrence struct {
 	Ref    string    `json:"ref"`
 }
 
-// readGuard reads <git dir>/parked-diffs/refusals.jsonl - the spool a refused commit is written to, one line
-// per refusal. The rule is the field a `guard:` signal names (`docs-only`, `protected-path`).
-func readGuard(repo string, evidence *Evidence) Skip {
-	if repo == "" {
-		return Skip{Stream: StreamGuard, Reason: "no checkout, so the guard's refusals were not read"}
+// guardRule is the rule name a `guard:` signal is matched against, with the separator folded to `-`.
+//
+// MEASURED, 2026-10-21: the guard has TWO producers and they spell the same kind differently. The commit
+// wrapper writes `rule: "docs_only"` into its refusal spool (scripts/git-hooks/git_commit_capture.py, the one
+// `record_refusal` call), while the seat guard writes `rule: "docs-only"` - and ten other hyphenated kinds -
+// into each seat's tool log. Without the fold, every `guard:` signal a person writes from the guard's own
+// vocabulary is dead: the reviewer's S2 verdict measured exactly this (rule=docs_only vs 757 blocked tool
+// lines carrying a rule) and it would have been a counter that can never fire.
+func guardRule(rule string) string {
+	return strings.ReplaceAll(strings.TrimSpace(rule), "_", "-")
+}
+
+// readGuard reads the guard's refusals from BOTH producers: the commit wrapper's spool
+// (<git dir>/parked-diffs/refusals.jsonl, one line per refused commit) and each seat's own tool log
+// (<state root>/seats/<room>/*/tool-calls.jsonl, the lines the guard wrote with `outcome: blocked`).
+//
+// THE STREAM IS UNREAD ONLY WHEN NO PRODUCER FILE WAS THERE AT ALL. Both are append-on-event files - a
+// wrapper that never refused a commit writes no spool, a seat the guard never blocked writes no blocked
+// line - so an absent file is measured silence and not a gap, and a present-but-empty one is the same. The
+// two are reported as one stream because a `guard:` signal names a rule, and a rule fires wherever the guard
+// enforces it.
+func readGuard(repo, stateRoot, room string, evidence *Evidence) Skip {
+	readAny := false
+	if repo != "" {
+		if path, err := refusalSpoolPath(repo); err == nil {
+			if _, statErr := os.Stat(path); statErr == nil {
+				readAny = true
+				readJSONLines(path, func(raw []byte) {
+					var line struct {
+						ID   string `json:"id"`
+						At   string `json:"ts"`
+						Rule string `json:"rule"`
+					}
+					if json.Unmarshal(raw, &line) != nil || line.Rule == "" {
+						return
+					}
+					at, err := time.Parse(time.RFC3339Nano, line.At)
+					if err != nil {
+						return
+					}
+					evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard,
+						Value: guardRule(line.Rule), At: at, Ref: line.ID})
+				})
+			}
+		}
 	}
-	path, err := refusalSpoolPath(repo)
-	if err != nil {
-		return Skip{Stream: StreamGuard, Reason: "the guard's refusal spool was not read: " + err.Error()}
+	// The seat's own directory, where the runtime points PI_CODING_AGENT_DIR and the guard writes its log:
+	// <state root>/rooms/<room>/seats/<seat>/tool-calls.jsonl, the same path the TOOL stream reads.
+	paths, _ := filepath.Glob(filepath.Join(stateRoot, "rooms", room, "seats", "*", "tool-calls.jsonl"))
+	for _, path := range paths {
+		readAny = true
+		readJSONLines(path, func(raw []byte) {
+			var line struct {
+				At      string `json:"at"`
+				Seat    string `json:"seat"`
+				Outcome string `json:"outcome"`
+				Rule    string `json:"rule"`
+			}
+			if json.Unmarshal(raw, &line) != nil || line.Rule == "" || line.Outcome != "blocked" {
+				return
+			}
+			at, err := time.Parse(time.RFC3339Nano, line.At)
+			if err != nil {
+				return
+			}
+			evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard, Value: guardRule(line.Rule),
+				At: at, Ref: "seat " + line.Seat + " " + line.At})
+		})
 	}
-	readJSONLines(path, func(raw []byte) {
-		var line struct {
-			ID   string `json:"id"`
-			At   string `json:"ts"`
-			Rule string `json:"rule"`
-		}
-		if json.Unmarshal(raw, &line) != nil || line.Rule == "" {
-			return
-		}
-		at, err := time.Parse(time.RFC3339Nano, line.At)
-		if err != nil {
-			return
-		}
-		evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard, Value: line.Rule, At: at, Ref: line.ID})
-	})
+	if !readAny {
+		return Skip{Stream: StreamGuard,
+			Reason: "neither a guard refusal spool nor a seat tool log was found for " + room}
+	}
 	return Skip{}
 }
 

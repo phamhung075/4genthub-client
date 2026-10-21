@@ -111,6 +111,13 @@ func ReadRecord(dir string) (Record, bool, error) {
 	if err := decoder.Decode(&record); err != nil {
 		return Record{}, true, fmt.Errorf("%s is not a record: %w", path, err)
 	}
+	// ONE value per file: a second value is a decision written twice or two records pasted together, and the
+	// reader would otherwise act on the first and silently drop the rest (the S1 verdict's trailing-JSON
+	// finding).
+	if after := bytes.TrimSpace(body[decoder.InputOffset():]); len(after) > 0 {
+		return Record{}, true, fmt.Errorf("%s holds more than one record: %d byte(s) follow the first",
+			path, len(after))
+	}
 	if err := record.Validate(); err != nil {
 		return Record{}, true, fmt.Errorf("%s: %w", path, err)
 	}

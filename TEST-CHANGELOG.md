@@ -224,3 +224,15 @@ reason names `share/queue-row-schema`, the signal, the occurrence count and `qit
 `landed 3`), `TestASkillsRowWithNoTreeSaysWhatItCouldNotLookAt` (an unset tree is a note, never a verdict)
 and `TestASkillsRowSurfacesACensusNote` (an unreadable stream rides beside the row). The census composition
 those cases stand in for is `clientskills.CensusRoom`, called by both this row and `skills evidence`.
+
+## 2026-10-21 - the guard stream's two producers, and two record-path minors
+
+`internal/clientskills/guardstream_test.go` (new), three cases against the reviewer's S2 finding:
+`TestTheGuardStreamFoldsTheSpoolRule` (a spool line `docs_only` matches a declared `docs-only`, and the
+occurrence's ref is the spool line's own `rf-9`), `TestTheGuardStreamReadsTheSeatsBlockedToolLines` (a blocked
+`protected-paths` line under `rooms/<room>/seats/<seat>/tool-calls.jsonl` is one occurrence while an `ok` line
+contributes none, and one readable producer keeps the stream out of `unread`) and
+`TestTheGuardStreamIsUnreadOnlyWhenNoProducerExists` (no spool and no log is unread; a present but empty log is
+measured silence). Two cases in `record_test.go`: `TestATrailingSecondRecordIsRefused` (a second JSON value is
+refused by name) and `TestAQueueLookupThatCouldNotBeMadeIsNotBroken` (the daemon's `unknown qitem_id` is
+checked-and-absent; a failed call is unchecked with its reason).
