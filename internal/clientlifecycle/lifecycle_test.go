@@ -171,7 +171,8 @@ func TestHelpAfterAVerbNeverRunsALifecycleAction(t *testing.T) {
 
 // TestUpInitialisesEveryServiceInOrder is the Python test of the same name, restated for 7.1: the daemon,
 // the room, the room recorded as meant-to-run, agent (the single restart authority),
-// the same health check `doctor` makes, the watch view, the UI, then herdr.
+// the same health check `doctor` makes, the watch view, then herdr. The web UI is not opened: that is
+// `4genteam ui`, and the openUI stub below records it if `up` ever reaches for it again.
 //
 // THE BRIDGE AND THE SUPERVISOR ARE NOT IN THIS LIST ANY MORE, and that is the ruling: `up` starts agent,
 // and agent starts them. A start path here would be a second mechanism for one safeguard.
@@ -208,7 +209,7 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 	if code := (upCommand{}).Run(context.Background(), []string{"my-room", "--team", writeRoomDefinition(t, "my-room")}, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("up returned %d (stderr: %q)", code, errOut.String())
 	}
-	want := []string{"ensureDaemon", "ensureWorktrees", "ensureRoom", "recordRoom", "startAgent", "waitSafeguards", "watch", "openUI", "herdr"}
+	want := []string{"ensureDaemon", "ensureWorktrees", "ensureRoom", "recordRoom", "startAgent", "waitSafeguards", "watch", "herdr"}
 	if strings.Join(ran, ",") != strings.Join(want, ",") {
 		t.Errorf("order = %v, want %v", ran, want)
 	}
