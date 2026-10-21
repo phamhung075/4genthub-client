@@ -31,7 +31,7 @@ func TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays(t *testing.T)
 		{Runtime: "agy", Bin: "/usr/bin/agy", Dir: "/home/reader/.gemini/config",
 			Config: ".gemini/config/hooks.json", Mode: "--agy-hook", EntryPresent: true},
 		{Runtime: "claude", Bin: "/usr/bin/claude", Dir: "/home/reader/.claude",
-			Config: ".claude/settings.json", Mode: "--claude-hook"},
+			Config: ".claude/settings.json", Mode: "--claude-hook", SeatFile: "settings.json"},
 	})
 	rows := runtimeRowsFor("")
 	if len(rows) != 2 {
@@ -57,29 +57,17 @@ func TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays(t *testing.T)
 		t.Errorf("the line names the file absolutely, the path install writes: %s", placed)
 	}
 
-	// claude's mode is in the guard this client ships, so its row reads as an unguarded FILE: the path the entry
-	// would be in, and the verb that writes it.
+	// claude's guard is the seat's own settings.json, written and passed by the runtime, so its row names that file
+	// and says no owner-wide entry is written - never the install verb, which would place a duplicate or a corpse.
 	unplaced := strings.Join(runtimeLines(rows[1]), "\n")
-	if !strings.Contains(unplaced, "no seat-guard entry in /home/reader/.claude/settings.json") {
-		t.Errorf("the line names the file install writes: %s", unplaced)
+	if !strings.Contains(unplaced, "the seat's own <seat dir>/settings.json") {
+		t.Errorf("the line names the seat file the guard comes from: %s", unplaced)
 	}
-	if !strings.Contains(unplaced, "`4genteam guard install` writes it") {
-		t.Errorf("the line names the verb that writes the entry: %s", unplaced)
+	if strings.Contains(unplaced, "`4genteam guard install` writes it") {
+		t.Errorf("a row whose guard is the seat file must not offer to write an owner-wide entry: %s", unplaced)
 	}
 	if strings.Contains(unplaced, "the guard's entry is in") {
-		t.Errorf("a row with no entry must not read as guarded: %s", unplaced)
-	}
-	// A row whose mode the guard does not answer is the other shape, and it must not read as an installable entry.
-	gated := strings.Join(runtimeLines(runtimeRow{
-		Row:  clientservices.Health{Safeguard: "guard_example"},
-		Hook: clientguard.RuntimeHook{Runtime: "example", Dir: "/opt/example", Config: ".example/hooks.json", Mode: "--no-such-hook"},
-		Home: "/home/reader",
-	}), "\n")
-	if !strings.Contains(gated, "no entry is placed") || !strings.Contains(gated, "--no-such-hook mode") {
-		t.Errorf("the line names the missing mode: %s", gated)
-	}
-	if strings.Contains(gated, "the guard's entry is in") || strings.Contains(gated, "guard install") {
-		t.Errorf("a row whose mode the guard lacks must not read as guarded or installable: %s", gated)
+		t.Errorf("a row with no owner-wide entry must not read as guarded: %s", unplaced)
 	}
 }
 

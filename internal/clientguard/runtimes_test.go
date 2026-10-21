@@ -234,26 +234,6 @@ func TestTheEntryGuardsTheSeatAndIsASilentNoOpOutsideOne(t *testing.T) {
 	}
 }
 
-// TestTheClaudeGateMatchesTheRuntimesFlag is the two-language constant: the rust supervisor decides the same fact in
-// `GUARD_HAS_CLAUDE_HOOK`, and a branch that moved one side only would ship a writer that disagrees with the asset.
-func TestTheClaudeGateMatchesTheRuntimesFlag(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join("..", "..", "rust", "agenthub-runtime", "src", "supervisor", "mod.rs"))
-	if err != nil {
-		t.Skipf("the rust supervisor is not beside this checkout: %v", err)
-	}
-	marker := "GUARD_HAS_CLAUDE_HOOK: bool ="
-	at := strings.Index(string(body), marker)
-	if at < 0 {
-		t.Fatalf("the rust supervisor no longer declares %q", marker)
-	}
-	rest := strings.TrimSpace(string(body)[at+len(marker):])
-	want := strings.HasPrefix(rest, "true")
-	if want != guardCarriesClaudeHook {
-		t.Errorf("guardCarriesClaudeHook is %v and rust's GUARD_HAS_CLAUDE_HOOK is %v: the two halves of one fact disagree",
-			guardCarriesClaudeHook, want)
-	}
-}
-
 // TestARuntimeWithNoHookSurfaceGetsARowAndNoWrite is codex: this client launches it with no settings file and no
 // command hook, so there is nothing to place and the row says so.
 func TestARuntimeWithNoHookSurfaceGetsARowAndNoWrite(t *testing.T) {
@@ -373,12 +353,6 @@ func TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone(t *testing.T) {
 	if out != "agy: the guard's entry is out of .gemini/config/hooks.json" {
 		t.Errorf("a removed entry says it was taken out; got %q", out)
 	}
-	// The mode the guard answers is the asset's, not the table's: a row naming a mode the guard does not dispatch
-	// would write an entry that exits 0 in silence, and the line says so instead of reporting a removal.
-	noMode := RuntimeUninstallLine(RuntimeHook{Runtime: "example", Config: ".example/hooks.json", Mode: "--no-such-hook"})
-	if noMode != "example: nothing was ever placed here - the guard has no --no-such-hook mode" {
-		t.Errorf("a runtime the guard cannot guard says nothing was placed; got %q", noMode)
-	}
 }
 
 // TestTheAgyEntryIsTheRuntimesOwnObject compares the whole entry - both phases, matcher, timeout and type - with the
@@ -442,113 +416,115 @@ func TestABlankOrBomConfigTakesTheEntry(t *testing.T) {
 	}
 }
 
-// TestTheClaudeWriteAndRemoveHalf is the gate's M3: the settings surgery on the owner's own file, driven directly
-// (package functions, so the flag being false does not hide it). `hooks: null` is M2's row.
-func TestTheClaudeWriteAndRemoveHalf(t *testing.T) {
-	entry := guardEntryFor("claude")
-	encoded, err := json.Marshal(entry)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decode := func(t *testing.T, raw json.RawMessage) map[string][]json.RawMessage {
-		t.Helper()
-		var members map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &members); err != nil {
-			t.Fatalf("the writer answered something claude cannot read: %v (%s)", err, raw)
+// TestTheClaudeEntryIsNeverWrittenAndTheAgyOneIs is the ruling's single case (RULING-2026-10-21-claude-guard-writer
+// §4.1, §4.5): claude's guard is the seat file the runtime writes, so `guard install` writes no claude entry - not
+// beside an owner's settings, not into a home that has none, and not over a hand-written entry an older build left -
+// while agy's entry lands in the same run. There is no claude mode gate left to vary: the client never writes the
+// entry, so the mode's presence cannot license one.
+func TestTheClaudeEntryIsNeverWrittenAndTheAgyOneIs(t *testing.T) {
+	runtimeOnPath(t, "claude", "agy")
+
+	for _, haveFile := range []bool{true, false} {
+		home := t.TempDir()
+		if haveFile {
+			home = homeWith(t, ".claude/settings.json", claudeFile)
 		}
-		phases := map[string][]json.RawMessage{}
-		for name, value := range members {
-			var definitions []json.RawMessage
-			if err := json.Unmarshal(value, &definitions); err != nil {
-				t.Fatalf("hooks.%s is not an array: %v (%s)", name, err, value)
-			}
-			phases[name] = definitions
-		}
-		return phases
-	}
-	// The argument is the `hooks` MEMBER, not the whole settings file.
-	ownerHooks := func() json.RawMessage {
-		var file struct {
-			Hooks json.RawMessage `json:"hooks"`
-		}
-		if err := json.Unmarshal([]byte(claudeFile), &file); err != nil {
+		hooks, err := InstallRuntimeHooks(home)
+		if err != nil {
 			t.Fatal(err)
 		}
-		return file.Hooks
-	}
-	guardCount := func(definitions []json.RawMessage) int {
-		count := 0
-		for _, definition := range definitions {
-			if carriesGuardText(definition) {
-				count++
+		byRuntime := map[string]RuntimeHook{}
+		for _, hook := range hooks {
+			byRuntime[hook.Runtime] = hook
+		}
+		claude, ok := byRuntime["claude"]
+		if !ok {
+			t.Fatalf("claude is on PATH, so it has a row: %+v", hooks)
+		}
+		if claude.EntryPresent {
+			t.Errorf("claude has no owner-wide entry, and the row says one is there: %+v", claude)
+		}
+		for _, want := range []string{"settings.json", "duplicate", "never fire"} {
+			if !strings.Contains(claude.Note, want) {
+				t.Errorf("the note names the seat file and why no entry is written (%q), got %q", want, claude.Note)
 			}
 		}
-		return count
-	}
+		body, err := os.ReadFile(filepath.Join(home, ".claude/settings.json"))
+		switch {
+		case haveFile && err != nil:
+			t.Fatalf("the owner's file is still there: %v", err)
+		case haveFile && string(body) != claudeFile:
+			t.Errorf("the owner's settings are untouched byte for byte:\ngot  %q\nwant %q", body, claudeFile)
+		case !haveFile && err == nil:
+			t.Errorf("no claude file existed and one was written: %s", body)
+		}
 
-	for _, start := range []string{"", "{}", `null`, `{}`, string(ownerHooks())} {
-		raw := json.RawMessage(start)
-		if start == "" {
-			raw = nil
+		agy, ok := byRuntime["agy"]
+		if !ok || !agy.EntryPresent {
+			t.Fatalf("agy's entry lands in the same run: %+v", hooks)
 		}
-		written, err := withClaudeHooks(raw, encoded)
-		if err != nil {
-			t.Fatalf("start %q: %v", start, err)
-		}
-		phases := decode(t, written)
-		for _, phase := range claudePhases {
-			if got := guardCount(phases[phase]); got != 1 {
-				t.Errorf("start %q: hooks.%s has %d guard definitions, want 1 (%s)", start, phase, got, written)
-			}
-		}
-		// Idempotent: a second pass adds nothing.
-		again, err := withClaudeHooks(written, encoded)
-		if err != nil {
-			t.Fatalf("start %q: second pass: %v", start, err)
-		}
-		if string(again) != string(written) {
-			t.Errorf("start %q: a second install changed the file:\nfirst  %s\nsecond %s", start, written, again)
-		}
-		// Removal drops only the guard's definitions and keeps the owner's.
-		removed, err := withoutClaudeHooks(written)
-		if err != nil {
-			t.Fatalf("start %q: removal: %v", start, err)
-		}
-		if strings.Contains(string(removed), GuardScriptName) {
-			t.Errorf("start %q: a guard definition survived removal: %s", start, removed)
+		agyBody, err := os.ReadFile(filepath.Join(home, ".gemini/config/hooks.json"))
+		if err != nil || !strings.Contains(string(agyBody), GuardScriptName) {
+			t.Errorf("agy's file holds the guard's entry: %v (%s)", err, agyBody)
 		}
 	}
+}
 
-	// The owner's own definition survives an install and a removal, unchanged.
-	written, err := withClaudeHooks(ownerHooks(), encoded)
+// TestAStaleClaudeEntryIsReportedAndRemoved is the uninstall half the ruling keeps (§4.2): a file an older build or
+// a hand edit left a guard entry in must still lose exactly that entry, and nothing else. The install never writes
+// one, so the file's entry is written here the way a reader's settings file would carry it.
+func TestAStaleClaudeEntryIsReportedAndRemoved(t *testing.T) {
+	runtimeOnPath(t, "claude")
+	stale := `{
+  "env": {"CLAUDE_KEY": "kept"},
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "*", "hooks": [{"type": "command", "timeout": 10, "command": "node /x/hooks/pre/seat-guard.ts --claude-hook pre"}]},
+      {"matcher": "*", "hooks": [{"type": "command", "command": "echo owner"}]}
+    ],
+    "PostToolUseFailure": [
+      {"matcher": "*", "hooks": [{"type": "command", "command": "node /x/hooks/pre/seat-guard.ts --claude-hook post"}]}
+    ]
+  }
+}`
+	home := homeWith(t, ".claude/settings.json", stale)
+	hooks := RuntimeHooks(home)
+	var row RuntimeHook
+	for _, hook := range hooks {
+		if hook.Runtime == "claude" {
+			row = hook
+		}
+	}
+	if !row.EntryPresent || !strings.Contains(row.Note, "stale owner-wide entry") ||
+		!strings.Contains(row.Note, "guard uninstall") {
+		t.Fatalf("a stale entry is reported as stale and named for removal: %+v", row)
+	}
+	if _, err := UninstallRuntimeHooks(home); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(home, ".claude/settings.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(written), "echo owner") {
-		t.Errorf("the owner's definition was dropped: %s", written)
+	if strings.Contains(string(body), GuardScriptName) {
+		t.Errorf("a guard definition survived the uninstall: %s", body)
 	}
-	removed, err := withoutClaudeHooks(written)
-	if err != nil {
-		t.Fatal(err)
+	for _, kept := range []string{"CLAUDE_KEY", "echo owner"} {
+		if !strings.Contains(string(body), kept) {
+			t.Errorf("the uninstall took the owner's %q with it: %s", kept, body)
+		}
 	}
-	if !strings.Contains(string(removed), "echo owner") {
-		t.Errorf("removal took the owner's settings with it: %s", removed)
+	var file struct {
+		Hooks map[string][]json.RawMessage `json:"hooks"`
 	}
-	if got := decode(t, removed)["PreToolUse"]; len(got) != 1 {
-		t.Errorf("removal left %d definitions in PreToolUse, want the owner's one: %s", len(got), removed)
+	if err := json.Unmarshal(body, &file); err != nil {
+		t.Fatalf("the file is still JSON claude can read: %v (%s)", err, body)
 	}
-
-	// A phase that is not an array is refused by name rather than overwritten.
-	if _, err := withClaudeHooks(json.RawMessage(`{"PreToolUse":"nope"}`), encoded); err == nil ||
-		!strings.Contains(err.Error(), "PreToolUse") {
-		t.Errorf("a non-array phase is refused by name, got %v", err)
+	if len(file.Hooks["PreToolUse"]) != 1 {
+		t.Errorf("PreToolUse kept %d definitions, want the owner's one: %s", len(file.Hooks["PreToolUse"]), body)
 	}
-	// An absent member stays absent on removal.
-	if out, err := withoutClaudeHooks(nil); err != nil || out != nil {
-		t.Errorf("absent hooks: got %q, %v", out, err)
-	}
-	if out, err := withoutClaudeHooks(json.RawMessage(`null`)); err != nil || out != nil {
-		t.Errorf("null hooks: got %q, %v", out, err)
+	if len(file.Hooks["PostToolUseFailure"]) != 0 {
+		t.Errorf("PostToolUseFailure kept %d definitions, want none: %s", len(file.Hooks["PostToolUseFailure"]), body)
 	}
 }
 

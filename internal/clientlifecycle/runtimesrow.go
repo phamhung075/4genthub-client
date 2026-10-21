@@ -54,9 +54,13 @@ func runtimeLines(row runtimeRow) []string {
 		switch {
 		case row.Hook.Config == "":
 			lines = append(lines, name+": no entry is placed - there is no hook surface for this runtime")
-		case !row.Hook.Guards():
-			lines = append(lines, name+": no entry is placed - the guard this client ships has no "+
-				row.Hook.Mode+" mode yet")
+		case row.Hook.CoveredBySeat():
+			lines = append(lines, name+": no owner-wide entry is written - this runtime's guard is the seat's own "+
+				"<seat dir>/"+row.Hook.SeatFile+", which the runtime writes and passes with --settings")
+			if row.Hook.EntryPresent {
+				lines = append(lines, name+": a stale owner-wide entry is in "+row.ConfigPath()+
+					"; `4genteam guard uninstall` removes it")
+			}
 		case row.Hook.EntryPresent:
 			lines = append(lines, name+": the guard's entry is in "+row.ConfigPath())
 		default:

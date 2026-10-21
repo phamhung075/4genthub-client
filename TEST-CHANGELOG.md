@@ -1,3 +1,18 @@
+## 2026-10-21 - the claude entry is never written, and a stale one is still removed
+
+`internal/clientguard/runtimes_test.go`: `TestTheClaudeEntryIsNeverWrittenAndTheAgyOneIs` replaces the deleted skip
+case - with claude and agy on PATH it runs the install over a home that has an owner's `.claude/settings.json` and
+one that has none (two runs), asserts the claude row reports no entry, that its note names `<seat dir>/settings.json`
+and why an owner-wide entry is refused (duplicate or dead), that the file is byte-identical where it exists and is
+not created where it does not, and that agy's entry lands in the same run.
+`TestAStaleClaudeEntryIsReportedAndRemoved` writes an older build's entry by hand and asserts the report calls it
+stale and names the uninstall verb, that `UninstallRuntimeHooks` removes exactly the guard definitions, and that the
+owner's `env` key, their hook and their `PreToolUse` array survive. `TestTheClaudeWriteAndRemoveHalf` and
+`TestTheClaudeGateMatchesTheRuntimesFlag` are deleted: the writer they exercised and the two-language constant they
+pinned no longer exist. `TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone` loses its "a mode the guard lacks"
+row; `internal/clientlifecycle/runtimesrow_test.go` carries `SeatFile` on claude's fixture and expects the seat-file
+line instead of the install verb.
+
 ## 2026-10-21 - the claude entry's unconditional skip is deleted
 
 `internal/clientguard/runtimes_test.go`: `TestTheClaudeEntryIsNotWrittenWhileTheAssetHasNoMode` returned

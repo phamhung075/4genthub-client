@@ -10,17 +10,18 @@
 // inside a claude seat: every entry is a no-op outside a seat (see below), so what it covers is the seats, and only
 // the seats, of a runtime that has no per-seat file.
 //
-// EVERY ENTRY IS A NO-OP OUTSIDE A SEAT. Its command tests `AGENTHUB_SEAT` and otherwise answers what the runtime
-// would answer with no hook (agy: its default "ask" before a tool and `{}` after one; claude: silence, which its
-// contract reads as allow). So one owner-wide entry can never begin refusing the owner's own work in the owner's
-// own window, and the guard runs only where `PI_CODING_AGENT_DIR` and the seat's log exist.
+// EVERY ENTRY THIS FILE WRITES IS A NO-OP OUTSIDE A SEAT. Its command tests `AGENTHUB_SEAT` and otherwise answers
+// what the runtime would answer with no hook (agy: its default "ask" before a tool and `{}` after one). So one
+// owner-wide entry can never begin refusing the owner's own work in the owner's own window, and the guard runs only
+// where `PI_CODING_AGENT_DIR` and the seat's log exist.
 //
-// AN ENTRY IS WRITTEN ONLY FOR A MODE THE SHIPPED GUARD ANSWERS. `assets/seat-guard.ts` dispatches `--agy-hook`
-// and, until the owner's asset patch lands, no `--claude-hook` (rust/agenthub-runtime/src/supervisor/mod.rs keeps
-// the same fact in `GUARD_HAS_CLAUDE_HOOK: bool`). A claude entry written before that flag flips is a hook that
-// exits 0 with no output - claude reads silence as allow - reported by `doctor` as guarded. So the claude row is
-// DETECTED, REPORTED and NOT WRITTEN while the mode is absent, and the constant below is the one place the two
-// languages have to agree; a test reads the rust source and fails if they drift.
+// CLAUDE HAS ONE WRITER, AND IT IS NOT THIS FILE. The runtime writes `<seat dir>/settings.json` - the bare command,
+// naming the seat's own asset copy - and passes it with `--settings` (supervisor/mod.rs, `claude_guard_settings` +
+// the runner's flag). An owner-wide `~/.claude/settings.json` entry would either fire beside the seat file's on every
+// tool call (double guard, double refusals) or never fire at all, because the seat file is what claude reads; one
+// outcome is a duplicate and the other is a corpse, and neither is coverage. So the claude row is DETECTED,
+// REPORTED and NEVER WRITTEN (`RULING-2026-10-21-claude-guard-writer`), its row names the seat file the guard comes
+// from, and `guard uninstall` still takes a hand-written or older-build entry out of the owner's file.
 //
 // A RUNTIME WITH NO HOOK SURFACE IS REPORTED, NEVER WRITTEN: codex is launched by this client with no hook
 // mechanism at all, so its row says so rather than inventing a file.
@@ -47,8 +48,13 @@ type RuntimeHook struct {
 	Dir string
 	// Config is the owner-wide file the guard's entry belongs in, "" when there is no surface to place one on.
 	Config string
-	// Mode is the guard argument the entry names: `--agy-hook` or `--claude-hook`; "" for no mode.
+	// Mode is the guard argument an entry for this runtime names: `--agy-hook`, or `--claude-hook` for the entry
+	// an older build may have left behind; "" for no mode.
 	Mode string
+	// SeatFile is the file the RUNTIME writes for each seat, when the guard reaches that runtime's seats through
+	// it and this client must never write an owner-wide entry: claude's `settings.json`, relative to the seat
+	// directory. "" when the owner-wide entry is the only one.
+	SeatFile string
 	// EntryPresent is whether Config already carries the guard's entry.
 	EntryPresent bool
 	// Note is the one thing a reader must know that the fields above cannot say: the entry is missing, there is
@@ -71,33 +77,19 @@ func (h RuntimeHook) Found() bool { return h.Bin != "" || h.Dir != "" }
 // actually run something.
 func (h RuntimeHook) Guards() bool { return h.Mode != "" && guardModeAvailable(h.Mode) }
 
-// guardCarriesClaudeHook mirrors rust/agenthub-runtime/src/supervisor/mod.rs's `GUARD_HAS_CLAUDE_HOOK`. It is
-// true because the shipped `assets/seat-guard.ts` dispatches `--claude-hook`: an entry that names a mode the
-// guard does not have is a hook that exits 0 in silence, which claude reads as allow, so the two halves move
-// together. Flipping this line without the asset carrying the mode is the bug this constant exists to prevent,
-// and `TestTheClaudeGateMatchesTheRuntimesFlag` fails if only one side moves.
-const guardCarriesClaudeHook = true
+// CoveredBySeat reports whether the RUNTIME already writes this runtime's guard, per seat, and this client must
+// therefore write no owner-wide entry: claude's guard is `<seat dir>/settings.json`, written and passed by the
+// runtime (`supervisor/mod.rs`), and a second entry would duplicate it or be dead.
+func (h RuntimeHook) CoveredBySeat() bool { return h.SeatFile != "" }
 
-// guardModeAvailable is whether the guard this client SHIPS answers `mode`, and the constant above is where the
-// asset and the runtime's flag meet.
-func guardModeAvailable(mode string) bool {
-	switch mode {
-	case "--agy-hook":
-		return true
-	case "--claude-hook":
-		return guardCarriesClaudeHook
-	}
-	return false
-}
+// guardModeAvailable is whether the guard this client SHIPS answers `mode`. Only agy's mode is answered here:
+// claude's is answered too, but by the runtime's seat file, which is why no entry is written for it.
+func guardModeAvailable(mode string) bool { return mode == "--agy-hook" }
 
-// GuardedCommand is the command an owner-wide entry runs: the seat's own guard when the session is a seat, and
-// the runtime's own default answer otherwise. `otherwise` is what the runtime needs outside a seat - agy's
-// answers, or "" for a runtime whose contract reads silence as allow.
+// GuardedCommand is the command an owner-wide entry runs: the seat's own guard when the session is a seat, and the
+// runtime's own default answer otherwise. `otherwise` is what the runtime needs outside a seat - agy's answers.
 func GuardedCommand(mode, phase, otherwise string) string {
 	run := fmt.Sprintf(`exec node "$PI_CODING_AGENT_DIR/hooks/pre/seat-guard.ts" %s %s`, mode, phase)
-	if otherwise == "" {
-		return fmt.Sprintf(`if [ -n "$AGENTHUB_SEAT" ]; then %s; fi`, run)
-	}
 	return fmt.Sprintf(`if [ -n "$AGENTHUB_SEAT" ]; then %s; else echo '%s'; fi`, run, otherwise)
 }
 
@@ -119,18 +111,6 @@ func agyGuardEntry() map[string]any {
 	}
 }
 
-// claudeGuardDefinition is the definition an owner-wide claude settings file carries for one phase. Inside a
-// seat the runtime writes the seat's own file (`claude_guard_settings`), which is why this one is guarded: the
-// owner's own claude window is not a seat and must keep working as it did.
-func claudeGuardDefinition(phase string) map[string]any {
-	return map[string]any{
-		"matcher": "*",
-		"hooks": []any{map[string]any{
-			"type": "command", "timeout": 10, "command": GuardedCommand("--claude-hook", phase, ""),
-		}},
-	}
-}
-
 // runtimeSpec is one row of the table: what to look for, where the runtime keeps its config, and where the
 // guard's entry goes. `config` is "" when the runtime has no hook surface for this client to place anything on.
 type runtimeSpec struct {
@@ -138,7 +118,10 @@ type runtimeSpec struct {
 	binary  string
 	dir     string // under the real home
 	config  string // under the real home; "" when there is no surface
-	mode    string
+	mode    string // the guard argument an entry for this runtime names
+	// seatFile is the file the RUNTIME writes for each seat, when that file is the runtime's only guard and this
+	// client must never write an owner-wide entry: claude's `settings.json`, relative to the seat directory.
+	seatFile string
 }
 
 // runtimeSpecs is the table, in the order the rows are reported, and it is the runtimes this client LAUNCHES
@@ -147,7 +130,8 @@ type runtimeSpec struct {
 // which was wrong twice: the client never starts it, and its config dir is agy's own home.
 var runtimeSpecs = []runtimeSpec{
 	{runtime: "agy", binary: "agy", dir: ".gemini/config", config: ".gemini/config/hooks.json", mode: "--agy-hook"},
-	{runtime: "claude", binary: "claude", dir: ".claude", config: ".claude/settings.json", mode: "--claude-hook"},
+	{runtime: "claude", binary: "claude", dir: ".claude", config: ".claude/settings.json", mode: "--claude-hook",
+		seatFile: "settings.json"},
 	// codex has no hook surface this client can write: it is launched with no per-seat settings file and reads no
 	// command hook, so its guard would have to be its own sandbox policy - not this file's business. The row
 	// exists so a reader sees the runtime was CONSIDERED and is not silently unguarded.
@@ -164,7 +148,13 @@ var runtimeLookPath = exec.LookPath
 func RuntimeHooks(home string) []RuntimeHook {
 	out := make([]RuntimeHook, 0, len(runtimeSpecs))
 	for _, spec := range runtimeSpecs {
-		hook := RuntimeHook{Runtime: spec.runtime, Dir: existingDir(home, spec.dir), Config: spec.config, Mode: spec.mode}
+		hook := RuntimeHook{
+			Runtime:  spec.runtime,
+			Dir:      existingDir(home, spec.dir),
+			Config:   spec.config,
+			Mode:     spec.mode,
+			SeatFile: spec.seatFile,
+		}
 		if path, err := runtimeLookPath(spec.binary); err == nil {
 			hook.Bin = path
 		}
@@ -175,10 +165,20 @@ func RuntimeHooks(home string) []RuntimeHook {
 		case spec.config == "":
 			hook.Note = spec.runtime + ": found, and there is no hook surface for it to place a guard on - " +
 				"this client starts it with no settings file, so nothing is written"
-		case !hook.Guards():
-			hook.Note = spec.runtime + ": found, and the seat guard this client ships has no " + spec.mode +
-				" mode yet - an entry would exit 0 answering nothing, so none is written (the runtime's own" +
-				" GUARD_HAS_CLAUDE_HOOK is false)"
+		case hook.CoveredBySeat():
+			hook.Note = spec.runtime + ": the guard reaches it through the seat's own <seat dir>/" + spec.seatFile +
+				", which the runtime writes and passes with --settings - no owner-wide entry is written, because" +
+				" one would either duplicate that file or never fire"
+			path := filepath.Join(home, spec.config)
+			present, err := guardEntryPresent(path, spec.mode)
+			if err != nil {
+				hook.ReadError = err.Error()
+				break
+			}
+			hook.EntryPresent = present
+			if present {
+				hook.Note += "; a stale owner-wide entry is in " + path + " - `4genteam guard uninstall` removes it"
+			}
 		default:
 			path := filepath.Join(home, spec.config)
 			present, err := guardEntryPresent(path, spec.mode)
@@ -210,7 +210,7 @@ func InstallRuntimeHooks(home string) ([]RuntimeHook, error) {
 	hooks := RuntimeHooks(home)
 	for i := range hooks {
 		hook := &hooks[i]
-		if hook.Config == "" || !hook.Guards() || hook.ReadError != "" {
+		if hook.Config == "" || hook.CoveredBySeat() || !hook.Guards() || hook.ReadError != "" {
 			continue
 		}
 		if err := writeRuntimeEntry(home, *hook); err != nil {
@@ -230,7 +230,7 @@ func UninstallRuntimeHooks(home string) ([]RuntimeHook, error) {
 	hooks := RuntimeHooks(home)
 	for i := range hooks {
 		hook := &hooks[i]
-		if hook.Config == "" || !hook.Guards() || hook.ReadError != "" || !hook.EntryPresent {
+		if hook.Config == "" || hook.ReadError != "" || !hook.EntryPresent {
 			continue
 		}
 		if err := removeRuntimeEntry(home, *hook); err != nil {
@@ -267,8 +267,6 @@ func RuntimeUninstallLine(hook RuntimeHook) string {
 		return hook.Runtime + ": the guard's entry is out of " + hook.Config
 	case hook.Config == "":
 		return hook.Runtime + ": nothing was installed, and there is no surface for one"
-	case !hook.Guards():
-		return hook.Runtime + ": nothing was ever placed here - the guard has no " + hook.Mode + " mode"
 	case hook.EntryPresent:
 		return hook.Runtime + ": the guard's entry is still in " + hook.Config
 	}
@@ -280,28 +278,23 @@ func RuntimeUninstallLine(hook RuntimeHook) string {
 // every key this client does not own are carried through. The result is written to a temporary file in the same
 // directory and renamed over the original, because a crash or a full disk mid-write must not truncate the
 // owner's own env or hooks.
+//
+// agy is the only runtime this writes for: every other row is either covered by the runtime's own seat file
+// (claude) or has no hook surface at all (codex), and `InstallRuntimeHooks` never calls this for them.
 func writeRuntimeEntry(home string, hook RuntimeHook) error {
+	if hook.Runtime != "agy" {
+		return fmt.Errorf("no owner-wide entry is written for %s", hook.Runtime)
+	}
 	path := filepath.Join(home, hook.Config)
 	doc, err := readDocument(path)
 	if err != nil {
 		return err
 	}
-	entry, err := json.Marshal(guardEntryFor(hook.Runtime))
+	entry, err := json.Marshal(agyGuardEntry())
 	if err != nil {
 		return fmt.Errorf("cannot encode the %s guard entry: %v", hook.Runtime, err)
 	}
-	switch hook.Runtime {
-	case "agy":
-		doc.set("seat-guard", entry)
-	case "claude":
-		accounted, err := withClaudeHooks(doc.get("hooks"), entry)
-		if err != nil {
-			return fmt.Errorf("%s: %v", path, err)
-		}
-		doc.set("hooks", accounted)
-	default:
-		return fmt.Errorf("no owner-wide entry is known for %s", hook.Runtime)
-	}
+	doc.set("seat-guard", entry)
 	return writeDocument(path, doc)
 }
 
@@ -328,84 +321,10 @@ func removeRuntimeEntry(home string, hook RuntimeHook) error {
 	return writeDocument(path, doc)
 }
 
-// claudePhases is every event the guard's claude mode answers, and every array the writer keeps the guard's
-// definition in. `PostToolUseFailure` is its own event - a failed call fires it with `error`, and `PostToolUse`
-// does not - so a settings file that names only the first two never logs a failure.
-var claudePhases = []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}
-
-// claudePhaseMode is the mode string the guard answers for one claude event: `PreToolUse` and
-// `PostToolUseFailure` both run the guard's own phase names, and the guard reads the event from the payload.
-func claudePhaseMode(phase string) string {
-	if phase == "PreToolUse" {
-		return "pre"
-	}
-	return "post"
-}
-
-// guardEntryFor is the JSON value one runtime's entry has: agy's own key, claude's two hook definitions.
-func guardEntryFor(runtime string) any {
-	switch runtime {
-	case "agy":
-		return agyGuardEntry()
-	case "claude":
-		// One DEFINITION per phase: `withClaudeHooks` appends it to that phase's array, so an array here would
-		// nest one inside the other and claude would read a definition it cannot parse.
-		entry := map[string]any{}
-		for _, phase := range claudePhases {
-			entry[phase] = claudeGuardDefinition(claudePhaseMode(phase))
-		}
-		return entry
-	}
-	return nil
-}
-
-// withClaudeHooks returns the `hooks` member with the guard's definition present in both phase arrays. Every
-// other member of `hooks`, and every other definition in the two arrays, is carried through as raw JSON: the
-// owner's own hooks are not this client's to reformat or to drop.
-func withClaudeHooks(raw json.RawMessage, entry json.RawMessage) (json.RawMessage, error) {
-	entryMembers, err := decodeObject(entry)
-	if err != nil {
-		return nil, fmt.Errorf("the guard's own entry is not an object: %v", err)
-	}
-	hooks := map[string]json.RawMessage{}
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &hooks); err != nil {
-			return nil, errors.New("`hooks` is not a JSON object, and the guard was not installed")
-		}
-		// `"hooks": null` decodes without an error and leaves the map nil, and the first `hooks[phase] = ...` would
-		// panic on the owner's own settings file. A null member means no definitions, which is an empty object.
-		if hooks == nil {
-			hooks = map[string]json.RawMessage{}
-		}
-	}
-	for _, phase := range claudePhases {
-		var definitions []json.RawMessage
-		if existing := hooks[phase]; len(existing) > 0 {
-			if err := json.Unmarshal(existing, &definitions); err != nil {
-				return nil, fmt.Errorf("`hooks.%s` is not a JSON array, and the guard was not installed", phase)
-			}
-		}
-		present := false
-		for _, definition := range definitions {
-			if carriesGuardText(definition) {
-				present = true
-				break
-			}
-		}
-		if !present {
-			definitions = append(definitions, entryMembers[phase])
-		}
-		encoded, err := json.Marshal(definitions)
-		if err != nil {
-			return nil, fmt.Errorf("cannot encode `hooks.%s`: %v", phase, err)
-		}
-		hooks[phase] = encoded
-	}
-	return json.Marshal(hooks)
-}
-
-// withoutClaudeHooks is `withClaudeHooks`'s inverse: both phase arrays lose the definitions that name the guard's
-// script, and everything the owner wrote stays exactly as it was. An absent `hooks` member stays absent.
+// withoutClaudeHooks is the uninstall's filter: every phase array loses the definitions that name the guard's
+// script, and everything the owner wrote stays exactly as it was. An absent `hooks` member stays absent. It is the
+// only claude code left, because the guard reaches claude through the seat's own file and this client writes no
+// owner-wide entry (see the header); a file an older build wrote still has to be cleaned.
 func withoutClaudeHooks(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return nil, nil
