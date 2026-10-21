@@ -3,6 +3,7 @@
 #
 #   scripts/build.sh              go vet, go test, build, install ~/.local/bin/4genteam and agenthub-runtime, install .env
 #   scripts/build.sh --no-test    skip go test (go vet still runs)
+#   scripts/build.sh --force      install the checkout's .env even when it differs from the live one
 #   scripts/build.sh --respawn RIG
 #                                 all of the above, then bring RIG back on what was just installed:
 #                                 `4genteam up RIG --respawn` stops agent and replaces the runtime daemon
@@ -14,7 +15,10 @@
 # The checkout's .env, when it exists, REPLACES ~/.config/4genthub/.env (mode 600): that is the one
 # file the client reads, so the file edited here is the file in effect after a build. A checkout
 # without a .env leaves an installed file as it is, and when none is installed yet creates it from
-# .env.sample (mode 600) for the user to fill in. The file's content is never printed.
+# .env.sample (mode 600) for the user to fill in. A live file that DIFFERS from the checkout's is a
+# credential and not a build artifact: the build refuses, names both paths and leaves the live file
+# untouched, because a stale checkout copy silently undoes a rotation. --force installs it anyway.
+# The file's content is never printed.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -24,10 +28,12 @@ env_dir=$HOME/.config/4genthub
 # The arguments are read BEFORE anything is built: a --respawn without a rig is a caller error, and it must
 # be said in one line rather than after a full build.
 no_test=0
+forced=0
 respawn=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-test) no_test=1 ;;
+    --force) forced=1 ;;
     --respawn)
       if [ $# -lt 2 ] || [ -z "$2" ]; then
         echo "build.sh: --respawn needs a rig name (e.g. --respawn 4genthub-min)" >&2
@@ -37,12 +43,26 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     *)
-      echo "build.sh: unknown argument $1 (usage: build.sh [--no-test] [--respawn RIG])" >&2
+      echo "build.sh: unknown argument $1 (usage: build.sh [--no-test] [--force] [--respawn RIG])" >&2
       exit 2
       ;;
   esac
   shift
 done
+
+# A live .env that differs from the checkout's is refused BEFORE anything is built: the live file holds a
+# credential, and a stale checkout copy would silently undo a rotation. cmp -s prints nothing, the message
+# names the two paths and never their content, and --force is the deliberate override.
+if [ -f "$root/.env" ] && [ -f "$env_dir/.env" ] && ! cmp -s "$root/.env" "$env_dir/.env"; then
+  if [ "$forced" = 0 ]; then
+    echo "build.sh: refusing to replace the live credential file: the two .env files differ" >&2
+    echo "build.sh:   checkout: $root/.env" >&2
+    echo "build.sh:   live:     $env_dir/.env" >&2
+    echo "build.sh: reconcile them, or pass --force to install the checkout's copy over the live one" >&2
+    exit 1
+  fi
+  echo "build.sh: --force: installing $root/.env over the differing $env_dir/.env" >&2
+fi
 
 cd "$root"
 go vet ./...
