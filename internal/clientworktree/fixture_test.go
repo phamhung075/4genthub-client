@@ -64,15 +64,6 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-// stubRoomDir makes the verbs resolve the room inside the fixture's own store. The production
-// resolution is clientenv.DefaultStateRoot over the machine's real home, which a test cannot move.
-func stubRoomDir(t *testing.T, store string) {
-	t.Helper()
-	original := RoomDir
-	RoomDir = func(room string) (string, error) { return filepath.Join(store, "rooms", room), nil }
-	t.Cleanup(func() { RoomDir = original })
-}
-
 // stubLinkProviderKey records the directories the provider key would be linked into, and writes
 // nothing: LinkProviderKey reads this machine's key file, which a test cannot supply.
 func stubLinkProviderKey(t *testing.T) *[]string {
@@ -142,7 +133,6 @@ func newSeatFixture(t *testing.T, seats []clientservices.SeatType) *seatFixture 
 	// The room's OWN record, which the verbs read: spec.json is what a room that exists is, and the team
 	// file above is only what creates it.
 	writeFile(t, filepath.Join(fixture.room, "spec.json"), roomSpecJSON(t, fixture.name, seats))
-	stubRoomDir(t, fixture.store)
 	return fixture
 }
 

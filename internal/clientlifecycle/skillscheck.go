@@ -580,11 +580,10 @@ func seatSkillInputs(root, room string) ([]seatSkillInput, []seatSkillFailure) {
 		return note(err.Error())
 	}
 	// The room's own directory, read where the caller pointed the report: `--state-root DIR` names the tree
-	// the rows are read from, so the check must not report one tree and inspect another.
-	roomDir := ""
-	if root != "" {
-		roomDir = filepath.Join(root, "rooms", room)
-	} else if roomDir, err = clientservices.RoomDir(room); err != nil {
+	// the rows are read from, so the check must not report one tree and inspect another. The root is
+	// already resolved above; it is passed, never re-derived.
+	roomDir, err := clientservices.RoomDir(root, room)
+	if err != nil {
 		return note(err.Error())
 	}
 	statuses, err := roomSeats(room)

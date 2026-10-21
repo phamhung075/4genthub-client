@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
-	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientteam"
 )
 
@@ -98,17 +97,25 @@ func DerivedWorktrees(roomDir, room string, seats []SeatType) []Worktree {
 	return out
 }
 
-// RoomDir is the room's OWN directory, and the ONE resolution `up`, the `worktrees` row and both
-// worktree verbs use: the seat store (a machine-level location) plus the room name. It is a variable
-// so a test drives the verbs over its own store, in the repo's style of a package-level seam rather
-// than an interface added for testing.
-var RoomDir = func(room string) (string, error) {
-	root := clientenv.DefaultStateRoot()
+// RoomDir is the room's OWN directory, and the ONE resolution `up`, the `worktrees` row, both worktree
+// verbs and the overlap scan use: `<root>/rooms/<room>`.
+//
+// IT NEVER RESOLVES THE ROOT. `--state-root DIR` is resolved ONCE, by the verb that took the flag, and the
+// derived paths live under THAT store: a function that re-derived the machine's default would derive
+// worktrees under one root while the verb started a daemon on another, silently. An empty root is a
+// caller's mistake and is refused rather than turned into a relative path. It is a variable so a test
+// drives the verbs over its own store, in the repo's style of a package-level seam rather than an
+// interface added for testing.
+var RoomDir = func(root, room string) (string, error) {
 	if root == "" {
 		return "", &clientcmd.CodedError{
-			Message: "cannot resolve the state root the room's worktrees live under",
-			Code:    clientcmd.ExitUsage,
+			Message: "the room's directory needs the state root the caller resolved, so one verb cannot " +
+				"derive under one store and read another",
+			Code: clientcmd.ExitUsage,
 		}
+	}
+	if room == "" {
+		return "", &clientcmd.CodedError{Message: "the room's directory needs a room name", Code: clientcmd.ExitUsage}
 	}
 	return filepath.Join(root, "rooms", room), nil
 }

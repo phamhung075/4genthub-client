@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
@@ -64,7 +65,7 @@ func (worktreeCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 }
 
 func printWorktreeUsage(w io.Writer) {
-	fmt.Fprint(w, `usage: 4genteam worktree <verb> ROOM [--main DIR]
+	fmt.Fprint(w, `usage: 4genteam worktree <verb> ROOM [--main DIR] [--state-root DIR]
 
 Read and clean up the room's derived seat worktrees. The list is derived from the seats of the room's
 own record (clientservices.DerivedWorktrees), so nothing here keeps a list of its own.
@@ -74,7 +75,8 @@ verbs:
   prune  remove only /tmp/wt-*, /tmp/gate-* and prunable entries, naming everything kept
 
 options:
-  --main DIR  the checkout whose worktrees these are (default: git rev-parse --show-toplevel)
+  --main DIR         the checkout whose worktrees these are (default: git rev-parse --show-toplevel)
+  --state-root DIR   the store the room is read under (default: this machine's own)
 
 Every verb answers --help with its own usage.
 `)
@@ -124,23 +126,40 @@ func usageError(message string) error {
 
 // RoomDir is the room's OWN directory: clientservices.RoomDir is the ONE resolution, and it is
 // restated here only so a test can drive the verbs over its own store, in the repo's style of a
-// package-level seam rather than an interface added for testing.
+// package-level seam rather than an interface added for testing. It takes the root the VERB resolved:
+// a verb that re-derived the machine's default would read one store's room while the flag named another.
 var RoomDir = clientservices.RoomDir
 
-// roomOf is the two readings both verbs open with: the room's directory and the seats of the room's OWN
-// record. The seats come from the ONE derivation (clientservices.LiveSeats over spec.json), never from a
-// list written down here: a room that exists is read from what exists.
-func roomOf(room string) (string, []clientservices.SeatType, error) {
-	roomDir, err := RoomDir(room)
+// roomOf is the two readings both verbs open with: the room's directory under the resolved root, and the
+// seats of the room's OWN record. The seats come from the ONE derivation (clientservices.LiveSeats over
+// spec.json), never from a list written down here: a room that exists is read from what exists. The root
+// is passed in - it used to be recovered with Dir(Dir(roomDir)), which is a derivation no caller could
+// check and no flag could redirect.
+func roomOf(root, room string) (string, []clientservices.SeatType, error) {
+	roomDir, err := RoomDir(root, room)
 	if err != nil {
 		return "", nil, err
 	}
-	root := filepath.Dir(filepath.Dir(roomDir))
 	seats, err := clientservices.LiveSeats(root, room)
 	if err != nil {
 		return "", nil, err
 	}
 	return roomDir, seats, nil
+}
+
+// verbRoot pulls `--state-root DIR` out of a verb's arguments, resolves it, and returns the remaining
+// arguments with the resolved root. The retired `--state-dir` spelling is refused by the ONE extractor,
+// so these verbs carry the client's single refusal for it rather than a second wording.
+func verbRoot(args []string) (string, []string, error) {
+	rootFlag, rest, err := clientenv.StateRootFromFlags(args)
+	if err != nil {
+		return "", nil, err
+	}
+	root, err := clientenv.ResolveStateRoot(rootFlag)
+	if err != nil {
+		return "", nil, err
+	}
+	return root, rest, nil
 }
 
 // derivedIndex is the derived worktrees keyed by their cleaned path, for the two verbs' lookups.
@@ -160,19 +179,24 @@ func describe(entry Entry) string {
 	return entry.Branch
 }
 
-const listUsage = `usage: 4genteam worktree list ROOM [--main DIR]
+const listUsage = `usage: 4genteam worktree list ROOM [--main DIR] [--state-root DIR]
 
 Print the room's derived seat worktrees (one line each, from the room's team.json) and every other
 entry of git worktree list, labelled foreign. It writes nothing.
 
 options:
-  --main DIR  the checkout whose worktrees these are (default: git rev-parse --show-toplevel)
+  --main DIR         the checkout whose worktrees these are (default: git rev-parse --show-toplevel)
+  --state-root DIR   the store the room is read under (default: this machine's own)
 `
 
 // runList prints the derived worktrees first, in the derivation's own order, then every entry the
 // derivation does not name. A derived path that is not in the listing is printed as missing instead of
 // being left out, so a room that was never started does not read like a room with no seats.
 func runList(args []string, stdout io.Writer) error {
+	root, args, err := verbRoot(args)
+	if err != nil {
+		return err
+	}
 	flags := newVerbFlags("list")
 	mainFlag := flags.String("main", "", "the checkout whose worktrees these are")
 	room, err := parseRoomVerb(flags, args, func(w io.Writer) { fmt.Fprint(w, listUsage) }, stdout)
@@ -183,7 +207,7 @@ func runList(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	roomDir, seats, err := roomOf(room)
+	roomDir, seats, err := roomOf(root, room)
 	if err != nil {
 		return err
 	}
@@ -213,7 +237,7 @@ func runList(args []string, stdout io.Writer) error {
 	return nil
 }
 
-const pruneUsage = `usage: 4genteam worktree prune ROOM [--main DIR]
+const pruneUsage = `usage: 4genteam worktree prune ROOM [--main DIR] [--state-root DIR]
 
 Remove the worktrees the ruling names and nothing else: a direct child of /tmp whose name begins with
 wt- or gate-, and an entry git marks prunable. Removal is ` + "`git worktree remove`" + ` WITHOUT --force, so a
@@ -222,7 +246,8 @@ main is refused and named, because removing it would delete the only reference t
 other foreign entry is listed and never removed.
 
 options:
-  --main DIR  the checkout whose worktrees these are (default: git rev-parse --show-toplevel)
+  --main DIR         the checkout whose worktrees these are (default: git rev-parse --show-toplevel)
+  --state-root DIR   the store the room is read under (default: this machine's own)
 `
 
 // runPrune walks the listing and removes only what the ruling names. It completes the walk - every
@@ -231,6 +256,10 @@ options:
 // them: an operator who asked for a prune must not have to read the output to learn that some of it
 // did not happen.
 func runPrune(args []string, stdout io.Writer) error {
+	root, args, err := verbRoot(args)
+	if err != nil {
+		return err
+	}
 	flags := newVerbFlags("prune")
 	mainFlag := flags.String("main", "", "the checkout whose worktrees these are")
 	room, err := parseRoomVerb(flags, args, func(w io.Writer) { fmt.Fprint(w, pruneUsage) }, stdout)
@@ -241,7 +270,7 @@ func runPrune(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	roomDir, seats, err := roomOf(room)
+	roomDir, seats, err := roomOf(root, room)
 	if err != nil {
 		return err
 	}

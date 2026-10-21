@@ -19,7 +19,7 @@ import (
 func stubWorktreeStepSeams(t *testing.T, ensure func(string, string, string, []clientservices.SeatType, io.Writer) error) {
 	t.Helper()
 	room, main, seatRoot, previous := worktreeRoomDir, worktreeMainRoot, worktreeSeatRoot, worktreeEnsure
-	worktreeRoomDir = func(string) (string, error) { return "/state/rooms/demo", nil }
+	worktreeRoomDir = func(string, string) (string, error) { return "/state/rooms/demo", nil }
 	worktreeMainRoot = func(string) (string, error) { return "/main", nil }
 	// No seat directory is readable unless a case says so: the default answer is "the definition names
 	// no repository", which keeps every case that is not about the root on the working directory's one.
@@ -45,7 +45,7 @@ func TestUpWorktreesStepDerivesTheSeatsOfThisStart(t *testing.T) {
 	}}
 
 	var out, errOut bytes.Buffer
-	if code := ensureWorktreesImpl("demo", spec, &out, &errOut); code != clientcmd.ExitOK {
+	if code := ensureWorktreesImpl("/state", "demo", spec, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("the step exited %d (stderr %q)", code, errOut.String())
 	}
 	if gotMain != "/main" || gotRoomDir != "/state/rooms/demo" || gotRoom != "demo" {
@@ -66,7 +66,7 @@ func TestUpWorktreesStepRefusesTheStartWhenTheDerivationRefuses(t *testing.T) {
 	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{{SeatKey: "lead", SeatType: "lead"}}}
 
 	var out, errOut bytes.Buffer
-	if code := ensureWorktreesImpl("demo", spec, &out, &errOut); code != clientcmd.ExitUnavailable {
+	if code := ensureWorktreesImpl("/state", "demo", spec, &out, &errOut); code != clientcmd.ExitUnavailable {
 		t.Fatalf("the step exited %d, want %d", code, clientcmd.ExitUnavailable)
 	}
 	if !bytes.Contains(errOut.Bytes(), []byte("/state/rooms/demo/wt/lead")) {
@@ -96,7 +96,7 @@ func TestUpWorktreesStepDerivesFromTheRoomsOwnRepositoryNotTheWorkingDirectorys(
 	}}
 
 	var out, errOut bytes.Buffer
-	if code := ensureWorktreesImpl("demo", spec, &out, &errOut); code != clientcmd.ExitOK {
+	if code := ensureWorktreesImpl("/state", "demo", spec, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("the step exited %d (stderr %q)", code, errOut.String())
 	}
 	if gotMain != "/project" {
@@ -121,7 +121,7 @@ func TestUpWorktreesStepKeepsTheWorkingDirectorysRootWhenNoSeatDirectoryAnswers(
 	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{{SeatKey: "lead", SeatType: "lead"}}}
 
 	var out, errOut bytes.Buffer
-	if code := ensureWorktreesImpl("demo", spec, &out, &errOut); code != clientcmd.ExitOK {
+	if code := ensureWorktreesImpl("/state", "demo", spec, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("the step exited %d (stderr %q)", code, errOut.String())
 	}
 	if gotMain != "/main" {
@@ -147,7 +147,7 @@ func TestUpWorktreesStepKeepsItsRootAndSaysSoWhenTheSeatsSpanTwoRepositories(t *
 	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{{SeatKey: "lead", SeatType: "lead"}}}
 
 	var out, errOut bytes.Buffer
-	if code := ensureWorktreesImpl("demo", spec, &out, &errOut); code != clientcmd.ExitOK {
+	if code := ensureWorktreesImpl("/state", "demo", spec, &out, &errOut); code != clientcmd.ExitOK {
 		t.Fatalf("the step exited %d (stderr %q)", code, errOut.String())
 	}
 	if gotMain != "/main" {
@@ -164,7 +164,7 @@ func TestUpWorktreesStepKeepsItsRootAndSaysSoWhenTheSeatsSpanTwoRepositories(t *
 // wt/go-dev-root, neither of them the derived path, so F1 could not pass for either seat.
 func TestUpFillsABlankSeatCwdFromTheDerivation(t *testing.T) {
 	room := worktreeRoomDir
-	worktreeRoomDir = func(string) (string, error) { return "/state/rooms/demo", nil }
+	worktreeRoomDir = func(string, string) (string, error) { return "/state/rooms/demo", nil }
 	t.Cleanup(func() { worktreeRoomDir = room })
 
 	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{
@@ -173,7 +173,7 @@ func TestUpFillsABlankSeatCwdFromTheDerivation(t *testing.T) {
 		// Already the derived path: kept, not rewritten, and a trailing separator is not a difference.
 		{SeatKey: "go-dev", SeatType: "developer", Cwd: strptr("/state/rooms/demo/wt/go-dev/")},
 	}}
-	filled, err := seatCwdsByDerivation("demo", spec)
+	filled, err := seatCwdsByDerivation("/state", "demo", spec)
 	if err != nil {
 		t.Fatalf("seatCwdsByDerivation refused a spec it derives: %v", err)
 	}
@@ -198,14 +198,14 @@ func TestUpFillsABlankSeatCwdFromTheDerivation(t *testing.T) {
 // there. The main checkout is the measured case - the lead of this very room.
 func TestUpRefusesASeatCwdThatIsNotTheDerivedWorktree(t *testing.T) {
 	room := worktreeRoomDir
-	worktreeRoomDir = func(string) (string, error) { return "/state/rooms/demo", nil }
+	worktreeRoomDir = func(string, string) (string, error) { return "/state/rooms/demo", nil }
 	t.Cleanup(func() { worktreeRoomDir = room })
 
 	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{
 		{SeatKey: "lead", SeatType: "lead", Cwd: strptr("/home/daihu/__projects__/4genthub")},
 		{SeatKey: "go-dev", SeatType: "developer"},
 	}}
-	_, err := seatCwdsByDerivation("demo", spec)
+	_, err := seatCwdsByDerivation("/state", "demo", spec)
 	if err == nil {
 		t.Fatal("a seat declared in the shared checkout was accepted")
 	}
@@ -217,3 +217,34 @@ func TestUpRefusesASeatCwdThatIsNotTheDerivedWorktree(t *testing.T) {
 }
 
 func strptr(s string) *string { return &s }
+
+// The root the verb RESOLVED is the root the derivation is handed (hub task 54a942c5): `up --state-root
+// DIR` must derive under DIR, not under the machine's default, which is what RoomDir used to do for
+// itself. Both steps that read the room's directory record the root they were given.
+func TestTheWorktreeStepsAreHandedTheResolvedRoot(t *testing.T) {
+	stubWorktreeStepSeams(t, func(string, string, string, []clientservices.SeatType, io.Writer) error { return nil })
+	room := worktreeRoomDir
+	var gotRoots []string
+	worktreeRoomDir = func(root, _ string) (string, error) {
+		gotRoots = append(gotRoots, root)
+		return "/state/rooms/demo", nil
+	}
+	t.Cleanup(func() { worktreeRoomDir = room })
+
+	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{{SeatKey: "lead", SeatType: "lead"}}}
+	if _, err := seatCwdsByDerivation("/tmp/x", "demo", spec); err != nil {
+		t.Fatalf("the cwd derivation refused the spec: %v", err)
+	}
+	var out, errOut bytes.Buffer
+	if code := ensureWorktreesImpl("/tmp/x", "demo", spec, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("the worktrees step exited %d (stderr %q)", code, errOut.String())
+	}
+	if len(gotRoots) != 2 {
+		t.Fatalf("the room directory was resolved %d times, want 2 (one per step): %v", len(gotRoots), gotRoots)
+	}
+	for i, root := range gotRoots {
+		if root != "/tmp/x" {
+			t.Errorf("step %d was handed root %q, want the resolved /tmp/x", i, root)
+		}
+	}
+}

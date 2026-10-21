@@ -327,7 +327,7 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	// definition this verb will not start (seat-worktrees.md - the main checkout takes only the land). The
 	// filled spec is the one the worktrees step ensures, the one the daemon is handed, and therefore the one
 	// spec.json records, so `doctor`'s F1 compares a pane against the path `up` actually launched it in.
-	spec, err = seatCwdsByDerivation(name, spec)
+	spec, err = seatCwdsByDerivation(stateDir, name, spec)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
 		return clientcmd.ExitRoomRefused
@@ -381,7 +381,7 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	// (daemon, gate, worktrees, seats): a seat's own worktree must exist before it launches, and each
 	// seat's cwd is now that worktree rather than the room. A refusal here starts the daemon and
 	// nothing else, exactly as a gate refusal does.
-	if code := ensureWorktrees(name, spec, stdout, stderr); code != clientcmd.ExitOK {
+	if code := ensureWorktrees(stateDir, name, spec, stdout, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	if code := ensureRoom(name, spec, daemonLog, stdout, stderr); code != clientcmd.ExitOK {
@@ -531,8 +531,8 @@ func runtimeBinary() (string, error) {
 // of the definition: a room must not be started with one team and have its worktrees derived from
 // another. A refusal is an `up` refusal; the alternative is a seat launching in the room and editing
 // the shared checkout, which is the defect the ruling removes.
-func ensureWorktreesImpl(name string, spec clientruntime.RoomSpec, stdout, stderr io.Writer) int {
-	roomDir, err := worktreeRoomDir(name)
+func ensureWorktreesImpl(root, name string, spec clientruntime.RoomSpec, stdout, stderr io.Writer) int {
+	roomDir, err := worktreeRoomDir(root, name)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam up: cannot derive the room's seat worktrees: %v\n", err)
 		return clientcmd.ExitUnavailable
@@ -708,8 +708,8 @@ func roomSpecFor(name, teamDir, stateDir string) (clientruntime.RoomSpec, error)
 // is therefore FILLED from the derivation, so the start, the record it writes and F1 cannot disagree, and a
 // cwd that names anything else is refused BEFORE the first seat starts, naming the seat, its declared
 // path, the derived one and the two ways to settle it.
-func seatCwdsByDerivation(name string, spec clientruntime.RoomSpec) (clientruntime.RoomSpec, error) {
-	roomDir, err := worktreeRoomDir(name)
+func seatCwdsByDerivation(root, name string, spec clientruntime.RoomSpec) (clientruntime.RoomSpec, error) {
+	roomDir, err := worktreeRoomDir(root, name)
 	if err != nil {
 		return spec, fmt.Errorf("the seats' worktrees cannot be derived: %w", err)
 	}

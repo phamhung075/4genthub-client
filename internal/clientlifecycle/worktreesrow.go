@@ -14,7 +14,6 @@ package clientlifecycle
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
@@ -100,14 +99,9 @@ func worktreesRowOf(name, root string) worktreesRow {
 		row.Note = clientservices.Worktrees + ": not observed: " + err.Error()
 		return row
 	}
-	roomDir := ""
-	if root != "" {
-		// `doctor --state-root DIR` names the tree the rows are read from, so the room's own directory
-		// is read there too: the same call must not report one tree and check another.
-		roomDir = filepath.Join(root, "rooms", name)
-	} else {
-		roomDir, err = worktreeRoomDir(name)
-	}
+	// `doctor --state-root DIR` names the tree the rows are read from, so the room's own directory is read
+	// there too - through the ONE resolution, so the same call cannot report one tree and check another.
+	roomDir, err := worktreeRoomDir(root, name)
 	if err != nil {
 		row.Note = clientservices.Worktrees + ": not observed: " + err.Error()
 		return row

@@ -74,7 +74,7 @@ func restoreAll(t *testing.T) {
 	// The worktrees step touches git and the machine's checkouts. Every case that is not ABOUT it starts
 	// from a stub, so a lifecycle assertion never depends on the repository the test binary was built
 	// in; the two cases that assert the step replace it with their own.
-	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int { return clientcmd.ExitOK }
+	ensureWorktrees = func(string, string, clientruntime.RoomSpec, io.Writer, io.Writer) int { return clientcmd.ExitOK }
 	daemon, worktrees, roomStep := ensureDaemon, ensureWorktrees, ensureRoom
 	record := recordRoomFor
 	authority, wait := startAuthority, waitSafeguards
@@ -185,7 +185,7 @@ func TestUpInitialisesEveryServiceInOrder(t *testing.T) {
 		ran = append(ran, "ensureDaemon")
 		return "/tmp/daemon.log", nil
 	}
-	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
+	ensureWorktrees = func(string, string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
 		ran = append(ran, "ensureWorktrees")
 		return clientcmd.ExitOK
 	}
@@ -321,7 +321,7 @@ func TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition(t *testing.T) {
 	// The room directory is the ONE resolution up, doctor and the worktree verbs share (worktreeRoomDir),
 	// so the derived paths come from the seam rather than from the flag this test passes.
 	roomDir := worktreeRoomDir
-	worktreeRoomDir = func(string) (string, error) { return directory, nil }
+	worktreeRoomDir = func(string, string) (string, error) { return directory, nil }
 	t.Cleanup(func() { worktreeRoomDir = roomDir })
 
 	ensureDaemon = func(string, io.Writer) (string, error) { return "/tmp/daemon.log", nil }

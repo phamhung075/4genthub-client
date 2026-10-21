@@ -42,7 +42,7 @@ func TestPruneRemovesOnlyTheWorktreesTheRulingNames(t *testing.T) {
 	}
 
 	var out strings.Builder
-	err := runPrune([]string{"--main", fixture.main, fixture.name}, &out)
+	err := runPrune([]string{"--main", fixture.main, "--state-root", fixture.store, fixture.name}, &out)
 	if err == nil {
 		t.Fatalf("prune left three worktrees behind, so it must fail:\n%s", out.String())
 	}
@@ -110,7 +110,7 @@ func TestListPrintsTheDerivedWorktreesAndEveryForeignEntry(t *testing.T) {
 	removeTmpWorktree(t, fixture.main, foreign)
 
 	var out strings.Builder
-	if err := runList([]string{"--main", fixture.main, fixture.name}, &out); err != nil {
+	if err := runList([]string{"--main", fixture.main, "--state-root", fixture.store, fixture.name}, &out); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	for _, want := range []string{

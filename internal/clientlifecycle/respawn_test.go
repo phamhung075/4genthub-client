@@ -90,7 +90,7 @@ func TestUpRespawnStopsTheSupervisionThenTheDaemonBeforeTheRoomStarts(t *testing
 		*steps = append(*steps, "ensureRoom")
 		return clientcmd.ExitOK
 	}
-	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
+	ensureWorktrees = func(string, string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
 		*steps = append(*steps, "ensureWorktrees")
 		return clientcmd.ExitOK
 	}
@@ -203,7 +203,7 @@ func TestUpRespawnReExecsItselfBeforeItStopsAnything(t *testing.T) {
 		t.Error("the calling process started a seat")
 		return clientcmd.ExitOK
 	}
-	ensureWorktrees = func(string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
+	ensureWorktrees = func(string, string, clientruntime.RoomSpec, io.Writer, io.Writer) int {
 		t.Error("the calling process ran the worktrees step")
 		return clientcmd.ExitOK
 	}

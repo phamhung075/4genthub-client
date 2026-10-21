@@ -40,7 +40,9 @@ func stubWorktreeRowSeams(t *testing.T, verdict clientworktree.CheckVerdict, err
 	worktreeCheck = func(string, string, string, []clientservices.SeatType) (clientworktree.CheckVerdict, error) {
 		return verdict, err
 	}
-	worktreeRoomDir = func(string) (string, error) { return "/room", nil }
+	// The seam mirrors production: the room directory is the given root plus rooms/<room>, so a case
+	// that writes a room under its own root reads THAT room.
+	worktreeRoomDir = func(root, room string) (string, error) { return filepath.Join(root, "rooms", room), nil }
 	// No derived path answers for a repository unless a case says so, which is the state of a room whose
 	// seats are not started yet: the working directory's root is what the row falls back to.
 	worktreeSeatRoot = func([]string) (string, bool, error) { return "", false, nil }

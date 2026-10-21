@@ -517,3 +517,16 @@ func overlapFixtureWorktree(roomDir, key, seatType string) (string, string) {
 	}
 	return "", ""
 }
+
+// The scan's production wiring binds the room directory to the root the VERB resolved (hub task
+// 54a942c5): `overlap --state-root DIR` must read DIR/rooms/<room>, not the machine's own store.
+func TestTheOverlapScanReadsTheRoomUnderTheResolvedRoot(t *testing.T) {
+	deps := defaultOverlapDeps("/tmp/x")
+	dir, err := deps.roomDir("demo")
+	if err != nil {
+		t.Fatalf("the scan's roomDir: %v", err)
+	}
+	if want := filepath.Join("/tmp/x", "rooms", "demo"); dir != want {
+		t.Fatalf("the scan reads %q, want %q", dir, want)
+	}
+}

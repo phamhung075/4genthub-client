@@ -95,7 +95,10 @@ func defaultOverlapDeps(stateRoot string) *overlapDeps {
 		teamDir:  func(room string) (string, error) { return clientservices.TeamDir("", room) },
 		seats:    clientservices.TeamSeats,
 		baseName: overlapTeamBaseBranch,
-		roomDir:  clientworktree.RoomDir,
+		// The scan reads the room directory under the SAME root it was wired with, through the ONE
+		// resolution: a scan that re-derived the machine's default would read one store while agent
+		// serves another.
+		roomDir:  func(room string) (string, error) { return clientworktree.RoomDir(stateRoot, room) },
 		mainRoot: clientworktree.MainRoot,
 		check:    clientworktree.Check,
 		git:      overlapGit,
