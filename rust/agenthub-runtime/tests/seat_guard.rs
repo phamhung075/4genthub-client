@@ -28,6 +28,16 @@ fn fresh_dir(tag: &str) -> PathBuf {
     ))
 }
 
+/// The rule a refusal names, from the reason a seat reads: the text between the first `(` and the first `)` of
+/// `blocked by seat guard (<rule>): ...`.
+fn rule_of(reason: &str) -> String {
+    reason
+        .split(['(', ')'])
+        .nth(1)
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// The rule that refused the call, or `None` when it was allowed.
 fn verdict(name: &str, args: serde_json::Value) -> Option<String> {
     verdict_in(&fresh_dir("test"), name, args)
@@ -48,7 +58,7 @@ fn verdict_with(
     args: serde_json::Value,
 ) -> Option<String> {
     refusal(dir, worktrees, name, args).map(|r| {
-        let rule = r.split(['(', ')']).nth(1).unwrap_or_default().to_owned();
+        let rule = rule_of(&r);
         let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap_or_default();
         assert!(
             log.contains(&format!("\"rule\":\"{rule}\"")),
@@ -112,6 +122,7 @@ fn refusal_full(
         .arg(guard())
         .args(["--agy-hook", "pre"])
         .env("AGENTHUB_SEAT", seat)
+        .env("AGENTHUB_ROOM", "demo")
         .env("AGENTHUB_SESSION_NAME", session)
         .env_remove("OPENRIG_SESSION_NAME")
         .env("AGENTHUB_WORKTREES", worktrees)
@@ -349,6 +360,127 @@ fn a_seat_cannot_kill_by_pattern_or_kill_pids_it_does_not_own() {
     allowed(&["pgrep -x omp", "kill -l", &own]);
 }
 
+/// The pair the runtime marks a seat's environment with (`supervisor/mod.rs`), inherited by every descendant; the
+/// harness exports the seat half as `AGENTHUB_SEAT=dev`, so the room half is `demo`.
+const MARK: (&str, &str) = ("demo", "dev");
+
+/// The pid a detached shell wrote into `file`, once it is there.
+fn pid_in(file: &Path) -> u32 {
+    for _ in 0..500 {
+        if let Ok(text) = std::fs::read_to_string(file) {
+            if let Ok(pid) = text.trim().parse() {
+                return pid;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("{} never named a pid", file.display());
+}
+
+/// Spawn `script` as the background job of a shell that then exits, carrying `mark`, and return its pid. Its parent
+/// is gone, so it is outside the seat's ancestry: only its mark can attribute it (ruling 6c, rows 2-4).
+fn orphaned(dir: &Path, tag: &str, mark: (&str, &str), script: &str) -> u32 {
+    let file = dir.join(format!("pid-{tag}"));
+    let _ = std::fs::remove_file(&file);
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!("{script} & echo $! > {}", file.display()))
+        .env("AGENTHUB_ROOM", mark.0)
+        .env("AGENTHUB_SEAT", mark.1)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("a shell is needed to detach a target");
+    pid_in(&file)
+}
+
+/// Ownership is the seat mark (the `AGENTHUB_ROOM`/`AGENTHUB_SEAT` pair) or ancestry, never the session: the eight
+/// rows of `RULING-2026-10-21-pid-ownership` §6c. Rows 2-8 are red against rev-9's asset and green once §6b lands.
+#[test]
+fn a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it() {
+    let dir = fresh_dir("pid");
+    let verdict = |command: String| {
+        refusal(
+            &dir,
+            WORKTREES,
+            "run_command",
+            serde_json::json!({ "CommandLine": command }),
+        )
+    };
+    let mut spawned: Vec<u32> = Vec::new();
+
+    // 1. A child of this very process: the ancestry branch, unchanged.
+    let mut started = Command::new("sleep")
+        .arg("60")
+        .env("AGENTHUB_ROOM", MARK.0)
+        .env("AGENTHUB_SEAT", MARK.1)
+        .spawn()
+        .expect("sleep");
+    spawned.push(started.id());
+    for command in [
+        format!("kill -9 {}", started.id()),
+        format!("kill -TERM {}", started.id()),
+        format!("kill -s TERM {}", started.id()),
+        format!("kill -0 {}", started.id()),
+    ] {
+        assert_eq!(verdict(command.clone()), None, "{command}");
+    }
+
+    // 2-4. Detached, so the ancestry branch cannot pass them for the wrong reason: a `nohup`'d child whose shell is
+    // reaped, a grandchild behind a shell, and a process that made itself a session leader.
+    for (tag, script) in [
+        ("nohup", "nohup sleep 60"),
+        ("grandchild", "sh -c 'sleep 60'"),
+        ("setsid", "setsid sleep 60"),
+    ] {
+        let pid = orphaned(&dir, tag, MARK, script);
+        spawned.push(pid);
+        let command = format!("kill -9 {pid}");
+        assert_eq!(verdict(command.clone()), None, "row {tag}: {command}");
+    }
+
+    // 5. Another seat's process: refused, and the reason names the owner seat.
+    let other = orphaned(&dir, "other-seat", ("demo", "lead"), "sleep 60");
+    spawned.push(other);
+    let why = verdict(format!("kill {other}")).expect("another seat's process is not ours");
+    assert!(why.contains("is marked"), "{why}");
+    assert!(why.contains("demo/lead"), "{why}");
+
+    // 6. A process that cleared its environment carries no mark and is nobody's.
+    let bare = orphaned(&dir, "env-i", MARK, "env -i sleep 60");
+    spawned.push(bare);
+    let why = verdict(format!("kill {bare}")).expect("an unmarked process is not ours");
+    assert!(
+        why.contains("names no AGENTHUB_ROOM/AGENTHUB_SEAT"),
+        "{why}"
+    );
+
+    // 7. A pid that is gone has no environment left to attribute.
+    let mut reaped = Command::new("true").spawn().expect("true");
+    let gone = reaped.id();
+    reaped.wait().expect("true exits");
+    let why = verdict(format!("kill {gone}")).expect("a reaped pid is not ours");
+    assert!(why.contains("no readable environment"), "{why}");
+
+    // 8. A process group signals every process in it, other seats' included.
+    for command in [
+        "kill -29162",
+        "kill -- -29162",
+        "kill -- -9",
+        "kill 0",
+        "kill -65",
+    ] {
+        let why = verdict(command.to_owned()).expect("a group is not a pid");
+        assert!(why.contains("is a process group"), "{command}: {why}");
+    }
+
+    for pid in &spawned {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    }
+    let _ = started.kill();
+    let _ = started.wait();
+}
+
 #[test]
 fn a_seat_writes_only_inside_its_worktree_and_not_to_frozen_or_protected_paths() {
     assert_eq!(write("/work/wt/dev/a.go"), None);
@@ -449,8 +581,9 @@ fn a_seat_cannot_edit_the_config_or_the_log_the_guard_rests_on() {
 /// Deleting or rewriting in place what enforces the rules puts the seat outside them as surely as editing it does:
 /// `rm`, `sed -i`, `truncate`, `dd of=`, an `mv` away and an `ln` over the file were all judged by NO rule, because
 /// writeTargets saw only a redirect, a `tee` and a copy target. The park record and the room's budget are the same
-/// kind of state, so they are named here too. A glob (`rm <seat dir>/*`), `find -delete`, `xargs rm` and a command
-/// inside quotes are still unjudged: the guard is a net for a seat's mistakes, not a sandbox.
+/// kind of state, so they are named here too. A glob is judged as the prefix it names (`rm <seat dir>/*` is the
+/// seat's directory), and one with no literal prefix is refused by name (`unresolvable-target`). `find -delete`,
+/// `xargs rm` and a command inside quotes are still unjudged: the guard is a net for a seat's mistakes, not a sandbox.
 #[test]
 fn a_seat_cannot_delete_or_rewrite_the_files_the_rules_rest_on() {
     let root = fresh_dir("state");
@@ -505,8 +638,9 @@ fn a_seat_cannot_delete_or_rewrite_the_files_the_rules_rest_on() {
     );
 }
 
-/// The net is not a blanket ban on deleting or rewriting: a seat's own worktree, the temp dir and a target it
-/// cannot judge (a variable) stay its own.
+/// The net is not a blanket ban on deleting or rewriting: a seat's own worktree and the temp dir stay its own. A
+/// target the guard cannot resolve (a variable) is REFUSED by name instead - silently dropped was how the metavar
+/// hole worked, and a deletion judged as if it named nothing is the one that reaches the asset.
 #[test]
 fn an_ordinary_deletion_still_stays_the_seat_s_own() {
     let seat = fresh_dir("seat");
@@ -520,13 +654,18 @@ fn an_ordinary_deletion_still_stays_the_seat_s_own() {
     for cmd in [
         format!("rm -rf {WORKTREE}/dist"),
         "rm /tmp/scratch".to_string(),
-        "rm -rf $SCRATCH/x".to_string(),
         format!("sed -i s/x/y/ {WORKTREE}/main.go"),
         format!("dd if=/dev/zero of={WORKTREE}/big.bin count=1"),
         format!("mv {WORKTREE}/a.go {WORKTREE}/b.go"),
     ] {
         assert_eq!(run(cmd.clone()), None, "{cmd}");
     }
+    // A target the guard cannot resolve is refused, not allowed: the same deletion with a variable was an allow
+    // while the target readers dropped the metavar, so the call was judged as if it named nothing.
+    assert_eq!(
+        run("rm -rf $SCRATCH/x".to_string()).as_deref(),
+        Some("unresolvable-target")
+    );
 }
 
 /// The launcher names the directories a seat may write, and the list IS the scope: both of the seat's worktrees
@@ -683,9 +822,9 @@ fn a_seat_cannot_touch_or_mkdir_a_path_no_rule_would_see() {
     }
 }
 
-/// The net is not a blanket ban on making directories: the worktree, the seat's own directory, the temp dir and a
-/// target it cannot judge (a variable) stay the seat's own, and a segment that merely STARTS with a protected one
-/// (`hooks/preflight`) is not protected.
+/// The net is not a blanket ban on making directories: the worktree, the seat's own directory and the temp dir stay
+/// the seat's own, and a segment that merely STARTS with a protected one (`hooks/preflight`) is not protected. A
+/// target the guard cannot resolve (a variable) is REFUSED by name, the same flip the deletion case carries.
 #[test]
 fn an_ordinary_touch_or_mkdir_stays_the_seat_s_own() {
     let seat = fresh_dir("seat");
@@ -702,11 +841,14 @@ fn an_ordinary_touch_or_mkdir_stays_the_seat_s_own() {
         format!("rmdir {WORKTREE}/build/probe"),
         format!("mkdir -p {WORKTREE}/hooks/preflight"),
         format!("touch {}", seat.join("notes.txt").display()),
-        "mkdir -p $SCRATCH/x".to_string(),
         "touch /tmp/probe-file".to_string(),
     ] {
         assert_eq!(run(cmd.clone()), None, "{cmd}");
     }
+    assert_eq!(
+        run("mkdir -p $SCRATCH/x".to_string()).as_deref(),
+        Some("unresolvable-target")
+    );
 }
 
 /// A SEAT DOES NOT RAISE ITS OWN CEILING. The verb writes the room's limits THROUGH the client, so it never names a
@@ -1003,7 +1145,7 @@ fn a_lane_is_admitted_by_the_seat_key_and_only_that_prefix() {
             "write_to_file",
             serde_json::json!({ "TargetFile": path }),
         )
-        .map(|r| r.split(['(', ')']).nth(1).unwrap_or_default().to_owned())
+        .map(|r| rule_of(&r))
     };
 
     assert_eq!(
@@ -1098,10 +1240,21 @@ fn stashed(tag: &str) -> PathBuf {
     git(&["add", "--", "rust/agenthub-runtime"], "add");
     git(&["commit", "-qm", "base"], "commit");
     std::fs::write(dir.join(GUARD_PATH), "changed\n").unwrap();
-    git(&["stash", "push", "-q", "-m", "guard", "--", GUARD_PATH], "stash the guard");
+    git(
+        &["stash", "push", "-q", "-m", "guard", "--", GUARD_PATH],
+        "stash the guard",
+    );
     std::fs::write(dir.join("rust/agenthub-runtime/src/lib.rs"), "changed\n").unwrap();
     git(
-        &["stash", "push", "-q", "-m", "src", "--", "rust/agenthub-runtime/src/lib.rs"],
+        &[
+            "stash",
+            "push",
+            "-q",
+            "-m",
+            "src",
+            "--",
+            "rust/agenthub-runtime/src/lib.rs",
+        ],
         "stash src",
     );
     dir
@@ -1177,6 +1330,10 @@ fn a_destination_flag_is_refused_on_a_writing_form() {
         "git apply --prefix=hooks/pre/ src.patch",
         "git apply --unsafe-paths src.patch",
         "patch -d out -p1 < src.patch",
+        // The attached spellings were the gap the reviewer measured: the short-form test matched a bare `-d` only,
+        // so `-dout` and a `-d` tucked behind `-p1` walked past the refusal while the split form tripped it.
+        "patch -dout -p1 < src.patch",
+        "patch -p1 -dhooks < src.patch",
     ] {
         assert_eq!(
             bash(&format!("cd {here} && {case}")).as_deref(),
@@ -1197,7 +1354,10 @@ fn a_destination_flag_is_refused_on_a_writing_form() {
 
 #[test]
 fn a_patch_from_stdin_is_refused() {
-    let dir = patch_dir("git-imports-stdin", &[("guard.patch", patch_doc(GUARD_PATH))]);
+    let dir = patch_dir(
+        "git-imports-stdin",
+        &[("guard.patch", patch_doc(GUARD_PATH))],
+    );
     let here = dir.display();
     // There is no document to read, so the guard cannot see what it writes: both spellings are refused, and
     // `git am` with no argument is the same shape.
@@ -1342,6 +1502,242 @@ fn a_stash_entry_is_read_whatever_verb_imports_it() {
     }
 }
 
+/// Staging writes by PATH (the index-route addendum of 2026-10-21, task 1c06bcd0): `git update-index --add --cacheinfo` writes the index and not
+/// the file, so one `git checkout-index -f` afterwards puts a modified guard on disk without a single refused write -
+/// the chain the reviewer measured, which falsified revision 5's premise. The verbs are read as names of what they
+/// write; `--index-info` has no name (its rows come from stdin) and `checkout-index --prefix` names its own
+/// destination, so both fail closed on this same rule.
+#[test]
+fn the_index_is_written_by_path_so_the_path_is_read() {
+    let repo = stashed("guard-index-writes");
+    let here = repo.display();
+    let blob = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", &format!("HEAD:{GUARD_PATH}")])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    // Eight refusals: both spellings of --cacheinfo, the stdin form, a named path in three verbs, the
+    // destination-rewriting form, and `commit --`.
+    for case in [
+        format!("git update-index --add --cacheinfo 100644,{blob},{GUARD_PATH}"),
+        format!("git update-index --add --cacheinfo=100644,{blob},{GUARD_PATH}"),
+        "git update-index --index-info".to_owned(),
+        format!("git update-index --assume-unchanged -- {GUARD_PATH}"),
+        "git checkout-index --prefix=/tmp/x/ -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        format!("git add -- {GUARD_PATH}"),
+        format!("git rm --cached -- {GUARD_PATH}"),
+        format!("git commit -m x -- {GUARD_PATH}"),
+    ] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case}"
+        );
+    }
+    // Four controls: the same verbs on a path that is not the owner's, and the no-op refresh.
+    for case in [
+        "git update-index --refresh".to_owned(),
+        "git add -n -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        "git rm -n -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        "git commit -m note -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+    ] {
+        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
+    }
+    // The asset is the owner's (owner ruling, 2026-10-21): the index route is refused to the lead like any seat.
+    assert!(
+        refusal_for_seat(
+            &fresh_dir("lead-index"),
+            WORKTREES,
+            "agenthub--room--lead",
+            "lead",
+            "run_command",
+            serde_json::json!({ "CommandLine": format!("cd {here} && git add -- {GUARD_PATH}") }),
+        )
+        .is_some(),
+        "the lead does not stage the guard"
+    );
+}
+
+/// The index is a MEDIUM (the index-route addendum of 2026-10-21): the verbs that name no path - `commit`, and
+/// `checkout-index -a` - turn whatever the index holds into a commit or a file, so the index itself is read; a
+/// directory operand names the guard inside it without naming it; and `read-tree` of a STASH entry imports one.
+/// The asset is the owner's, so every one of these paths is refused to every seat, the lead included.
+#[test]
+fn the_index_is_read_where_the_verb_names_no_path() {
+    let repo = stashed("guard-index-parity");
+    let here = repo.display();
+    let blob = |spec: &str| {
+        String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", spec])
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned()
+    };
+    // A blob that DIFFERS from HEAD's: the index route is about replacing the entry, and an entry equal to HEAD's
+    // is invisible to the parity read - so the fixture writes the seat's bytes first and hashes them. The file lives
+    // in a directory of this run's own, because the temp root is shared across runs and two runs would hash each
+    // other's bytes.
+    let carried_dir = fresh_dir("guard-index-carried");
+    std::fs::create_dir_all(&carried_dir).unwrap();
+    let carried = carried_dir.join("carried-guard.ts");
+    std::fs::write(&carried, "const victim = 1;\n").unwrap();
+    let guard_blob = String::from_utf8(
+        Command::new("git")
+            .args(["hash-object", "-w", carried.to_str().unwrap()])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    let src_blob = blob("HEAD:rust/agenthub-runtime/src/lib.rs");
+    // Six controls first: a commit-relative tree and a HEAD reset, the same verbs on paths that are not the
+    // owner's, and a directory rename outside the protected paths.
+    for case in [
+        "git read-tree -u --reset HEAD".to_owned(),
+        // The reset that keeps its meaning: an unstaging and a HEAD reset write nothing protected.
+        "git reset".to_owned(),
+        "git reset --mixed HEAD".to_owned(),
+        // The NAMED form of checkout-index stays useful; the whole-index forms below are refused.
+        "git checkout-index -f -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        format!("git update-index --cacheinfo 100644,{src_blob},rust/agenthub-runtime/src/lib.rs"),
+        "git mv rust/agenthub-runtime/src/lib.rs rust/agenthub-runtime/src/moved.ts".to_owned(),
+    ] {
+        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
+    }
+    // Eight refusals that need no poisoned index: the stdin form, a directory operand, a rename, a stash tree.
+    // (`--index-info` is pinned once, in the block above; a second copy adds no coverage.)
+    for case in [
+        "git update-index --stdin".to_owned(),
+        "git rm -r rust/agenthub-runtime/assets".to_owned(),
+        format!("git mv {GUARD_PATH} rust/agenthub-runtime/assets/copy.ts"),
+        "git read-tree -u --reset stash@{1}".to_owned(),
+        // One step removed from read-tree: `reset --mixed <stash>` puts the entry in the index, which is what
+        // `checkout-index -a` or a whole-index commit would then carry (the reviewer's measured chain).
+        "git reset --mixed stash@{1}".to_owned(),
+        "git reset stash@{1}".to_owned(),
+        // Whole-index materialisation, refused outright (lead, 2026-10-21): the pair `reset --mixed <stash>`
+        // then `checkout-index -a -f` needs no index the hook can see as dirty at call time.
+        "git checkout-index -a -f".to_owned(),
+        "git checkout-index --all -f".to_owned(),
+        // The bare `checkout-index -f` is NOT in this list: probed, it exits 0 and writes nothing (the
+        // materialisation needs `-a` or `--all`), so a refusal pinned on it would be an over-refusal.
+    ] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case}"
+        );
+    }
+    // The two parity refusals need the index poisoned OUT OF BAND, which is what the fixture does: the hook sees
+    // only a command line, and `git commit` / `git checkout-index -a` name nothing at all.
+    let poison = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{guard_blob},{GUARD_PATH}"),
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(
+        poison.success(),
+        "the fixture must be able to poison the index"
+    );
+    for case in ["git commit -m x", "git checkout-index -a -f"] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case} over a poisoned index"
+        );
+    }
+    // The control that keeps the parity honest: the same commit over a CLEAN index is the seat's own.
+    assert!(Command::new("git")
+        .args(["reset", "-q"])
+        .current_dir(&repo)
+        .status()
+        .unwrap()
+        .success());
+    assert_eq!(
+        bash(&format!("cd {here} && git commit -m x")),
+        None,
+        "git commit -m x over a clean index"
+    );
+    // The asset is the owner's (owner ruling, 2026-10-21): every route that would write `seat-guard.ts` - a commit by
+    // pathspec, a patch reader, a write tool - is refused to the lead exactly as to any other seat.
+    let patches = patch_dir(
+        "seat-asset-patch",
+        &[
+            ("guard.patch", patch_doc(GUARD_PATH)),
+            (
+                "both.patch",
+                format!(
+                    "{}{}",
+                    patch_doc(GUARD_PATH),
+                    patch_doc("scripts/git-hooks/pre-commit")
+                ),
+            ),
+        ],
+    );
+    for (session, key) in [
+        ("agenthub--room--lead", "lead"),
+        ("agenthub--room--go-dev", "go-dev"),
+    ] {
+        for refused in [
+            serde_json::json!({ "CommandLine": format!("cd {here} && git commit -m z -- {GUARD_PATH}") }),
+            serde_json::json!({ "CommandLine": format!("cd {} && git apply guard.patch", patches.display()) }),
+            serde_json::json!({ "CommandLine": format!("cd {} && patch -p1 < guard.patch", patches.display()) }),
+            serde_json::json!({ "CommandLine": format!("cd {} && git apply both.patch", patches.display()) }),
+            serde_json::json!({ "CommandLine": format!("cd {here} && git mv {GUARD_PATH} hooks/pre/seat-guard.ts") }),
+            serde_json::json!({ "TargetFile": GUARD_PATH }),
+            serde_json::json!({ "TargetFile": "scripts/git-hooks/pre-commit" }),
+        ] {
+            let name = if refused.get("TargetFile").is_some() {
+                "write_to_file"
+            } else {
+                "run_command"
+            };
+            let seen = rule_of(
+                &refusal_for_seat(
+                    &fresh_dir(&format!("{key}-asset")),
+                    WORKTREES,
+                    session,
+                    key,
+                    name,
+                    refused.clone(),
+                )
+                .unwrap_or_default(),
+            );
+            // A `run_command` that names the asset is read by the shell's import rule; a `write_to_file` names its
+            // path, so the write-target rule answers it. The pair is pinned, not "either rule".
+            let want = if name == "write_to_file" {
+                "protected-paths"
+            } else {
+                "git-imports-a-tree"
+            };
+            assert_eq!(
+                seen, want,
+                "no seat lands the guard, {key} included: {refused} answers {seen}"
+            );
+        }
+    }
+}
+
 #[test]
 fn the_refusals_name_no_deploy_and_no_ownership_claim() {
     // The needle is spelled in two pieces so the file that forbids the claim is not itself a hit for it: the task's
@@ -1374,4 +1770,705 @@ fn the_refusals_name_no_deploy_and_no_ownership_claim() {
         !docker.contains("deploy"),
         "the docker refusal asserts no deploy model: {docker}"
     );
+}
+
+/// A repository whose HEAD tracks the guard beside two ordinary files, one of them the source `git add src/` names.
+/// The probes below are the architect's ruling, run for real: every one of the six was ALLOWED at revision 8 and
+/// landed the guard's deletion or its bytes in HEAD.
+fn tracked(tag: &str) -> PathBuf {
+    let dir = fresh_dir(tag);
+    std::fs::create_dir_all(dir.join("rust/agenthub-runtime/assets")).unwrap();
+    std::fs::create_dir_all(dir.join("rust/agenthub-runtime/src")).unwrap();
+    std::fs::create_dir_all(dir.join("other")).unwrap();
+    let git = |args: &[&str], label: &str| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {label} must succeed");
+    };
+    git(&["init", "-q", "."], "init");
+    git(&["config", "user.email", "seat@guard.test"], "email");
+    git(&["config", "user.name", "seat"], "name");
+    std::fs::write(dir.join(GUARD_PATH), "const real = 1;\n").unwrap();
+    std::fs::write(dir.join("rust/agenthub-runtime/src/lib.rs"), "a\n").unwrap();
+    std::fs::write(dir.join("other/one.txt"), "c\n").unwrap();
+    std::fs::write(dir.join("newfile"), "n\n").unwrap();
+    git(&["add", "--", "."], "add");
+    git(&["commit", "-qm", "base"], "commit");
+    dir
+}
+
+#[test]
+fn the_pathspec_is_read_as_the_set_it_covers() {
+    let repo = tracked("guard-pathspec-set");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+    // Twelve refusals and one chain (revision 9). A directory operand names the guard inside it, so every one of
+    // these is refused before it runs - the shell forms by the set the write target covers, the git forms by the set
+    // the pathspec covers, and the five whole-tree forms by naming no path at all.
+    for case in [
+        "rm -r rust/agenthub-runtime/assets",
+        "mv rust/agenthub-runtime/assets /tmp/assets-moved",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    for case in [
+        "git add rust/agenthub-runtime/assets",
+        "git commit -m x -- rust/agenthub-runtime/assets",
+        "git checkout HEAD -- rust/agenthub-runtime/assets",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
+    }
+    for case in [
+        "git add -u",
+        "git add -a",
+        "git add -p",
+        "git commit -am x",
+        "git commit -a -m x",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("git-destructive"), "{case}");
+    }
+    // The chain the reviewer executed: one call, three calls, same verdict at the first statement that would. The
+    // rule that answers is the first one in the list to fire - `git-imports-a-tree` reads the `git add` statement
+    // before `protected-paths` is reached - and what matters is that the call does not run.
+    assert_eq!(
+        at("rm -r rust/agenthub-runtime/assets && git add rust/agenthub-runtime/assets && git commit -m x -- rust/agenthub-runtime/assets")
+            .as_deref(),
+        Some("git-imports-a-tree")
+    );
+    // One level up, and a copy INTO the protected directory: a path no rule saw at revision 8.
+    for case in [
+        "rm -r rust/agenthub-runtime",
+        "cp other/one.txt rust/agenthub-runtime/assets/",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    // The controls the ruling pins as allowed: an over-broad refusal would be a finding. `git add src/` and a
+    // directory rename outside the protected paths are habits, and both stay allowed.
+    for case in [
+        "git add -- rust/agenthub-runtime/src/lib.rs",
+        "git add -N -- newfile",
+        "git add rust/agenthub-runtime/src/",
+        "git commit -m x -- rust/agenthub-runtime/src/lib.rs",
+        "git commit -m x",
+        "git rm -r other",
+        "git mv other other2",
+        "git checkout HEAD -- other",
+        "rm -r other",
+        "git read-tree -u --reset HEAD",
+        "git diff HEAD -- rust/agenthub-runtime/src/lib.rs",
+    ] {
+        assert_eq!(at(case), None, "{case}");
+    }
+}
+
+/// A target is the PATH, not the spelling (the architect's 2026-10-21 quoting and pathspec ruling): a quoted word
+/// names the same file as the same word unquoted. Every row is a probe the ruling measured; the controls are the
+/// over-refusals it forbids, so a guard that refused every quoted word or every command word would fail here beside
+/// the one that judged none of them.
+#[test]
+fn a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is() {
+    let repo = tracked("guard-quoted-target");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+    let asset = GUARD_PATH;
+
+    for case in [
+        format!("cp evil.ts \"{asset}\""),
+        format!("cp evil.ts '{asset}'"),
+        format!("printf x > \"{asset}\""),
+        format!("printf x >> \"{asset}\""),
+        format!("printf x 2> \"{asset}\""),
+        format!("dd if=evil.ts of=\"{asset}\""),
+        format!("install evil.ts \"{asset}\""),
+        format!("mv evil.ts \"{asset}\""),
+        format!("rsync -a evil.ts \"{asset}\""),
+        format!("echo evil | tee \"{asset}\""),
+        format!("sed -i s/o/e/ \"{asset}\""),
+        format!("truncate -s 0 \"{asset}\""),
+        format!("unlink \"{asset}\""),
+        format!("touch \"{asset}\""),
+        "mkdir -p \"rust/agenthub-runtime/assets\"".to_owned(),
+        "rm -r \"rust/agenthub-runtime/assets\"".to_owned(),
+        // The unquoted control each quoted row above is judged by: the same path, the same rule.
+        format!("cp evil.ts {asset}"),
+        format!("printf x > {asset}"),
+        format!("printf x >> {asset}"),
+        format!("printf x 2> {asset}"),
+        format!("dd if=evil.ts of={asset}"),
+        format!("install evil.ts {asset}"),
+        format!("mv evil.ts {asset}"),
+        format!("rsync -a evil.ts {asset}"),
+        format!("echo evil | tee {asset}"),
+        format!("sed -i s/o/e/ {asset}"),
+        format!("truncate -s 0 {asset}"),
+        format!("unlink {asset}"),
+        format!("touch {asset}"),
+        "mkdir -p rust/agenthub-runtime/assets".to_owned(),
+        // The two glob forms of the same directory.
+        "rm -r rust/agenthub-runtime/assets/*".to_owned(),
+        "rm -r 'rust/agenthub-runtime/assets'/*".to_owned(),
+    ] {
+        assert_eq!(at(&case).as_deref(), Some("protected-paths"), "{case}");
+    }
+
+    // The controls: a glob WITH a literal prefix the rules can read, a quoted word that is not a command, a path with
+    // a space that is not protected, and a redirect whose word is quoted rather than a command's. An over-broad
+    // refusal is a finding, so these must pass beside the rows above.
+    for case in [
+        "rm -r 'build'/*".to_owned(),
+        "rm -rf dist/*".to_owned(),
+        "cp a/*.ts dir/".to_owned(),
+        "echo \"git push origin main\"".to_owned(),
+        "echo \"a;b\"".to_owned(),
+        "echo \"a; git push origin main\"".to_owned(),
+        format!("echo \"x > {asset}\""),
+        "printf x > \"a b.txt\"".to_owned(),
+        "cp evil.ts \"my file.ts\"".to_owned(),
+        "cp a b".to_owned(),
+    ] {
+        assert_eq!(at(&case), None, "{case}");
+    }
+
+    // A quoted path keeps its SPACE and loses its quotes: the refusal names one path, not two words.
+    let reason = refusal(
+        &fresh_dir("guard-quoted-space"),
+        WORKTREES,
+        "run_command",
+        serde_json::json!({ "CommandLine": "printf x > \"/home/other/main/my file.ts\"" }),
+    )
+    .expect("a redirect outside the worktrees is refused");
+    assert!(
+        reason.contains("/home/other/main/my file.ts is outside"),
+        "the quoted path keeps its space: {reason}"
+    );
+}
+
+/// The directory a `cd` names is the DIRECTORY, not its spelling. The extractor resolves a relative target against
+/// the directory the call runs in, so `cd "rust/agenthub-runtime"` read through the erasure's blanked word resolved
+/// to `""`, left the base where it was, and the next statement's `assets` was judged as a path outside the guard
+/// (measured by the gate 2026-10-21: `cd "<tree>" && rm -r assets` was ALLOW, and `git -C "<tree>"` the same). Each
+/// quoted row stands beside its unquoted control, and the reads stay allowed.
+#[test]
+fn a_quoted_cd_names_the_directory_the_next_statement_writes_in() {
+    let repo = tracked("guard-quoted-cd");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+
+    // The unquoted control first, then the same statement with the directory quoted both ways.
+    for case in [
+        "cd rust/agenthub-runtime && rm -r assets",
+        "cd \"rust/agenthub-runtime\" && rm -r assets",
+        "cd 'rust/agenthub-runtime' && rm -r assets",
+        "cd rust/agenthub-runtime && rm -r assets/*",
+        "cd \"rust/agenthub-runtime\" && rm -r assets/*",
+        "cd rust/agenthub-runtime && mv assets /tmp/gone",
+        "cd \"rust/agenthub-runtime\" && mv assets /tmp/gone",
+        "cd \"rust/agenthub-runtime\" && touch assets/seat-guard.ts",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    for case in [
+        "cd rust/agenthub-runtime && git add assets",
+        "cd \"rust/agenthub-runtime\" && git add assets",
+        "git -C \"rust/agenthub-runtime\" rm -r assets",
+        "git -C \"rust/agenthub-runtime\" add assets",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
+    }
+
+    // Reading under the same directory stays the seat's own, and so does a directory the rules do not rest on.
+    for case in [
+        "cd \"rust/agenthub-runtime\" && ls assets",
+        "cd \"rust/agenthub-runtime\" && cat assets/seat-guard.ts",
+        "git -C \"rust/agenthub-runtime\" status",
+        "cd \"a b\" && ls",
+        "cd \"build\" && rm -r x",
+        // A group is its own scope: the write inside it is judged there, the one after it is judged in the call's
+        // own directory, and a group is not a way to hide either.
+        "(cd rust/agenthub-runtime) && rm -r assets",
+        "(cd build && rm -r x)",
+        "(cd /tmp && ls)",
+        "(cd \"rust/agenthub-runtime\" && ls assets)",
+        "cd rust/agenthub-runtime && (ls assets)",
+    ] {
+        assert_eq!(at(case), None, "{case}");
+    }
+
+    // A group's own `cd` moves the base for the statements inside it (M3', measured by the gate 2026-10-21: both
+    // group forms were ALLOWED at rev-9, because the delimiter stayed on the command word).
+    for case in [
+        "(cd rust/agenthub-runtime && rm -r assets)",
+        "{ cd rust/agenthub-runtime && rm -r assets; }",
+        "cd rust/agenthub-runtime && (rm -r assets)",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    for case in [
+        "(cd rust/agenthub-runtime && git add assets)",
+        "{ cd \"rust/agenthub-runtime\" && git add assets; }",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
+    }
+
+    // A `cd` operand with no literal prefix is refused by name, not resolved as a directory that cannot exist: the
+    // base it would leave behind is one the guard only thinks it knows.
+    for case in [
+        "cd $D && rm -r assets",
+        "cd \"$D\" && rm -r assets",
+        "cd ${D} && rm -r assets",
+        "cd $D && git add assets",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("unresolvable-target"), "{case}");
+    }
+}
+
+/// A word the guard cannot resolve is REFUSED, not dropped: a variable (quoted or not), a glob with no literal
+/// prefix, and the frozen plan files reached through a glob. Each was silently an allow while the erasure dropped
+/// quoted spans and `NOT_A_TARGET` dropped metavariables, so a call was judged as if it named nothing.
+#[test]
+fn a_word_the_guard_cannot_resolve_is_refused() {
+    let repo = tracked("guard-unresolvable-target");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+
+    // A word that names no readable path at all: a variable (quoted or not) and a glob with no literal prefix. Each
+    // used to be dropped by the target readers, so the call was judged as if it named nothing.
+    for case in [
+        "cp evil.ts $TARGET".to_owned(),
+        "rm -r \"$DIR/assets\"".to_owned(),
+        "rm -r *".to_owned(),
+    ] {
+        assert_eq!(at(&case).as_deref(), Some("unresolvable-target"), "{case}");
+    }
+
+    for case in ["echo x >> NEXT-GEN*.md", "rm -rf ai_docs/reports-status/*"] {
+        assert_eq!(at(case).as_deref(), Some("frozen-paths"), "{case}");
+    }
+}
+
+/// A PATHSPEC read from a file, or from stdin, names a set the guard never sees: the ruling refuses the flag
+/// outright on every verb that carries it, in both spellings, and the older allowance for `-`/`/dev/stdin` goes
+/// with the rest. A file of paths is a document, the same class as a patch document.
+#[test]
+fn a_pathspec_file_is_refused_whatever_verb_reads_it() {
+    let repo = tracked("guard-pathspec-file");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+
+    // A PATHSPEC read from a file, and one read from stdin: the rows are written by the seat and never appear on the
+    // command line, so no rule can read which paths they name. `=-` and `=/dev/stdin` were the only spellings the
+    // older rule saw.
+    for case in [
+        "git add --pathspec-from-file=psf.txt".to_owned(),
+        "git add --pathspec-from-file psf.txt".to_owned(),
+        "git rm -r --pathspec-from-file=psf.txt".to_owned(),
+        "git commit -m x --pathspec-from-file=psf.txt".to_owned(),
+        "git checkout --pathspec-from-file=psf.txt".to_owned(),
+        "git restore --pathspec-from-file=psf.txt".to_owned(),
+        "git reset --pathspec-from-file=psf.txt".to_owned(),
+        "git stash push --pathspec-from-file=psf.txt".to_owned(),
+        "git add --pathspec-from-file=-".to_owned(),
+        "git add --pathspec-from-file=/dev/stdin".to_owned(),
+    ] {
+        assert_eq!(at(&case).as_deref(), Some("pathspec-from-file"), "{case}");
+    }
+
+    for case in ["echo x >> NEXT-GEN*.md", "rm -rf ai_docs/reports-status/*"] {
+        assert_eq!(at(case).as_deref(), Some("frozen-paths"), "{case}");
+    }
+}
+
+/// The redactor through its own seam, `node seat-guard.ts --redact`: the function the post-execution hook applies
+/// to every tool result, so the model and the transcript never read the value. `env` is the seat's environment.
+fn redacted(env: &[(&str, &str)], text: &str) -> String {
+    let mut command = Command::new("node");
+    command
+        .arg(guard())
+        .arg("--redact")
+        // The child gets a directory of its own, so a redactor that writes (or fails) into the seat's real agent
+        // directory cannot pass on a file the test harness happened to leave there.
+        .env("PI_CODING_AGENT_DIR", fresh_dir("redact"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let mut child = command
+        .spawn()
+        .expect("node is needed to run the seat guard");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "the redactor answers and exits 0");
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// The measured leak (2026-10-21): a value printed WITHOUT its name - a webhook config, a `printenv` - reached a
+/// provider. A value the seat carries is replaced wherever it appears, and the secret shapes are replaced even
+/// when no variable names them; the text around them, newlines included, is kept.
+#[test]
+fn a_tool_result_loses_the_secret_values_and_keeps_its_shape() {
+    let carried = "fake0carried0value0for0test";
+    let shape =
+        format!("url: https://x/triggerbuild?token={carried}\nplain {carried}\nnext line\n");
+    let out = redacted(&[("AGENTHUB_TOKEN", carried)], &shape);
+    assert!(!out.contains(carried), "{out}");
+    assert!(out.contains("<redacted:AGENTHUB_TOKEN>"), "{out}");
+    assert_eq!(
+        out.matches('\n').count(),
+        shape.matches('\n').count(),
+        "the result keeps its line count: {out:?}"
+    );
+
+    let out = redacted(&[], "AGENTHUB_TOKEN=abc123def456\nkeep this\n");
+    assert!(!out.contains("abc123def456"), "{out}");
+    assert!(out.contains("keep this\n"), "{out}");
+
+    let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0LW9ubHkifQ.ZmFrZS1zaWduYXR1cmUtdGVzdA";
+    let key = "sk-fake0test0key0only0000000";
+    let out = redacted(
+        &[],
+        &format!("a {jwt} b\nc {key} d\nAuthorization: Bearer fake0bearer0value0x\n"),
+    );
+    for secret in [jwt, key, "fake0bearer0value0x"] {
+        assert!(!out.contains(secret), "{secret} survived: {out}");
+    }
+    assert!(
+        out.contains("<redacted:jwt>") && out.contains("<redacted:key>"),
+        "each shape is named in its placeholder: {out}"
+    );
+    assert!(out.starts_with("a ") && out.contains(" b\nc "), "{out}");
+
+    // The shape reads a NAME this seat does not carry: no environment of the test names DB_PASSWORD, so only the
+    // `NAME=value` pattern can take `hunter2` out of the result.
+    let pair = redacted(&[], "DB_PASSWORD=hunter2\nkeep me\n");
+    assert!(
+        !pair.contains("hunter2"),
+        "the value must not survive: {pair}"
+    );
+    assert!(pair.contains("keep me"), "{pair}");
+
+    let clean = "git status\nOn branch main\n";
+    assert_eq!(
+        redacted(&[], clean),
+        clean,
+        "a result with no secret is unchanged"
+    );
+}
+
+/// The handler the LEAK was in, exercised where omp runs it: the asset's default export is handed a fake `pi` that
+/// records the handlers it registers, a `tool_call` is fired to open a call, then a `tool_result` carrying a value in
+/// its text. A patch that deletes the `tool_result` handler and keeps `--redact` passes every row above, so this is
+/// the only pin on the override the model actually reads (`pi.on("tool_result")`).
+#[test]
+fn the_result_handler_redacts_what_the_model_reads() {
+    let dir = fresh_dir("guard-tool-result");
+    std::fs::create_dir_all(&dir).unwrap();
+    let carried = "fake0carried0value0for0driver";
+    let asset = serde_json::to_string(&guard().display().to_string()).unwrap();
+    let driver = dir.join("driver.mjs");
+    std::fs::write(
+        &driver,
+        format!(
+            r#"import hook from {asset};
+const handlers = new Map();
+hook({{ on(name, fn) {{ handlers.set(name, fn); }} }});
+if (!handlers.has("tool_result")) {{
+  process.stdout.write(JSON.stringify({{ handlers: [...handlers.keys()] }}));
+}} else {{
+  const call = await handlers.get("tool_call")({{
+    toolName: "bash",
+    toolCallId: "call-1",
+    input: {{ command: "git status" }},
+  }});
+  const out = await handlers.get("tool_result")({{
+    toolCallId: "call-1",
+    isError: false,
+    content: [{{ type: "text", text: "printenv said: " + process.env.AGENTHUB_TOKEN }}],
+  }});
+  process.stdout.write(JSON.stringify({{ call: call ?? null, out: out ?? null }}));
+}}
+"#
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new("node")
+        .arg(&driver)
+        .env("AGENTHUB_SEAT", "dev")
+        .env("AGENTHUB_SESSION_NAME", "agenthub--room--dev")
+        .env("AGENTHUB_WORKTREES", WORKTREES)
+        .env("PI_CODING_AGENT_DIR", &dir)
+        .env("AGENTHUB_TOKEN", carried)
+        .env_remove("OPENRIG_SESSION_NAME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("node is needed to run the seat guard");
+    assert!(
+        out.status.success(),
+        "the driver runs: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let answer: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("the driver answers JSON");
+    assert!(
+        answer.get("handlers").is_none(),
+        "the asset registers no tool_result handler: it answers {:?}",
+        answer["handlers"]
+    );
+    assert!(
+        answer["call"].is_null(),
+        "git status is allowed, so the call opens: {:?}",
+        answer["call"]
+    );
+    let text = answer["out"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the result handler answers content: {answer}"));
+    assert!(
+        !text.contains(carried),
+        "the value must not reach the model: {text}"
+    );
+    assert!(
+        text.contains("<redacted:AGENTHUB_TOKEN>"),
+        "the placeholder names what left the text: {text}"
+    );
+}
+
+#[test]
+fn an_environment_dump_is_refused_and_a_scoped_environment_is_not() {
+    refused(
+        "env-dump",
+        &[
+            "printenv",
+            "printenv AGENTHUB_TOKEN",
+            "env",
+            "env | grep -c TOKEN",
+            "export -p",
+            "declare -p",
+            "declare -p AGENTHUB_TOKEN",
+            "set",
+        ],
+    );
+    allowed(&[
+        "env -u TMUX tmux ls",
+        "FOO=1 git status",
+        "set -e",
+        "compgen -v > /dev/null",
+    ]);
+}
+
+#[test]
+fn a_gh_api_read_of_a_credential_surface_is_refused_and_ci_reads_are_not() {
+    refused(
+        "gh-api-secret",
+        &[
+            "gh api repos/o/r/hooks",
+            "gh api /repos/o/r/actions/secrets",
+            "gh api repos/o/r/keys",
+        ],
+    );
+    allowed(&[
+        "gh api repos/o/r/actions/runs",
+        "gh pr list",
+        "gh api repos/o/r/pulls?state=open",
+    ]);
+}
+
+/// One claude-code hook call, `node seat-guard.ts --claude-hook <phase>`, with claude's payload on stdin: the
+/// answer it printed, parsed.
+fn claude_hook(dir: &Path, phase: &str, payload: serde_json::Value) -> serde_json::Value {
+    std::fs::create_dir_all(dir).unwrap();
+    let mut child = Command::new("node")
+        .arg(guard())
+        .args(["--claude-hook", phase])
+        .env("AGENTHUB_SEAT", "dev")
+        .env("AGENTHUB_SESSION_NAME", "agenthub--room--dev")
+        .env_remove("OPENRIG_SESSION_NAME")
+        .env_remove("AGENTHUB_LANES_ROOT")
+        .env("AGENTHUB_WORKTREES", WORKTREES)
+        .env("PI_CODING_AGENT_DIR", dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("node is needed to run the seat guard");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    serde_json::from_slice(&child.wait_with_output().unwrap().stdout)
+        .expect("the guard answers JSON")
+}
+
+/// The rule a claude PreToolUse call is refused by, or `None` when claude is told `allow`.
+fn claude_rule(tool: &str, input: serde_json::Value) -> Option<String> {
+    let answer = claude_hook(
+        &fresh_dir("claude"),
+        "pre",
+        serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input}),
+    );
+    let out = &answer["hookSpecificOutput"];
+    assert_eq!(out["hookEventName"], "PreToolUse");
+    match out["permissionDecision"].as_str() {
+        Some("allow") => None,
+        Some("deny") => {
+            let reason = out["permissionDecisionReason"].as_str().unwrap();
+            Some(rule_of(reason))
+        }
+        other => panic!("claude reads allow or deny, not {other:?}"),
+    }
+}
+
+/// claude's tool names reach the rule the same call reaches through the agy path, which maps to the omp names the
+/// rules are written in: one table, so a name that stops mapping fails here and not in a seat.
+#[test]
+fn a_claude_call_reaches_the_rule_its_omp_name_reaches() {
+    let outside = "/elsewhere/x.txt";
+    let cases: &[(&str, serde_json::Value, &str, serde_json::Value)] = &[
+        (
+            "Bash",
+            serde_json::json!({"command": "cat .env"}),
+            "run_command",
+            serde_json::json!({"CommandLine": "cat .env"}),
+        ),
+        (
+            "Bash",
+            serde_json::json!({"command": "git push origin main"}),
+            "run_command",
+            serde_json::json!({"CommandLine": "git push origin main"}),
+        ),
+        (
+            "Bash",
+            serde_json::json!({"command": "printenv"}),
+            "run_command",
+            serde_json::json!({"CommandLine": "printenv"}),
+        ),
+        (
+            "Bash",
+            serde_json::json!({"command": "env -u TMUX tmux ls"}),
+            "run_command",
+            serde_json::json!({"CommandLine": "env -u TMUX tmux ls"}),
+        ),
+        (
+            "Read",
+            serde_json::json!({"file_path": "/work/wt/dev/.env"}),
+            "view_file",
+            serde_json::json!({"AbsolutePath": "/work/wt/dev/.env"}),
+        ),
+        (
+            "Read",
+            serde_json::json!({"file_path": "/repo/README.md"}),
+            "view_file",
+            serde_json::json!({"AbsolutePath": "/repo/README.md"}),
+        ),
+        (
+            "Write",
+            serde_json::json!({"file_path": outside}),
+            "write_to_file",
+            serde_json::json!({"TargetFile": outside}),
+        ),
+        (
+            "Edit",
+            serde_json::json!({"file_path": outside}),
+            "write_to_file",
+            serde_json::json!({"TargetFile": outside}),
+        ),
+        (
+            "MultiEdit",
+            serde_json::json!({"file_path": outside}),
+            "write_to_file",
+            serde_json::json!({"TargetFile": outside}),
+        ),
+        (
+            "Write",
+            serde_json::json!({"file_path": "/work/wt/dev/src/a.rs"}),
+            "write_to_file",
+            serde_json::json!({"TargetFile": "/work/wt/dev/src/a.rs"}),
+        ),
+    ];
+    for (tool, input, agy, args) in cases {
+        let expected = verdict(agy, args.clone());
+        assert_eq!(claude_rule(tool, input.clone()), expected, "{tool} {input}");
+    }
+    // The rule-bearing cases are refused, so the table cannot pass on a guard that allows everything.
+    assert_eq!(
+        claude_rule(
+            "Bash",
+            serde_json::json!({"command": "git push origin main"})
+        )
+        .as_deref(),
+        Some("push")
+    );
+    assert!(claude_rule("Write", serde_json::json!({"file_path": outside})).is_some());
+    assert_eq!(
+        claude_rule(
+            "Bash",
+            serde_json::json!({"command": "env -u TMUX tmux ls"})
+        ),
+        None
+    );
+    assert_eq!(
+        claude_rule("Read", serde_json::json!({"file_path": "/repo/README.md"})),
+        None
+    );
+    for tool in [
+        "Grep",
+        "Glob",
+        "Task",
+        "WebFetch",
+        "WebSearch",
+        "BashOutput",
+    ] {
+        assert_eq!(
+            claude_rule(
+                tool,
+                serde_json::json!({"pattern": "x", "path": "/work/wt/dev"})
+            ),
+            None,
+            "{tool}"
+        );
+    }
+}
+
+/// PostToolUse answers `{}` and logs the call's outcome once; a refusal is logged by the pre phase as `blocked`.
+#[test]
+fn a_claude_post_call_answers_empty_and_logs_one_line() {
+    let dir = fresh_dir("claude-post");
+    let answer = claude_hook(
+        &dir,
+        "post",
+        serde_json::json!({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "git status"}}),
+    );
+    assert_eq!(answer, serde_json::json!({}));
+    let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap();
+    let lines: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "{log}");
+    assert_eq!(lines[0]["outcome"], "ok");
+    assert_eq!(lines[0]["tool"], "bash");
+
+    let dir = fresh_dir("claude-deny");
+    claude_hook(
+        &dir,
+        "pre",
+        serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "cat .env"}}),
+    );
+    let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap();
+    assert!(log.contains("\"outcome\":\"blocked\""), "{log}");
 }

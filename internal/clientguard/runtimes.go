@@ -72,14 +72,14 @@ func (h RuntimeHook) Found() bool { return h.Bin != "" || h.Dir != "" }
 func (h RuntimeHook) Guards() bool { return h.Mode != "" && guardModeAvailable(h.Mode) }
 
 // guardCarriesClaudeHook mirrors rust/agenthub-runtime/src/supervisor/mod.rs's `GUARD_HAS_CLAUDE_HOOK`. It is
-// false because the shipped `assets/seat-guard.ts` dispatches no `--claude-hook`: an entry that names a mode the
-// guard does not have is a hook that exits 0 in silence, which claude reads as allow. Flipping this line without
-// the asset carrying the mode is the bug this constant exists to prevent, so flipping it is one commit that also
-// flips the rust constant - and `TestTheClaudeGateMatchesTheRuntimesFlag` fails if only one side moves.
-const guardCarriesClaudeHook = false
+// true because the shipped `assets/seat-guard.ts` dispatches `--claude-hook`: an entry that names a mode the
+// guard does not have is a hook that exits 0 in silence, which claude reads as allow, so the two halves move
+// together. Flipping this line without the asset carrying the mode is the bug this constant exists to prevent,
+// and `TestTheClaudeGateMatchesTheRuntimesFlag` fails if only one side moves.
+const guardCarriesClaudeHook = true
 
-// guardModeAvailable is whether the guard this client SHIPS answers `mode`. The agy mode is in the asset; the
-// claude mode arrives with the owner's asset patch, and the constant above is where the two halves meet.
+// guardModeAvailable is whether the guard this client SHIPS answers `mode`, and the constant above is where the
+// asset and the runtime's flag meet.
 func guardModeAvailable(mode string) bool {
 	switch mode {
 	case "--agy-hook":

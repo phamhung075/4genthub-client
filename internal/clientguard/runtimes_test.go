@@ -404,8 +404,10 @@ func TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone(t *testing.T) {
 	if out != "agy: the guard's entry is out of .gemini/config/hooks.json" {
 		t.Errorf("a removed entry says it was taken out; got %q", out)
 	}
-	noMode := RuntimeUninstallLine(RuntimeHook{Runtime: "claude", Config: ".claude/settings.json", Mode: "--claude-hook"})
-	if noMode != "claude: nothing was ever placed here - the guard has no --claude-hook mode" {
+	// The mode the guard answers is the asset's, not the table's: a row naming a mode the guard does not dispatch
+	// would write an entry that exits 0 in silence, and the line says so instead of reporting a removal.
+	noMode := RuntimeUninstallLine(RuntimeHook{Runtime: "example", Config: ".example/hooks.json", Mode: "--no-such-hook"})
+	if noMode != "example: nothing was ever placed here - the guard has no --no-such-hook mode" {
 		t.Errorf("a runtime the guard cannot guard says nothing was placed; got %q", noMode)
 	}
 }

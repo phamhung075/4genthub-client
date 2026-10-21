@@ -33,6 +33,66 @@ reddens `TestASeatSkillsLandingIsItsOwnSeat` (landed 2, want 1); disabling the b
 guard and the resolved-path dedupe reddens `TestEachWorktreeSpoolIsReadOnceWhateverItsChildren` (stream size 4,
 want 1); the `From->To`-only send ref reddens `TestTwoRefusalsBetweenOnePairAreTwoOccurrences` (1 occurrence, want
 2); the literal `strings.Contains` reddens `TestTheToolStreamCountsBothMcpSpellings` (1 command, want 2).
+## 2026-10-21 - the quoting suite carries the gate's B1 fix: the directory a quoted `cd` names, and the two flipped rows (rust, branch 4genthub-min/rev9-tests-fold)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, on `ca22c477`. Gate `qitem-20261021181739-9da6703153f7` found a quoted
+`cd` resolving through the erasure's blanked word (`cd "rust/agenthub-runtime"` was `cd ""`), so the next
+statement's relative target resolved outside the guard and the protected assets directory was deletable, movable and
+stageable. New test `a_quoted_cd_names_the_directory_the_next_statement_writes_in`: five statements whose unquoted
+control refuses and whose quoted forms (`"…"` and `'…'`) must refuse with the same rule - `rm -r assets`,
+`rm -r assets/*`, `mv assets /tmp/gone`, `touch assets/seat-guard.ts` (`protected-paths`), `git add assets`
+(`git-imports-a-tree`) - plus both `git -C` spellings, and five reads that must stay allowed. On the pre-fix patch
+the test fails on the seven quoted rows; on the fixed asset it passes.
+
+`a_quoted_cd_names_the_directory_the_next_statement_writes_in` gains the gate's M3' rows: a group's own `cd`
+(`(cd rust/agenthub-runtime && rm -r assets)`, the `{ … ; }` form, and `cd … && (rm -r assets)`) is judged inside
+the group while `(cd rust/agenthub-runtime) && rm -r assets` is judged in the call's own directory, and a `cd`
+operand with no literal prefix (`$D`, `"$D"`, `${D}`) is refused `unresolvable-target` instead of leaving a base the
+guard only thinks it knows. Five allow rows stand beside them, including `(cd build && rm -r x)` and
+`(cd /tmp && ls)`.
+
+Two rows flip to the ruling's semantics: `rm -rf $SCRATCH/x` and `mkdir -p $SCRATCH/x` move out of the allow
+lists of `an_ordinary_deletion_still_stays_the_seat_s_own` and `an_ordinary_touch_or_mkdir_stays_the_seat_s_own` and
+are asserted `unresolvable-target`; three doc comments that called a variable target "the seat's own" are corrected,
+and the glob clause now says a glob is judged as its literal prefix and one with no prefix is refused by name.
+`a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is` gains the unquoted control for every write verb it
+quotes (the gate's m1 asked for the control or the clause dropped).
+
+Measured (2026-10-21, `wt/go-dev-fold` at `ca22c477` plus this change, patched asset in a scratch crate):
+`cargo test --offline` - 194 (bin), 1 (held_send), 40 (seat_guard, 0 failed), 1 (umask); `cargo fmt --check` clean;
+`cargo clippy --offline --all-targets -D warnings` clean. Same suite on the pre-fix patched asset: seat_guard 39
+passed, 1 failed (the new test only); on rev-9's own asset: 34 passed, 6 failed - the five rows the v1 diff fixes
+and the new `cd` test.
+
+## 2026-10-21 - the rev-9 suite re-expressed on 109cbeca: quoting, unresolvable words, a pathspec file, and the result handler (rust, branch 4genthub-min/rev9-tests-fold)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, cut from `owner/seat-guard-rev9` @ `109cbeca`. Four rows, each written
+against this tree's own helpers (`rule_of`, `tracked`, `bash`) rather than replayed from `8b00747b`:
+`a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is` (B1) - one row per write verb of the ruling's
+table, double- and single-quoted, beside its unquoted control, plus the controls that must stay allowed (a quoted
+statement separator, a quoted `>` that starts no redirect, a path with a real space, `cp a b`) and a refusal whose
+reason keeps the space and loses the quotes. `a_word_the_guard_cannot_resolve_is_refused` (B1) - a variable quoted
+and unquoted, and a glob with no literal prefix, each `unresolvable-target`, beside the literal-prefix rows
+(`rm -r rust/agenthub-runtime/assets/*` denied, `rm -r 'build'/*` and `rm -rf dist/*` allowed) and the two
+frozen-path globs. `a_pathspec_file_is_refused_whatever_verb_reads_it` (B2) - ten spellings over seven verbs plus
+`-` and `/dev/stdin`, each `pathspec-from-file`. `the_result_handler_redacts_what_the_model_reads` (M1) - the
+asset's default export is imported with a fake `pi` that records the handlers it registers; `tool_call` opens a
+call and `tool_result` carries a value, and the returned content must not contain it and must name the placeholder.
+A patch that deletes the `tool_result` handler and keeps `--redact` passes every earlier row; this is the pin.
+
+The five fold fixes are re-expressed on this tree: `rule_of` restores the per-rule pin (m2) - seven owner-asset
+calls now assert `protected-paths` for the two `TargetFile` writes and `git-imports-a-tree` for the git forms, not
+"some refusal"; the carried guard blob lives in a directory of the run's own (the fold's temp-dir collision);
+bare `git checkout-index -f` stays out of the refusal list (the fold's over-refusal, probed: exits 0, writes
+nothing); the redactor's child gets its own `PI_CODING_AGENT_DIR` and must exit 0; and the count comments are
+corrected - twelve refusals and one chain in the pathspec test, eight in the no-poisoned-index block, whose
+duplicate `--index-info` row is gone.
+
+Measured (2026-10-21, `wt/go-dev-fold` at 109cbeca plus this change): `cargo test --offline` - 194 (bin), 1
+(held_send), 39 (seat_guard: 36 passed), 1 (umask) - and of those the 3 failed are BY DESIGN - `a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is`,
+`a_word_the_guard_cannot_resolve_is_refused` and `a_pathspec_file_is_refused_whatever_verb_reads_it` are the
+owner's asset fix and turn green when it lands. The three reds are the gate's B1/B2, the driver is green against
+this asset (the handler exists; the row pins it against deletion).
 
 ## 2026-10-21 - a claude seat is handed the guard it never ran (rust, branch 4genthub-min/claude-guard-settings)
 
@@ -321,6 +381,49 @@ event (`seats/architect/RULING-2026-10-21-claude-hook-mode.md` §1, correction 2
 assertion it had (foreign file untouched, own file rewritten then cleared, the const as the gate, the one-way check
 that a true flag needs an asset carrying the dispatch).
 
+## 2026-10-21 - revision 9 of the seat guard's suite lands before its asset (rust, branch 4genthub-min/rev9-tests-on-main)
+
+`rust/agenthub-runtime/tests/seat_guard.rs` arrives whole from `4genthub-min/guard-imports-a-tree` (`7f4512c`), on
+a branch cut from client main `ec09aa0f` because the guard branch is not mergeable (a merge of it reverts
+`supervisor.go` and `room.go`). Thirty rows: the twenty-seven already on main, the two index rows of revision 8
+(`the_index_is_written_by_path_so_the_path_is_read`, `the_index_is_read_where_the_verb_names_no_path`) and
+`the_pathspec_is_read_as_the_set_it_covers`, which reads a pathspec as the set of paths it covers - `rm -r` and `mv`
+of the assets directory, `git add`/`commit`/`checkout HEAD --` over it, the whole-index forms `git add -u`, `-a`,
+`-p` and `git commit -a`/`-am`, a three-statement chain denying at its first firing rule, plus controls that must
+stay ALLOWED because over-refusal is the other failure mode.
+
+Red before the asset lands, measured at this tip on main's revision-6 asset `3e7c033aa2e1`: 27 passed, 3 failed -
+`the_index_is_written_by_path_so_the_path_is_read` (`tests/seat_guard.rs:1381`),
+`the_index_is_read_where_the_verb_names_no_path` (`:1480`) and `the_pathspec_is_read_as_the_set_it_covers`
+(`:1668`). With the revision-9 asset `44be3f195328` (`wt/lead/owner-actions/seat-guard-rev9-from-main.patch`,
+sha256 `806536475a20`) applied the same suite is 30 passed, 0 failed. The three red rows are the point: they pin the
+asset's rule, so the split landing cannot pass by accident.
+
+## 2026-10-21 - the guard redacts results, refuses environment dumps, and answers claude-code (rust, branch owner/seat-guard-rev9)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, 30 → 35 rows. The rev-9 lead-asset rows now assert that `lead` and
+`go-dev` are both refused the guard (commit by pathspec, `git apply`, `patch -p1`, `git mv`, a TargetFile write).
+New: `a_tool_result_loses_the_secret_values_and_keeps_its_shape` (through `node seat-guard.ts --redact`: a carried
+value, a `NAME=value`, a JWT, an `sk-` key and a Bearer token are gone, newlines and clean text are kept),
+`an_environment_dump_is_refused_and_a_scoped_environment_is_not`,
+`a_gh_api_read_of_a_credential_surface_is_refused_and_ci_reads_are_not`,
+`a_claude_call_reaches_the_rule_its_omp_name_reaches` (each claude tool name against the agy path's verdict for the
+same call) and `a_claude_post_call_answers_empty_and_logs_one_line`. The file is rustfmt-formatted and one
+single-element loop is unrolled for clippy. Measured: `cargo test --offline` 194 + 1 + 35 + 1 passed, 0 failed.
+
+## 2026-10-21 - pid ownership is the seat mark or ancestry, eight rows (rust, branch 4genthub-min/rev9-tests-fold)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, 40 → 41 rows: `a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it`
+carries the eight rows of `RULING-2026-10-21-pid-ownership` §6c - a started child (ancestry), `nohup`, a grandchild
+behind a shell and `setsid` (all three detached through `orphaned()`, whose spawning shell exits, so the ancestry
+branch cannot pass them for the wrong reason), another seat's marked pid (`is marked` in the reason), a target that
+cleared its environment, a reaped pid, and five process-group operands. `refusal_full` exports `AGENTHUB_ROOM=demo`
+so the harness carries both halves of the mark, and `src/supervisor/mod.rs`'s
+`a_seats_env_never_carries_the_connector_credential` also pins `AGENTHUB_ROOM=demo`, `AGENTHUB_SEAT=dev` and that
+neither key is `env_is_denied`. Measured at `3e009d79`: `cargo test --no-run` clean, the pin test 1 passed, the new
+test red at row `nohup` (`pid … was not started by this seat`) - red by design at the rev-9 asset, green once the
+owner's `:361-375`/`:392` edit lands. Whole suite at that asset: 34 passed, 7 failed (the new row plus six
+pre-existing reds by design).
 ## 2026-10-21 - a proposal cites a row or a census ref
 
 `internal/clientskills/propose_test.go` gains `TestProposeCitesTheCensusRefsItPrints`, a table of the decision's
