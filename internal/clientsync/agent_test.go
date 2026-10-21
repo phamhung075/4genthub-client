@@ -265,6 +265,16 @@ func TestSafeguardFramesOnlyAfterReadyEchoesTheCapability(t *testing.T) {
 	if _, present := frames[1]["pid"]; present {
 		t.Errorf("frame[1] carries pid for a row whose pid is zero: %v", frames[1])
 	}
+	// 2.2's socket time format is unix millis, and the hub reads `at` through wsOptUnixMillis, which
+	// takes integer numbers only: a formatted string leaves room_safeguards.last_beat_at NULL on every
+	// row. The stamp is the daemon's own clock, in milliseconds.
+	at, isNumber := frames[0]["at"].(int64)
+	if !isNumber {
+		t.Fatalf("frame[0] at = %T %v, want a unix-millisecond number", frames[0]["at"], frames[0]["at"])
+	}
+	if want := h.clock.now().UnixMilli(); at != want {
+		t.Errorf("frame[0] at = %d, want the daemon clock in millis (%d)", at, want)
+	}
 }
 
 // Case 3: stop-and-wait, the cursor and the gap. After hello + resendAll the stored cursor is 5, one
