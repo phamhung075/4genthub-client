@@ -149,6 +149,15 @@ fn child_argv(
                 }
                 .to_string(),
             );
+            // THE SEAT'S GUARD, as claude can read one: claude runs a hook only when a settings file names it, and
+            // the supervisor writes that file for a claude seat whose guard carries the claude mode (see
+            // `write_claude_guard_settings`). The flag follows the file - claude refuses to start on a `--settings`
+            // path that is not there, so a seat with no guard is launched without the flag, never with a broken one.
+            let settings = seat_dir.join(crate::supervisor::CLAUDE_SETTINGS_FILE);
+            if settings.is_file() {
+                argv.push("--settings".to_string());
+                argv.push(settings.to_string_lossy().to_string());
+            }
             // THE SEAT'S OWN MCP FILE, which is where the cloud entry and - when the environment names one -
             // the delegation server live. claude reads no server from the seat dir without this flag, so
             // without it a claude seat reaches no daemon and no `deepseek_agent`; the file is per seat (its
@@ -2351,6 +2360,42 @@ mod tests {
             "an unspecified posture must deny, not ask: {argv:?}"
         );
         assert_eq!(child_program(&AgentRuntime::ClaudeCode, &seat), "claude");
+    }
+
+    /// A claude seat is handed the guard's settings file when the supervisor has written one, and no `--settings`
+    /// flag while it has none: claude refuses to start on a path that is not there, so a seat whose guard the
+    /// client has not installed is launched without the flag rather than with a broken one.
+    #[test]
+    fn claude_argv_names_the_seats_settings_only_while_the_file_is_there() {
+        let seat = SeatSpec {
+            seat_key: "architect".into(),
+            seat_type: "architect".into(),
+            runtime: "claude-code".into(),
+            model: None,
+            permission_policy: None,
+            cwd: None,
+            agent_dir: None,
+            policy_document: None,
+            env: Default::default(),
+        };
+        let dir = std::env::temp_dir().join(format!("runner-settings-{}", std::process::id()));
+        fs::create_dir_all(&dir).expect("seat dir");
+        let file = dir.join(crate::supervisor::CLAUDE_SETTINGS_FILE);
+        let _ = fs::remove_file(&file);
+        let argv = child_argv(&AgentRuntime::ClaudeCode, &dir, &seat).expect("argv");
+        assert!(
+            !argv.iter().any(|a| a == "--settings"),
+            "no settings file, no flag: {argv:?}"
+        );
+        crate::supervisor::write_claude_guard_settings_when(&dir, true).expect("settings");
+        let argv = child_argv(&AgentRuntime::ClaudeCode, &dir, &seat).expect("argv");
+        let expected = file.to_string_lossy().to_string();
+        assert!(
+            argv.windows(2)
+                .any(|pair| pair[0] == "--settings" && pair[1] == expected),
+            "the seat's own settings file is what runs its guard: {argv:?}"
+        );
+        fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     /// A claude seat gets its workflow file as an appended system prompt once the supervisor has written it,

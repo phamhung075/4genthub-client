@@ -451,6 +451,61 @@ fn agy_guard_entry() -> serde_json::Value {
     })
 }
 
+/// The settings file a claude seat is launched with (`--settings`); the runner adds the flag when it is there.
+pub(crate) const CLAUDE_SETTINGS_FILE: &str = "settings.json";
+
+/// The settings a claude seat's own file carries: the seat guard on both phases, the phase as its argument. agy
+/// is told the same thing in one global file (`agy_guard_entry`); claude has no global hook file a per-seat entry
+/// could live in, so the file is the seat's own and the command resolves the seat's guard from the agent dir the
+/// supervisor exports for every seat (`PI_CODING_AGENT_DIR`), the same path agy's entry names.
+fn claude_guard_settings() -> String {
+    let command = |phase: &str| {
+        format!("node \"$PI_CODING_AGENT_DIR/hooks/pre/seat-guard.ts\" --claude-hook {phase}")
+    };
+    serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{"matcher": "*",
+                "hooks": [{"type": "command", "timeout": 10, "command": command("pre")}]}],
+            "PostToolUse": [{"matcher": "*",
+                "hooks": [{"type": "command", "timeout": 10, "command": command("post")}]}],
+        }
+    })
+    .to_string()
+}
+
+/// Whether the bundled guard carries the `--claude-hook` mode. It does not yet: the mode is a patch on
+/// `assets/seat-guard.ts`, which `protectedPath` refuses to a seat, and it is written for the owner at
+/// `seats/go-dev/PATCH-2026-10-21-seat-guard-claude-hook.md`. This flag, not a substring of the asset, is the
+/// gate: the asset's own header already describes `--agy-hook` in prose, so a comment mentioning the claude flag
+/// would flip a substring test open while no mode exists and plant a hook that answers nothing. Flip it in the
+/// same change as the owner's patch; `the_claude_settings_run_the_seat_guard_on_both_phases` fails if the flag is
+/// true while the asset lacks the mode.
+pub(crate) const GUARD_HAS_CLAUDE_HOOK: bool = false;
+
+/// Write the claude seat's settings file, or clear one left by an earlier start. A guard without the
+/// `--claude-hook` mode is one that never reads this payload and never answers, so writing the file for it would
+/// plant a hook no tool call is checked by; the runner's flag follows this file, so the two cannot disagree.
+fn write_claude_guard_settings(seat_dir: &Path) -> Result<(), String> {
+    write_claude_guard_settings_when(seat_dir, GUARD_HAS_CLAUDE_HOOK)
+}
+
+/// The writer with its gate as an argument, so a test exercises the file it writes while the bundled guard still
+/// lacks the mode. Production reaches it only through `write_claude_guard_settings`.
+pub(crate) fn write_claude_guard_settings_when(
+    seat_dir: &Path,
+    guard_carries_mode: bool,
+) -> Result<(), String> {
+    let path = seat_dir.join(CLAUDE_SETTINGS_FILE);
+    if !guard_carries_mode {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| format!("cannot clear {}: {e}", path.display()))?;
+        }
+        return Ok(());
+    }
+    fs::write(&path, claude_guard_settings() + "\n")
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
 /// Make sure agy's global `hooks.json` carries the seat guard, and touch nothing else in it: the file also holds
 /// other tools' hooks. A file that is not a JSON object is an error rather than a file to overwrite.
 fn install_agy_guard_hook(home: &Path) -> Result<(), String> {
@@ -1086,6 +1141,15 @@ impl RoomSupervisor {
             .map_err(|e| format!("cannot create the seat's hook dir: {e}"))?;
         fs::write(hook_dir.join("seat-guard.ts"), SEAT_TOOL_HOOK)
             .map_err(|e| format!("cannot write the seat's tool hook: {e}"))?;
+        // THE CLAUDE SEAT'S HOOK FILE, in the same window as the guard it runs. claude runs no hook it is not
+        // handed, and this is the only way the seat's rules reach it (the guard is the file omp loads); the runner
+        // adds `--settings` while this file exists, so the argv never names a file that is not there.
+        if matches!(
+            AgentRuntime::from_str_loose(&seat.runtime),
+            AgentRuntime::ClaudeCode
+        ) {
+            write_claude_guard_settings(&seat_dir)?;
+        }
         install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
         if matches!(
             AgentRuntime::from_str_loose(&seat.runtime),
@@ -4838,6 +4902,57 @@ mod tests {
             Some(document),
             "the room's own record carries it, so a later route cannot install the old document"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A claude seat's settings file, written by the writer the supervisor calls, names the seat's own guard on
+    /// both phases with the phase as the argument. The gate is `GUARD_HAS_CLAUDE_HOOK`, so the test forces the
+    /// writer on and reads the FILE it wrote - not an in-memory string - and the runner's `--settings` flag then
+    /// follows that same file (`runner::tests::claude_argv_names_the_seats_settings_only_while_the_file_is_there`).
+    #[test]
+    fn the_claude_settings_run_the_seat_guard_on_both_phases() {
+        let dir = scratch("claude-settings");
+        let seat_dir = dir.join("seats").join("architect");
+        fs::create_dir_all(&seat_dir).unwrap();
+        let path = seat_dir.join(CLAUDE_SETTINGS_FILE);
+        write_claude_guard_settings_when(&seat_dir, true).unwrap();
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let command = |phase: &str| {
+            settings["hooks"][phase][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        for (phase, word) in [("PreToolUse", "pre"), ("PostToolUse", "post")] {
+            assert_eq!(
+                command(phase),
+                format!(
+                    "node \"$PI_CODING_AGENT_DIR/hooks/pre/seat-guard.ts\" --claude-hook {word}"
+                ),
+                "{phase} must run the seat's own guard"
+            );
+        }
+        // A file an earlier start left behind is rewritten while the guard carries the mode, and cleared while it
+        // does not, so the runner never hands claude a file the writer would not stand behind.
+        fs::write(&path, "{\"stale\":true}").unwrap();
+        write_claude_guard_settings_when(&seat_dir, true).unwrap();
+        assert!(
+            !fs::read_to_string(&path).unwrap().contains("stale"),
+            "the entry is rewritten, not kept"
+        );
+        write_claude_guard_settings_when(&seat_dir, false).unwrap();
+        assert!(!path.exists(), "a guard without the mode leaves no file");
+        // The gate production uses is the const, and a true flag is only sound for an asset that carries the
+        // dispatch. Prose that merely mentions the flag cannot open it.
+        write_claude_guard_settings(&seat_dir).unwrap();
+        assert_eq!(path.exists(), GUARD_HAS_CLAUDE_HOOK);
+        if GUARD_HAS_CLAUDE_HOOK {
+            assert!(
+                SEAT_TOOL_HOOK.contains("--claude-hook"),
+                "the flag is true only for a guard that carries the mode"
+            );
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
