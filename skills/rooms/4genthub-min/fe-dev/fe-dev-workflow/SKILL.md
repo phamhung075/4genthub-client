@@ -1,6 +1,14 @@
 ---
 name: fe-dev-workflow
 description: "Use at the start of every session and before every task. The fe-dev seat's working method in 4genthub-min - claim one assigned frontend task, split it into disjoint component parts for a DeepSeek crew in your worktree, type-check and test with no local build, prove it in a browser against a deployed origin, and hand to the reviewer."
+signals:
+  - guard: local-frontend-build
+  - row-tag: guide
+  - command: 4genteam facts
+  - command: 4genteam complete
+  - command: npx tsc
+  - command: browser
+  - command: mcp:manage_task
 ---
 
 # fe-dev - how this seat works

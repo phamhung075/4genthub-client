@@ -1,6 +1,9 @@
 ---
 name: architect-ecosystem-review
 description: Use on the room's review cadence - the lead and the architect read the friction board, the stuck rows and the cost rows and produce one ranked improvement list.
+signals:
+  - command: 4genteam room status
+  - command: 4genteam room queue
 ---
 
 # Architect ecosystem review (lead + architect)

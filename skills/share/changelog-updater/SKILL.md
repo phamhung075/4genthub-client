@@ -1,6 +1,9 @@
 ---
 name: changelog-updater
 description: Write this repo's changelog entry - ONE new file CHANGELOG/<date>--<title>.md per merged task (not per commit), naming the proof. Use when a task merges or a change lands.
+signals:
+  - guard: docs-only
+  - command: git_commit_capture.py
 ---
 
 # Changelog updater

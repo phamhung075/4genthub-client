@@ -1,6 +1,8 @@
 ---
 name: system-improvement-analysis
 description: Use when the architect takes a friction cluster and turns it into a ruling, a tool change or a skill edit with a stated size and builder.
+signals:
+  - command: 4genteam skills evidence
 ---
 
 # System improvement analysis (architect)
@@ -10,7 +12,8 @@ Triage names a cluster; this turns it into a decision the team can execute.
 ## Inputs
 
 A friction cluster - a deduped group of reports, or one line from the ecosystem review - with the evidence the
-reports carry.
+reports carry, and the census line for the skills the cluster touches
+(`4genteam skills evidence 4genthub-min --json`).
 
 ## Output: one decision note, the architect's usual shape
 

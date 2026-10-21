@@ -1,6 +1,8 @@
 ---
 name: flow-summary
 description: State a turn's flow as four lines - facts, rule, decision, next - before acting, with facts read from `4genteam facts` instead of re-derived by bash chains.
+signals:
+  - command: 4genteam facts
 ---
 
 # Flow summary

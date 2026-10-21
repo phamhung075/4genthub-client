@@ -19,6 +19,8 @@ metadata:
       No prose in the body was rewritten. See VENDORING.md's modification table and
       internal/clientskills/links_test.go, which now fails on any local link in a
       shipped skill document that does not resolve.
+signals:
+  - command: browser
 ---
 
 # Browser Automation with agent-browser

@@ -366,17 +366,41 @@ func TestProposeRefusesAValueThatIsNeitherARowNorACensusRef(t *testing.T) {
 
 // TestSeatFromSessionMatchesOnlyThisRoomsSeat: the room in the session name is the guard, so a name for
 // another room answers nothing instead of naming a seat this room does not have.
+//
+// The store holds THREE spellings of a destination and all three are read here: `agenthub--<room>--<seat>`,
+// `<seat>@<room>` (the branch propose.go gained when it learned the second spelling, untested until now) and
+// the bare `<seat>` - a seat only when the room's own seat keys say so, so a destination naming no seat of the
+// room answers nothing rather than demoting every skill the room has.
 func TestSeatFromSessionMatchesOnlyThisRoomsSeat(t *testing.T) {
+	seats := map[string]bool{"go-dev": true, "lead": true, "reviewer": true}
 	cases := []struct{ session, room, want string }{
 		{"agenthub--4genthub-min--go-dev", "4genthub-min", "go-dev"},
 		{"4genthub-min--fe-dev", "4genthub-min", ""},
 		{"agenthub--other-room--go-dev", "4genthub-min", ""},
 		{"", "4genthub-min", ""},
+		// `<seat>@<room>`: 28 + 4 + 10 rows in this room name their seat this way.
+		{"lead@4genthub-min", "4genthub-min", "lead"},
+		{"reviewer@4genthub-min", "4genthub-min", "reviewer"},
+		{"lead@other-room", "4genthub-min", ""},
+		// The bare spelling, which only the room's own seat keys can resolve: 50 rows in this room.
+		{"reviewer", "4genthub-min", "reviewer"},
+		{"go-dev", "4genthub-min", "go-dev"},
+		// A destination that names no seat of the room stays unattributed (`owner-session`: 16 rows here).
+		{"owner-session", "4genthub-min", ""},
+		{"agenthub--4genthub-min", "4genthub-min", ""},
 	}
 	for _, testCase := range cases {
-		if got := seatFromSession(testCase.session, testCase.room); got != testCase.want {
+		if got := seatFromSession(testCase.session, testCase.room, seats); got != testCase.want {
 			t.Fatalf("seatFromSession(%q, %q) = %q, want %q",
 				testCase.session, testCase.room, got, testCase.want)
 		}
+	}
+	// A room with no record to read answers an EMPTY seat set, which narrows the reader to the two spelled
+	// forms - it never turns a real seat name into a failure.
+	if got := seatFromSession("reviewer", "4genthub-min", nil); got != "" {
+		t.Fatalf("a bare name with no seat set = %q, want \"\"", got)
+	}
+	if got := seatFromSession("lead@4genthub-min", "4genthub-min", nil); got != "lead" {
+		t.Fatalf("a spelled name with no seat set = %q, want lead", got)
 	}
 }

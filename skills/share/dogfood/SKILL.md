@@ -7,6 +7,8 @@ metadata:
     vendored_from: "Vercel agent-browser ecosystem (https://github.com/vercel/agent-browser)"
     vendoring_pattern: vendored-as-is
     last_upstream_check: "2026-05-13 (diff against <skills-dir>/dogfood = identical)"
+signals:
+  - command: browser
 ---
 
 # Dogfood

@@ -2,6 +2,10 @@
 name: fe-dev-role
 description: The developer contract as this seat reads it - implement one clearly defined task at a time, keep the change small and tested, run the checks and read their output, and hand the change to review with what was run.
 seat-type-version: 1.4.12
+signals:
+  - guard: env-secret
+  - guard: git-destructive
+  - command: 4genteam send
 ---
 
 # fe-dev - the Developer seat's contract

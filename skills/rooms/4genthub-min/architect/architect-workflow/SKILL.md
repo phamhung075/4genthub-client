@@ -1,6 +1,13 @@
 ---
 name: architect-workflow
 description: "Use at the start of every session and before every ruling or design note. The architect seat's working method in 4genthub-min - take one design question, send a read-only DeepSeek crew to map the code and prior rulings, weigh at least two options from that evidence, record the decision note, and hand implementation to the right dev seat."
+signals:
+  - guard: env-secret
+  - row-tag: guide
+  - command: 4genteam facts
+  - command: 4genteam room queue
+  - command: 4genteam decide
+  - command: mcp:manage_task
 ---
 
 # architect - how this seat works

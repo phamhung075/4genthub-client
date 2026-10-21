@@ -20,7 +20,7 @@ Full reference: `docs/WATCH.md` in the `4genthub-client` repository.
 `4genteam` is that repository's Go binary (`cmd/4genteam`). Every workspace and pane it opens is
 created in the directory you ran it from (`--cwd`), so run it from the project you are working in.
 `4genteam up <ROOM>` opens the same wall as part of the lifecycle — safeguards,
-this view, then the UI.
+then this view. It opens no browser; `4genteam ui` opens the web UI.
 
 That opens both workspaces:
 

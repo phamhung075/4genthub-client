@@ -2,6 +2,8 @@
 name: reviewer-role
 description: The reviewer seat's contract - review a change with fresh eyes against the task it was meant to satisfy, report findings ranked by severity with the file and line, and never fix what it finds.
 seat-type-version: 1.4.19
+signals:
+  - command: 4genteam send
 ---
 
 # reviewer - the Reviewer seat's contract

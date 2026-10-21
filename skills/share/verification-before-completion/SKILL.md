@@ -6,6 +6,9 @@ metadata:
     vendored_from: "Obra Superpowers (https://github.com/obra/superpowers)"
     vendoring_pattern: modify-the-file
     last_upstream_check: "2026-05-13 (historical upstream comparison; a local harness section on services and long jobs added 2026-10-17)"
+signals:
+  - command: 4genteam complete
+  - command: git show
 ---
 
 # Verification Before Completion

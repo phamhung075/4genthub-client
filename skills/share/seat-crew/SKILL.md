@@ -1,6 +1,8 @@
 ---
 name: seat-crew
 description: "Use whenever a task has two or more independent parts, a repo-wide read, a long log or a bulk mechanical change. Every seat leads its own crew of DeepSeek workers through deepseek-offload: split the work, start one worker per part in parallel, verify each report, and own the result."
+signals:
+  - command: deepseek_agent
 ---
 
 # Seat crew - you lead your own workers

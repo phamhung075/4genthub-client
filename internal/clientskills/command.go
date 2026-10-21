@@ -313,7 +313,7 @@ func railRows(evidence *Evidence, room, note string) string {
 		created, _ := time.Parse(time.RFC3339Nano, row.TsCreated)
 		updated, _ := time.Parse(time.RFC3339Nano, row.TsUpdated)
 		rows = append(rows, RailRow{ID: row.QitemID, State: row.State, Tags: row.Tags,
-			Created: created, Updated: updated})
+			Created: created, Updated: updated, Destination: row.DestinationSession})
 	}
 	evidence.Rows = rows
 	return note
