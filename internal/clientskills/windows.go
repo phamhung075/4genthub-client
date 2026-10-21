@@ -111,9 +111,10 @@ func applyWindow(row *Row, signals []Signal, evidence Evidence, since time.Time)
 	var refs []string
 	occurrences := 0
 	commands := 0
+	scope := scopeSeat(row.Level)
 	for _, signal := range signals {
-		matched := evidence.Occurrences(signal, since)
-		if tooBroad(len(matched), evidence.StreamSize(signal, since)) {
+		matched := evidence.Occurrences(signal, since, scope)
+		if tooBroad(len(matched), evidence.StreamSize(signal, since, scope)) {
 			// The signal fires on half its own stream: a tag every gate row carries would demote every
 			// skill that declares it, which teaches the loop nothing. It is named and decides nothing.
 			row.Broad = append(row.Broad, signal.String())
@@ -123,20 +124,57 @@ func applyWindow(row *Row, signals []Signal, evidence Evidence, since time.Time)
 				refs = append(refs, occurrence.Stream+":"+occurrence.Ref)
 			}
 		}
-		commands += evidence.Commands(signal, since)
+		commands += evidence.Commands(signal, since, scope)
 	}
 	row.Occurrences = occurrences
 	row.Commands = commands
 	row.Landed = evidence.LandedFor(signals, since)
+	// A row with occurrences cites them whether it demotes or holds: a `hold` on 44 refusals that names none is
+	// a number the reader has to take on trust. The list is deduped and capped - the count stays in Occurrences,
+	// so a truncated list is still a truthful one - and a citation is only ever a real ref.
+	if occurrences > 0 {
+		row.Refs = capRefs(dedupe(refs))
+	}
+	// R2 of RULING-2026-10-21-skill-signals.md: `command:` counts USE, and a stream that never watches a
+	// failure cannot hold a skill to account. A skill whose every declared signal is a command has no failure
+	// stream, so its verdict is `no-signal` - the verdict that already means exactly that - with its command
+	// counts kept for the reader. `hold` is for a skill that HAS a stream and no occurrence in the window.
+	if !hasAttributedSignal(signals) {
+		row.Verdict = VerdictNoSignal
+		return
+	}
 	switch {
 	case row.State == StateTrusted && occurrences > 0:
 		row.Verdict = VerdictDemote
-		row.Refs = dedupe(refs)
 	case row.State == StateProvisional && occurrences == 0 && row.Landed >= PromotionWindow:
 		row.Verdict = VerdictPromotable
 	default:
 		row.Verdict = VerdictHold
 	}
+}
+
+// refCap is how many citations a row prints. The number is the evidence; the list is the way in, and a reader
+// follows the first few before asking whether the rest say anything new.
+const refCap = 20
+
+// capRefs keeps the first refCap refs of a row.
+func capRefs(refs []string) []string {
+	if len(refs) > refCap {
+		return refs[:refCap]
+	}
+	return refs
+}
+
+// hasAttributedSignal reports whether any declared signal is matched against a stream that carries a FAILURE.
+// `command:` facts are TOOL lines - use, never outcome - so a declaration made only of them has nothing that
+// could demote it, whatever the numbers say.
+func hasAttributedSignal(signals []Signal) bool {
+	for _, signal := range signals {
+		if stream, ok := attributedStreams[signal.Kind]; ok && stream != StreamTool {
+			return true
+		}
+	}
+	return false
 }
 
 // tooBroad is the admission rule applied to a declared signal: a signal that matched at least half of its

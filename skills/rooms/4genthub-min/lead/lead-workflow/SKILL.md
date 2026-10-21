@@ -1,6 +1,12 @@
 ---
 name: lead-workflow
 description: "Use at the start of every session and before every assignment. The lead seat's working method in 4genthub-min - clock in, turn the owner's goal and the queue into one bounded assignment per seat, run a read-only DeepSeek crew for surveys and evidence checks, and close work only through review and the Jev gate."
+signals:
+  - row-tag: guide
+  - command: 4genteam facts
+  - command: room queue create
+  - command: 4genteam complete
+  - command: 4genteam skills evidence
 ---
 
 # lead - how this seat works
@@ -49,7 +55,10 @@ tracked to a reviewed, gated finish. You do not write code or docs. Your crew do
    gate (`jev-decisions`). Before merging, check the assignment's `decision:` line against
    `~/.config/4genthub/jev_decisions.log` for the change's window: an assignment that carried
    alternatives and no `jev=<ts>` goes back to the seat that picked, with the missing line named. Then
-   merge the seat's branch into `main` by the gated merge in `seat-worktree`.
+   read the skill census - `4genteam skills evidence 4genthub-min --json` - before the merge: a `demote`
+   names the skill and the refusal or row that demoted it and gets one `4genteam skills propose` from its
+   owner seat; a `broken-record` blocks the merge. Then merge the seat's branch into `main` by the gated
+   merge in `seat-worktree`.
 7. **Report** to the owner in the `lead-role` output format.
 
 ## Your crew (read-only only)

@@ -2,6 +2,8 @@
 name: architect-role
 description: The architect seat's contract - own the design decisions and their record, weigh at least two options, define interfaces and their trade-offs, recommend one. The architect does not implement.
 seat-type-version: 1.4.12
+signals:
+  - command: 4genteam send
 ---
 
 # architect - the Architect seat's contract

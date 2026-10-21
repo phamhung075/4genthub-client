@@ -23,7 +23,7 @@ func TestTheGuardStreamFoldsTheSpoolRule(t *testing.T) {
 
 	evidence := LoadEvidence(t.TempDir(), "room", repo)
 	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
-	found := evidence.Occurrences(Signal{Kind: SignalGuard, Value: "docs-only"}, since)
+	found := evidence.Occurrences(Signal{Kind: SignalGuard, Value: "docs-only"}, since, "")
 	if len(found) != 1 {
 		t.Fatalf("occurrences = %d, want 1: the spool's docs_only must match the declared docs-only (%v)",
 			len(found), found)
@@ -46,7 +46,7 @@ func TestTheGuardStreamReadsTheSeatsBlockedToolLines(t *testing.T) {
 		t.Fatalf("a stream with one readable producer must not be marked unread: %v", evidence.Skips)
 	}
 	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
-	found := evidence.Occurrences(Signal{Kind: SignalGuard, Value: "protected-paths"}, since)
+	found := evidence.Occurrences(Signal{Kind: SignalGuard, Value: "protected-paths"}, since, "")
 	if len(found) != 1 {
 		t.Fatalf("occurrences = %d, want 1 (the blocked line, not the ok one): %v", len(found), found)
 	}
@@ -61,7 +61,7 @@ func TestAJevOccurrenceCarriesARefAReaderCanFollow(t *testing.T) {
 
 	evidence := LoadEvidence(stateRoot, "room", "")
 	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
-	found := evidence.Occurrences(Signal{Kind: SignalJEV, Value: "escalation"}, since)
+	found := evidence.Occurrences(Signal{Kind: SignalJEV, Value: "escalation"}, since, "")
 	if len(found) != 1 {
 		t.Fatalf("occurrences = %d, want 1: %v", len(found), found)
 	}

@@ -94,7 +94,17 @@ var callerWorktree = func(room string) (string, error) {
 // seatFromSession reads the seat out of a canonical session name, `agenthub--<room>--<seat>`. A name that
 // does not end in this room's seat answers empty rather than guessing: the room in it is the guard.
 func seatFromSession(session, room string) string {
-	parts := strings.Split(strings.TrimSpace(session), "--")
+	value := strings.TrimSpace(session)
+	// The store holds both spellings and the guard reads both: `agenthub--<room>--<seat>` and `<seat>@<room>`
+	// (measured 2026-10-21: 25 rows name the lead as `lead@4genthub-min`). One reader, so a seat cannot be
+	// invisible to the census because a row was written through the other spelling.
+	if at := strings.LastIndex(value, "@"); at >= 0 {
+		if value[at+1:] == room {
+			return value[:at]
+		}
+		return ""
+	}
+	parts := strings.Split(value, "--")
 	if len(parts) < 3 || parts[len(parts)-2] != room {
 		return ""
 	}

@@ -1,6 +1,9 @@
 ---
 name: queue-row-schema
 description: Write a queue row body the daemon accepts - four lines, facts / rule / decision / next, inside the per-field caps. Read before `4genteam room queue create`.
+signals:
+  - guard: queue-coalesce
+  - command: 4genteam room queue
 ---
 
 # Queue row schema

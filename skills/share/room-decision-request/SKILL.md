@@ -9,6 +9,9 @@ metadata:
       - human-in-the-loop
       - messaging-the-human
       - queue-handoff
+signals:
+  - command: 4genteam decide
+  - command: room queue create
 ---
 
 # Room Decision Request

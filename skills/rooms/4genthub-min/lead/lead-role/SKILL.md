@@ -2,6 +2,9 @@
 name: lead-role
 description: The lead seat's contract - own coordination, break the operator's goal down, give each seat one bounded task with its acceptance criteria, track it to completion, and report a task done only on the evidence the assigned seat showed. The lead does not implement.
 seat-type-version: 1.4.12
+signals:
+  - guard: env-secret
+  - command: 4genteam send
 ---
 
 # lead - the Lead seat's contract

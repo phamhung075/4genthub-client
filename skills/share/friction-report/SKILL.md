@@ -1,6 +1,8 @@
 ---
 name: friction-report
 description: Use when a seat hits friction - a missing tool, a constraint, a slow or failing step, or a rule that blocks good work. File one report through the existing feedback channel and continue; the room tracks that same text as an item tagged `friction`. Never a silent workaround.
+signals:
+  - command: submit_feedback
 ---
 
 # Friction report

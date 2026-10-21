@@ -1,6 +1,9 @@
 ---
 name: fe-4genthub-driven
 description: "Recheck the 4genthub frontend where it actually runs — production or a local build — as a real signed-in user with the shared e2e account. A measured toolkit, not a checklist of opinions: the front door, backend-call truth, theme in both color modes, WCAG AA contrast, motion under prefers-reduced-motion, CRUD-animation wiring, and responsive layout on phone, laptop and desktop, plus the phone walk the room now ships as e2e/phone-layout.spec.ts. Run the pre-merge checklist before shipping a frontend change, and diff a fresh capture against the committed baseline after deploying."
+signals:
+  - command: browser
+  - command: npx tsc
 ---
 
 # fe-4genthub-driven

@@ -1,6 +1,12 @@
 ---
 name: go-dev-workflow
 description: "Use at the start of every session and before every task. The go-dev seat's working method in 4genthub-min - claim one assigned task, split it into disjoint parts for a DeepSeek crew working in your worktree, verify and test everything yourself, commit by pathspec, and hand to the reviewer."
+signals:
+  - row-tag: guide
+  - command: 4genteam facts
+  - command: 4genteam complete
+  - command: go test
+  - command: cargo test
 ---
 
 # go-dev - how this seat works

@@ -6,6 +6,8 @@ metadata:
     vendored_from: "Obra Superpowers (https://github.com/obra/superpowers)"
     vendoring_pattern: modify-the-file
     last_upstream_check: "2026-05-13 (historical upstream comparison; local scope and preservation adaptations made since)"
+signals:
+  - command: npm test
 ---
 
 # Test-Driven Development (TDD)

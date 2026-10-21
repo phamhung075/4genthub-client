@@ -1,6 +1,11 @@
 ---
 name: seat-worktree
 description: Every writing seat edits only in its own git worktree on its own branch, never in the shared main checkout. Main changes only by a gated merge done by the lead. Use before the first edit of a session and before every commit or merge.
+signals:
+  - guard: worktree-scope
+  - guard: push
+  - guard: git-imports-a-tree
+  - command: git diff
 ---
 
 # Seat Worktree
@@ -22,6 +27,7 @@ Owner decision, 2026-10-11. Every seat that writes files works in its own git wo
 - Only the lead works on `main`. No other seat edits, commits or merges there.
 - Only the lead pushes (`main`, `frontend`), after the reviewer gate and a green test run. No other seat pushes.
 - A seat commits on its own branch with a pathspec: `git commit -m "..." -- <paths>`. Use `git add -N` for new files. A seat never rebases another seat's branch.
+- Importing a tree is the same move: a patch, a stash, another branch's ref or a worktree outside the room's `wt/` is refused, because files move between trees without a commit.
 - A merge conflict is resolved by the author seat on its own branch, then the change goes through the gate again.
 - A seat that finishes tells the lead the branch name and the commit range. The lead does the rest.
 

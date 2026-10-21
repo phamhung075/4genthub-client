@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
 
 // The typed streams a declared signal is matched against. Each is a RECORD A TOOL ALREADY WROTE, never a
@@ -44,6 +46,10 @@ type Fact struct {
 	Value  string    `json:"value"`
 	At     time.Time `json:"at"`
 	Ref    string    `json:"ref"`
+	// Seat is the seat the fact was PRODUCED by, "" when the stream cannot name one (the machine-wide Jev log).
+	// It is what R1 of RULING-2026-10-21-skill-signals.md scopes a seat-tier skill by: another seat's refusal is
+	// not a failure of this seat's rule, and an unattributed fact is nobody's, so it counts for every scope.
+	Seat string `json:"seat,omitempty"`
 }
 
 // RailRow is one queue row as the census needs it: the row's identity, its state, its tags and its two
@@ -55,6 +61,26 @@ type RailRow struct {
 	Tags    []string
 	Created time.Time
 	Updated time.Time
+	// Destination is the session the row was handed to. It is the row's own attribution: a `row-tag:` landing
+	// counts for the seat the row names, and a destination naming no seat of the room counts for every scope.
+	Destination string
+}
+
+// SeatOf is the row's destination as a seat of THIS room, "" when it names none: a row handed to a session the
+// room does not spell as its own is unattributed, and an unattributed row counts for every scope.
+func (r RailRow) SeatOf() string {
+	value := strings.TrimSpace(r.Destination)
+	if value == "" {
+		return ""
+	}
+	if at := strings.LastIndex(value, "@"); at >= 0 {
+		return value[:at]
+	}
+	parts := strings.Split(value, "--")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }
 
 // Evidence is every typed fact the windows can see, plus the room's rows for the landed count. A stream
@@ -91,7 +117,7 @@ func (e Evidence) Unread(stream string) bool {
 func LoadEvidence(stateRoot, room, repo string) Evidence {
 	var evidence Evidence
 
-	evidence.add(readGuard(repo, stateRoot, room, &evidence))
+	evidence.add(readGuard(append(roomWorktreeDirs(stateRoot, room), repo), stateRoot, room, &evidence))
 	evidence.add(readSends(stateRoot, room, &evidence))
 	evidence.add(readJev(stateRoot, &evidence))
 	evidence.add(readTools(stateRoot, room, &evidence))
@@ -107,21 +133,46 @@ func (e *Evidence) add(skip Skip) {
 	}
 }
 
-// Occurrences returns the refused-or-escalated facts a declared signal matches at or after since. A
-// `command:` signal is NOT here: TOOL is counts only, so a tool call that failed can never demote a skill
-// (the acceptance for S2 names exactly this case).
-func (e Evidence) Occurrences(signal Signal, since time.Time) []Occurrence {
+// inScope is R1 of RULING-2026-10-21-skill-signals.md: a seat-tier skill states a rule for THAT seat, so a
+// fact another seat produced is not a failure of it. An empty scope is the whole room (a `share` or `room`
+// skill), and an unattributed fact is nobody's - it counts for every scope, because unknown attribution is
+// not another seat's.
+func inScope(scope, seat string) bool {
+	return scope == "" || seat == "" || seat == scope
+}
+
+// seatLevelPrefix is how census.go spells a seat-tier skill's level: `seat:<name>`, the same spelling the
+// store's `--level` filters take.
+const seatLevelPrefix = "seat:"
+
+// scopeSeat is a row's level as the seat it is judged on: `<seat>` for a seat-tier skill, "" for a skill the
+// whole room owns (`share`, `room`). A level that is not the seat spelling is the room's, never a seat name.
+func scopeSeat(level string) string {
+	value := strings.TrimSpace(level)
+	if !strings.HasPrefix(value, seatLevelPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(value, seatLevelPrefix))
+}
+
+// Occurrences returns the refused-or-escalated facts a declared signal matches at or after since, inside the
+// row's scope. A `command:` signal is NOT here: TOOL is counts only, so a tool call that failed can never
+// demote a skill (the acceptance for S2 names exactly this case).
+func (e Evidence) Occurrences(signal Signal, since time.Time, scope string) []Occurrence {
 	stream, ok := attributedStreams[signal.Kind]
 	if !ok || stream == StreamTool {
 		return nil
 	}
 	if stream == StreamQueue {
-		return rowOccurrences(e.Rows, signal.Value, since)
+		return rowOccurrences(e.Rows, signal.Value, since, scope)
 	}
 	var found []Occurrence
 	seen := map[string]bool{}
 	for _, fact := range e.Facts {
 		if fact.Stream != stream || fact.At.Before(since) {
+			continue
+		}
+		if !inScope(scope, fact.Seat) {
 			continue
 		}
 		if fact.Value != signal.Value {
@@ -132,7 +183,8 @@ func (e Evidence) Occurrences(signal Signal, since time.Time) []Occurrence {
 			continue
 		}
 		seen[key] = true
-		found = append(found, Occurrence{At: fact.At, Stream: fact.Stream, Value: fact.Value, Ref: fact.Ref})
+		found = append(found, Occurrence{At: fact.At, Stream: fact.Stream, Value: fact.Value, Ref: fact.Ref,
+			Seat: fact.Seat})
 	}
 	sort.SliceStable(found, func(i, j int) bool { return found[i].At.Before(found[j].At) })
 	return found
@@ -141,15 +193,19 @@ func (e Evidence) Occurrences(signal Signal, since time.Time) []Occurrence {
 // rowOccurrences is the rail's half of a `row-tag:` signal: every row carrying the tag that was CREATED
 // inside the window. A row's own transitions are not read - the tag was put on the row when it was written,
 // and that is the moment the typed finding appeared.
-func rowOccurrences(rows []RailRow, tag string, since time.Time) []Occurrence {
+func rowOccurrences(rows []RailRow, tag string, since time.Time, scope string) []Occurrence {
 	var found []Occurrence
 	for _, row := range rows {
 		if row.Created.Before(since) {
 			continue
 		}
+		if !inScope(scope, row.SeatOf()) {
+			continue
+		}
 		for _, has := range row.Tags {
 			if has == tag {
-				found = append(found, Occurrence{At: row.Created, Stream: StreamQueue, Value: tag, Ref: row.ID})
+				found = append(found, Occurrence{At: row.Created, Stream: StreamQueue, Value: tag, Ref: row.ID,
+					Seat: row.SeatOf()})
 				break
 			}
 		}
@@ -160,7 +216,7 @@ func rowOccurrences(rows []RailRow, tag string, since time.Time) []Occurrence {
 
 // StreamSize counts the facts of a signal's stream inside the window: the denominator of the "too broad"
 // rule. A stream with nothing in the window has size zero, and no ratio can be taken from it.
-func (e Evidence) StreamSize(signal Signal, since time.Time) int {
+func (e Evidence) StreamSize(signal Signal, since time.Time, scope string) int {
 	stream, ok := attributedStreams[signal.Kind]
 	if !ok {
 		return 0
@@ -168,7 +224,7 @@ func (e Evidence) StreamSize(signal Signal, since time.Time) int {
 	if stream == StreamQueue {
 		size := 0
 		for _, row := range e.Rows {
-			if !row.Created.Before(since) {
+			if !row.Created.Before(since) && inScope(scope, row.SeatOf()) {
 				size++
 			}
 		}
@@ -176,7 +232,7 @@ func (e Evidence) StreamSize(signal Signal, since time.Time) int {
 	}
 	size := 0
 	for _, fact := range e.Facts {
-		if fact.Stream == stream && !fact.At.Before(since) {
+		if fact.Stream == stream && !fact.At.Before(since) && inScope(scope, fact.Seat) {
 			size++
 		}
 	}
@@ -185,13 +241,13 @@ func (e Evidence) StreamSize(signal Signal, since time.Time) int {
 
 // Commands counts the TOOL lines whose target carries a declared command, at or after since. Literal,
 // case-sensitive, no globs - a command signal is a substring of what the tool was asked to do.
-func (e Evidence) Commands(signal Signal, since time.Time) int {
+func (e Evidence) Commands(signal Signal, since time.Time, scope string) int {
 	if signal.Kind != SignalCommand || signal.Value == "" {
 		return 0
 	}
 	count := 0
 	for _, fact := range e.Facts {
-		if fact.Stream != StreamTool || fact.At.Before(since) {
+		if fact.Stream != StreamTool || fact.At.Before(since) || !inScope(scope, fact.Seat) {
 			continue
 		}
 		if strings.Contains(fact.Value, signal.Value) {
@@ -237,6 +293,9 @@ type Occurrence struct {
 	Stream string    `json:"stream"`
 	Value  string    `json:"value"`
 	Ref    string    `json:"ref"`
+	// Seat is the seat the fact came from, "" when the stream cannot name one. It is reported because a
+	// demotion whose actor cannot be read is a claim the reader has to take on trust.
+	Seat string `json:"seat,omitempty"`
 }
 
 // guardRule is the rule name a `guard:` signal is matched against, with the separator folded to `-`.
@@ -260,9 +319,12 @@ func guardRule(rule string) string {
 // line - so an absent file is measured silence and not a gap, and a present-but-empty one is the same. The
 // two are reported as one stream because a `guard:` signal names a rule, and a rule fires wherever the guard
 // enforces it.
-func readGuard(repo, stateRoot, room string, evidence *Evidence) Skip {
+func readGuard(repos []string, stateRoot, room string, evidence *Evidence) Skip {
 	readAny := false
-	if repo != "" {
+	for _, repo := range repos {
+		if repo == "" {
+			continue
+		}
 		if path, err := refusalSpoolPath(repo); err == nil {
 			if _, statErr := os.Stat(path); statErr == nil {
 				readAny = true
@@ -271,6 +333,7 @@ func readGuard(repo, stateRoot, room string, evidence *Evidence) Skip {
 						ID   string `json:"id"`
 						At   string `json:"ts"`
 						Rule string `json:"rule"`
+						Seat string `json:"seat"`
 					}
 					if json.Unmarshal(raw, &line) != nil || line.Rule == "" {
 						return
@@ -280,7 +343,7 @@ func readGuard(repo, stateRoot, room string, evidence *Evidence) Skip {
 						return
 					}
 					evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard,
-						Value: guardRule(line.Rule), At: at, Ref: line.ID})
+						Value: guardRule(line.Rule), At: at, Ref: line.ID, Seat: line.Seat})
 				})
 			}
 		}
@@ -290,6 +353,9 @@ func readGuard(repo, stateRoot, room string, evidence *Evidence) Skip {
 	paths, _ := filepath.Glob(filepath.Join(stateRoot, "rooms", room, "seats", "*", "tool-calls.jsonl"))
 	for _, path := range paths {
 		readAny = true
+		// The file's own directory names the seat; the line's `seat` field is the writer's answer and wins
+		// when it is there, because a seat dir renamed without its lines would otherwise misattribute them.
+		fromDir := filepath.Base(filepath.Dir(path))
 		readJSONLines(path, func(raw []byte) {
 			var line struct {
 				At      string `json:"at"`
@@ -304,8 +370,12 @@ func readGuard(repo, stateRoot, room string, evidence *Evidence) Skip {
 			if err != nil {
 				return
 			}
+			seat := line.Seat
+			if seat == "" {
+				seat = fromDir
+			}
 			evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard, Value: guardRule(line.Rule),
-				At: at, Ref: "seat " + line.Seat + " " + line.At})
+				At: at, Ref: "seat " + seat + " " + line.At, Seat: seat})
 		})
 	}
 	if !readAny {
@@ -313,6 +383,31 @@ func readGuard(repo, stateRoot, room string, evidence *Evidence) Skip {
 			Reason: "neither a guard refusal spool nor a seat tool log was found for " + room}
 	}
 	return Skip{}
+}
+
+// roomWorktreeDirs lists the directories the ROOM's refusals can be written under (R3 of
+// RULING-2026-10-21-skill-signals.md): a refused commit happens in the seat's own worktree, and its line lands in
+// that worktree's git dir, so a census that read only one checkout saw one seat's refusals out of six. Every
+// directory under `<roomDir>/wt`, and one level below each (the client is a submodule, so
+// `wt/<seat>/agenthub_client` answers a git dir of its own), is handed to the same `refusalSpoolPath` the caller's
+// own repo goes through; a directory that is not a worktree contributes nothing.
+func roomWorktreeDirs(stateRoot, room string) []string {
+	if stateRoot == "" || room == "" {
+		return nil
+	}
+	roomDir, err := clientservices.RoomDir(stateRoot, room)
+	if err != nil {
+		return nil
+	}
+	roots, _ := filepath.Glob(filepath.Join(roomDir, "wt", "*"))
+	var dirs []string
+	for _, root := range roots {
+		dirs = append(dirs, root)
+		below, _ := filepath.Glob(filepath.Join(root, "*"))
+		dirs = append(dirs, below...)
+	}
+	sort.Strings(dirs)
+	return dirs
 }
 
 // refusalSpoolPath is the guard's own spool, asked of git rather than assumed: a linked worktree's git dir is
@@ -336,6 +431,7 @@ func readSends(stateRoot, room string, evidence *Evidence) Skip {
 		return Skip{Stream: StreamSend, Reason: "no seat of " + room + " has a send audit"}
 	}
 	for _, path := range paths {
+		seat := filepath.Base(filepath.Dir(path))
 		readJSONLines(path, func(raw []byte) {
 			var line struct {
 				At      time.Time
@@ -349,7 +445,7 @@ func readSends(stateRoot, room string, evidence *Evidence) Skip {
 				return
 			}
 			evidence.Facts = append(evidence.Facts, Fact{Stream: StreamSend, Value: line.Reason,
-				At: line.At, Ref: line.From + "->" + line.To})
+				At: line.At, Ref: line.From + "->" + line.To, Seat: seat})
 		})
 	}
 	return Skip{}
@@ -413,7 +509,7 @@ func readTools(stateRoot, room string, evidence *Evidence) Skip {
 				return
 			}
 			evidence.Facts = append(evidence.Facts, Fact{Stream: StreamTool, Value: line.Target,
-				At: line.At, Ref: seat})
+				At: line.At, Ref: seat, Seat: seat})
 		})
 	}
 	return Skip{}

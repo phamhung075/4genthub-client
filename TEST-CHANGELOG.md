@@ -305,3 +305,19 @@ their own `row-tag:` value, a guard-only skill claims none, and a skill whose de
 claims none either (the old count answered 3 for all four). `TestTheWindowsDemoteAndPromote` keeps its 3 but its
 fixture rows now carry the tag the promoted skill declares, because an unattributed landing is exactly what the
 new rule stops counting.
+
+## 2026-10-21 - a seat skill sees its own seat's future, and a hold cites what it holds on
+
+- `TestASeatSkillIsJudgedOnItsOwnSeat` (R1): one `seat:go-dev` skill and one `share` skill over the same rule,
+  with a `go-dev` fact and a `reviewer` fact supplied by the test. The seat row counts 1 with `guard:own` and the
+  room row counts 2 - the same facts, two scopes.
+- `TestRefusalSpoolsOfTheRoomsWorktreesAreAllRead` (R3): a git worktree under `<state root>/rooms/room/wt/go-dev`
+  carrying its own `parked-diffs/refusals.jsonl` beside the caller's repo. Both spools are read, the worktree
+  line's own `seat` is kept, and the caller's line is not lost.
+- `TestAHoldRowCitesItsOccurrences`: a provisional skill with one attributed fact holds and cites `guard:rf-hold`
+  (before this, only `demote` filled refs).
+- `TestTheToolStreamIsCountsOnly` now expects `no-signal` rather than `hold` (R2): a declaration made only of
+  `command:` signals has no failure stream, while the errored call is still counted and still demotes nobody.
+  `TestTheWindowsDemoteAndPromote` keeps its demote; its share-level fixture is now read under the room scope,
+  which is what `share` means.
+- `guardstream_test.go` passes the room scope (`""`) to `Occurrences`, whose signature gained it.
