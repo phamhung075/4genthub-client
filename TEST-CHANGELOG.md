@@ -1,10 +1,9 @@
 ## 2026-10-21 - the pid suite splits into eight cases that reap their own fixtures
 
-`rust/agenthub-runtime/tests/seat_guard.rs`: the single
-`a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it` held all eight rows of
+`rust/agenthub-runtime/tests/seat_guard.rs`: one `#[test]` held all eight rows of
 `RULING-2026-10-21-pid-ownership` §6c and spawned a `sleep` before the first assert, so any panic leaked every
-fixture the rows had started (`std::process::Child` has no kill-on-drop). The rows become eight cases -
-`a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it` (ancestry),
+fixture the rows had started (`std::process::Child` has no kill-on-drop). That function is gone; the rows become
+eight cases - `a_child_of_this_process_is_the_seats_by_ancestry`,
 `a_nohup_child_is_the_seats_by_its_mark`, `a_grandchild_behind_a_shell_is_the_seats_by_its_mark`,
 `a_session_leader_is_the_seats_by_its_mark`, `another_seats_process_is_refused_and_the_reason_names_it`,
 `a_process_that_cleared_its_environment_is_nobodys`, `a_reaped_pid_is_not_the_seats` and
@@ -14,6 +13,11 @@ backgrounded JOB, so for `sh -c 'sleep 60'` the recorded pid is the inner shell 
 that pid alone. The walk re-reads `/proc/<pid>/task/<pid>/children` per node rather than parsing a command line, and
 `orphaned()` creates the case's dir before the detached shell redirects into it - a case that detaches before it
 judges anything would otherwise write no pid file, exit 0 and leave a running process unnamed.
+
+Decision of record: `jev=2026-10-21T20:02:15.149275172Z` (lead tier, confidence 1.0) - eight tests with
+`Drop`-owned fixtures, over one function collecting mismatches into a `Vec` and over a `cases!` macro; recorded in
+`~/.config/4genthub/jev_decisions.log` and on board task `0527c4ce`, whose ruling is
+`DECISION-2026-10-21-pid-suite-split.md`.
 
 Measured 2026-10-21 at `3e009d79` plus this diff against the rev-9 asset: `cargo fmt --check` clean, the whole
 `seat_guard` suite 35 passed / 13 failed and zero `sleep 60` survivors after the run - the seven pid cases red by
