@@ -380,6 +380,10 @@ fn pid_in(file: &Path) -> u32 {
 /// Spawn `script` as the background job of a shell that then exits, carrying `mark`, and return its pid. Its parent
 /// is gone, so it is outside the seat's ancestry: only its mark can attribute it (ruling 6c, rows 2-4).
 fn orphaned(dir: &Path, tag: &str, mark: (&str, &str), script: &str) -> u32 {
+    // The case's dir holds the guard's log AND this pid file, and a case that detaches before it judges anything
+    // calls this before anything else creates it: an uncreated dir makes the redirect fail in the detached shell,
+    // which then exits 0 while the process it started is already running and unnamed.
+    std::fs::create_dir_all(dir).expect("the case's own dir");
     let file = dir.join(format!("pid-{tag}"));
     let _ = std::fs::remove_file(&file);
     Command::new("sh")
@@ -394,75 +398,176 @@ fn orphaned(dir: &Path, tag: &str, mark: (&str, &str), script: &str) -> u32 {
     pid_in(&file)
 }
 
-/// Ownership is the seat mark (the `AGENTHUB_ROOM`/`AGENTHUB_SEAT` pair) or ancestry, never the session: the eight
-/// rows of `RULING-2026-10-21-pid-ownership` §6c. Rows 2-8 are red against rev-9's asset and green once §6b lands.
-#[test]
-fn a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it() {
-    let dir = fresh_dir("pid");
-    let verdict = |command: String| {
-        refusal(
-            &dir,
-            WORKTREES,
-            "run_command",
-            serde_json::json!({ "CommandLine": command }),
-        )
-    };
-    let mut spawned: Vec<u32> = Vec::new();
+/// A case's own fixtures: the pids it started, reaped with their descendants when the value drops. `Drop` runs on
+/// the success path AND during an unwind, which is the point - `std::process::Child` has no kill-on-drop, so a
+/// cleanup written after the asserts leaks every fixture spawned before the first panic (measured 2026-10-21 on the
+/// old single test: its row-2 `nohup` panic left a `sleep 60` running after the binary exited; this split suite,
+/// panic and all, leaves none).
+#[derive(Default)]
+struct Fixture {
+    started: Vec<std::process::Child>,
+    detached: Vec<u32>,
+}
 
-    // 1. A child of this very process: the ancestry branch, unchanged.
-    let mut started = Command::new("sleep")
+impl Fixture {
+    /// Spawns `command`, keeps the child for the drop, and returns its pid.
+    fn start(&mut self, command: &mut Command) -> u32 {
+        let child = command.spawn().expect("a fixture starts");
+        let pid = child.id();
+        self.started.push(child);
+        pid
+    }
+
+    /// Takes a pid whose parent is already gone and returns it.
+    fn detach(&mut self, pid: u32) -> u32 {
+        self.detached.push(pid);
+        pid
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        for child in &mut self.started {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        for &pid in &self.detached {
+            reap(pid);
+        }
+    }
+}
+
+/// Reaps `pid` and the processes under it, leaves first: `orphaned()` records `$!`, the backgrounded JOB - for
+/// `sh -c 'sleep 60'` that is the inner shell and its `sleep` is a child - so killing the recorded pid alone strands
+/// the leaf on every run where the row passes (`DECISION-2026-10-21-pid-suite-split.md`). The walk ASKS the kernel
+/// (`/proc/<pid>/task/<pid>/children`, re-read per node) rather than guessing from a command line, and an `exec` in
+/// the script is no fix: a shell with a child is the shape the grandchild row exists to test.
+fn reap(pid: u32) {
+    for child in children_of(pid) {
+        reap(child);
+    }
+    let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+}
+
+/// The direct children the kernel reports for `pid`, or none: a process that exited, is a zombie or is not ours has
+/// no readable `children` file, and that is not an error at reaping time.
+fn children_of(pid: u32) -> Vec<u32> {
+    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
+        .map(|text| {
+            text.split_whitespace()
+                .filter_map(|word| word.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One `run_command` verdict of the pid matrix: the command judged through the guard with the case's own log dir.
+fn pid_verdict(dir: &Path, command: &str) -> Option<String> {
+    refusal(
+        dir,
+        WORKTREES,
+        "run_command",
+        serde_json::json!({ "CommandLine": command }),
+    )
+}
+
+/// Ownership is the seat mark (the `AGENTHUB_ROOM`/`AGENTHUB_SEAT` pair) or ancestry, never the session: the eight
+/// rows of `RULING-2026-10-21-pid-ownership` §6c, one `#[test]` per case so a red run names its own row and each case
+/// owns its fixture. Rows 2-8 are red against rev-9's asset and green once §6b lands; row 8's five group forms are
+/// one case (parsing), not five fixtures.
+///
+/// Row 1: a child of this very process is the seat's by ancestry.
+#[test]
+fn a_child_of_this_process_is_the_seats_by_ancestry() {
+    let dir = fresh_dir("pid-ancestry");
+    let mut fixture = Fixture::default();
+    let mut started = Command::new("sleep");
+    started
         .arg("60")
         .env("AGENTHUB_ROOM", MARK.0)
-        .env("AGENTHUB_SEAT", MARK.1)
-        .spawn()
-        .expect("sleep");
-    spawned.push(started.id());
+        .env("AGENTHUB_SEAT", MARK.1);
+    let pid = fixture.start(&mut started);
     for command in [
-        format!("kill -9 {}", started.id()),
-        format!("kill -TERM {}", started.id()),
-        format!("kill -s TERM {}", started.id()),
-        format!("kill -0 {}", started.id()),
+        format!("kill -9 {pid}"),
+        format!("kill -TERM {pid}"),
+        format!("kill -s TERM {pid}"),
+        format!("kill -0 {pid}"),
     ] {
-        assert_eq!(verdict(command.clone()), None, "{command}");
+        assert_eq!(pid_verdict(&dir, &command), None, "{command}");
     }
+}
 
-    // 2-4. Detached, so the ancestry branch cannot pass them for the wrong reason: a `nohup`'d child whose shell is
-    // reaped, a grandchild behind a shell, and a process that made itself a session leader.
-    for (tag, script) in [
-        ("nohup", "nohup sleep 60"),
-        ("grandchild", "sh -c 'sleep 60'"),
-        ("setsid", "setsid sleep 60"),
-    ] {
-        let pid = orphaned(&dir, tag, MARK, script);
-        spawned.push(pid);
-        let command = format!("kill -9 {pid}");
-        assert_eq!(verdict(command.clone()), None, "row {tag}: {command}");
-    }
+/// Row 2: a `nohup`'d child whose shell is reaped is outside the ancestry, so only its mark can attribute it.
+#[test]
+fn a_nohup_child_is_the_seats_by_its_mark() {
+    let dir = fresh_dir("pid-nohup");
+    let mut fixture = Fixture::default();
+    let pid = fixture.detach(orphaned(&dir, "nohup", MARK, "nohup sleep 60"));
+    let command = format!("kill -9 {pid}");
+    assert_eq!(pid_verdict(&dir, &command), None, "{command}");
+}
 
-    // 5. Another seat's process: refused, and the reason names the owner seat.
-    let other = orphaned(&dir, "other-seat", ("demo", "lead"), "sleep 60");
-    spawned.push(other);
-    let why = verdict(format!("kill {other}")).expect("another seat's process is not ours");
+/// Row 3: a grandchild behind a shell - the shell is the recorded pid and the `sleep` under it is the leaf.
+#[test]
+fn a_grandchild_behind_a_shell_is_the_seats_by_its_mark() {
+    let dir = fresh_dir("pid-grandchild");
+    let mut fixture = Fixture::default();
+    let pid = fixture.detach(orphaned(&dir, "grandchild", MARK, "sh -c 'sleep 60'"));
+    let command = format!("kill -9 {pid}");
+    assert_eq!(pid_verdict(&dir, &command), None, "{command}");
+}
+
+/// Row 4: a process that made itself a session leader - detached twice over.
+#[test]
+fn a_session_leader_is_the_seats_by_its_mark() {
+    let dir = fresh_dir("pid-setsid");
+    let mut fixture = Fixture::default();
+    let pid = fixture.detach(orphaned(&dir, "setsid", MARK, "setsid sleep 60"));
+    let command = format!("kill -9 {pid}");
+    assert_eq!(pid_verdict(&dir, &command), None, "{command}");
+}
+
+/// Row 5: another seat's process is refused, and the reason names the owner seat.
+#[test]
+fn another_seats_process_is_refused_and_the_reason_names_it() {
+    let dir = fresh_dir("pid-other-seat");
+    let mut fixture = Fixture::default();
+    let other = fixture.detach(orphaned(&dir, "other-seat", ("demo", "lead"), "sleep 60"));
+    let why =
+        pid_verdict(&dir, &format!("kill {other}")).expect("another seat's process is not ours");
     assert!(why.contains("is marked"), "{why}");
     assert!(why.contains("demo/lead"), "{why}");
+}
 
-    // 6. A process that cleared its environment carries no mark and is nobody's.
-    let bare = orphaned(&dir, "env-i", MARK, "env -i sleep 60");
-    spawned.push(bare);
-    let why = verdict(format!("kill {bare}")).expect("an unmarked process is not ours");
+/// Row 6: a process that cleared its environment carries no mark and is nobody's.
+#[test]
+fn a_process_that_cleared_its_environment_is_nobodys() {
+    let dir = fresh_dir("pid-env-i");
+    let mut fixture = Fixture::default();
+    let bare = fixture.detach(orphaned(&dir, "env-i", MARK, "env -i sleep 60"));
+    let why = pid_verdict(&dir, &format!("kill {bare}")).expect("an unmarked process is not ours");
     assert!(
         why.contains("names no AGENTHUB_ROOM/AGENTHUB_SEAT"),
         "{why}"
     );
+}
 
-    // 7. A pid that is gone has no environment left to attribute.
-    let mut reaped = Command::new("true").spawn().expect("true");
-    let gone = reaped.id();
-    reaped.wait().expect("true exits");
-    let why = verdict(format!("kill {gone}")).expect("a reaped pid is not ours");
+/// Row 7: a pid that is gone has no environment left to attribute. The pid is judged immediately, so no other test
+/// can be handed the same number between the exit and the verdict.
+#[test]
+fn a_reaped_pid_is_not_the_seats() {
+    let dir = fresh_dir("pid-reaped");
+    let mut gone = Command::new("true").spawn().expect("true");
+    let pid = gone.id();
+    gone.wait().expect("true exits");
+    let why = pid_verdict(&dir, &format!("kill {pid}")).expect("a reaped pid is not ours");
     assert!(why.contains("no readable environment"), "{why}");
+}
 
-    // 8. A process group signals every process in it, other seats' included.
+/// Row 8: a process group signals every process in it, other seats' included - one case, five spellings.
+#[test]
+fn a_process_group_operand_is_refused_whatever_its_spelling() {
+    let dir = fresh_dir("pid-group");
     for command in [
         "kill -29162",
         "kill -- -29162",
@@ -470,15 +575,9 @@ fn a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it() {
         "kill 0",
         "kill -65",
     ] {
-        let why = verdict(command.to_owned()).expect("a group is not a pid");
+        let why = pid_verdict(&dir, command).expect("a group is not a pid");
         assert!(why.contains("is a process group"), "{command}: {why}");
     }
-
-    for pid in &spawned {
-        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
-    }
-    let _ = started.kill();
-    let _ = started.wait();
 }
 
 #[test]

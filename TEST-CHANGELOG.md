@@ -1,3 +1,25 @@
+## 2026-10-21 - the pid suite splits into eight cases that reap their own fixtures
+
+`rust/agenthub-runtime/tests/seat_guard.rs`: the single
+`a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it` held all eight rows of
+`RULING-2026-10-21-pid-ownership` §6c and spawned a `sleep` before the first assert, so any panic leaked every
+fixture the rows had started (`std::process::Child` has no kill-on-drop). The rows become eight cases -
+`a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it` (ancestry),
+`a_nohup_child_is_the_seats_by_its_mark`, `a_grandchild_behind_a_shell_is_the_seats_by_its_mark`,
+`a_session_leader_is_the_seats_by_its_mark`, `another_seats_process_is_refused_and_the_reason_names_it`,
+`a_process_that_cleared_its_environment_is_nobodys`, `a_reaped_pid_is_not_the_seats` and
+`a_process_group_operand_is_refused_whatever_its_spelling` - each with its own `dir` and its own `Fixture`, whose
+`Drop` kills the children it started and reaps the pids it took, leaves first: `orphaned()` records `$!`, the
+backgrounded JOB, so for `sh -c 'sleep 60'` the recorded pid is the inner shell and its `sleep` survives a kill of
+that pid alone. The walk re-reads `/proc/<pid>/task/<pid>/children` per node rather than parsing a command line, and
+`orphaned()` creates the case's dir before the detached shell redirects into it - a case that detaches before it
+judges anything would otherwise write no pid file, exit 0 and leave a running process unnamed.
+
+Measured 2026-10-21 at `3e009d79` plus this diff against the rev-9 asset: `cargo fmt --check` clean, the whole
+`seat_guard` suite 35 passed / 13 failed and zero `sleep 60` survivors after the run - the seven pid cases red by
+design (the asset refuses what the ruling allows), the ancestry case green, and the six quoting reds main already
+carries. On the un-split test the same measurement left a `sleep 60` running after the binary exited.
+
 ## 2026-10-21 - the quoting suite carries the gate's B1 fix: the directory a quoted `cd` names, and the two flipped rows (rust, branch 4genthub-min/rev9-tests-fold)
 
 `rust/agenthub-runtime/tests/seat_guard.rs`, on `ca22c477`. Gate `qitem-20261021181739-9da6703153f7` found a quoted
