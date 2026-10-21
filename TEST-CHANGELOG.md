@@ -1,3 +1,15 @@
+## 2026-10-21 - the seat guard's import rule and its revision-6 source table (rust, branch 4genthub-min/guard-imports-a-tree)
+
+`rust/agenthub-runtime/tests/seat_guard.rs` gains `a_stash_entry_is_read_whatever_verb_imports_it`: a fixture
+whose `stash@{1}` rewrites the guard, plus a branch that differs only outside the protected paths. Nine refusals
+(`stash branch`, `cherry-pick`/`merge`/`rebase`/`checkout`/`switch` on the entry, `switch -c x <entry>`, the
+`git branch sneaky && git cherry-pick sneaky` pair in ONE call, and `stash push -- <guard>`), the path-free
+`stash push` over a modified guard, and five controls that must stay allowed (`cherry-pick HEAD`, `switch -c y
+HEAD`, `checkout <a branch outside the protected paths>`, `stash list`, `stash show -p`). The probe table also
+pins `hooks/pre` and `.gemini/config/hooks.json`, which criterion 2 named but the table did not carry, and
+`patch -dhooks/pre` (attached) beside the split spelling. Measured: 27 passed, 0 failed with the asset patch;
+against the pin asset 20 passed, 7 failed.
+
 ## 2026-10-21 - the evidence verb refuses a placeholder `tsc` (go, branch 4genthub-min/guard-imports-a-tree)
 
 `internal/clientevidence/evidence_test.go` gains three cases over `notTheCompiler`: a bare `tsc` resolving

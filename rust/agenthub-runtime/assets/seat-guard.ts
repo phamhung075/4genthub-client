@@ -3,10 +3,10 @@
 //
 // It does two jobs and nothing else:
 //   1. GUARD: block the calls the owner's standing rules forbid a seat - printing a secret from a `.env`
-//      file, running Docker, pushing (a push to main deploys production; the lead pushes after the reviewer
-//      gate and a green test run, every other seat does not), changing the room's own tmux server,
-//      bypassing the git hooks, destructive git, killing processes by pattern, building the frontend locally
-//      (a vite build took 3.9 GB), and writing outside the directories
+//      file, running Docker, changing the room's own tmux server, pushing (only the lead pushes, after the
+//      reviewer gate and a green test run; every other seat does not), bypassing the git hooks, destructive
+//      git, importing a tree from outside (a patch the guard cannot read), killing processes by pattern,
+//      building the frontend locally (a vite build took 3.9 GB), and writing outside the directories
 //      the launcher names for the seat ($AGENTHUB_WORKTREES, set by the supervisor from the room spec) or into the
 //      frozen plan files and the guard's own sources.
 //   2. LOG: append ONE line per tool call to <seat dir>/tool-calls.jsonl, so "what did this seat do, and was it
@@ -19,6 +19,7 @@
 // A line is {at, seat, session, tool, target, target_class, outcome, ms, bytes_out?, rule?, blocked_rule?, error?}. `outcome` is "ok", "error" or
 // "blocked"; a blocked call carries the `rule` that refused it. An MCP call is the tool mcp__<server>_<tool>
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
+import { spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
@@ -187,6 +188,130 @@ function destroys({ verb, args }: { verb: string; args: string[] }): string {
   if (verb === "commit" && args.includes("--amend")) return "git commit --amend rewrites a commit; make a new commit";
   return "";
 }
+
+// ---- what a patch would write ---------------------------------------------------------------------------------
+// A patch NAMES a file to read and a tree to write: the protected paths are never arguments, so no write-target
+// rule could see them, and `git apply guard.patch` / `patch -p1 < guard.diff` wrote the guard that refuses them
+// (measured 2026-10-20, task 1c06bcd0). The test below is on the TAIL of a header token - a basename, or a
+// protected directory anywhere in the path - so it never has to emulate `-p`: stripping a prefix shortens a path
+// and cannot hide a tail, while -p is in measured use 23 times across the five seats. A destination-rewriting flag
+// (`--directory`, `--prefix`, `--unsafe-paths`, `patch -d`) moves the write to a path no header line names, so
+// those are refused instead of composed: a wrong composition order fails OPEN, which is the hole itself.
+const unquote = (token: string): string => {
+  const quoted = token.match(/^"(.*)"$/) ?? token.match(/^'(.*)'$/);
+  if (!quoted) return token;
+  return quoted[1]
+    .replace(/\\([0-7]{3})/g, (_, oct: string) => String.fromCharCode(Number.parseInt(oct, 8)))
+    .replace(/\\\\/g, "\\")
+    .replace(/\\"/g, '"');
+};
+
+// One header value: a quoted path, else the value up to a tab (a plain `---`/`+++` line may carry a timestamp).
+const headerPath = (rest: string): string => {
+  const text = rest.trim();
+  if (text.startsWith('"')) {
+    const end = text.slice(1).search(/(?<!\\)"/);
+    return unquote(end < 0 ? text : text.slice(0, end + 2));
+  }
+  return text.split("\t")[0].trim();
+};
+
+// Every path a patch document names, on either side of every form git emits: `diff --git a/X b/Y`, the `---`/`+++`
+// pair (a deletion's `+++ /dev/null` still leaves the `-` side naming the file), rename and copy, and the
+// "Binary files a/X and b/Y differ" line. The WHOLE document is read, so an mbox with several messages is covered,
+// and a `GIT binary patch` block is caught by the `diff --git` line that precedes it.
+function patchNames(text: string): string[] {
+  const names: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      const pair = line.slice("diff --git ".length).match(/^("(?:\\.|[^"\\])*"|\S+)\s+("(?:\\.|[^"\\])*"|\S+)$/);
+      if (pair) names.push(unquote(pair[1]), unquote(pair[2]));
+      continue;
+    }
+    if (line.startsWith("--- ") || line.startsWith("+++ ")) names.push(headerPath(line.slice(4)));
+    const moved = line.match(/^(?:rename|copy) (?:from|to) (.*)$/);
+    if (moved) names.push(headerPath(moved[1]));
+    const binary = line.match(/^Binary files (.*) and (.*) differ$/);
+    if (binary) names.push(headerPath(binary[1]), headerPath(binary[2]));
+  }
+  return names.filter((n) => n && n !== "/dev/null");
+}
+
+// The patch a statement reads: the word after a `<` redirect, else its first operand. A bare `-`, a pipe with no
+// operand and a `patch` with no argument name no document at all, and null is how that is reported - the caller
+// refuses, because the alternative is a document the guard never saw.
+function patchSource(part: string, args: string[]): string | null {
+  const redirect = part.match(/(?<![0-9&>])<\s*([^\s<>|;&]+)/);
+  if (redirect) return unquote(redirect[1]);
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "-p" || arg === "-d") {
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) continue;
+    return unquote(arg);
+  }
+  return null;
+}
+
+// The refusal every one of these verbs shares when it would write a protected path.
+const OWNERS_GUARD =
+  "the git hooks and the seat guard are the owner's to change: this would write a protected path. Land the change as a commit the lead merges, or ask the owner to apply it";
+
+// ---- what a REF would import ----------------------------------------------------------------------------------
+// A stash entry IS a commit, and the owner makes stashes unguarded, so `git checkout <stash>`, `git switch <stash>`,
+// `git cherry-pick <stash>`, `git merge <stash>` and `git rebase <stash>` imported the guard through a source no rule
+// read: measured 2026-10-21 (task 1c06bcd0) - the base tree's asset read `const old = 1;`, a stash entry's tree read
+// `const victim = 1;`, and after `git checkout -q <entry>` the working tree held the entry's bytes with no protected
+// path named anywhere in the command. The rule therefore triggers on the SOURCE of an import, not on the verb: every
+// operand is resolved, and one resolving into the stash reflog is read the way `git stash pop` already is. A plain
+// commit operand stays allowed - a guard change in a commit was made by the lead or the owner, the sanctioned path.
+const stashSeen = new Map<string, Set<string>>();
+function stashEntries(here: string): Set<string> {
+  const seen = stashSeen.get(here);
+  if (seen) return seen;
+  // A reflog that cannot be read yields no entries: with no stash there is no entry to import, so nothing is written.
+  const out = spawnSync("git", ["-C", here, "reflog", "refs/stash", "--format=%H"], { encoding: "utf8" });
+  const set = new Set(
+    out.status === 0 ? String(out.stdout ?? "").split("\n").map((line) => line.trim()).filter(Boolean) : [],
+  );
+  stashSeen.set(here, set);
+  return set;
+}
+
+// What an operand names as a commit, or null when it names no commit at all - `switch -c x <ref>` CREATES `x`, so an
+// operand that does not resolve yet is allowed: the verb fails or writes something the guard did not have to guess.
+function resolved(here: string, op: string): string | null {
+  const out = spawnSync("git", ["-C", here, "rev-parse", "--verify", `${op}^{commit}`], { encoding: "utf8" });
+  if (out.status !== 0) return null;
+  return String(out.stdout ?? "").trim() || null;
+}
+
+// The paths a stash entry would write, read the way `git stash pop` is read, or null when the entry cannot be read.
+// An unreadable entry is null and not an empty list: this read is the one that exists to see the guard.
+function stashWrites(here: string, ref: string): string[] | null {
+  const tracked = spawnSync("git", ["-C", here, "diff", "--name-only", "--no-renames", `${ref}^1`, ref], { encoding: "utf8" });
+  if (tracked.status !== 0) return null;
+  // A stash made with -u keeps its untracked files in a third parent; that read failing means there are none.
+  const untracked = spawnSync("git", ["-C", here, "ls-tree", "-r", "--name-only", `${ref}^3`], { encoding: "utf8" });
+  return `${String(tracked.stdout ?? "")}\n${String(untracked.stdout ?? "")}`
+    .split("\n")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+// The paths git itself lists for the tree or the index, which is how `git stash push` names what it would revert.
+function listedPaths(here: string, ...args: string[]): string[] {
+  const out = spawnSync("git", ["-C", here, ...args, "--name-only"], { encoding: "utf8" });
+  return out.status === 0
+    ? String(out.stdout ?? "").split("\n").map((name) => name.trim()).filter(Boolean)
+    : [];
+}
+
+const unreadableStash =
+  "the stash entry cannot be read, so the guard cannot see what it writes; look at it with `git stash show -p` and apply it with the owner";
+
 
 // A pid is owned when it descends from the guard's process or its parent (the seat's agent): a seat may stop what
 // it started, not another seat's processes or a daemon.
@@ -424,7 +549,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     rule: "docker",
     check: (tool, input) =>
       tool === "bash" && statements(input).some((part) => DOCKER_CALL.test(part))
-        ? "Docker is not run from a seat; production updates by a push the owner approves"
+        ? "Docker is not run from a seat; report what the container change is for to the lead"
         : "",
   },
   {
@@ -471,6 +596,112 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
         const git = gitOf(part);
         const reason = git ? destroys(git) : "";
         if (reason) return reason;
+      }
+      return "";
+    },
+  },
+  {
+    // WHAT A VERB IMPORTS IS NOT AN ARGUMENT. `git apply`, `git am` and `patch` name a document to read and a tree
+    // to write, and neither is the protected path, so the write-target rules saw nothing: all six were allowed at
+    // the pin and one of them rewrote this file (measured 2026-10-20, task 1c06bcd0). `git checkout -- <path>`,
+    // `git restore <path>` and `git stash pop|apply|branch` import from the index or a stash entry, so they are read
+    // here too - a stash may have been made by the owner, unguarded. The verbs that import COMMITTED content
+    // (checkout, switch, cherry-pick, merge, rebase) stay allowed on a plain commit, and are read on an operand that
+    // resolves into the stash reflog, because a stash entry IS a commit (measured 2026-10-21, revision 6).
+    rule: "git-imports-a-tree",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      let dir = process.cwd();
+      // A name a statement in THIS call makes at a stash entry: `git branch sneaky stash@{0} && git cherry-pick sneaky`
+      // is one tool call, and at hook time `sneaky` does not exist yet, so the alias has to be remembered rather than
+      // resolved (measured 2026-10-21, revision 6 - without this the pair was allowed and wrote the guard).
+      const aliases = new Map<string, string>();
+      for (const part of statements(input)) {
+        // The directory a patch path resolves against: a `cd` in this statement, else the tracked one. A `cd` inside
+        // a subshell is not tracked, and the read then fails closed.
+        const cd = part.trim().match(/^cd\s+(\S+)/);
+        if (cd) {
+          dir = resolve(dir, unquote(cd[1]));
+          continue;
+        }
+        const git = gitOf(part);
+        const words = part.trim().split(/\s+/);
+        const isPatch = !git && words[0] === "patch";
+        if (!isPatch && !(git && /^(apply|am|branch|checkout|restore|stash|switch|cherry-pick|merge|rebase)$/.test(git.verb))) continue;
+        const here = git ? resolve(dir, part.match(/(?:^|\s)-C\s+(\S+)/)?.[1] ?? ".") : dir;
+
+        if (git && /^(checkout|restore)$/.test(git.verb) && (git.verb === "restore" || git.args.includes("--"))) {
+          const after = git.verb === "checkout" ? git.args.slice(git.args.indexOf("--") + 1) : git.args;
+          if (after.filter((a) => !a.startsWith("-")).some((p) => protectedPath(absolute(resolve(here, unquote(p))))))
+            return OWNERS_GUARD;
+          continue;
+        }
+        if (git && git.verb === "branch") {
+          // Making a name is harmless on its own - nothing is written - but the name it makes is remembered for the
+          // rest of this call, so a cherry-pick of it in the same statement resolves to the entry it points at.
+          const [name, start] = git.args.filter((a) => !a.startsWith("-"));
+          const at = name && start ? resolved(here, unquote(start)) : null;
+          if (name && at) aliases.set(name, at);
+          continue;
+        }
+        if (git && /^(checkout|switch|cherry-pick|merge|rebase)$/.test(git.verb)) {
+          // The SOURCE of the import: an operand that already names a commit, read against the stash entries. A
+          // `switch -c x <ref>` operand that names no commit is its own new branch, so it lands in `resolved` as null.
+          const entry = git.args
+            .filter((a) => !a.startsWith("-"))
+            .map((op) => aliases.get(unquote(op)) ?? resolved(here, unquote(op)))
+            .find((sha) => sha !== null && stashEntries(here).has(sha));
+          if (entry) {
+            const names = stashWrites(here, entry);
+            if (!names) return unreadableStash;
+            if (names.some((p) => protectedPath(absolute(resolve(here, p))))) return OWNERS_GUARD;
+          }
+          continue;
+        }
+        if (git && git.verb === "stash") {
+          const sub = git.args[0] ?? "";
+          if (/^(pop|apply|branch)$/.test(sub)) {
+            // The ref is the word AFTER the subcommand (`stash branch <name> [<stash>]` names its entry third); with
+            // none, the entry is stash@{0}.
+            const rest = git.args.slice(sub === "branch" ? 2 : 1);
+            const ref = rest.find((a) => !a.startsWith("-")) ?? "stash@{0}";
+            const names = stashWrites(here, ref);
+            if (!names) return unreadableStash;
+            if (names.some((p) => protectedPath(absolute(resolve(here, p))))) return OWNERS_GUARD;
+            continue;
+          }
+          if (sub === "push") {
+            // The destruction side of the same class: `stash push` reverts what it stashes to HEAD, so a path named
+            // after `--` - or, in the path-free form, whatever the tree and the index say changed - is read.
+            const dash = git.args.indexOf("--");
+            const named =
+              dash >= 0
+                ? git.args.slice(dash + 1).filter((a) => !a.startsWith("-"))
+                : [...listedPaths(here, "diff"), ...listedPaths(here, "diff", "--cached")];
+            if (named.some((p) => protectedPath(absolute(resolve(here, p))))) return OWNERS_GUARD;
+            continue;
+          }
+          continue;
+        }
+
+        const args = git ? git.args : words.slice(1);
+        // The forms that write nothing: `git am`'s own control verbs, and the dry runs.
+        if (git && git.verb === "am" && args.some((a) => /^--(continue|abort|skip|resolved)$/.test(a))) continue;
+        if (args.some((a) => /^--(check|stat|summary|numstat)$/.test(a) || a === "--dry-run")) continue;
+        if (args.some((a) => /^--(directory|prefix|unsafe-paths)(=|$)/.test(a)) || (isPatch && args.some((a) => /^-[A-Za-z]*d/.test(a))))
+          return "this command names its own destination (--directory, --prefix, --unsafe-paths, patch -d), so the guard cannot see the paths it writes: cd into the directory and apply there";
+        const source = patchSource(part, args);
+        if (!source)
+          return "this command takes its patch from stdin, so the guard cannot see what it writes. Name the patch file, or land the change as a commit";
+        let text: string | null = null;
+        try {
+          text = readFileSync(resolve(here, source.replace(/^~(?=\/|$)/, homedir())), "utf8");
+        } catch {
+          text = null;
+        }
+        if (text === null)
+          return "the patch file cannot be read, so the guard cannot see what it writes; name a file inside your worktrees";
+        if (patchNames(text).some((p) => protectedPath(absolute(resolve(here, p))))) return OWNERS_GUARD;
       }
       return "";
     },
@@ -526,7 +757,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     check: (tool, input) =>
       pushAuthority() || tool !== "bash" || !statements(input).some((part) => GIT_PUSH_CALL.test(part))
         ? ""
-        : "a seat does not push: a push to main deploys production and only the lead pushes it. Report the commit to the lead",
+        : "a seat does not push: only the lead pushes, after the reviewer gate and a green test run. Report the commit to the lead",
   },
   {
     // A ceiling a seat can raise is not a ceiling. READING the room's limits stays the seat's business - it should
