@@ -15,7 +15,7 @@ import (
 )
 
 const guardUsage = `usage: 4genteam guard install [--checkout DIR] [--home DIR]
-       4genteam guard uninstall [--checkout DIR]
+       4genteam guard uninstall [--checkout DIR] [--home DIR]
        4genteam guard run pre-commit|pre-push [args...]`
 
 // ExitRefused is the git guard declining the command git called the hook for. Any non-zero exit from a hook
@@ -29,8 +29,10 @@ func Commands() []clientcmd.Command { return []clientcmd.Command{guardCommand{}}
 
 type guardCommand struct{}
 
-func (guardCommand) Name() string    { return "guard" }
-func (guardCommand) Summary() string { return "the guard: install its git hooks and runtime entries, or run one" }
+func (guardCommand) Name() string { return "guard" }
+func (guardCommand) Summary() string {
+	return "the guard: install its git hooks and runtime entries, or run one"
+}
 
 func (guardCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
@@ -83,9 +85,9 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "the git guard is in force for %s: %d hook(s) written, and the hooks folder git resolves is "+
 		"the one they went into\n", *checkout, len(installed))
-	// THE RUNTIME SIDE, in the same verb: the git guard covers git, and these entries are what covers a tool
-	// call in a claude or agy window. A machine with none of the runtimes installed writes nothing and says so
-	// in one line.
+	// THE RUNTIME SIDE, in the same verb: the git guard covers git, and these entries are what covers the runtimes
+	// whose only hook surface is their owner-wide file. A machine with none of the runtimes installed writes
+	// nothing and says so in one line.
 	root := *home
 	if root == "" {
 		root, err = clientenv.RealHome()
@@ -97,11 +99,17 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	hooks, err := InstallRuntimeHooks(root)
 	if err != nil {
+		// A partial install is named before the refusal: the entries written before the failing file are in force,
+		// and a reader who sees only the error would go looking for an install that half happened.
+		for _, hook := range hooks {
+			fmt.Fprintln(stdout, RuntimeInstallLine(hook))
+		}
 		fmt.Fprintf(stderr, "4genteam guard install: %v\n", err)
 		return ExitRefused
 	}
 	if len(hooks) == 0 {
-		fmt.Fprintf(stdout, "no claude, agy or gemini config was found under %s, so no runtime entry was written\n", root)
+		fmt.Fprintf(stdout, "no runtime of this client (agy, claude, codex) was found under %s, so no runtime "+
+			"entry was written\n", root)
 		return clientcmd.ExitOK
 	}
 	for _, hook := range hooks {
@@ -114,12 +122,35 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("guard uninstall", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	checkout := flags.String("checkout", ".", "the checkout whose guard hooks should be taken back out")
+	home := flags.String("home", "", "the home whose runtime config files are cleaned (default: the registered user's home)")
 	if err := flags.Parse(args); err != nil {
 		return clientcmd.ExitUsage
 	}
 	if flags.NArg() > 0 {
 		fmt.Fprintf(stderr, "4genteam guard uninstall: unexpected argument %q\n%s\n", flags.Arg(0), guardUsage)
 		return clientcmd.ExitUsage
+	}
+	// The runtime entries come out FIRST, because they do not depend on the checkout at all: an entry install wrote
+	// is removed by the home it was written in, and a checkout that has since been deleted is exactly the case where
+	// the owner still needs the entry gone. Taking the git hooks out first would refuse here and leave it behind.
+	failed := false
+	root := *home
+	if root == "" {
+		resolved, err := clientenv.RealHome()
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam guard uninstall: cannot resolve the home whose runtime configs are "+
+				"cleaned: %v\n", err)
+			return ExitRefused
+		}
+		root = resolved
+	}
+	hooks, err := UninstallRuntimeHooks(root)
+	for _, hook := range hooks {
+		fmt.Fprintln(stdout, RuntimeUninstallLine(hook))
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam guard uninstall: %v\n", err)
+		failed = true
 	}
 	removed, err := Uninstall(*checkout, stdout)
 	if err != nil {
@@ -128,10 +159,13 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(removed) == 0 {
 		fmt.Fprintf(stdout, "the git guard is not installed for %s: nothing to take out\n", *checkout)
-		return clientcmd.ExitOK
+	} else {
+		fmt.Fprintf(stdout, "the git guard is out of %s: %d hook(s) removed, and any hook it had replaced is back "+
+			"where it was\n", *checkout, len(removed))
 	}
-	fmt.Fprintf(stdout, "the git guard is out of %s: %d hook(s) removed, and any hook it had replaced is back "+
-		"where it was\n", *checkout, len(removed))
+	if failed {
+		return ExitRefused
+	}
 	return clientcmd.ExitOK
 }
 

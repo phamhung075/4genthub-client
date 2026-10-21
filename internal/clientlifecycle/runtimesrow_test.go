@@ -1,4 +1,5 @@
-// The runtime rows of `doctor`: one row per runtime CLI this machine has, named `guard_<runtime>`, and its lines.
+// The runtime rows of `doctor`: one row per runtime this client launches on this machine, named `guard_<runtime>`,
+// and the lines each row prints.
 package clientlifecycle
 
 import (
@@ -20,20 +21,20 @@ func rowsFromHooks(t *testing.T, hooks []clientguard.RuntimeHook) {
 }
 
 // TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays is the row's whole report: the binary's path, the
-// entry in the owner-wide file, and the row naming the GUARD in that runtime rather than the runtime alone.
+// entry in the owner-wide file named ABSOLUTELY (the row writes one path and must report the same one), and the row
+// naming the GUARD in that runtime rather than the runtime alone.
 func TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays(t *testing.T) {
 	rowsFromHooks(t, []clientguard.RuntimeHook{
-		{Runtime: "claude", Bin: "/usr/bin/claude", Dir: "/home/reader/.claude",
-			Config: ".claude/settings.json", Mode: "--claude-hook", EntryPresent: true},
 		{Runtime: "agy", Bin: "/usr/bin/agy", Dir: "/home/reader/.gemini/config",
-			Config: ".gemini/config/hooks.json", Mode: "--agy-hook",
-			Note: "agy: found, and the guard's entry is not in /home/reader/.gemini/config/hooks.json"},
+			Config: ".gemini/config/hooks.json", Mode: "--agy-hook", EntryPresent: true},
+		{Runtime: "claude", Bin: "/usr/bin/claude", Dir: "/home/reader/.claude",
+			Config: ".claude/settings.json", Mode: "--claude-hook"},
 	})
 	rows := runtimeRowsFor("")
 	if len(rows) != 2 {
 		t.Fatalf("two detected runtimes are two rows: %+v", rows)
 	}
-	if rows[0].Row.Safeguard != "guard_claude" || rows[1].Row.Safeguard != "guard_agy" {
+	if rows[0].Row.Safeguard != "guard_agy" || rows[1].Row.Safeguard != "guard_claude" {
 		t.Fatalf("the rows are named for the guard in each runtime: %+v", rows)
 	}
 	if rows[0].Row.Room != "" {
@@ -46,24 +47,25 @@ func TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays(t *testing.T)
 	}
 
 	placed := strings.Join(runtimeLines(rows[0]), "\n")
-	if !strings.Contains(placed, "found at /usr/bin/claude") {
+	if !strings.Contains(placed, "found at /usr/bin/agy") {
 		t.Errorf("the line says where the binary is: %s", placed)
 	}
-	if !strings.Contains(placed, "the guard's entry is in .claude/settings.json") {
-		t.Errorf("the line says which file carries the entry: %s", placed)
+	if !strings.Contains(placed, "the guard's entry is in /home/reader/.gemini/config/hooks.json") {
+		t.Errorf("the line names the file absolutely, the path install writes: %s", placed)
 	}
 
-	missing := strings.Join(runtimeLines(rows[1]), "\n")
-	if !strings.Contains(missing, "no seat-guard entry in .gemini/config/hooks.json") {
-		t.Errorf("a missing entry names the file it should be in: %s", missing)
+	// claude has no mode in the guard this client ships: the row says so and does not claim an entry.
+	gated := strings.Join(runtimeLines(rows[1]), "\n")
+	if !strings.Contains(gated, "no entry is placed") || !strings.Contains(gated, "--claude-hook") {
+		t.Errorf("the line names the missing mode: %s", gated)
 	}
-	if !strings.Contains(missing, "guard install") {
-		t.Errorf("a missing entry names the verb that writes it: %s", missing)
+	if strings.Contains(gated, "the guard's entry is in") {
+		t.Errorf("a row whose mode the guard lacks must not read as guarded: %s", gated)
 	}
 }
 
-// TestARuntimeInNoConfigAndOnNoPathIsNotARow: a machine without claude says nothing about claude, so a reader does
-// not see a row for a runtime they never installed.
+// TestARuntimeInNoConfigAndOnNoPathIsNotARow: a machine without agy says nothing about agy, so a reader does not see
+// a row for a runtime they never installed.
 func TestARuntimeInNoConfigAndOnNoPathIsNotARow(t *testing.T) {
 	rowsFromHooks(t, nil)
 	if rows := runtimeRowsFor(""); len(rows) != 0 {
@@ -74,54 +76,75 @@ func TestARuntimeInNoConfigAndOnNoPathIsNotARow(t *testing.T) {
 // TestARuntimeFoundOnlyByItsConfigDirectoryStillGetsARow: the binary can leave the PATH while the config stays -
 // a nvm or mise shell, a machine midway through an uninstall - and the entry is still what a seat would read.
 func TestARuntimeFoundOnlyByItsConfigDirectoryStillGetsARow(t *testing.T) {
-	rowsFromHooks(t, []clientguard.RuntimeHook{{Runtime: "claude", Dir: "/home/reader/.claude",
-		Config: ".claude/settings.json", Mode: "--claude-hook", EntryPresent: false}})
+	rowsFromHooks(t, []clientguard.RuntimeHook{{Runtime: "agy", Dir: "/home/reader/.gemini/config",
+		Config: ".gemini/config/hooks.json", Mode: "--agy-hook"}})
 	lines := strings.Join(runtimeLines(runtimeRowsFor("")[0]), "\n")
-	if !strings.Contains(lines, "by its config directory /home/reader/.claude") {
+	if !strings.Contains(lines, "by its config directory /home/reader/.gemini/config") {
 		t.Errorf("the line names the directory that found it: %s", lines)
 	}
 }
 
-// TestARuntimeWithNoGuardModeSaysSoAndIsNotARefusal is gemini's row: the guard has no mode for it, nothing is
-// placed, and the row says why rather than going quiet.
-func TestARuntimeWithNoGuardModeSaysSoAndIsNotARefusal(t *testing.T) {
-	rowsFromHooks(t, []clientguard.RuntimeHook{{Runtime: "gemini", Bin: "/usr/bin/gemini", Dir: "/home/reader/.gemini"}})
+// TestARuntimeWithNoHookSurfaceSaysSoAndIsNotARefusal is codex's row: this client launches it with no settings file
+// and no command hook, so nothing is placed and the row says why rather than going quiet.
+func TestARuntimeWithNoHookSurfaceSaysSoAndIsNotARefusal(t *testing.T) {
+	rowsFromHooks(t, []clientguard.RuntimeHook{{Runtime: "codex", Bin: "/usr/bin/codex", Dir: "/home/reader/.codex"}})
 	rows := runtimeRowsFor("")
-	if len(rows) != 1 || rows[0].Row.State != clientservices.Running {
-		t.Fatalf("gemini's row is a reading: %+v", rows)
+	if len(rows) != 1 || rows[0].Row.State != clientservices.Running || rows[0].Row.Safeguard != "guard_codex" {
+		t.Fatalf("codex's row is a reading: %+v", rows)
 	}
 	lines := strings.Join(runtimeLines(rows[0]), "\n")
-	if !strings.Contains(lines, "no seat-guard entry is placed") || !strings.Contains(lines, "no gemini mode") {
-		t.Errorf("the row says there is no mode for this runtime: %s", lines)
+	if !strings.Contains(lines, "no entry is placed") || !strings.Contains(lines, "no hook surface") {
+		t.Errorf("the row says there is no surface to place one on: %s", lines)
 	}
 }
 
-// TestAConfigThatCannotBeReadIsALineAndNotAFailure: the owner's file is theirs, and doctor reports the read it
-// could not make rather than refusing the whole report for it.
+// TestAConfigThatCannotBeReadIsALineAndNotAFailure: the owner's file is theirs, and doctor reports the read it could
+// not make rather than refusing the whole report for it.
 func TestAConfigThatCannotBeReadIsALineAndNotAFailure(t *testing.T) {
-	rowsFromHooks(t, []clientguard.RuntimeHook{{Runtime: "claude", Bin: "/usr/bin/claude",
-		Config: ".claude/settings.json", Mode: "--claude-hook", ReadError: "settings.json is not JSON"}})
+	rowsFromHooks(t, []clientguard.RuntimeHook{{Runtime: "agy", Bin: "/usr/bin/agy",
+		Config: ".gemini/config/hooks.json", Mode: "--agy-hook", ReadError: "hooks.json is not JSON"}})
 	rows := runtimeRowsFor("")
 	if rows[0].Row.State != clientservices.Running {
 		t.Errorf("an unreadable config is not a refusal: %+v", rows[0].Row)
 	}
 	lines := strings.Join(runtimeLines(rows[0]), "\n")
-	if !strings.Contains(lines, "settings.json is not JSON") {
+	if !strings.Contains(lines, "hooks.json is not JSON") {
 		t.Errorf("the line carries the read error: %s", lines)
 	}
 }
 
-// TestAHomeThatCannotBeResolvedIsOneRowWithItsReason: the rows cannot be read at all, and the report says that
-// once instead of printing nothing.
-func TestAHomeThatCannotBeResolvedIsOneRowWithItsReason(t *testing.T) {
+// TestTheRowForAHomeThatCannotBeResolvedPrintsItsReason is the gate's M3: the row decides nothing, and a bare
+// `running` with no line under it is a report that cannot say why. The reason is in the row's line, which is also
+// what `--json` carries as its reasons.
+func TestTheRowForAHomeThatCannotBeResolvedPrintsItsReason(t *testing.T) {
 	previous := runtimeHome
 	runtimeHome = func() (string, error) { return "", errors.New("no registered home") }
 	t.Cleanup(func() { runtimeHome = previous })
 	rows := runtimeRowsFor("")
-	if len(rows) != 1 || !strings.Contains(rows[0].Hook.ReadError, "no registered home") {
+	if len(rows) != 1 || !strings.Contains(rows[0].Reason, "no registered home") {
 		t.Fatalf("an unreadable home is one row naming the reason: %+v", rows)
 	}
-	if lines := runtimeLines(rows[0]); len(lines) != 0 {
-		t.Errorf("a runtime that was never found prints no lines: %v", lines)
+	lines := runtimeLines(rows[0])
+	if len(lines) == 0 || !strings.Contains(strings.Join(lines, "\n"), "no registered home") {
+		t.Fatalf("the reason reaches the printed line, not only the struct: %v", lines)
+	}
+}
+
+// TestTheDoctorReportCarriesTheRuntimeRows is the gate's m11: nothing outside this package's own case asserted that
+// the report carries these rows, so deleting the doctor's wiring left the suite green. The JSON is built through the
+// same functions the report uses - doctorJSONRows over rowReasons - so the assertion is on the surface a reader
+// sees, not on the helper this file happens to call.
+func TestTheDoctorReportCarriesTheRuntimeRows(t *testing.T) {
+	rowsFromHooks(t, []clientguard.RuntimeHook{{Runtime: "agy", Bin: "/usr/bin/agy",
+		Config: ".gemini/config/hooks.json", Mode: "--agy-hook"}})
+	runtimeRows := runtimeRowFor("")
+	health := []clientservices.Health{runtimeRows[0].Row}
+	reported := doctorJSONRows(health, nil, nil, nil, runtimeRows, nil, nil, nil, nil)
+	if len(reported) != 1 {
+		t.Fatalf("the report carries the row: %+v", reported)
+	}
+	reasons := strings.Join(reported[0].Reasons, "\n")
+	if !strings.Contains(reasons, "guard_agy: found at /usr/bin/agy") {
+		t.Fatalf("the row's reasons are the runtime lines: %v", reported[0].Reasons)
 	}
 }

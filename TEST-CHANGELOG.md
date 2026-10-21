@@ -254,15 +254,23 @@ pins the JEV ref as the line's own `timestamp` and `tier`, and the JEV fixture n
 log never writes.
 
 `internal/clientguard/runtimes_test.go` and `internal/clientlifecycle/runtimesrow_test.go` cover the owner-wide
-half of the guard. `TestInstallRuntimeHooksPlacesAGuardedEntryInEachRuntimeAndKeepsTheRestOfTheFile` writes both
-files through the installer and asserts the owner's `env`, their own hook definition, another tool's key in
-agy's file and the file's mode all survive, that the agy entry equals `agyGuardEntry()`, and that a second run
-adds nothing; `TestInstallWritesClaudeAndAgyButReportsGeminiAsHavingNoMode` pins gemini's note and that no file
-is written for it; `TestTheEntryIsFoundInTheFileTheRuntimeReads` covers both nesting shapes;
-`TestAConfigThisClientCannotReadIsReportedAndNotOverwritten` asserts a non-object file is refused by name and
-left byte-identical; `TestADetectedRuntimeWithoutTheEntryIsReportedWithTheFileThatIsMissing`,
-`TestARuntimeThatIsNotOnPathAndHasNoConfigDirIsNotReported` and `TestTheInstallLineSaysWhereTheEntryIsOrWhyThereIsNone`
-cover the report and the verb's line. On the doctor side `TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays`,
-`TestARuntimeFoundOnlyByItsConfigDirectoryStillGetsARow`, `TestARuntimeWithNoGuardModeSaysSoAndIsNotARefusal`,
-`TestAConfigThatCannotBeReadIsALineAndNotAFailure` and `TestAHomeThatCannotBeResolvedIsOneRowWithItsReason` pin
-the rows, their lines, and that no case refuses `doctor`.
+half of the guard. `TestInstallPlacesTheAgyEntryKeepsTheOwnersFileAndIsByteStable` runs the installer against a
+home holding another tool's `herdr` entry and asserts that key and the owner's indentation survive, that the two
+commands read back from the file equal the text `supervisor/mod.rs` writes (spelled in the test, not built by
+the code under test), that no temporary file is left behind, and that a second install moves not one byte.
+`TestTheEntryGuardsTheSeatAndIsASilentNoOpOutsideOne` RUNS the command the entry carries through `sh` in both
+states: outside a seat it prints agy's own pass-through and never execs the guard, inside one it execs the guard
+from `PI_CODING_AGENT_DIR` (a stand-in script, so the assertion is on behaviour). `TestTheClaudeEntryIsNotWrittenWhileTheAssetHasNoMode`
+and `TestTheClaudeGateMatchesTheRuntimesFlag` pin the gate: claude's row is a row, no entry is written, and the
+constant here equals the runtime's `GUARD_HAS_CLAUDE_HOOK`. `TestARuntimeWithNoHookSurfaceGetsARowAndNoWrite`
+and `TestARuntimeThatIsNotOnPathAndHasNoConfigDirIsNotReported` pin codex and the silence for an undetected
+runtime; `TestTheEntryIsFoundOnlyWithItsMode` is the gate's n3 (an entry under a mode this guard does not write
+reads as missing); `TestAConfigThisClientCannotReadIsReportedAndNotOverwritten` asserts a non-object file is
+refused by name and left byte-identical; `TestUninstallTakesTheEntryBackOutAndKeepsTheOwnersHooks` covers the
+removal; `TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone` and `TestTheAgyEntryIsTheRuntimesOwnObject`
+cover the verb's lines and the entry's shape. On the doctor side
+`TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays` names the binary's path and the config
+absolutely, `TestARuntimeInNoConfigAndOnNoPathIsNotARow`, `TestARuntimeFoundOnlyByItsConfigDirectoryStillGetsARow`,
+`TestARuntimeWithNoHookSurfaceSaysSoAndIsNotARefusal`, `TestAConfigThatCannotBeReadIsALineAndNotAFailure`,
+`TestTheRowForAHomeThatCannotBeResolvedPrintsItsReason` and `TestTheDoctorReportCarriesTheRuntimeRows` pin the
+rows, their lines, the reason on both surfaces, and that no case refuses `doctor`.
