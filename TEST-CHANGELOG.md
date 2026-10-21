@@ -343,3 +343,17 @@ value, a `NAME=value`, a JWT, an `sk-` key and a Bearer token are gone, newlines
 `a_claude_call_reaches_the_rule_its_omp_name_reaches` (each claude tool name against the agy path's verdict for the
 same call) and `a_claude_post_call_answers_empty_and_logs_one_line`. The file is rustfmt-formatted and one
 single-element loop is unrolled for clippy. Measured: `cargo test --offline` 194 + 1 + 35 + 1 passed, 0 failed.
+
+## 2026-10-21 - pid ownership is the seat mark or ancestry, eight rows (rust, branch 4genthub-min/rev9-tests-fold)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, 40 → 41 rows: `a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it`
+carries the eight rows of `RULING-2026-10-21-pid-ownership` §6c - a started child (ancestry), `nohup`, a grandchild
+behind a shell and `setsid` (all three detached through `orphaned()`, whose spawning shell exits, so the ancestry
+branch cannot pass them for the wrong reason), another seat's marked pid (`is marked` in the reason), a target that
+cleared its environment, a reaped pid, and five process-group operands. `refusal_full` exports `AGENTHUB_ROOM=demo`
+so the harness carries both halves of the mark, and `src/supervisor/mod.rs`'s
+`a_seats_env_never_carries_the_connector_credential` also pins `AGENTHUB_ROOM=demo`, `AGENTHUB_SEAT=dev` and that
+neither key is `env_is_denied`. Measured at `3e009d79`: `cargo test --no-run` clean, the pin test 1 passed, the new
+test red at row `nohup` (`pid … was not started by this seat`) - red by design at the rev-9 asset, green once the
+owner's `:361-375`/`:392` edit lands. Whole suite at that asset: 34 passed, 7 failed (the new row plus six
+pre-existing reds by design).

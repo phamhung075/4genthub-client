@@ -4667,6 +4667,17 @@ mod tests {
             Some("demo"),
             "the runtime wins over both"
         );
+        // The pair is the seat MARK the guard reads from /proc/<pid>/environ to attribute a pid (ruling
+        // `RULING-2026-10-21-pid-ownership`): both halves, the seat key over the file's value, and neither scrubbed.
+        assert_eq!(
+            env.get("AGENTHUB_SEAT").map(String::as_str),
+            Some("dev"),
+            "the mark's other half is the seat key"
+        );
+        assert!(
+            !crate::env_is_denied("AGENTHUB_ROOM") && !crate::env_is_denied("AGENTHUB_SEAT"),
+            "a denied key never reaches the pane, so the mark would be unreadable"
+        );
         assert!(!env.contains_key("bad key"));
         let none = seat_env(
             &seat,

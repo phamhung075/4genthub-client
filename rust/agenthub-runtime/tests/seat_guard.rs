@@ -122,6 +122,7 @@ fn refusal_full(
         .arg(guard())
         .args(["--agy-hook", "pre"])
         .env("AGENTHUB_SEAT", seat)
+        .env("AGENTHUB_ROOM", "demo")
         .env("AGENTHUB_SESSION_NAME", session)
         .env_remove("OPENRIG_SESSION_NAME")
         .env("AGENTHUB_WORKTREES", worktrees)
@@ -357,6 +358,127 @@ fn a_seat_cannot_kill_by_pattern_or_kill_pids_it_does_not_own() {
     // The test process is the guard's parent, which the guard treats as the seat's own agent.
     let own = format!("kill -9 {}", std::process::id());
     allowed(&["pgrep -x omp", "kill -l", &own]);
+}
+
+/// The pair the runtime marks a seat's environment with (`supervisor/mod.rs`), inherited by every descendant; the
+/// harness exports the seat half as `AGENTHUB_SEAT=dev`, so the room half is `demo`.
+const MARK: (&str, &str) = ("demo", "dev");
+
+/// The pid a detached shell wrote into `file`, once it is there.
+fn pid_in(file: &Path) -> u32 {
+    for _ in 0..500 {
+        if let Ok(text) = std::fs::read_to_string(file) {
+            if let Ok(pid) = text.trim().parse() {
+                return pid;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("{} never named a pid", file.display());
+}
+
+/// Spawn `script` as the background job of a shell that then exits, carrying `mark`, and return its pid. Its parent
+/// is gone, so it is outside the seat's ancestry: only its mark can attribute it (ruling 6c, rows 2-4).
+fn orphaned(dir: &Path, tag: &str, mark: (&str, &str), script: &str) -> u32 {
+    let file = dir.join(format!("pid-{tag}"));
+    let _ = std::fs::remove_file(&file);
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!("{script} & echo $! > {}", file.display()))
+        .env("AGENTHUB_ROOM", mark.0)
+        .env("AGENTHUB_SEAT", mark.1)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("a shell is needed to detach a target");
+    pid_in(&file)
+}
+
+/// Ownership is the seat mark (the `AGENTHUB_ROOM`/`AGENTHUB_SEAT` pair) or ancestry, never the session: the eight
+/// rows of `RULING-2026-10-21-pid-ownership` §6c. Rows 2-8 are red against rev-9's asset and green once §6b lands.
+#[test]
+fn a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it() {
+    let dir = fresh_dir("pid");
+    let verdict = |command: String| {
+        refusal(
+            &dir,
+            WORKTREES,
+            "run_command",
+            serde_json::json!({ "CommandLine": command }),
+        )
+    };
+    let mut spawned: Vec<u32> = Vec::new();
+
+    // 1. A child of this very process: the ancestry branch, unchanged.
+    let mut started = Command::new("sleep")
+        .arg("60")
+        .env("AGENTHUB_ROOM", MARK.0)
+        .env("AGENTHUB_SEAT", MARK.1)
+        .spawn()
+        .expect("sleep");
+    spawned.push(started.id());
+    for command in [
+        format!("kill -9 {}", started.id()),
+        format!("kill -TERM {}", started.id()),
+        format!("kill -s TERM {}", started.id()),
+        format!("kill -0 {}", started.id()),
+    ] {
+        assert_eq!(verdict(command.clone()), None, "{command}");
+    }
+
+    // 2-4. Detached, so the ancestry branch cannot pass them for the wrong reason: a `nohup`'d child whose shell is
+    // reaped, a grandchild behind a shell, and a process that made itself a session leader.
+    for (tag, script) in [
+        ("nohup", "nohup sleep 60"),
+        ("grandchild", "sh -c 'sleep 60'"),
+        ("setsid", "setsid sleep 60"),
+    ] {
+        let pid = orphaned(&dir, tag, MARK, script);
+        spawned.push(pid);
+        let command = format!("kill -9 {pid}");
+        assert_eq!(verdict(command.clone()), None, "row {tag}: {command}");
+    }
+
+    // 5. Another seat's process: refused, and the reason names the owner seat.
+    let other = orphaned(&dir, "other-seat", ("demo", "lead"), "sleep 60");
+    spawned.push(other);
+    let why = verdict(format!("kill {other}")).expect("another seat's process is not ours");
+    assert!(why.contains("is marked"), "{why}");
+    assert!(why.contains("demo/lead"), "{why}");
+
+    // 6. A process that cleared its environment carries no mark and is nobody's.
+    let bare = orphaned(&dir, "env-i", MARK, "env -i sleep 60");
+    spawned.push(bare);
+    let why = verdict(format!("kill {bare}")).expect("an unmarked process is not ours");
+    assert!(
+        why.contains("names no AGENTHUB_ROOM/AGENTHUB_SEAT"),
+        "{why}"
+    );
+
+    // 7. A pid that is gone has no environment left to attribute.
+    let mut reaped = Command::new("true").spawn().expect("true");
+    let gone = reaped.id();
+    reaped.wait().expect("true exits");
+    let why = verdict(format!("kill {gone}")).expect("a reaped pid is not ours");
+    assert!(why.contains("no readable environment"), "{why}");
+
+    // 8. A process group signals every process in it, other seats' included.
+    for command in [
+        "kill -29162",
+        "kill -- -29162",
+        "kill -- -9",
+        "kill 0",
+        "kill -65",
+    ] {
+        let why = verdict(command.to_owned()).expect("a group is not a pid");
+        assert!(why.contains("is a process group"), "{command}: {why}");
+    }
+
+    for pid in &spawned {
+        let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+    }
+    let _ = started.kill();
+    let _ = started.wait();
 }
 
 #[test]

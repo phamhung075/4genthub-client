@@ -39,6 +39,27 @@ Three owner commits on `owner/seat-guard-rev9`, on top of `d5249fc0` (the revisi
 - `tests/seat_guard.rs` is rustfmt-clean, and one `clippy::single_element_loop` from the rev-9 suite is gone; CI's
   `cargo fmt --check` and `cargo clippy -D warnings` refused both at `d5249fc0`.
 
+## The seat mark is pinned, and the eight pid-ownership rows land (2026-10-21)
+
+The ruling `RULING-2026-10-21-pid-ownership` makes ownership the seat mark the runtime writes into every pane's
+environment (`AGENTHUB_ROOM` + `AGENTHUB_SEAT`, readable at `/proc/<pid>/environ`, so it survives `nohup`,
+reparenting and `setsid`) or ancestry - never the session id. The go-dev half of it is tests only; the asset edit
+(`assets/seat-guard.ts` `:361-375`, `:392`) is the owner's.
+
+- `src/supervisor/mod.rs`: the existing `a_seats_env_never_carries_the_connector_credential` now also pins the
+  mark - `AGENTHUB_ROOM` equals the fixture's `demo`, `AGENTHUB_SEAT` the seat key `dev` (the runtime's key over
+  the value `.env` carries), and neither key is `env_is_denied`, since a scrubbed key never reaches the pane and
+  the mark would be unreadable. No behaviour change.
+- `tests/seat_guard.rs`: `a_pid_is_the_seats_when_it_carries_the_seat_mark_or_descends_from_it`, eight rows -
+  a started child is allowed by ancestry; `nohup`, a grandchild behind a shell, and `setsid` are **detached**
+  (the spawning shell exits and is reaped) so the ancestry branch cannot pass them for the wrong reason; another
+  seat's marked pid is refused with `is marked` in the reason; a target that cleared its environment is nobody's;
+  a reaped pid has no environment left; and a process group (`kill -PGID`, `kill -- -PGID`, `kill -- -9`, `kill 0`,
+  `kill -65`) is refused as a group. The harness carries the whole mark (`AGENTHUB_ROOM=demo`).
+
+Rows 2-8 are red at the rev-9 asset and green once the owner's `:361-375`/`:392` edit lands: at `3e009d79` the new
+test stops at row `nohup` ("pid … was not started by this seat").
+
 ## Verification
 
 At `c9dc09c4` in `rust/agenthub-runtime`: `cargo fmt --check` clean, `cargo clippy --offline --all-targets -D
