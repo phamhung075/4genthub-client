@@ -67,6 +67,35 @@ const SECRET = /\b([A-Za-z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Za-z0-9_]*\s*[=:
 // One log line is one line: whitespace runs, newlines included, collapse to a single space.
 const redact = (text: string): string =>
   text.replace(SECRET, (_m, name, bearer) => `${name ?? bearer}<redacted>`).replace(/\s+/g, " ").trim();
+// THE VALUES THIS SEAT CARRIES, longest first. A redactor that knows only NAMES cannot help when a value is
+// printed without its name - `printenv AGENTHUB_TOKEN`, a `curl` body, a webhook's config - which is exactly
+// how the CapRover triggerbuild token reached a DeepSeek transcript (measured 2026-10-21). Read once: the
+// seat's environment does not change under it.
+const KNOWN_SECRETS: { name: string; value: string }[] = Object.entries(process.env)
+  .filter(([name, value]) => /TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIAL/i.test(name) && (value ?? "").length >= 8)
+  .map(([name, value]) => ({ name, value: value as string }))
+  .sort((a, b) => b.value.length - a.value.length);
+
+// Secret SHAPES, for the values no environment of this seat names: a JWT, an `sk-` API key, a Bearer header,
+// and the `NAME=value` form a `.env` or a `docker inspect` prints.
+const JWT_SHAPE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+const API_KEY_SHAPE = /\bsk-[A-Za-z0-9_-]{16,}/g;
+const BEARER_SHAPE = /\b(Bearer\s+)[A-Za-z0-9._~+/-]{12,}=*/gi;
+const PAIR_SHAPE = /\b([A-Za-z0-9_]*(?:TOKEN|KEY|SECRET|PASSWORD)[A-Za-z0-9_]*\s*[=:]\s*)\S+/gi;
+
+/// Redact VALUES in a tool result, not lines: the seat keeps the shape of what it ran (newlines, columns), and
+/// only the secret itself is replaced. Deliberately NOT `redact` above, whose whitespace collapse belongs to a
+/// one-line log.
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const { name, value } of KNOWN_SECRETS) out = out.split(value).join(`<redacted:${name}>`);
+  return out
+    .replace(JWT_SHAPE, "<redacted:jwt>")
+    .replace(API_KEY_SHAPE, "<redacted:key>")
+    .replace(BEARER_SHAPE, (_m, prefix) => `${prefix}<redacted:bearer>`)
+    .replace(PAIR_SHAPE, (_m, name) => `${name}<redacted>`);
+}
+
 
 function describe(tool: string, input: Record<string, unknown>): string {
   if (tool.startsWith("mcp__")) {
@@ -611,6 +640,49 @@ function coalescingRow(create: { room: string; to: string; tags: string[] }): st
 // The rules. Each returns the reason a call is refused, or "" to let it through.
 const RULES: { rule: string; check: (tool: string, input: Record<string, unknown>) => string }[] = [
   {
+    // PRINTING THE ENVIRONMENT IS PRINTING EVERY SECRET THE SEAT CARRIES. `env`, `printenv` and a bare `set`
+    // dump AGENTHUB_TOKEN and the cloud keys in one call, and the `.env` rule below never saw them because no
+    // path is named. A command that RUNS something under changed variables (`env -u X cmd`, `FOO=bar cmd`)
+    // stays allowed: it is the assignment, not the dump.
+    rule: "env-dump",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      const flag = /^[-+][A-Za-z0-9-]+$/;
+      const assign = /^[A-Za-z_][A-Za-z0-9_]*=/;
+      for (const part of statements(input)) {
+        const words = part.trim().split(/\s+/).filter(Boolean);
+        if (!words.length) continue;
+        const cmd = basename(words[0]);
+        const args = words.slice(1);
+        if (cmd === "printenv")
+          return "printenv prints a secret's value; ask for a NAME, never a value (`grep -c NAME FILE`, or read the file the variable is documented in)";
+        if (cmd === "env" && !args.some((w) => !flag.test(w) && !assign.test(w)))
+          return "bare `env` prints every secret this seat carries; run the command you need instead of dumping the environment";
+        if ((cmd === "export" || cmd === "declare" || cmd === "typeset") && args.some((w) => /^-[A-Za-z]*p/.test(w)))
+          return "`" + cmd + " -p` prints every variable, secrets included; list names with `compgen -v` and read the value you need from where it is documented";
+        if (cmd === "set" && args.length === 0)
+          return "bare `set` prints every variable, secrets included; read the one you need from its file";
+      }
+      return "";
+    },
+  },
+  {
+    // A `gh api` read of a credential surface RETURNS a live secret: the measured case is `.../hooks`, whose
+    // config carries the CapRover triggerbuild token. The rest of `gh api` - run lists, PRs, checks - stays
+    // allowed, because that is how a seat reads CI.
+    rule: "gh-api-secret",
+    check: (tool, input) => {
+      if (tool !== "bash") return "";
+      for (const part of statements(input)) {
+        const call = part.match(callOf("gh\\s+api"));
+        if (!call) continue;
+        if (/(^|[\s/?])(?:hooks?|secrets?|keys?|tokens?|installations?)(?:[/\s?]|$)/i.test(call[1]))
+          return "a `gh api` read of a credential surface returns a live secret (a webhook's config carries its token); the owner rotates it, and CI reads what it needs without it";
+      }
+      return "";
+    },
+  },
+  {
     rule: "env-secret",
     check: (tool, input) => {
       if (tool === "read" && /(^|\/)\.env[^/]*$/.test(String(input.path ?? "")))
@@ -1015,18 +1087,34 @@ export default function hook(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", async (event) => {
-    const call = started.get(event.toolCallId);
-    if (!call) return;
-    started.delete(event.toolCallId);
-    const text = (event.content ?? []).map((c: { type: string; text?: string }) => (c.type === "text" ? c.text : "")).join("");
-    record({
-      tool: call.tool,
-      target: call.target,
-      outcome: event.isError ? "error" : "ok",
-      ms: Date.now() - call.at,
-      bytes_out: Buffer.byteLength(text),
-      ...(event.isError ? { error: redact(text).slice(0, MAX_TARGET) } : {}),
+    // THE RESULT THE MODEL READS IS REDACTED: a seat's own tokens, and anything shaped like a secret, leave the
+    // tool output before the next provider request and before the transcript records it. The content override
+    // is the extension contract's own post-execution hook (omp://hooks.md, "Redact tool output on
+    // post-execution"), so this is not a second mechanism.
+    const content = event.content ?? [];
+    let changed = false;
+    const redacted = content.map((chunk: { type: string; text?: string }) => {
+      if (chunk.type !== "text" || typeof chunk.text !== "string") return chunk;
+      const clean = redactSecrets(chunk.text);
+      if (clean === chunk.text) return chunk;
+      changed = true;
+      return { ...chunk, text: clean };
     });
+
+    const call = started.get(event.toolCallId);
+    if (call) {
+      started.delete(event.toolCallId);
+      const text = content.map((c: { type: string; text?: string }) => (c.type === "text" ? c.text : "")).join("");
+      record({
+        tool: call.tool,
+        target: call.target,
+        outcome: event.isError ? "error" : "ok",
+        ms: Date.now() - call.at,
+        bytes_out: Buffer.byteLength(text),
+        ...(event.isError ? { error: redact(text).slice(0, MAX_TARGET) } : {}),
+      });
+    }
+    if (changed) return { content: redacted };
   });
 }
 
@@ -1085,3 +1173,12 @@ async function agyHook(phase: string): Promise<void> {
 
 const agyFlag = process.argv.indexOf("--agy-hook");
 if (agyFlag >= 0) await agyHook(process.argv[agyFlag + 1] ?? "");
+
+// The redactor's own seam, so its cases run without an omp session: stdin in, stdout out. It is the same function
+// the post-execution hook applies, so a test cannot pass on a second implementation.
+const redactFlag = process.argv.indexOf("--redact");
+if (redactFlag >= 0) {
+  let raw = "";
+  for await (const chunk of process.stdin) raw += chunk;
+  process.stdout.write(redactSecrets(raw));
+}

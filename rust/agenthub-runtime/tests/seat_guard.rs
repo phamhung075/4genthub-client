@@ -1667,3 +1667,69 @@ fn the_pathspec_is_read_as_the_set_it_covers() {
         assert_eq!(at(case), None, "{case}");
     }
 }
+
+/// The redactor through its own seam, `node seat-guard.ts --redact`: the function the post-execution hook applies
+/// to every tool result, so the model and the transcript never read the value. `env` is the seat's environment.
+fn redacted(env: &[(&str, &str)], text: &str) -> String {
+    let mut command = Command::new("node");
+    command
+        .arg(guard())
+        .arg("--redact")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let mut child = command.spawn().expect("node is needed to run the seat guard");
+    child.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+    String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+}
+
+/// The measured leak (2026-10-21): a value printed WITHOUT its name - a webhook config, a `printenv` - reached a
+/// provider. A value the seat carries is replaced wherever it appears, and the secret shapes are replaced even
+/// when no variable names them; the text around them, newlines included, is kept.
+#[test]
+fn a_tool_result_loses_the_secret_values_and_keeps_its_shape() {
+    let carried = "fake0carried0value0for0test";
+    let out = redacted(
+        &[("AGENTHUB_TOKEN", carried)],
+        &format!("url: https://x/triggerbuild?token={carried}\nplain {carried}\nnext line\n"),
+    );
+    assert!(!out.contains(carried), "{out}");
+    assert!(out.contains("<redacted:AGENTHUB_TOKEN>"), "{out}");
+    assert!(out.ends_with("next line\n"), "the newlines survive: {out:?}");
+
+    let out = redacted(&[], "AGENTHUB_TOKEN=abc123def456\nkeep this\n");
+    assert!(!out.contains("abc123def456"), "{out}");
+    assert!(out.contains("keep this\n"), "{out}");
+
+    let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0LW9ubHkifQ.ZmFrZS1zaWduYXR1cmUtdGVzdA";
+    let key = "sk-fake0test0key0only0000000";
+    let out = redacted(&[], &format!("a {jwt} b\nc {key} d\nAuthorization: Bearer fake0bearer0value0x\n"));
+    for secret in [jwt, key, "fake0bearer0value0x"] {
+        assert!(!out.contains(secret), "{secret} survived: {out}");
+    }
+    assert!(out.starts_with("a ") && out.contains(" b\nc "), "{out}");
+
+    let clean = "git status\nOn branch main\n";
+    assert_eq!(redacted(&[], clean), clean, "a result with no secret is unchanged");
+}
+
+#[test]
+fn an_environment_dump_is_refused_and_a_scoped_environment_is_not() {
+    refused(
+        "env-dump",
+        &["printenv", "printenv AGENTHUB_TOKEN", "env", "env | grep -c TOKEN", "export -p", "set"],
+    );
+    allowed(&["env -u TMUX tmux ls", "FOO=1 git status", "set -e"]);
+}
+
+#[test]
+fn a_gh_api_read_of_a_credential_surface_is_refused_and_ci_reads_are_not() {
+    refused(
+        "gh-api-secret",
+        &["gh api repos/o/r/hooks", "gh api /repos/o/r/actions/secrets"],
+    );
+    allowed(&["gh api repos/o/r/actions/runs"]);
+}
