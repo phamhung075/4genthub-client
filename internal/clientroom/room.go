@@ -45,8 +45,10 @@ import (
 var closeWatch = clientwatch.CloseRoomWorkspaces
 
 // peakGate is the DeepSeek peak gate `reseat` asks before it stops a seat; a var so the suite can watch when
-// it runs relative to the stop, and so the refusal path needs no real clock.
-var peakGate = clientlifecycle.PeakGate
+// it runs relative to the stop, and so the refusal path needs no real clock. It is the SOCKET-AWARE one: the
+// gate reads the daemon this invocation resolved (`--socket`, else the environment, else the default), not
+// the machine's default, because those are different daemons on a machine running more than one.
+var peakGate = clientlifecycle.PeakGateAt
 
 // Commands is what the dispatcher registers from this package: one verb, `room`, whose Run switches over the
 // sub-verbs in roomVerbs - the shape clientseat and clientteam already register, so the dispatcher's own list
@@ -441,8 +443,10 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 	// A RESTART IS A LAUNCH, so the peak gate runs BEFORE the stop: a refusal here leaves the seat exactly
 	// as it was, which is the difference between a refusal and a room left down that nobody asked to stop.
 	// The gate is the exported one (room records, and an unreadable reading refuses in words), and its code
-	// is returned unchanged - 3 for a refusal, 2 for a schedule this client cannot read.
-	if code := peakGate(inv.room, "room reseat", allowPeak, stderr); code != clientcmd.ExitOK {
+	// is returned unchanged - 3 for a refusal, 2 for a schedule this client cannot read. IT READS THE DAEMON
+	// THIS INVOCATION RESOLVED: the socket is passed, so `reseat --socket` gates the daemon it is about to
+	// stop and restart, and a refusal here is about THAT room rather than another daemon's.
+	if code := peakGate(inv.client.SocketPath, inv.room, "room reseat", allowPeak, stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	// THE DOCUMENT BEFORE THE STOP, so the seat is down for the hub round trip and nothing more. This is the

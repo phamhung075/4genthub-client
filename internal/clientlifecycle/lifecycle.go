@@ -364,7 +364,7 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	// THE GATE RUNS BEFORE THE RESTORE, and after the daemon only because the room's models are read from
 	// the daemon. So a refusal starts the daemon and nothing else: no seat is resumed, which is the step
 	// that would have started DeepSeek work at the peak rate.
-	if code := peakGate(name, "up", allowPeak, declaredNodes(spec), stderr); code != clientcmd.ExitOK {
+	if code := peakGate("", name, "up", allowPeak, declaredNodes(spec), stderr); code != clientcmd.ExitOK {
 		return code
 	}
 	// THE WORKTREES STEP RUNS BEFORE THE SEATS, and after the gate, which is the order the ruling gives
@@ -795,14 +795,18 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 // an ERROR naming the room, because `reseat` has to say why it will not restart a seat. The names differ on purpose -
 // two same-named functions with opposite contracts is a trap whose only guard would be a commit message.
 //
-// The reading itself is clientruntime.RoomNodes, in one home so the gate here and the watchdog in
+// The reading itself is clientruntime.RoomNodesAt, in one home so the gate here and the watchdog in
 // clientrestore cannot disagree about the same room.
+//
+// THE SOCKET IS THE CALLER'S, not this machine's default: a verb given `--socket PATH` gates the daemon it is
+// about to restart, so the seam takes the resolved socket and passes it down. An empty socket is the default,
+// which is what the in-process agent, the supervisor and a restore want.
 //
 // The three answers are the seam's own, explicit rather than a sentinel: ok with no error is a transport's
 // answer (possibly an empty table - a room with no seats), no ok and no error is NO RECORDS - the
 // runtime knows no such room, so there is nothing to decide - and an error is a read that FAILED.
-var roomNodes = func(name string) ([]map[string]any, bool, error) {
-	return clientruntime.RoomNodes(name)
+var roomNodes = func(socket, name string) ([]map[string]any, bool, error) {
+	return clientruntime.RoomNodesAt(socket, name)
 }
 
 // PeakGate is the DeepSeek peak gate for every verb in the client that starts or resumes a room's seats
@@ -830,7 +834,18 @@ var roomNodes = func(name string) ([]map[string]any, bool, error) {
 // the whole guard on this fail-open case, and it is here, once, so that no verb reaching this gate - `up`,
 // `compact`, or a restore - can forget to print it.
 func PeakGate(name, verb string, allowPeak bool, stderr io.Writer) int {
-	return peakGate(name, verb, allowPeak, nil, stderr)
+	return PeakGateAt("", name, verb, allowPeak, stderr)
+}
+
+// PeakGateAt is PeakGate against the daemon at socket: the verb's own `--socket`, when it has one, so the
+// gate reads the daemon it is about to stop and restart rather than this machine's default. An empty socket
+// is PeakGate exactly - the default - which is what `up`, `compact` and the restore path pass.
+//
+// THE DEFECT THIS CLOSES (`room reseat --socket`, `heal --socket`): the gate used to read the default socket
+// whatever the verb was told, so on a machine with two daemons the gate could refuse a fine room or pass a
+// DeepSeek room at peak, and a test pointing the verb at a fake daemon saw the gate dial nothing at all.
+func PeakGateAt(socket, name, verb string, allowPeak bool, stderr io.Writer) int {
+	return peakGate(socket, name, verb, allowPeak, nil, stderr)
 }
 
 // declaredNodes is a definition's seats in the shape of the room's node records, which is what the gate reads.
@@ -849,8 +864,8 @@ func declaredNodes(spec clientruntime.RoomSpec) []map[string]any {
 	return nodes
 }
 
-func peakGate(name, verb string, allowPeak bool, declared []map[string]any, stderr io.Writer) int {
-	nodes, ok, err := roomNodes(name)
+func peakGate(socket, name, verb string, allowPeak bool, declared []map[string]any, stderr io.Writer) int {
+	nodes, ok, err := roomNodes(socket, name)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam %s: the room's node records could not be read, so the peak gate cannot "+
 			"say whether starting this room bills at peak: %v\n", verb, err)
