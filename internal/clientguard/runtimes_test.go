@@ -422,3 +422,222 @@ func TestTheAgyEntryIsTheRuntimesOwnObject(t *testing.T) {
 		t.Errorf("agy's entry drifted from supervisor/mod.rs's agy_guard_entry:\ngot  %s\nwant %s", got, want)
 	}
 }
+
+// TestAnUnreadableConfigRefusesTheInstall is the gate's M1: a detected runtime whose config this client cannot
+// read is a guard that is NOT in force, so `guard install` names it and refuses. A 0-byte and a BOM-prefixed file
+// are not that case - they are files a runtime leaves behind, and they take the entry.
+func TestAnUnreadableConfigRefusesTheInstall(t *testing.T) {
+	runtimeOnPath(t, "agy")
+	repo := newGitRepo(t)
+
+	// A directory where the config file should be: unreadable as a file for every uid, so the case does not depend
+	// on the test's own permissions.
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".gemini/config/hooks.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	code := runInstall([]string{"--checkout", repo.dir, "--home", home}, &stdout, &stderr)
+	if code != ExitRefused {
+		t.Fatalf("install = %d, want %d; stdout=%s stderr=%s", code, ExitRefused, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "agy: ") || !strings.Contains(stdout.String(), "cannot be read") {
+		t.Errorf("the row names the unreadable file, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "could not be read") {
+		t.Errorf("the refusal says why, got %q", stderr.String())
+	}
+}
+
+// TestABlankOrBomConfigTakesTheEntry: neither shape is a config this client cannot read, so both install.
+func TestABlankOrBomConfigTakesTheEntry(t *testing.T) {
+	runtimeOnPath(t, "agy")
+	for _, body := range []string{"", "   \n", "\xef\xbb\xbf\n", "\xef\xbb\xbf{}"} {
+		home := homeWith(t, ".gemini/config/hooks.json", body)
+		hooks, err := InstallRuntimeHooks(home)
+		if err != nil {
+			t.Fatalf("body %q: %v", body, err)
+		}
+		if len(hooks) != 1 || !hooks[0].EntryPresent || hooks[0].ReadError != "" {
+			t.Fatalf("body %q: entry not placed: %+v", body, hooks)
+		}
+		written, err := os.ReadFile(filepath.Join(home, ".gemini/config/hooks.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(written), GuardScriptName) {
+			t.Errorf("body %q: the file holds no guard entry: %s", body, written)
+		}
+	}
+}
+
+// TestTheClaudeWriteAndRemoveHalf is the gate's M3: the settings surgery on the owner's own file, driven directly
+// (package functions, so the flag being false does not hide it). `hooks: null` is M2's row.
+func TestTheClaudeWriteAndRemoveHalf(t *testing.T) {
+	entry := guardEntryFor("claude")
+	encoded, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decode := func(t *testing.T, raw json.RawMessage) map[string][]json.RawMessage {
+		t.Helper()
+		var members map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &members); err != nil {
+			t.Fatalf("the writer answered something claude cannot read: %v (%s)", err, raw)
+		}
+		phases := map[string][]json.RawMessage{}
+		for name, value := range members {
+			var definitions []json.RawMessage
+			if err := json.Unmarshal(value, &definitions); err != nil {
+				t.Fatalf("hooks.%s is not an array: %v (%s)", name, err, value)
+			}
+			phases[name] = definitions
+		}
+		return phases
+	}
+	// The argument is the `hooks` MEMBER, not the whole settings file.
+	ownerHooks := func() json.RawMessage {
+		var file struct {
+			Hooks json.RawMessage `json:"hooks"`
+		}
+		if err := json.Unmarshal([]byte(claudeFile), &file); err != nil {
+			t.Fatal(err)
+		}
+		return file.Hooks
+	}
+	guardCount := func(definitions []json.RawMessage) int {
+		count := 0
+		for _, definition := range definitions {
+			if carriesGuardText(definition) {
+				count++
+			}
+		}
+		return count
+	}
+
+	for _, start := range []string{"", "{}", `null`, `{}`, string(ownerHooks())} {
+		raw := json.RawMessage(start)
+		if start == "" {
+			raw = nil
+		}
+		written, err := withClaudeHooks(raw, encoded)
+		if err != nil {
+			t.Fatalf("start %q: %v", start, err)
+		}
+		phases := decode(t, written)
+		for _, phase := range claudePhases {
+			if got := guardCount(phases[phase]); got != 1 {
+				t.Errorf("start %q: hooks.%s has %d guard definitions, want 1 (%s)", start, phase, got, written)
+			}
+		}
+		// Idempotent: a second pass adds nothing.
+		again, err := withClaudeHooks(written, encoded)
+		if err != nil {
+			t.Fatalf("start %q: second pass: %v", start, err)
+		}
+		if string(again) != string(written) {
+			t.Errorf("start %q: a second install changed the file:\nfirst  %s\nsecond %s", start, written, again)
+		}
+		// Removal drops only the guard's definitions and keeps the owner's.
+		removed, err := withoutClaudeHooks(written)
+		if err != nil {
+			t.Fatalf("start %q: removal: %v", start, err)
+		}
+		if strings.Contains(string(removed), GuardScriptName) {
+			t.Errorf("start %q: a guard definition survived removal: %s", start, removed)
+		}
+	}
+
+	// The owner's own definition survives an install and a removal, unchanged.
+	written, err := withClaudeHooks(ownerHooks(), encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(written), "echo owner") {
+		t.Errorf("the owner's definition was dropped: %s", written)
+	}
+	removed, err := withoutClaudeHooks(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(removed), "echo owner") {
+		t.Errorf("removal took the owner's settings with it: %s", removed)
+	}
+	if got := decode(t, removed)["PreToolUse"]; len(got) != 1 {
+		t.Errorf("removal left %d definitions in PreToolUse, want the owner's one: %s", len(got), removed)
+	}
+
+	// A phase that is not an array is refused by name rather than overwritten.
+	if _, err := withClaudeHooks(json.RawMessage(`{"PreToolUse":"nope"}`), encoded); err == nil ||
+		!strings.Contains(err.Error(), "PreToolUse") {
+		t.Errorf("a non-array phase is refused by name, got %v", err)
+	}
+	// An absent member stays absent on removal.
+	if out, err := withoutClaudeHooks(nil); err != nil || out != nil {
+		t.Errorf("absent hooks: got %q, %v", out, err)
+	}
+	if out, err := withoutClaudeHooks(json.RawMessage(`null`)); err != nil || out != nil {
+		t.Errorf("null hooks: got %q, %v", out, err)
+	}
+}
+
+// TestUninstallTakesTheRuntimeEntryOutBeforeTheDeletedCheckout is the gate's M4: the ordering that was blocker 3.
+// A checkout that has since been deleted must not stop the owner-wide entry from coming out.
+func TestUninstallTakesTheRuntimeEntryOutBeforeTheDeletedCheckout(t *testing.T) {
+	runtimeOnPath(t, "agy")
+	home := homeWith(t, ".gemini/config/hooks.json", agyFile)
+	if _, err := InstallRuntimeHooks(home); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(t.TempDir(), "checkout-that-was-deleted")
+	var stdout, stderr strings.Builder
+	code := runUninstall([]string{"--checkout", missing, "--home", home}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("uninstall with a deleted checkout answered success; stdout=%s", stdout.String())
+	}
+	body, err := os.ReadFile(filepath.Join(home, ".gemini/config/hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), GuardScriptName) {
+		t.Errorf("the runtime entry survived the deleted checkout: %s", body)
+	}
+	if !strings.Contains(string(body), "\"herdr\"") {
+		t.Errorf("another tool's key did not survive: %s", body)
+	}
+}
+
+// TestASymlinkedConfigKeepsItsLink is the gate's m3: a dotfile-managed config is a link, and the install must write
+// the file the link names rather than replace the link.
+func TestASymlinkedConfigKeepsItsLink(t *testing.T) {
+	runtimeOnPath(t, "agy")
+	home := t.TempDir()
+	managed := filepath.Join(t.TempDir(), "managed-hooks.json")
+	if err := os.WriteFile(managed, []byte(agyFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, ".gemini/config/hooks.json")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(managed, link); err != nil {
+		t.Skipf("symlinks are not available here: %v", err)
+	}
+	if _, err := InstallRuntimeHooks(home); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link was replaced by a regular file")
+	}
+	body, err := os.ReadFile(managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), GuardScriptName) {
+		t.Errorf("the managed file was not written: %s", body)
+	}
+}

@@ -3,7 +3,10 @@
 package clientlifecycle
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -130,21 +133,67 @@ func TestTheRowForAHomeThatCannotBeResolvedPrintsItsReason(t *testing.T) {
 	}
 }
 
-// TestTheDoctorReportCarriesTheRuntimeRows is the gate's m11: nothing outside this package's own case asserted that
-// the report carries these rows, so deleting the doctor's wiring left the suite green. The JSON is built through the
-// same functions the report uses - doctorJSONRows over rowReasons - so the assertion is on the surface a reader
-// sees, not on the helper this file happens to call.
+// TestTheDoctorReportCarriesTheRuntimeRows is the gate's m1: the row's own wiring in `runDoctor` - the append into
+// the report and the human lines - not just the helper the case above drives directly. Deleting either wiring line
+// left the suite green while the comment claimed the row was reported.
 func TestTheDoctorReportCarriesTheRuntimeRows(t *testing.T) {
-	rowsFromHooks(t, []clientguard.RuntimeHook{{Runtime: "agy", Bin: "/usr/bin/agy",
-		Config: ".gemini/config/hooks.json", Mode: "--agy-hook"}})
-	runtimeRows := runtimeRowFor("")
-	health := []clientservices.Health{runtimeRows[0].Row}
-	reported := doctorJSONRows(health, nil, nil, nil, runtimeRows, nil, nil, nil, nil)
-	if len(reported) != 1 {
-		t.Fatalf("the report carries the row: %+v", reported)
+	fixture := newHealthFixture(t, []string{"demo"})
+	home := t.TempDir()
+	runtimeRowFor = func(string) []runtimeRow {
+		return []runtimeRow{{
+			Row: clientservices.Health{
+				Safeguard: runtimeSafeguard("agy"),
+				State:     clientservices.Running,
+				AgeS:      clientservices.UnknownAge,
+			},
+			Hook: clientguard.RuntimeHook{
+				Runtime:      "agy",
+				Bin:          "/usr/bin/agy",
+				Config:       ".gemini/config/hooks.json",
+				Mode:         "--agy-hook",
+				EntryPresent: true,
+			},
+			Home: home,
+		}}
 	}
-	reasons := strings.Join(reported[0].Reasons, "\n")
-	if !strings.Contains(reasons, "guard_agy: found at /usr/bin/agy") {
-		t.Fatalf("the row's reasons are the runtime lines: %v", reported[0].Reasons)
+
+	var stdout, stderr bytes.Buffer
+	code := runDoctor("demo", fixture.root, false, &stdout, &stderr)
+	human := stdout.String()
+	if code == 0 && human == "" {
+		t.Fatalf("the report printed nothing: code=%d stderr=%s", code, stderr.String())
+	}
+	for _, want := range []string{
+		"guard_agy: found at /usr/bin/agy",
+		"guard_agy: the guard's entry is in " + filepath.Join(home, ".gemini/config/hooks.json"),
+	} {
+		if !strings.Contains(human, want) {
+			t.Errorf("the human report is missing %q, got:\n%s", want, human)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	runDoctor("demo", fixture.root, true, &stdout, &stderr)
+	var rows []struct {
+		Safeguard string   `json:"safeguard"`
+		Reasons   []string `json:"reasons"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &rows); err != nil {
+		t.Fatalf("the report is not JSON: %v\n%s", err, stdout.String())
+	}
+	found := false
+	for _, row := range rows {
+		if row.Safeguard != "guard_agy" {
+			continue
+		}
+		found = true
+		joined := strings.Join(row.Reasons, "\n")
+		if !strings.Contains(joined, "found at /usr/bin/agy") {
+			t.Errorf("the JSON row carries no reason line: %q", joined)
+		}
+	}
+	if !found {
+		t.Errorf("no guard_agy row in the report: %s", stdout.String())
 	}
 }

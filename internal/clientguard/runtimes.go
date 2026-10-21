@@ -245,6 +245,9 @@ func UninstallRuntimeHooks(home string) ([]RuntimeHook, error) {
 // RuntimeInstallLine is one runtime's line after `guard install`: the file its entry is in, or the reason nothing
 // was written there. One function, so the verb and its report cannot word the same fact differently.
 func RuntimeInstallLine(hook RuntimeHook) string {
+	if hook.ReadError != "" {
+		return hook.Runtime + ": " + hook.ReadError
+	}
 	if hook.Note != "" {
 		return hook.Note
 	}
@@ -325,6 +328,20 @@ func removeRuntimeEntry(home string, hook RuntimeHook) error {
 	return writeDocument(path, doc)
 }
 
+// claudePhases is every event the guard's claude mode answers, and every array the writer keeps the guard's
+// definition in. `PostToolUseFailure` is its own event - a failed call fires it with `error`, and `PostToolUse`
+// does not - so a settings file that names only the first two never logs a failure.
+var claudePhases = []string{"PreToolUse", "PostToolUse", "PostToolUseFailure"}
+
+// claudePhaseMode is the mode string the guard answers for one claude event: `PreToolUse` and
+// `PostToolUseFailure` both run the guard's own phase names, and the guard reads the event from the payload.
+func claudePhaseMode(phase string) string {
+	if phase == "PreToolUse" {
+		return "pre"
+	}
+	return "post"
+}
+
 // guardEntryFor is the JSON value one runtime's entry has: agy's own key, claude's two hook definitions.
 func guardEntryFor(runtime string) any {
 	switch runtime {
@@ -333,10 +350,11 @@ func guardEntryFor(runtime string) any {
 	case "claude":
 		// One DEFINITION per phase: `withClaudeHooks` appends it to that phase's array, so an array here would
 		// nest one inside the other and claude would read a definition it cannot parse.
-		return map[string]any{
-			"PreToolUse":  claudeGuardDefinition("pre"),
-			"PostToolUse": claudeGuardDefinition("post"),
+		entry := map[string]any{}
+		for _, phase := range claudePhases {
+			entry[phase] = claudeGuardDefinition(claudePhaseMode(phase))
 		}
+		return entry
 	}
 	return nil
 }
@@ -354,8 +372,13 @@ func withClaudeHooks(raw json.RawMessage, entry json.RawMessage) (json.RawMessag
 		if err := json.Unmarshal(raw, &hooks); err != nil {
 			return nil, errors.New("`hooks` is not a JSON object, and the guard was not installed")
 		}
+		// `"hooks": null` decodes without an error and leaves the map nil, and the first `hooks[phase] = ...` would
+		// panic on the owner's own settings file. A null member means no definitions, which is an empty object.
+		if hooks == nil {
+			hooks = map[string]json.RawMessage{}
+		}
 	}
-	for _, phase := range []string{"PreToolUse", "PostToolUse"} {
+	for _, phase := range claudePhases {
 		var definitions []json.RawMessage
 		if existing := hooks[phase]; len(existing) > 0 {
 			if err := json.Unmarshal(existing, &definitions); err != nil {
@@ -390,6 +413,9 @@ func withoutClaudeHooks(raw json.RawMessage) (json.RawMessage, error) {
 	hooks := map[string]json.RawMessage{}
 	if err := json.Unmarshal(raw, &hooks); err != nil {
 		return nil, errors.New("`hooks` is not a JSON object, and the guard's entry was not removed")
+	}
+	if hooks == nil {
+		return nil, nil
 	}
 	for phase, existing := range hooks {
 		var definitions []json.RawMessage
@@ -439,6 +465,18 @@ type documentMember struct {
 	Raw json.RawMessage
 }
 
+// configBody is a config file's JSON bytes, with the two shapes a runtime leaves behind answered as "no members":
+// a UTF-8 BOM at the head (Windows-written, and `encoding/json` refuses it), and a file holding nothing but
+// whitespace. Neither is a config this client cannot read - both mean no member was ever written - so the install
+// writes into a fresh object instead of reporting a broken file and silently placing nothing.
+func configBody(body []byte) []byte {
+	body = bytes.TrimPrefix(body, []byte("\xef\xbb\xbf"))
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil
+	}
+	return body
+}
+
 // readDocument reads a config file. A missing file is an empty document with this client's indentation (the
 // runtime is installed and has never written one); anything that is not a JSON object is an error, because
 // overwriting a file this client does not understand is how another tool's settings are lost.
@@ -449,6 +487,9 @@ func readDocument(path string) (document, error) {
 			return document{indent: "  "}, nil
 		}
 		return document{}, fmt.Errorf("cannot read %s: %v", path, err)
+	}
+	if body = configBody(body); body == nil {
+		return document{indent: "  "}, nil
 	}
 	members, err := decodeMembers(body)
 	if err != nil {
@@ -577,6 +618,12 @@ func (d document) encode() ([]byte, error) {
 // will hold a hook naming the seat's guard, not because this client widens anything. The write goes through a
 // temporary file in the same directory and a rename, so a crash mid-write cannot leave the owner with half a file.
 func writeDocument(path string, doc document) error {
+	// A SYMLINKED CONFIG STAYS A SYMLINK. `~/.claude/settings.json` is often a link into a dotfile-managed file, and
+	// a rename onto the link's own path would replace the link with a regular file and leave the managed target
+	// stale - the owner's file silently bypassed. The write follows the link to the file it names.
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
 	body, err := doc.encode()
 	if err != nil {
 		return fmt.Errorf("cannot encode %s: %v", path, err)
@@ -633,6 +680,9 @@ func guardEntryPresent(path, mode string) (bool, error) {
 			return false, nil
 		}
 		return false, fmt.Errorf("%s cannot be read: %v", path, err)
+	}
+	if body = configBody(body); body == nil {
+		return false, nil
 	}
 	var value any
 	if err := json.Unmarshal(body, &value); err != nil {

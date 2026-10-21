@@ -321,3 +321,17 @@ new rule stops counting.
   `TestTheWindowsDemoteAndPromote` keeps its demote; its share-level fixture is now read under the room scope,
   which is what `share` means.
 - `guardstream_test.go` passes the room scope (`""`) to `Occurrences`, whose signature gained it.
+
+## 2026-10-21 - the gate's four majors on the owner-wide guard entries
+
+`TestAnUnreadableConfigRefusesTheInstall` (M1: a directory where the config file should be, so the case does not
+depend on the test's uid; `runInstall` = ExitRefused, the row names the file, the refusal says why),
+`TestABlankOrBomConfigTakesTheEntry` (M1's other half: "", whitespace, BOM, BOM+`{}` all take the entry),
+`TestTheClaudeWriteAndRemoveHalf` (M3: absent/null/empty/owner file, idempotence, removal keeping the owner's
+definitions, a non-array phase refused by name, absent and null removal answering nothing),
+`TestUninstallTakesTheRuntimeEntryOutBeforeTheDeletedCheckout` (M4: entry gone, exit non-zero, `herdr` kept),
+`TestASymlinkedConfigKeepsItsLink` (m3: the link survives and the managed target gains the entry), and
+`TestTheDoctorReportCarriesTheRuntimeRows` rewritten (m1: it drove `runtimeRowFor` and `doctorJSONRows` itself;
+it now runs `runDoctor` and asserts the human lines and the `--json` reasons). `newHealthFixture` gained
+`runtimeRowFor`/`runtimeHome`/`runtimeHooks` stubs (m2), so the doctor cases no longer read the operator's home
+and PATH.

@@ -112,8 +112,20 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			"entry was written\n", root)
 		return clientcmd.ExitOK
 	}
+	unread := 0
 	for _, hook := range hooks {
 		fmt.Fprintln(stdout, RuntimeInstallLine(hook))
+		if hook.ReadError != "" {
+			unread++
+		}
+	}
+	// A DETECTED RUNTIME WHOSE CONFIG COULD NOT BE READ IS NOT AN INSTALL THAT SUCCEEDED: its guard is not in
+	// force, and exiting 0 would report a machine as guarded when the runtime's hooks never call the guard. The
+	// lines above are printed first, so a reader sees which runtimes DID land.
+	if unread > 0 {
+		fmt.Fprintf(stderr, "4genteam guard install: %d runtime config(s) could not be read, so their guard "+
+			"entries were not placed\n", unread)
+		return ExitRefused
 	}
 	return clientcmd.ExitOK
 }

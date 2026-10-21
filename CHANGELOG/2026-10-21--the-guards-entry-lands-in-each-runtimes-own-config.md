@@ -12,7 +12,8 @@ could say a runtime's config carried no guard.
   without agy says nothing about agy. gemini was dropped from the table: this client never launches it, so its
   config is not this client's to edit.
 - **Only a runtime whose guard has a mode gets an entry.** The shipped `seat-guard.ts` dispatches
-  `--agy-hook` and `--redact`; it has no `--claude-hook`, so `GUARD_HAS_CLAUDE_HOOK` is false and the claude
+  `--agy-hook` and nothing else yet (`--redact` and `--claude-hook` are the owner's pending asset patches); it has
+  no `--claude-hook`, so `GUARD_HAS_CLAUDE_HOOK` is false and the claude
   row says so instead of writing an entry that would exit 0 answering nothing while the report called it
   guarded. Flipping that one constant after the asset gains the mode is the whole change.
 - The entry is **guarded**: `if [ -n "$AGENTHUB_SEAT" ]; then exec node "$PI_CODING_AGENT_DIR/hooks/pre/seat-guard.ts" <mode> <phase>; <otherwise> fi`.
@@ -45,3 +46,34 @@ and left `herdr`, and `uninstall` against a missing checkout cleaned the entry a
 `doctor 4genthub-min` printed `guard_agy`/`guard_claude`/`guard_codex` with their lines and exited 0.
 `go test ./...` in `agenthub_client` is green (35 packages); `go test -count=1 ./internal/clientguard/
 ./internal/clientlifecycle/` passes.
+
+## Gate fixes (a974ec10 review: M1-M4, m1-m3)
+
+- **M1 - an unreadable config is a failed install.** `RuntimeInstallLine` carries the read error as the
+  runtime's line, and `runInstall` prints every row and then exits 3 when a DETECTED runtime was skipped for
+  that reason, because its guard is not in force. A 0-byte and a BOM-prefixed file are not that case: both are
+  what a runtime leaves behind, so `configBody` answers them as "no members" and the entry lands
+  (`TestAnUnreadableConfigRefusesTheInstall`, `TestABlankOrBomConfigTakesTheEntry`; `guard install` on a
+  directory-shaped config prints `agy: … cannot be read` and exits 3).
+- **M2 - `"hooks": null` no longer panics.** A null member decodes to a nil map without an error, so the writer
+  resets it to an empty object; the removal answers "nothing to remove" for it.
+- **M3 - the claude write/remove half has its cases**, driven as package functions so the false flag does not
+  hide them: absent, `{}`, null, `{}` with owner definitions, a whole owner file; both phases plus
+  `PostToolUseFailure` get exactly one guard definition, a second pass is byte-identical, removal keeps the
+  owner's definitions and drops only the guard's, a non-array phase is refused by name
+  (`TestTheClaudeWriteAndRemoveHalf`). The writer now registers `PostToolUseFailure` too - the asset's failure
+  event, without which a settings file would never log a failed call.
+- **M4 - the uninstall ordering has a case**: `runUninstall` against a checkout that does not exist removes the
+  runtime entry and exits non-zero (`TestUninstallTakesTheRuntimeEntryOutBeforeTheDeletedCheckout`).
+- **m1 - the report's own wiring is tested**: `runDoctor` with a stubbed `runtimeRowFor` prints
+  `guard_agy: found at …` and the absolute config path on the human surface and in `--json` reasons
+  (`TestTheDoctorReportCarriesTheRuntimeRows`, replacing the case that called the helper itself).
+- **m2 - `newHealthFixture` stubs `runtimeHome`/`runtimeHooks`**, so no doctor case reads the operator's home
+  or PATH any more.
+- **m3 - a symlinked config stays a link**: `writeDocument` follows it, so a dotfile-managed file is written
+  through rather than replaced (`TestASymlinkedConfigKeepsItsLink`; measured with `guard install`, the link
+  intact and the managed target holding the entry).
+- **m4 - the dated entry's claim is narrowed**: the shipped asset dispatches `--agy-hook` only; `--redact` and
+  `--claude-hook` are the owner's pending patches.
+
+`go test ./...` in `agenthub_client`: green.
