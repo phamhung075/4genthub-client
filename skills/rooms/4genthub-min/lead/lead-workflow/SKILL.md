@@ -56,8 +56,10 @@ tracked to a reviewed, gated finish. You do not write code or docs. Your crew do
 
 Your workers never edit. Every job is `--read-only`. Good jobs: a repo survey before an assignment,
 an independent re-run of a seat's test, a digest of a seat's long log or transcript, a draft brief
-written into your report (you send it yourself). Path B only: this seat has no `deepseek` MCP entry.
-Mechanics and the work-order template: `seat-crew`.
+written into your report (you send it yourself). This seat mounts the `deepseek` bridge like every other
+seat, so both tool paths in `seat-crew` are open to it; a job spends, so gate it with
+`4genteam offpeak --quiet` (exit 1 means peak - wait for the window) exactly as `system-improvement-analysis`
+does for a draft. Mechanics and the work-order template: `seat-crew`.
 
 ## Decisions and escalation
 

@@ -138,12 +138,12 @@ func TestTheWindowsDemoteAndPromote(t *testing.T) {
 	recent := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	old := time.Date(2019, 6, 1, 0, 0, 0, 0, time.UTC)
 	evidence.Rows = []RailRow{
-		{ID: "qitem-old-1", State: "done", Created: old, Updated: old},
-		{ID: "qitem-old-2", State: "done", Created: old, Updated: old},
-		{ID: "qitem-1", State: "done", Created: recent, Updated: recent},
-		{ID: "qitem-2", State: "done", Created: recent, Updated: recent},
-		{ID: "qitem-3", State: "done", Created: recent, Updated: recent},
-		{ID: "qitem-4", State: "pending", Created: recent, Updated: recent},
+		{ID: "qitem-old-1", State: "done", Tags: []string{"defect"}, Created: old, Updated: old},
+		{ID: "qitem-old-2", State: "done", Tags: []string{"defect"}, Created: old, Updated: old},
+		{ID: "qitem-1", State: "done", Tags: []string{"defect"}, Created: recent, Updated: recent},
+		{ID: "qitem-2", State: "done", Tags: []string{"defect"}, Created: recent, Updated: recent},
+		{ID: "qitem-3", State: "done", Tags: []string{"defect"}, Created: recent, Updated: recent},
+		{ID: "qitem-4", State: "pending", Tags: []string{"defect"}, Created: recent, Updated: recent},
 	}
 
 	rows, notes, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
@@ -179,6 +179,54 @@ func TestTheWindowsDemoteAndPromote(t *testing.T) {
 	}
 	if fresh.Window == "" {
 		t.Error("fresh window is empty: an absent record windows from the skill's first commit")
+	}
+}
+
+// TestALandingCountsOnlyForTheSkillWhoseTagsItCarries is the reviewer's change to 7c2c7d4e: the census counted
+// every row the room closed, so a provisional skill was promoted on other skills' work. A landing now counts when
+// the row carries one of the skill's OWN declared row-tag values - the fact its stream is made of.
+//
+// Four skills, three closed rows: `defect` claims the row tagged defect, `guard` the row tagged guard, `streamed`
+// declares only a guard: rule (no row is its own), and `missing` declares a tag no closed row carries. Landed:
+// 1, 1, 0, 0 - the old count answered 3 for each of them.
+func TestALandingCountsOnlyForTheSkillWhoseTagsItCarries(t *testing.T) {
+	tree, sha := gitTree(t, map[string]string{
+		"share/defect/SKILL.md":   skillHeader("defect", "row-tag: defect"),
+		"share/guard/SKILL.md":    skillHeader("guard", "row-tag: guard"),
+		"share/streamed/SKILL.md": skillHeader("streamed", "guard: docs-only"),
+		"share/missing/SKILL.md":  skillHeader("missing", "row-tag: nobody"),
+	})
+	for _, name := range []string{"defect", "guard", "streamed", "missing"} {
+		writeRecordFile(t, tree.Root, "share/"+name, `{"state":"provisional","since":"`+sha+`"}`)
+	}
+	recent := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+
+	evidence := LoadEvidence(fixtureStateRoot(t), "room", fixtureRefusalSpool(t))
+	evidence.Rows = []RailRow{
+		{ID: "qitem-1", State: "done", Tags: []string{"defect", "gate"}, Created: recent, Updated: recent},
+		{ID: "qitem-2", State: "done", Tags: []string{"guard"}, Created: recent, Updated: recent},
+		{ID: "qitem-3", State: "done", Tags: []string{"other"}, Created: recent, Updated: recent},
+	}
+	want := map[string]int{"share/defect": 1, "share/guard": 1, "share/streamed": 0, "share/missing": 0}
+
+	rows, _, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	seen := 0
+	for _, row := range rows {
+		key := row.Level + "/" + row.Name
+		expected, ok := want[key]
+		if !ok {
+			continue
+		}
+		seen++
+		if row.Landed != expected {
+			t.Errorf("%s landed = %d, want %d", key, row.Landed, expected)
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("census reported %d of the %d fixture skills", seen, len(want))
 	}
 }
 

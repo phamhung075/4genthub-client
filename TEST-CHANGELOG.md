@@ -357,3 +357,23 @@ neither key is `env_is_denied`. Measured at `3e009d79`: `cargo test --no-run` cl
 test red at row `nohup` (`pid … was not started by this seat`) - red by design at the rev-9 asset, green once the
 owner's `:361-375`/`:392` edit lands. Whole suite at that asset: 34 passed, 7 failed (the new row plus six
 pre-existing reds by design).
+## 2026-10-21 - a proposal cites a row or a census ref
+
+`internal/clientskills/propose_test.go` gains `TestProposeCitesTheCensusRefsItPrints`, a table of the decision's
+five cases (`DECISION-2026-10-21-skill-drafting.md`, slice 0) plus a sixth: a `guard:` skill on a refusal id, on a
+`seat <seat> <ts>` line, a `jev:` skill on a decision line, a `send:` skill on an audit line and a `row-tag:` skill
+on a row all propose and print the signal they matched; a `guard:` skill on a queue row is still refused (the
+pre-existing case, unchanged); and a `guard:` skill citing a JEV ref is refused, because the kind must equal the
+stream the declared signal names. The evidence seam is a field on the fixture, so a case hands over `Fact`s rather
+than writing stream files. `TestProposeRefusesAnIDThatIsNotAQueueRow` becomes
+`TestProposeRefusesAValueThatIsNeitherARowNorACensusRef`: the widened rule it pinned is repealed by this change, so
+the case now asserts the refusal that names both accepted kinds.
+
+## 2026-10-21 - a landing is attributed to the skill whose tag the row carries
+
+`internal/clientskills/windows_test.go` gains `TestALandingCountsOnlyForTheSkillWhoseTagsItCarries`: four
+provisional skills over three closed rows, asserting `landed` = 1, 1, 0, 0 - two skills claim the row that carries
+their own `row-tag:` value, a guard-only skill claims none, and a skill whose declared tag no closed row carries
+claims none either (the old count answered 3 for all four). `TestTheWindowsDemoteAndPromote` keeps its 3 but its
+fixture rows now carry the tag the promoted skill declares, because an unattributed landing is exactly what the
+new rule stops counting.

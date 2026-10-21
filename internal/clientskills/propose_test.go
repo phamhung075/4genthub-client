@@ -13,11 +13,12 @@ import (
 // proposeFixture is one tree, the room it is read for, and the seams a proposal goes through: the caller's
 // worktree and the cited rows. Every test starts here so no test can reach a daemon or a real worktree.
 type proposeFixture struct {
-	tree  Tree
-	room  string
-	head  string
-	rows  map[string]*clientruntime.QueueRow
-	fault map[string]string
+	tree     Tree
+	room     string
+	head     string
+	rows     map[string]*clientruntime.QueueRow
+	fault    map[string]string
+	evidence Evidence
 }
 
 const proposeSkillBody = `---
@@ -59,6 +60,9 @@ func newProposeFixture(t *testing.T, body string) *proposeFixture {
 		return row, nil
 	}
 	t.Cleanup(func() { callerWorktree = restore; queueRow = restoreRows })
+	restoreEvidence := proposeEvidence
+	proposeEvidence = func(room, repo string) Evidence { return fixture.evidence }
+	t.Cleanup(func() { proposeEvidence = restoreEvidence })
 	return fixture
 }
 
@@ -189,8 +193,100 @@ body
 	}
 }
 
-// TestProposeRefusesAProposalThatChangesNoLine: the same proposal twice changes nothing the second time, and
-// the second run refuses instead of rewriting a file with its own bytes.
+// TestProposeCitesTheCensusRefsItPrints is slice 0 of `DECISION-2026-10-21-skill-drafting.md`: `--from` takes a
+// queue row OR one of the census's own refs, and the kind a cite matches is the stream its declared signal names.
+// The cases are the decision's five, plus the one that keeps the widening from being a loophole: a ref of the
+// wrong stream still carries nothing.
+func TestProposeCitesTheCensusRefsItPrints(t *testing.T) {
+	const at = "2026-10-21T15:33:22Z"
+	refusalRef := "20261021153322-22691"
+	jevRef := "jev:2026-10-21T17:06:42.668960571Z seat"
+	sendRef := "agenthub--4genthub-min--lead->agenthub--4genthub-min--reviewer"
+	cases := []struct {
+		name    string
+		signals string
+		facts   []Fact
+		from    string
+		want    string // the signal line the proposal printed; "" means it must be refused
+		reason  string // a substring the refusal must carry
+	}{
+		{
+			name:    "a row-tag skill on a row",
+			signals: "  - row-tag: defect\n",
+			from:    "qitem-1",
+			want:    "signal: row-tag: defect",
+		},
+		{
+			name:    "a guard skill on the refusal id the spool wrote",
+			signals: "  - guard: docs-only\n",
+			facts:   []Fact{{Stream: StreamGuard, Value: "docs-only", Ref: refusalRef}},
+			from:    refusalRef,
+			want:    "signal: guard: docs-only",
+		},
+		{
+			name:    "a guard skill on a seat's blocked tool line",
+			signals: "  - guard: env-secret\n",
+			facts:   []Fact{{Stream: StreamGuard, Value: "env-secret", Ref: "seat go-dev " + at}},
+			from:    "seat go-dev " + at,
+			want:    "signal: guard: env-secret",
+		},
+		{
+			name:    "a guard skill on a queue row still carries nothing",
+			signals: "  - guard: docs-only\n",
+			from:    "qitem-1",
+			reason:  "row-tag",
+		},
+		{
+			name:    "a jev skill on the decision log's own line",
+			signals: "  - jev: owner-only\n",
+			facts:   []Fact{{Stream: StreamJEV, Value: "owner-only", Ref: jevRef}},
+			from:    jevRef,
+			want:    "signal: jev: owner-only",
+		},
+		{
+			name:    "a send skill on a refused send's audit line",
+			signals: "  - send: guest-denied\n",
+			facts:   []Fact{{Stream: StreamSend, Value: "guest-denied", Ref: sendRef}},
+			from:    sendRef,
+			want:    "signal: send: guest-denied",
+		},
+		{
+			name:    "a guard skill on a ref of another stream",
+			signals: "  - guard: owner-only\n",
+			facts:   []Fact{{Stream: StreamJEV, Value: "owner-only", Ref: jevRef}},
+			from:    jevRef,
+			reason:  "guard: owner-only",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newProposeFixture(t, "---\nname: tool\ndescription: a fixture skill\nsignals:\n"+
+				testCase.signals+"---\nbody\n")
+			fixture.evidence = Evidence{Facts: testCase.facts}
+			code, stdout, stderr := fixture.propose(t, "--skill", "tool", "--change", "fix",
+				"--from", testCase.from)
+			if testCase.want == "" {
+				if code != 2 || !strings.Contains(stderr, testCase.reason) {
+					t.Fatalf("want a refusal naming %q; exit %d, stderr %q", testCase.reason, code, stderr)
+				}
+				return
+			}
+			if code != 0 {
+				t.Fatalf("exit %d, stderr %q", code, stderr)
+			}
+			if !strings.Contains(stdout, testCase.want) {
+				t.Fatalf("the proposal must name %q: %q", testCase.want, stdout)
+			}
+			record, present, err := ReadRecord(fixture.skillDir(t))
+			if err != nil || !present {
+				t.Fatalf("no record: present=%v err=%v", present, err)
+			}
+			if len(record.Evidence) != 1 || record.Evidence[0] != testCase.from {
+				t.Fatalf("the record cites %v, want [%s]", record.Evidence, testCase.from)
+			}
+		})
+	}
+}
 func TestProposeRefusesAProposalThatChangesNoLine(t *testing.T) {
 	fixture := newProposeFixture(t, "")
 	if code, _, stderr := fixture.propose(t, "--skill", "tool", "--change", "fix", "--from", "qitem-1"); code != 0 {
@@ -253,17 +349,18 @@ func TestProposeNamesTheLevelWhenTwoLevelsDeliverTheName(t *testing.T) {
 	}
 }
 
-// TestProposeRefusesAnIDThatIsNotAQueueRow: --from cites queue rows, and a commit name is a different kind of
-// evidence - refused by name rather than handed to the rail.
-func TestProposeRefusesAnIDThatIsNotAQueueRow(t *testing.T) {
+// TestProposeRefusesAValueThatIsNeitherARowNorACensusRef: --from takes a queue row or a ref `skills evidence`
+// prints, and a value that is neither is refused by name rather than handed to a stream reader that would
+// read it as "no such fact".
+func TestProposeRefusesAValueThatIsNeitherARowNorACensusRef(t *testing.T) {
 	fixture := newProposeFixture(t, "")
 
 	code, _, stderr := fixture.propose(t, "--skill", "tool", "--change", "fix", "--from", "0123abc")
 	if code != 2 {
 		t.Fatalf("exit = %d, want 2", code)
 	}
-	if !strings.Contains(stderr, "is not a qitem- id") {
-		t.Fatalf("the refusal must say what kind of id it wanted: %q", stderr)
+	if !strings.Contains(stderr, "is neither a qitem- id nor a ref") {
+		t.Fatalf("the refusal must say which two kinds it takes: %q", stderr)
 	}
 }
 

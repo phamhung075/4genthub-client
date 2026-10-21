@@ -201,13 +201,31 @@ func (e Evidence) Commands(signal Signal, since time.Time) int {
 	return count
 }
 
-// Landed counts the room's rows that reached `done` at or after since. A row is an item; the queue is the
-// only record of one landing, because a landing IS the gate's closure.
-func (e Evidence) Landed(since time.Time) int {
+// LandedFor counts the room's rows that reached `done` at or after since AND carry one of the skill's OWN
+// declared `row-tag:` values. A landing is a row, and the only fact a row carries is its tags - so a landing a
+// reader cannot attribute to the skill is some other skill's work, and counting it would promote this one on
+// evidence it never carried. A skill that declares no row-tag therefore counts zero: it has no landing of its
+// own, and the promotion the census grants on landings is not for it.
+func (e Evidence) LandedFor(signals []Signal, since time.Time) int {
+	own := map[string]bool{}
+	for _, signal := range signals {
+		if signal.Kind == SignalRowTag && signal.Value != "" {
+			own[signal.Value] = true
+		}
+	}
+	if len(own) == 0 {
+		return 0
+	}
 	count := 0
 	for _, row := range e.Rows {
-		if row.State == "done" && !row.Updated.Before(since) {
-			count++
+		if row.State != "done" || row.Updated.Before(since) {
+			continue
+		}
+		for _, tag := range row.Tags {
+			if own[tag] {
+				count++
+				break
+			}
 		}
 	}
 	return count

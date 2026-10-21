@@ -127,7 +127,7 @@ func applyWindow(row *Row, signals []Signal, evidence Evidence, since time.Time)
 	}
 	row.Occurrences = occurrences
 	row.Commands = commands
-	row.Landed = evidence.Landed(since)
+	row.Landed = evidence.LandedFor(signals, since)
 	switch {
 	case row.State == StateTrusted && occurrences > 0:
 		row.Verdict = VerdictDemote
