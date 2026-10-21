@@ -60,25 +60,27 @@ var proposeEvidence = func(room, repo string) Evidence {
 // It is a seam for the same reason RoomDir is - a test drives the verb over its own fixture - and it is a
 // function rather than a flag so no argument can aim a proposal at another seat's tree.
 var callerWorktree = func(room string) (string, error) {
+	root, err := clientenv.ResolveStateRoot("")
+	if err != nil {
+		return "", err
+	}
+	// The room's own seat keys are read before the seat is resolved, because they are half of what a BARE
+	// session name means: `reviewer` is a seat only if the room says it is one.
+	seats, err := clientservices.LiveSeats(root, room)
+	if err != nil {
+		return "", err
+	}
 	seat := strings.TrimSpace(os.Getenv("AGENTHUB_SEAT"))
 	if seat == "" {
-		seat = seatFromSession(os.Getenv("AGENTHUB_SESSION_NAME"), room)
+		seat = seatFromSession(os.Getenv("AGENTHUB_SESSION_NAME"), room, seatKeys(seats))
 	}
 	if seat == "" {
 		return "", usageError("no seat: a proposal is written into the caller's own worktree, and neither " +
 			"$AGENTHUB_SEAT nor $AGENTHUB_SESSION_NAME names one")
 	}
-	root, err := clientenv.ResolveStateRoot("")
-	if err != nil {
-		return "", err
-	}
 	// RoomDir takes the root this verb resolved, never one it re-derives: the seat's worktree is read under
 	// the same store as everything else the proposal touched (the RoomDir rule, 2026-10-21).
 	roomDir, err := clientservices.RoomDir(root, room)
-	if err != nil {
-		return "", err
-	}
-	seats, err := clientservices.LiveSeats(root, room)
 	if err != nil {
 		return "", err
 	}
@@ -91,24 +93,48 @@ var callerWorktree = func(room string) (string, error) {
 		"the room %q names no seat %q, so it derives no worktree to write into", room, seat))
 }
 
-// seatFromSession reads the seat out of a canonical session name, `agenthub--<room>--<seat>`. A name that
-// does not end in this room's seat answers empty rather than guessing: the room in it is the guard.
-func seatFromSession(session, room string) string {
+// seatFromSession reads the seat out of a session name or a row's destination. The store holds THREE
+// spellings - `agenthub--<room>--<seat>`, `<seat>@<room>` and the bare `<seat>` - and this is the one reader
+// for all of them: a seat cannot be invisible to the census because a row was written through another spelling.
+// A name for another room answers empty rather than guessing: the room in it is the guard.
+//
+// The bare spelling is only a seat when the room's OWN seat keys say so (`clientservices.LiveSeats`): fifty
+// rows in this room name a seat bare, and a destination the room does not spell as a seat - `owner-session`,
+// prose - must stay unattributed rather than demote a skill. An empty set narrows the reader to the two
+// spelled forms and is never an error.
+func seatFromSession(session, room string, seats map[string]bool) string {
 	value := strings.TrimSpace(session)
-	// The store holds both spellings and the guard reads both: `agenthub--<room>--<seat>` and `<seat>@<room>`
-	// (measured 2026-10-21: 25 rows name the lead as `lead@4genthub-min`). One reader, so a seat cannot be
-	// invisible to the census because a row was written through the other spelling.
+	if value == "" {
+		return ""
+	}
 	if at := strings.LastIndex(value, "@"); at >= 0 {
 		if value[at+1:] == room {
 			return value[:at]
 		}
 		return ""
 	}
-	parts := strings.Split(value, "--")
-	if len(parts) < 3 || parts[len(parts)-2] != room {
-		return ""
+	if parts := strings.Split(value, "--"); len(parts) >= 3 {
+		if parts[len(parts)-2] != room {
+			return ""
+		}
+		return parts[len(parts)-1]
 	}
-	return parts[len(parts)-1]
+	if seats[value] {
+		return value
+	}
+	return ""
+}
+
+// seatKeys is a room's seats as the set the seat reader consults: its own keys, which are the authority for the
+// bare spelling. It is a set, not a list, because every row of every review asks it the same question.
+func seatKeys(seats []clientservices.SeatType) map[string]bool {
+	keys := make(map[string]bool, len(seats))
+	for _, seat := range seats {
+		if key := strings.TrimSpace(seat.Key); key != "" {
+			keys[key] = true
+		}
+	}
+	return keys
 }
 
 // pathInside reports whether target lies inside dir, after resolving symlinks in both: a proposal aimed at

@@ -128,7 +128,7 @@ func applyWindow(row *Row, signals []Signal, evidence Evidence, since time.Time)
 	}
 	row.Occurrences = occurrences
 	row.Commands = commands
-	row.Landed = evidence.LandedFor(signals, since)
+	row.Landed = evidence.LandedFor(signals, since, scope)
 	// A row with occurrences cites them whether it demotes or holds: a `hold` on 44 refusals that names none is
 	// a number the reader has to take on trust. The list is deduped and capped - the count stays in Occurrences,
 	// so a truncated list is still a truthful one - and a citation is only ever a real ref.

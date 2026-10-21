@@ -1,3 +1,39 @@
+## 2026-10-21 - the gate's first review of the skill signals: scope, spelling and one spool read (go, branch 4genthub-min/runtime-hooks)
+
+`internal/clientskills` gains the tests the review found missing, one per finding.
+`TestASeatSkillsLandingIsItsOwnSeat` (B1): a `seat:go-dev` skill and a `share` skill both declare `row-tag: guide`
+over one go-dev and one reviewer closed row - landed 1 and 2, where the unscoped count answered 2 and 2, which is
+why every seat workflow printed the room's 44. `TestARowNamingItsSeatBareIsThatSeatsRow` (B2, M3): the destinations
+`go-dev`, `reviewer` (bare), `owner-session` and `""` read through `Evidence.seatOf`, then a census over a bare
+`go-dev` row and a bare `reviewer` row asserts the seat skill counts 1 occurrence (the reviewer's row is not every
+seat's) and a go-dev stream size of 1, while an unattributed `owner-session` row still counts for every scope.
+`TestSeatFromSessionMatchesOnlyThisRoomsSeat` (M3) takes the room's seat set now and covers the `<seat>@<room>`
+branch propose.go gained untested (`lead@4genthub-min` -> `lead`, `lead@other-room` -> ""), the bare spelling with
+and without a seat set, and `owner-session` staying unattributed.
+`TestEachWorktreeSpoolIsReadOnceWhateverItsChildren` (M1): one worktree with two ordinary child directories and a
+plain file yields a guard stream size of 1 and one occurrence; the unguarded loop read the same spool once per
+child. `TestTwoRefusalsBetweenOnePairAreTwoOccurrences` (m1): two refused sends between one pair with one Reason are
+two occurrences with distinct refs, and the stream size agrees with the citation count.
+`TestTheToolStreamCountsBothMcpSpellings` (m2): `command: mcp:manage_task` counts `mcp:manage_task.list` and
+`xd://mcp__agenthub_http_manage_task` (2, not 1), while `go test` stays a literal match and a name the log does not
+carry counts 0. `TestASeatSkillIsJudgedOnItsOwnSeat` checks `len(row.Refs)` before indexing it (m3), so
+"occurrences but no refs" fails with a message instead of panicking.
+
+`readGuard` now asks git about a candidate only when it carries `.git` and keys each read by the resolved spool
+path, `Evidence` carries the room and its seat set (`clientservices.LiveSeats`, an unreadable record meaning an
+empty set), `seatFromSession` is the one destination reader and takes that set, `LandedFor` takes the scope, and a
+send fact's ref carries the decision's time.
+
+Measured (2026-10-21, worktree `wt/go-dev-signals` at 211eff11 plus these changes): `go build ./...` clean;
+`go test -count=1 ./internal/clientskills/` 51 tests pass, 0 fail; `go test -count=1 ./...` 35 packages ok, 0
+failed. Every new test was run against its own revert: `LandedFor(signals, since, "")`
+reddens `TestASeatSkillsLandingIsItsOwnSeat` (landed 2, want 1); disabling the bare-seat branch reddens
+`TestSeatFromSessionMatchesOnlyThisRoomsSeat` (`reviewer` -> "") and `TestARowNamingItsSeatBareIsThatSeatsRow`
+(`seatOf("go-dev")` -> "", seat occurrences 2, stream size 2, unattributed count 3); dropping readGuard's `.git`
+guard and the resolved-path dedupe reddens `TestEachWorktreeSpoolIsReadOnceWhateverItsChildren` (stream size 4,
+want 1); the `From->To`-only send ref reddens `TestTwoRefusalsBetweenOnePairAreTwoOccurrences` (1 occurrence, want
+2); the literal `strings.Contains` reddens `TestTheToolStreamCountsBothMcpSpellings` (1 command, want 2).
+
 ## 2026-10-21 - a claude seat is handed the guard it never ran (rust, branch 4genthub-min/claude-guard-settings)
 
 Two tests, both in `rust/agenthub-runtime`. `supervisor::tests::the_claude_settings_run_the_seat_guard_on_both_phases`
@@ -321,6 +357,16 @@ new rule stops counting.
   `TestTheWindowsDemoteAndPromote` keeps its demote; its share-level fixture is now read under the room scope,
   which is what `share` means.
 - `guardstream_test.go` passes the room scope (`""`) to `Occurrences`, whose signature gained it.
+
+Measured (2026-10-21, this branch after the gate's first review): `go test -count=1 ./internal/clientskills/` 51
+tests pass, 0 fail. Reverting the scope wiring - `inScope` answering true and `applyWindow`'s `scope := ""` -
+reddens `TestASeatSkillIsJudgedOnItsOwnSeat` by name, seat skill = 2 occurrences `[guard:neighbour guard:own]`
+against the 1 it asserts, and with it the two scope tests the review added (a seat skill landed 2 where the
+reviewer's closed row is not its landing; a bare `reviewer` row counted 2 occurrences and a go-dev stream size of
+2, each a 1). `TestRefusalSpoolsOfTheRoomsWorktreesAreAllRead`, `TestAHoldRowCitesItsOccurrences` and
+`TestTheToolStreamIsCountsOnly` stay green under that revert, because each is a room-scope case - `share`, or an
+explicit `"go-dev"` scope handed to `Occurrences` - so they pin the rule without depending on `applyWindow`'s
+wiring. The verdict's claim that the revert reddens all four by name does not hold for these three.
 
 ## 2026-10-21 - the gate's four majors on the owner-wide guard entries
 

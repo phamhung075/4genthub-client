@@ -39,7 +39,7 @@ var attributedStreams = map[string]string{
 
 // Fact is one line of a typed stream, reduced to what a signal can be matched against. Value is the field
 // the stream's signal names: a refusal rule, a send Reason, a Jev Kind, a queue tag, a tool target. Every
-// Fact carries the id a reader can follow (a refusal id, a qitem, `from->to`), because a demotion nobody
+// Fact carries the id a reader can follow (a refusal id, a qitem, `from->to <ts>`), because a demotion nobody
 // can look up is a claim.
 type Fact struct {
 	Stream string    `json:"stream"`
@@ -62,25 +62,8 @@ type RailRow struct {
 	Created time.Time
 	Updated time.Time
 	// Destination is the session the row was handed to. It is the row's own attribution: a `row-tag:` landing
-	// counts for the seat the row names, and a destination naming no seat of the room counts for every scope.
+	// counts for the seat the row names, read through Evidence.seatOf.
 	Destination string
-}
-
-// SeatOf is the row's destination as a seat of THIS room, "" when it names none: a row handed to a session the
-// room does not spell as its own is unattributed, and an unattributed row counts for every scope.
-func (r RailRow) SeatOf() string {
-	value := strings.TrimSpace(r.Destination)
-	if value == "" {
-		return ""
-	}
-	if at := strings.LastIndex(value, "@"); at >= 0 {
-		return value[:at]
-	}
-	parts := strings.Split(value, "--")
-	if len(parts) < 3 {
-		return ""
-	}
-	return parts[len(parts)-1]
 }
 
 // Evidence is every typed fact the windows can see, plus the room's rows for the landed count. A stream
@@ -89,6 +72,13 @@ func (r RailRow) SeatOf() string {
 type Evidence struct {
 	Facts []Fact
 	Rows  []RailRow
+	// Room and Seats are what a row's destination is read against: the room the census is for, and that
+	// room's OWN seat keys (`clientservices.LiveSeats`). The seat set is the authority for the bare spelling -
+	// the store holds `<seat>` beside `agenthub--<room>--<seat>` and `<seat>@<room>` - so a destination the
+	// room does not spell as a seat stays unattributed rather than being guessed into one. An empty set is not
+	// an error: it narrows attribution to the two spelled forms, and no read fails because of it.
+	Room  string
+	Seats map[string]bool
 	// Skips names every stream that was NOT read, by stream. It decides a skill's verdict: a stream nobody
 	// opened cannot report an occurrence, and counting that as silence would promote on a file no one read.
 	Skips []Skip
@@ -115,7 +105,14 @@ func (e Evidence) Unread(stream string) bool {
 // a refused commit would have been made. A read that fails is recorded in Skipped, never returned as an error:
 // one unreadable stream narrows what the census knows, and the report says so.
 func LoadEvidence(stateRoot, room, repo string) Evidence {
-	var evidence Evidence
+	evidence := Evidence{Room: room}
+
+	// The room's own seat keys decide the BARE spelling of a row's destination (`reviewer`). A room with no
+	// record to read answers an empty set, which narrows attribution to the two spelled forms and is never a
+	// failure of the read: the streams below are what a skip is about.
+	if seats, err := clientservices.LiveSeats(stateRoot, room); err == nil {
+		evidence.Seats = seatKeys(seats)
+	}
 
 	evidence.add(readGuard(append(roomWorktreeDirs(stateRoot, room), repo), stateRoot, room, &evidence))
 	evidence.add(readSends(stateRoot, room, &evidence))
@@ -141,6 +138,13 @@ func inScope(scope, seat string) bool {
 	return scope == "" || seat == "" || seat == scope
 }
 
+// seatOf is a row's destination as a seat of THIS room, through the ONE reader (`seatFromSession`): the store
+// holds three spellings, `<seat>@<room>`, `agenthub--<room>--<seat>` and the bare `<seat>`, and a row that
+// names no seat of the room answers "" - unattributed, which `inScope` counts for every scope.
+func (e Evidence) seatOf(destination string) string {
+	return seatFromSession(destination, e.Room, e.Seats)
+}
+
 // seatLevelPrefix is how census.go spells a seat-tier skill's level: `seat:<name>`, the same spelling the
 // store's `--level` filters take.
 const seatLevelPrefix = "seat:"
@@ -164,7 +168,7 @@ func (e Evidence) Occurrences(signal Signal, since time.Time, scope string) []Oc
 		return nil
 	}
 	if stream == StreamQueue {
-		return rowOccurrences(e.Rows, signal.Value, since, scope)
+		return e.rowOccurrences(signal.Value, since, scope)
 	}
 	var found []Occurrence
 	seen := map[string]bool{}
@@ -193,19 +197,20 @@ func (e Evidence) Occurrences(signal Signal, since time.Time, scope string) []Oc
 // rowOccurrences is the rail's half of a `row-tag:` signal: every row carrying the tag that was CREATED
 // inside the window. A row's own transitions are not read - the tag was put on the row when it was written,
 // and that is the moment the typed finding appeared.
-func rowOccurrences(rows []RailRow, tag string, since time.Time, scope string) []Occurrence {
+func (e Evidence) rowOccurrences(tag string, since time.Time, scope string) []Occurrence {
 	var found []Occurrence
-	for _, row := range rows {
+	for _, row := range e.Rows {
 		if row.Created.Before(since) {
 			continue
 		}
-		if !inScope(scope, row.SeatOf()) {
+		seat := e.seatOf(row.Destination)
+		if !inScope(scope, seat) {
 			continue
 		}
 		for _, has := range row.Tags {
 			if has == tag {
 				found = append(found, Occurrence{At: row.Created, Stream: StreamQueue, Value: tag, Ref: row.ID,
-					Seat: row.SeatOf()})
+					Seat: seat})
 				break
 			}
 		}
@@ -224,7 +229,7 @@ func (e Evidence) StreamSize(signal Signal, since time.Time, scope string) int {
 	if stream == StreamQueue {
 		size := 0
 		for _, row := range e.Rows {
-			if !row.Created.Before(since) && inScope(scope, row.SeatOf()) {
+			if !row.Created.Before(since) && inScope(scope, e.seatOf(row.Destination)) {
 				size++
 			}
 		}
@@ -240,7 +245,11 @@ func (e Evidence) StreamSize(signal Signal, since time.Time, scope string) int {
 }
 
 // Commands counts the TOOL lines whose target carries a declared command, at or after since. Literal,
-// case-sensitive, no globs - a command signal is a substring of what the tool was asked to do.
+// case-sensitive, no globs - a command signal is a substring of what the tool was asked to do - with ONE
+// normalisation: an `mcp:<tool>` declaration matches the tool's own name as well as its text, because the log
+// spells one MCP tool two ways, `mcp:manage_task.list` and `xd://mcp__agenthub_http_manage_task` (343 of the
+// latter measured 2026-10-21, which the literal prefix alone missed). A declaration with no `mcp:` prefix is
+// matched by its own text alone. Commands are counts only, so no verdict moves either way.
 func (e Evidence) Commands(signal Signal, since time.Time, scope string) int {
 	if signal.Kind != SignalCommand || signal.Value == "" {
 		return 0
@@ -250,19 +259,40 @@ func (e Evidence) Commands(signal Signal, since time.Time, scope string) int {
 		if fact.Stream != StreamTool || fact.At.Before(since) || !inScope(scope, fact.Seat) {
 			continue
 		}
-		if strings.Contains(fact.Value, signal.Value) {
+		if commandMatches(fact.Value, signal.Value) {
 			count++
 		}
 	}
 	return count
 }
 
-// LandedFor counts the room's rows that reached `done` at or after since AND carry one of the skill's OWN
-// declared `row-tag:` values. A landing is a row, and the only fact a row carries is its tags - so a landing a
-// reader cannot attribute to the skill is some other skill's work, and counting it would promote this one on
-// evidence it never carried. A skill that declares no row-tag therefore counts zero: it has no landing of its
-// own, and the promotion the census grants on landings is not for it.
-func (e Evidence) LandedFor(signals []Signal, since time.Time) int {
+// mcpCommandPrefix is how a declaration spells an MCP tool: `mcp:<tool>`.
+const mcpCommandPrefix = "mcp:"
+
+// commandMatches reports whether a tool target carries a declared command: its text, literally, or - for an
+// `mcp:<tool>` declaration - the text after that prefix, which is the tool's own name. The second half is a
+// literal substring like the first, never a pattern: `mcp:manage_task` matches every `mcp:manage_task.<verb>`
+// by its text and `xd://mcp__agenthub_http_manage_task` by its name, and a declaration without the prefix
+// (`go test`, `git diff`) is untouched by this rule.
+func commandMatches(target, declared string) bool {
+	if strings.Contains(target, declared) {
+		return true
+	}
+	if !strings.HasPrefix(declared, mcpCommandPrefix) {
+		return false
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(declared, mcpCommandPrefix))
+	return name != "" && strings.Contains(target, name)
+}
+
+// LandedFor counts the room's rows that reached `done` at or after since, carry one of the skill's OWN
+// declared `row-tag:` values, AND were handed to a seat the row is judged on. A landing is a row, and the only
+// fact a row carries besides its tags is the session it was handed to - so a landing a reader cannot attribute
+// to the skill is some other skill's work, and counting it would promote this one on evidence it never carried.
+// The scope is the same one every other window reads (R1): without it, one closed row of a tag five seat skills
+// declare promotes all five, which is exactly the sharing R1 removes. A skill that declares no row-tag counts
+// zero: it has no landing of its own, and the promotion the census grants on landings is not for it.
+func (e Evidence) LandedFor(signals []Signal, since time.Time, scope string) int {
 	own := map[string]bool{}
 	for _, signal := range signals {
 		if signal.Kind == SignalRowTag && signal.Value != "" {
@@ -275,6 +305,9 @@ func (e Evidence) LandedFor(signals []Signal, since time.Time) int {
 	count := 0
 	for _, row := range e.Rows {
 		if row.State != "done" || row.Updated.Before(since) {
+			continue
+		}
+		if !inScope(scope, e.seatOf(row.Destination)) {
 			continue
 		}
 		for _, tag := range row.Tags {
@@ -321,32 +354,50 @@ func guardRule(rule string) string {
 // enforces it.
 func readGuard(repos []string, stateRoot, room string, evidence *Evidence) Skip {
 	readAny := false
+	// EACH SPOOL IS READ ONCE, keyed by the path git resolved. `roomWorktreeDirs` hands over a worktree's
+	// children beside the worktree itself, and git's discovery walks UP from any directory inside a repository:
+	// `wt/<seat>/notes` used to answer `wt/<seat>`'s git dir, so one refusals.jsonl was appended once per child
+	// (measured 2026-10-21: 9-12 times per worktree, 113 rev-parse spawns for nine worktrees). Occurrences
+	// survived on its dedupe; StreamSize did not, and the `tooBroad` denominator - the admission rule R3 relies
+	// on - was multiplied by the child count. The resolved spool path is the identity here.
+	seen := map[string]bool{}
 	for _, repo := range repos {
 		if repo == "" {
 			continue
 		}
-		if path, err := refusalSpoolPath(repo); err == nil {
-			if _, statErr := os.Stat(path); statErr == nil {
-				readAny = true
-				readJSONLines(path, func(raw []byte) {
-					var line struct {
-						ID   string `json:"id"`
-						At   string `json:"ts"`
-						Rule string `json:"rule"`
-						Seat string `json:"seat"`
-					}
-					if json.Unmarshal(raw, &line) != nil || line.Rule == "" {
-						return
-					}
-					at, err := time.Parse(time.RFC3339Nano, line.At)
-					if err != nil {
-						return
-					}
-					evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard,
-						Value: guardRule(line.Rule), At: at, Ref: line.ID, Seat: line.Seat})
-				})
-			}
+		// Only a worktree root can own a spool, and a plain child (a file, an ordinary subdirectory) has no
+		// `.git`. Asking git about it is what started discovery walking up to the parent, so the check is the
+		// guard: a directory git cannot answer for is skipped silently, exactly as a failed `refusalSpoolPath`
+		// always was.
+		if _, err := os.Stat(filepath.Join(repo, ".git")); err != nil {
+			continue
 		}
+		path, err := refusalSpoolPath(repo)
+		if err != nil || seen[path] {
+			continue
+		}
+		seen[path] = true
+		if _, statErr := os.Stat(path); statErr != nil {
+			continue
+		}
+		readAny = true
+		readJSONLines(path, func(raw []byte) {
+			var line struct {
+				ID   string `json:"id"`
+				At   string `json:"ts"`
+				Rule string `json:"rule"`
+				Seat string `json:"seat"`
+			}
+			if json.Unmarshal(raw, &line) != nil || line.Rule == "" {
+				return
+			}
+			at, err := time.Parse(time.RFC3339Nano, line.At)
+			if err != nil {
+				return
+			}
+			evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard,
+				Value: guardRule(line.Rule), At: at, Ref: line.ID, Seat: line.Seat})
+		})
 	}
 	// The seat's own directory, where the runtime points PI_CODING_AGENT_DIR and the guard writes its log:
 	// <state root>/rooms/<room>/seats/<seat>/tool-calls.jsonl, the same path the TOOL stream reads.
@@ -391,6 +442,13 @@ func readGuard(repos []string, stateRoot, room string, evidence *Evidence) Skip 
 // directory under `<roomDir>/wt`, and one level below each (the client is a submodule, so
 // `wt/<seat>/agenthub_client` answers a git dir of its own), is handed to the same `refusalSpoolPath` the caller's
 // own repo goes through; a directory that is not a worktree contributes nothing.
+//
+// THE LIST IS BY PATH, NOT BY IDENTITY, and two of the paths it resolves are copies of one tree: this room's
+// `wt/lead/agenthub_client.obsolete` (a retired copy of the client) and `wt/lead/agenthub_client` (a distinct
+// worktree) both answer a git dir, so refusals written in a retired copy are counted in the census. That is
+// deliberate on the evidence - a refusal is a refusal wherever it was refused, and the census is the room's - and
+// it is the READER that keeps a spool from being counted twice: `readGuard` keys every read by the spool path git
+// RESOLVED, so a copy that resolves to a path already read adds nothing.
 func roomWorktreeDirs(stateRoot, room string) []string {
 	if stateRoot == "" || room == "" {
 		return nil
@@ -444,8 +502,12 @@ func readSends(stateRoot, room string, evidence *Evidence) Skip {
 			if json.Unmarshal(raw, &line) != nil || line.From == "" || line.At.IsZero() || line.Allowed {
 				return
 			}
+			// The ref is the pair AND the decision's time: two refusals between one pair carrying the same
+			// Reason are two decisions, and a ref of `from->to` alone collapsed them through Occurrences'
+			// dedupe while both still counted in StreamSize - a count and a citation that disagreed.
 			evidence.Facts = append(evidence.Facts, Fact{Stream: StreamSend, Value: line.Reason,
-				At: line.At, Ref: line.From + "->" + line.To, Seat: seat})
+				At: line.At, Ref: line.From + "->" + line.To + " " + line.At.UTC().Format(time.RFC3339Nano),
+				Seat: seat})
 		})
 	}
 	return Skip{}

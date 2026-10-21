@@ -2,6 +2,7 @@
 name: reviewer-workflow
 description: "Use at the start of every session and before every review. The reviewer seat's working method in 4genthub-min - take one handed-off change, fan out read-only DeepSeek reviewers along independent dimensions, confirm every finding yourself, and return one ranked verdict to the author and the lead."
 signals:
+  - guard: env-secret
   - row-tag: guide
   - command: 4genteam facts
   - command: go test

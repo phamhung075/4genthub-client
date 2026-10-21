@@ -27,7 +27,7 @@ Owner decision, 2026-10-11. Every seat that writes files works in its own git wo
 - Only the lead works on `main`. No other seat edits, commits or merges there.
 - Only the lead pushes (`main`, `frontend`), after the reviewer gate and a green test run. No other seat pushes.
 - A seat commits on its own branch with a pathspec: `git commit -m "..." -- <paths>`. Use `git add -N` for new files. A seat never rebases another seat's branch.
-- Importing a tree is the same move: a patch, a stash, another branch's ref or a worktree outside the room's `wt/` is refused, because files move between trees without a commit.
+- Importing a tree is the same move: `git apply`, `git am`, `patch`, `git restore <path>`, `git checkout -- <path>` and `git stash pop|apply|branch` are refused when they would write a protected path, because files move between trees without a commit. `git checkout`, `git switch`, `git cherry-pick`, `git merge` and `git rebase` are allowed on a plain commit and are read only when an operand resolves into the stash reflog — a stash entry is a commit.
 - A merge conflict is resolved by the author seat on its own branch, then the change goes through the gate again.
 - A seat that finishes tells the lead the branch name and the commit range. The lead does the rest.
 

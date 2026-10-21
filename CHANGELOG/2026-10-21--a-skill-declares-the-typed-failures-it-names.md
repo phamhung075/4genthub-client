@@ -9,9 +9,13 @@
 `---` so `metadata:` is untouched: the guard's own rule names (folded `_`→`-`), the store's own row tags, or a
 literal substring of a tool target. Each rule has one owner in its scope - `worktree-scope`, `push` and
 `git-imports-a-tree` on `seat-worktree` and on no seat skill, `docs-only` on `changelog-updater`,
-`queue-coalesce` on `queue-row-schema`, each seat's `env-secret` on exactly one of its skills - so one refusal
-demotes one skill. The 9 skills that name no typed failure stay `no-signal` and are listed with the rule or verb
-that would arm each.
+`queue-coalesce` on `queue-row-schema`, `env-secret` on exactly one skill in each of the five seats
+(`architect-workflow`, `fe-dev-role`, `go-dev-role`, `lead-role`, `reviewer-workflow`) - so one refusal
+demotes one skill. The ruling's table named no reviewer owner; the gate measured the consequence - a reviewer
+`env-secret` refusal matched no declaration - and the gap is closed here by declaring the rule on the
+reviewer's own workflow skill, the one reader of that seat's facts (measured after the declaration: 7 reviewer
+`env-secret` occurrences, seat-scoped). The 9
+skills that name no typed failure stay `no-signal` and are listed with the rule or verb that would arm each.
 
 `skills/share/deepseek-offload` is **not** declared: it is a symlink into the `third_party/deepseek-offload`
 submodule, so its front matter is that repository's file and not this one's.
@@ -20,15 +24,36 @@ submodule, so its front matter is that repository's file and not this one's.
 
 A skill delivered at `seat:<seat>` states a rule for that seat; another seat's refusal is not a failure of it.
 `Fact` gains `Seat`, filled from the spool line's own `seat` field, the blocked tool line's `seat`, and the
-tool log's directory; `RailRow` gains `Destination` and `SeatOf()`, which `railRows` fills from
-`DestinationSession`; `seatFromSession` reads both spellings the store holds (`agenthub--<room>--<seat>` and
-`<seat>@<room>`). `Occurrences`, `StreamSize`, `Commands` and `rowOccurrences` take the row's level and skip
-another seat's facts - numerator and denominator both, so `tooBroad` stays a ratio of one scope. A fact whose
-seat cannot be named (the machine-wide Jev log, a row handed to a session naming no seat) counts for every
-scope: unknown attribution is not another seat's.
+tool log's directory; `RailRow` gains `Destination`, filled from `DestinationSession`, and the row's seat is
+read through `seatFromSession` - ONE reader for the three spellings the store holds
+(`agenthub--<room>--<seat>`, `<seat>@<room>`, and a bare `<seat>` that counts only when the room's own seat
+keys name it). `Occurrences`, `StreamSize`, `Commands`, `rowOccurrences` and `LandedFor` take the row's level
+and skip another seat's facts - numerator and denominator both, so `tooBroad` stays a ratio of one scope. A
+fact whose seat cannot be named (the machine-wide Jev log, a row whose destination names no seat of the room)
+counts for every scope: unknown attribution is not another seat's.
 
-Measured on the room's own facts: `go-dev-role` 39, `fe-dev-role` 6, `lead-role` 24, `architect-workflow` 16 -
+Measured on the room's own facts: `go-dev-role` 39, `fe-dev-role` 6, `lead-role` 24, `architect-workflow` 14 -
 its own seat's refusals, not the room's.
+
+## Landings are scoped, the bare spelling resolves, and a spool is read once
+
+The gate's first review measured three holes in the above and one in each of two counts:
+- `LandedFor` took no scope, so the five seat workflows each reported the room's 44 closed rows; a seat skill
+  was promoted on another seat's landings. Scoped, the live census no longer agrees: `go-dev-workflow` 15,
+  `lead-workflow` 14, `architect-workflow` 6, `fe-dev-workflow` 5, `reviewer-workflow` 5.
+- the row reader answered "" for a bare seat name (50 rows in this room), which `inScope` counts as EVERY
+  scope; `propose.go`'s seat reader and this one are now one function, and the bare spelling resolves against
+  the room's seat keys (a destination naming no seat still answers "").
+- `roomWorktreeDirs` handed every child of a worktree to `git rev-parse`, whose discovery walks up, so one
+  `refusals.jsonl` was parsed 9-12 times per worktree (113 spawns) and `StreamSize` - the `tooBroad`
+  denominator - was multiplied by the child count. A worktree root is now the only candidate and each resolved
+  spool path is read once (measured: 914 guard facts over 834 distinct refs before; facts now dedupe on the
+  resolved path).
+- a `send:` fact's ref is `from->to <timestamp>`, so two distinct refusals between one pair no longer collapse
+  to one occurrence while both count in the stream (latent: no skill declares `send:` yet).
+- an `mcp:<tool>` declaration also matches the tool's own name, because the tool log spells one MCP tool
+  `mcp:manage_task.list` and `xd://mcp__agenthub_http_manage_task`; the literal prefix alone missed the second
+  spelling. Commands are counts only, so no verdict moves.
 
 ## R2 - only an attributed signal can make a skill `no-signal`-free
 
@@ -46,7 +71,7 @@ so before this the census read one line of ten. Now `changelog-updater` holds on
 
 ## A hold cites its occurrences
 
-`applyWindow` filled `Refs` only for `demote`, so a skill holding on 302 occurrences showed a number with no id
+`applyWindow` filled `Refs` only for `demote`, so a skill holding on hundreds of occurrences showed a number with no id
 to follow. A row with occurrences cites them whether it demotes or holds, deduped and capped at 20 - the count
 stays in `occurrences`, so a truncated list is still a truthful one, and a citation is never synthetic.
 
@@ -55,10 +80,13 @@ stays in `occurrences`, so a truncated list is still a truthful one, and a citat
 `lead-workflow` §6 Close reads the census before the merge and names what a `demote` and a `broken-record` do;
 `system-improvement-analysis` takes the census line for the skills a cluster touches as an input;
 `friction-triage` names the shipped feedback channel and rows tagged `finding` instead of a `friction` tag the
-daemon's closed tag list does not contain; `seat-worktree` says importing a tree is the same move as rebasing.
+daemon's closed tag list does not contain; `seat-worktree` says importing a tree is the same move as rebasing -
+in the rule's own terms, naming the verbs that are refused when they would write a protected path and the ones
+that stay allowed on a plain commit, because the first wording widened the rule.
 
 ## Verification
 
 `go test ./...` in the client: green. `4genteam skills evidence 4genthub-min --json` on this tree: 37 skills,
 **11 `hold`, 26 `no-signal`, 0 `broken-record`, 0 `demote`**, every hold carrying refs; `changelog-updater`
-10 occurrences, `seat-worktree` 302, `go-dev-role` 39, `queue-row-schema` 54.
+10 occurrences, `seat-worktree` 322, `go-dev-role` 39, `queue-row-schema` 55; the five seat workflows'
+landings differ (15, 14, 6, 5, 5) where before the fix all five read 44.
