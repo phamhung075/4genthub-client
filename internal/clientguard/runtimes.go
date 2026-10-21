@@ -58,6 +58,9 @@ type RuntimeHook struct {
 	// ReadError is a config file this client could not read or parse: the owner's file, left alone, and the
 	// reason the row cannot say whether the entry is there.
 	ReadError string
+	// Removed is set by the uninstall for an entry it took out, so the verb's line can say what it DID rather
+	// than only what is left: after a removal the row looks exactly like a row where nothing was ever there.
+	Removed bool
 }
 
 // Found is whether this machine has the runtime at all: on the PATH, or with the config directory an earlier
@@ -234,6 +237,7 @@ func UninstallRuntimeHooks(home string) ([]RuntimeHook, error) {
 			return hooks, err
 		}
 		hook.EntryPresent = false
+		hook.Removed = true
 	}
 	return hooks, nil
 }
@@ -250,18 +254,22 @@ func RuntimeInstallLine(hook RuntimeHook) string {
 	return hook.Runtime + ": the guard's entry is in " + hook.Config
 }
 
-// RuntimeUninstallLine is one runtime's line after `guard uninstall`.
+// RuntimeUninstallLine is one runtime's line after `guard uninstall`: what the verb took out, or why there was
+// nothing to take.
 func RuntimeUninstallLine(hook RuntimeHook) string {
-	if hook.ReadError != "" {
+	switch {
+	case hook.ReadError != "":
 		return hook.Runtime + ": " + hook.ReadError
-	}
-	if hook.Config == "" {
+	case hook.Removed:
+		return hook.Runtime + ": the guard's entry is out of " + hook.Config
+	case hook.Config == "":
 		return hook.Runtime + ": nothing was installed, and there is no surface for one"
-	}
-	if hook.EntryPresent {
+	case !hook.Guards():
+		return hook.Runtime + ": nothing was ever placed here - the guard has no " + hook.Mode + " mode"
+	case hook.EntryPresent:
 		return hook.Runtime + ": the guard's entry is still in " + hook.Config
 	}
-	return hook.Runtime + ": no guard entry is in " + hook.Config
+	return hook.Runtime + ": no guard entry was in " + hook.Config
 }
 
 // writeRuntimeEntry is the one write, per runtime: the file is read as its top-level members IN DOCUMENT ORDER,

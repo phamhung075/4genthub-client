@@ -28,7 +28,9 @@ could say a runtime's config carried no guard.
 - `guard install` and `guard uninstall` gained `--home` (default: the registered user's home). `uninstall` now
   takes the runtime entries out as well, and it does that **before** the git half: an entry is removed by the
   home it was written in, so a checkout that has since been deleted - exactly when the owner still needs the
-  entry gone - cannot refuse the cleanup.
+  entry gone - cannot refuse the cleanup. Its line says what it DID (`the guard's entry is out of X`) rather
+  than only what is left, because a removed row and a row where nothing was ever placed read the same
+  otherwise.
 - `clientlifecycle/runtimesrow.go` adds one `doctor` row per detected runtime - `guard_<runtime>` - carrying
   no room, because the file belongs to the machine. Each row prints where the binary was found and what the
   file says, naming the config by its **absolute** path; a home that cannot be resolved is one row whose line

@@ -394,9 +394,19 @@ func TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone(t *testing.T) {
 	if note != "codex: found, and there is no surface" {
 		t.Errorf("got %q", note)
 	}
-	gone := RuntimeUninstallLine(RuntimeHook{Runtime: "agy", Config: ".gemini/config/hooks.json"})
-	if gone != "agy: no guard entry is in .gemini/config/hooks.json" {
+	gone := RuntimeUninstallLine(RuntimeHook{Runtime: "agy", Config: ".gemini/config/hooks.json", Mode: "--agy-hook"})
+	if gone != "agy: no guard entry was in .gemini/config/hooks.json" {
 		t.Errorf("got %q", gone)
+	}
+	// A line that cannot tell a removal from a file that never carried the entry is the verb's own report lying by
+	// omission: the owner who just ran uninstall reads the first, and only one of them is about an action.
+	out := RuntimeUninstallLine(RuntimeHook{Runtime: "agy", Config: ".gemini/config/hooks.json", Removed: true})
+	if out != "agy: the guard's entry is out of .gemini/config/hooks.json" {
+		t.Errorf("a removed entry says it was taken out; got %q", out)
+	}
+	noMode := RuntimeUninstallLine(RuntimeHook{Runtime: "claude", Config: ".claude/settings.json", Mode: "--claude-hook"})
+	if noMode != "claude: nothing was ever placed here - the guard has no --claude-hook mode" {
+		t.Errorf("a runtime the guard cannot guard says nothing was placed; got %q", noMode)
 	}
 }
 

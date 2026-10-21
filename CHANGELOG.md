@@ -3,6 +3,12 @@
 Notable changes to this repository, in the [Keep a Changelog](https://keepachangelog.com/)
 format. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2026-10-21 — the guard's owner-wide half: `install` places it, `doctor` reports it, `uninstall` takes it out
+
+### Added
+- `4genteam guard install|uninstall` now also place and remove the seat guard's **owner-wide** entry - the half a claude or agy session reads before any seat exists. `install` writes it into the runtime's own file (`~/.gemini/config/hooks.json`; claude's `~/.claude/settings.json` once the shipped guard gains its `--claude-hook` mode), naming the `node .../seat-guard.ts` command behind `if [ -n "$AGENTHUB_SEAT" ]` so the owner's own window is untouched, and it keeps every key, hook definition, indentation unit and file mode it does not own; a second install moves no byte. `uninstall` takes the entry out before the git half, so a checkout that has since been deleted cannot leave an entry behind. Both take `--home`. Tests: `clientguard`.
+- `4genteam doctor` gains one row per runtime this client launches (`guard_agy`, `guard_claude`, `guard_codex`), saying where the binary was found and what the owner-wide file says, with the config named by absolute path. A missing entry is a note, not a failure; a runtime whose guard ships no mode for it says so; a home that cannot be resolved is one row whose line is the reason. gemini leaves the table - this client never launches it. Tests: `clientlifecycle`.
+
 ## 2026-10-18 — the git guard lands, and `doctor` reports stranded handoffs
 
 ### Added
