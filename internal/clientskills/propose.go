@@ -43,6 +43,19 @@ var queueRow = func(room, id string) (*clientruntime.QueueRow, error) {
 	return clientruntime.NewClient("").QueueShow(room, id)
 }
 
+// proposeEvidence loads the typed streams a non-row cite is resolved against. It is the SAME load the census
+// verb does (`skills evidence`), which is what keeps the two in step: a ref the report prints is a ref this
+// verb can resolve, because one function produced both. A seam for the same reason queueRow is one - a test
+// hands over facts instead of writing four stream files - and read LAZILY, so a proposal that cites only queue
+// rows never opens a stream it does not need.
+var proposeEvidence = func(room, repo string) Evidence {
+	root, err := clientenv.ResolveStateRoot("")
+	if err != nil {
+		return Evidence{}
+	}
+	return LoadEvidence(root, room, repo)
+}
+
 // callerWorktree is the ONE directory a proposal may be written under: the seat's own derived worktree.
 // It is a seam for the same reason RoomDir is - a test drives the verb over its own fixture - and it is a
 // function rather than a flag so no argument can aim a proposal at another seat's tree.
@@ -164,54 +177,101 @@ func splitCites(value string) ([]string, error) {
 	return cites, nil
 }
 
-// citeRows resolves every cited row and refuses the whole proposal when one does not: the error says which
-// id and what the daemon answered, so an unreachable rail reads differently from a row that is not there.
-func citeRows(room string, cites []string) ([]*clientruntime.QueueRow, error) {
-	rows := make([]*clientruntime.QueueRow, 0, len(cites))
-	for _, id := range cites {
-		if !strings.HasPrefix(id, QueueIDPrefix) {
-			return nil, usageError(fmt.Sprintf(
-				"--from %s is not a %s id: a proposal cites queue rows", id, QueueIDPrefix))
-		}
-		row, err := queueRow(room, id)
-		if err != nil {
-			return nil, usageError(fmt.Sprintf(
-				"--from %s does not resolve in room %q: %v", id, room, err))
-		}
-		if row == nil {
-			return nil, usageError(fmt.Sprintf("--from %s does not resolve in room %q", id, room))
-		}
-		rows = append(rows, row)
-	}
-	return rows, nil
+// cite is one --from value decided: a rail row, or one fact of a typed stream. Exactly one of the two is set.
+type cite struct {
+	ID   string
+	Row  *clientruntime.QueueRow
+	Fact *Fact
 }
 
-// carriesSignal answers the second refusal: the cited rows must carry a signal the skill declared, or the
-// proposal cites evidence the skill is not accountable for. A queue row's typed facts are its tags, so the
-// only kind that can match is row-tag - a skill that declared stream kinds alone has nothing a row carries.
-func carriesSignal(signals []Signal, rows []*clientruntime.QueueRow) (Signal, string) {
+// resolveCites decides every cited value before the proposal looks at the skill, and refuses the whole
+// proposal when one does not resolve - the error says which value and what was looked for.
+//
+// A value is a queue row (`qitem-…`, today's rule, kept) or ONE OF THE CENSUS'S OWN REFS: a refusal id, a
+// `seat <seat> <ts>` line, a `jev:<ts> <tier>` line or a `<from>-><to>` send line. The refs are not a second
+// vocabulary to keep in step - they are the `ref` field of the facts `skills evidence` prints, resolved
+// through the census's own loader, so a cite the report shows is a cite this verb can always resolve.
+func resolveCites(room, repo string, cites []string) ([]cite, error) {
+	out := make([]cite, 0, len(cites))
+	var evidence *Evidence
+	for _, id := range cites {
+		if strings.HasPrefix(id, QueueIDPrefix) {
+			row, err := queueRow(room, id)
+			if err != nil {
+				return nil, usageError(fmt.Sprintf(
+					"--from %s does not resolve in room %q: %v", id, room, err))
+			}
+			if row == nil {
+				return nil, usageError(fmt.Sprintf("--from %s does not resolve in room %q", id, room))
+			}
+			out = append(out, cite{ID: id, Row: row})
+			continue
+		}
+		if evidence == nil {
+			loaded := proposeEvidence(room, repo)
+			evidence = &loaded
+		}
+		fact, ok := evidence.fact(id)
+		if !ok {
+			return nil, usageError(fmt.Sprintf(
+				"--from %s is neither a %s id nor a ref `4genteam skills evidence` prints for room %q",
+				id, QueueIDPrefix, room))
+		}
+		out = append(out, cite{ID: id, Fact: fact})
+	}
+	return out, nil
+}
+
+// fact is the one stream fact whose ref is exactly this value. An exact match, not a prefix: a ref is what a
+// report prints, and a value that only starts like one is a cite nobody can look up.
+func (e Evidence) fact(ref string) (*Fact, bool) {
+	for i := range e.Facts {
+		if e.Facts[i].Ref == ref {
+			return &e.Facts[i], true
+		}
+	}
+	return nil, false
+}
+
+// carriesSignal answers the second refusal: the cited evidence must carry a signal the skill declared, or the
+// proposal cites evidence the skill is not accountable for. A queue row's typed facts are its tags, so only
+// `row-tag:` matches a row; every other kind matches a fact of ITS OWN stream whose value is the signal's -
+// the same pairing `Occurrences` makes when it demotes a skill, so a cite cannot reach a rule the census
+// would never fire.
+func carriesSignal(signals []Signal, cites []cite) (Signal, string) {
 	if len(signals) == 0 {
-		return Signal{}, "the skill declares no signals, so no cited row can carry one"
+		return Signal{}, "the skill declares no signals, so no cited evidence can carry one"
 	}
 	kinds := make([]string, 0, len(signals))
 	for _, signal := range signals {
 		kinds = append(kinds, signal.String())
 	}
 	for _, signal := range signals {
-		if signal.Kind != SignalRowTag {
+		stream, ok := attributedStreams[signal.Kind]
+		if !ok {
 			continue
 		}
-		for _, row := range rows {
-			for _, tag := range row.Tags {
-				if tag == signal.Value {
-					return signal, ""
+		for _, cited := range cites {
+			if stream == StreamQueue {
+				if cited.Row == nil {
+					continue
 				}
+				for _, tag := range cited.Row.Tags {
+					if tag == signal.Value {
+						return signal, ""
+					}
+				}
+				continue
+			}
+			if cited.Fact != nil && cited.Fact.Stream == stream && cited.Fact.Value == signal.Value {
+				return signal, ""
 			}
 		}
 	}
 	return Signal{}, fmt.Sprintf(
-		"the skill declares %s, and none of the cited rows carries one (a row's typed facts are its tags, "+
-			"so only row-tag: can match)", strings.Join(kinds, ", "))
+		"the skill declares %s, and none of the cited evidence carries one (a queue row's typed facts are its "+
+			"tags, so only row-tag: can match a row; any other kind needs a ref that `4genteam skills evidence` "+
+			"prints)", strings.Join(kinds, ", "))
 }
 
 // headCommit is the commit a proposal windows from: the tree's HEAD, which is where the proposal starts
@@ -305,7 +365,7 @@ func runSkillsPropose(args []string, stdout, stderr io.Writer) int {
 		return clientcmd.ExitUsage
 	}
 
-	rows, err := citeRows(room, cites)
+	resolved, err := resolveCites(room, worktree, cites)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam skills propose: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
@@ -315,7 +375,7 @@ func runSkillsPropose(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam skills propose: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
 	}
-	signal, reason := carriesSignal(signals, rows)
+	signal, reason := carriesSignal(signals, resolved)
 	if reason != "" {
 		fmt.Fprintf(stderr, "4genteam skills propose: %s\n", reason)
 		return clientcmd.ExitUsage
