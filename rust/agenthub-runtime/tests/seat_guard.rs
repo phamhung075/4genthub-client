@@ -2037,6 +2037,16 @@ fn a_quoted_cd_names_the_directory_the_next_statement_writes_in() {
         "time cd rust/agenthub-runtime && rm -r assets",
         "! cd rust/agenthub-runtime && rm -r assets",
         "then ! cd rust/agenthub-runtime && rm -r assets",
+        // An ARM's command is a command position too, and the `case` may itself follow a keyword: the arm rule was
+        // read only when `case` opened the statement and only one word past the pattern, so both rows were ALLOW
+        // (gate, 2026-10-21). A prefix after the arm is the same shell exactly as one at the start.
+        "case x in x) cd rust/agenthub-runtime;; esac && rm -r assets",
+        "if true; then case x in x) cd rust/agenthub-runtime;; esac; fi && rm -r assets",
+        "while true; do case x in x) cd rust/agenthub-runtime;; esac; break; done && rm -r assets",
+        "case x in x) command cd rust/agenthub-runtime;; esac && rm -r assets",
+        "case x in x) builtin cd rust/agenthub-runtime;; esac && rm -r assets",
+        "case x in x) time cd rust/agenthub-runtime;; esac && rm -r assets",
+        "case x in x) ! cd rust/agenthub-runtime;; esac && rm -r assets",
     ] {
         assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
     }
