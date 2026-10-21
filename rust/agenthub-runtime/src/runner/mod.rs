@@ -2387,7 +2387,7 @@ mod tests {
             !argv.iter().any(|a| a == "--settings"),
             "no settings file, no flag: {argv:?}"
         );
-        fs::write(&file, "{\"hooks\":{}}").expect("settings");
+        crate::supervisor::write_claude_guard_settings_when(&dir, true).expect("settings");
         let argv = child_argv(&AgentRuntime::ClaudeCode, &dir, &seat).expect("argv");
         let expected = file.to_string_lossy().to_string();
         assert!(
