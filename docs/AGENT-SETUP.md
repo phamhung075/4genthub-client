@@ -69,7 +69,9 @@ chmod 600 ~/.config/4genthub/.env
 ```
 
 Initialize it once, before the first verb that talks to the server. Never copy over an existing file:
-it holds the user's key. `scripts/build.sh` creates it from `.env.sample` when none exists.
+it holds the user's key. `scripts/build.sh` creates it from `.env.sample` when none exists, and it
+refuses to replace a live file that differs from the checkout's — the message names both paths and
+leaves the live file untouched — unless `--force` is passed.
 
 Ask the user for the key; do not generate one, and do not put one in this file yourself. The
 sample also lists the optional settings (`TYPESAFE_API_KEY`, which Jev uses on this machine for `4genteam decide` and `4genteam complete`; `DEEPSEEK_API_KEY`, the `COMPACT_*` limits,

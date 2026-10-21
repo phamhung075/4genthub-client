@@ -72,7 +72,9 @@ install -m 0755 4genteam ~/.local/bin/
 `~/.local/bin/4genteam`, and, when the checkout has a `.env`, a copy of it over `~/.config/4genthub/.env`
 (mode 600). The file edited in the checkout is therefore the file in effect after a build; a checkout
 without a `.env` leaves an installed file alone and, when none is installed yet, creates it from
-`.env.sample` (you then set `AGENTHUB_TOKEN`). `--no-test` skips `go test`.
+`.env.sample` (you then set `AGENTHUB_TOKEN`). A live `.env` that **differs** from the checkout's is
+refused — the message names both paths and the live file is untouched — because a stale checkout copy
+silently undoes a rotation; `--force` installs the checkout's copy anyway. `--no-test` skips `go test`.
 
 The seat-side checker is a **second** binary, built from this repository's `cmd/seatcheck` and put
 where the seats find it:
@@ -102,8 +104,9 @@ mkdir -p ~/.config/4genthub
 chmod 600 ~/.config/4genthub/.env
 ```
 
-`scripts/build.sh` does this for you on a first install. Never copy over an existing file: it holds
-the key.
+`scripts/build.sh` does this for you on a first install, and it refuses to replace a live file that
+differs from the checkout's (`--force` is the deliberate override). Never copy over an existing file
+by hand either: it holds the key.
 
 - The client reads `~/.config/4genthub/.env` at startup. Resolved from the real home, it is the same
   file inside a seat and out.
