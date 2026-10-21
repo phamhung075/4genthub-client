@@ -20,6 +20,8 @@ Three owner commits on `owner/seat-guard-rev9`, on top of `d5249fc0` (the revisi
 - **A `--claude-hook pre|post` mode** (`c9dc09c4`, row 0fe6369fc14a). claude's tool names map to the omp names the
   rules read; the answer is `hookSpecificOutput` allow/deny. `GUARD_HAS_CLAUDE_HOOK` flips to `true`, so the
   supervisor writes `<seat>/settings.json` and the runner passes `--settings`. codex still has no hook.
+  Redaction runs for omp seats only: claude's `PostToolUse` answers `{}`, so a claude-code seat has the refusals
+  without the result-redaction backstop.
 
 ### Fixed
 
