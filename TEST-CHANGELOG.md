@@ -1,3 +1,16 @@
+## 2026-10-21 - the cd test carries the compound rows the M3' verdict found open
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, `a_quoted_cd_names_the_directory_the_next_statement_writes_in`: seven
+rows whose `cd` sits inside an `if`/`while`/`for` body and whose write is either inside the compound or after its
+close - `if true; then cd <tree>; fi && rm -r assets`, the `... && rm -r assets; fi` and `; fi; rm -r assets` forms,
+the `else true` form, `while ... do cd <tree>; break; done && rm -r assets`, `for ... done && rm -r assets`, and the
+same `if` form with `git add assets` (`git-imports-a-tree`) - plus four reads that stay allowed. Every deny row is
+ALLOW on the 1504-line image `23003fc6` (the shipped quoting diff, 9/9 hunks on base `109cbeca`), measured through
+the agy seam; the `cd` read stops at `then`/`do`, so the write after the compound is judged in the call's own
+directory. Red until the asset reads compound keywords, which is the owner's next apply
+(`PATCH-2026-10-21-guard-compound-cd.diff`: `commandAt` skips the compound keywords before the command name).
+`cargo fmt --check` clean.
+
 ## 2026-10-21 - the quoting suite carries the gate's B1 fix: the directory a quoted `cd` names, and the two flipped rows (rust, branch 4genthub-min/rev9-tests-fold)
 
 `rust/agenthub-runtime/tests/seat_guard.rs`, on `ca22c477`. Gate `qitem-20261021181739-9da6703153f7` found a quoted

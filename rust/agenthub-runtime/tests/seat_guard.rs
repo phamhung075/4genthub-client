@@ -2015,6 +2015,34 @@ fn a_quoted_cd_names_the_directory_the_next_statement_writes_in() {
         assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
     }
 
+    // A `cd` inside an `if`/`while`/`for` body is the same shell, not a subshell: the directory it moves to is the
+    // one the statements after the compound write in. Measured by the gate 2026-10-21 (VERDICT-2026-10-21-m3p.md):
+    // every row below is ALLOW on the 1504-line image `23003fc6`, because the `cd` read stops at `then`/`do`.
+    for case in [
+        "if true; then cd rust/agenthub-runtime; fi && rm -r assets",
+        "if true; then cd rust/agenthub-runtime && rm -r assets; fi",
+        "if true; then cd rust/agenthub-runtime; fi; rm -r assets",
+        "if true; then cd rust/agenthub-runtime; else true; fi && rm -r assets",
+        "while true; do cd rust/agenthub-runtime; break; done && rm -r assets",
+        "for f in x; do cd rust/agenthub-runtime; done && rm -r assets",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    assert_eq!(
+        at("if true; then cd rust/agenthub-runtime; fi && git add assets").as_deref(),
+        Some("git-imports-a-tree")
+    );
+
+    // The reads stay the seat's own: a compound whose body only looks at the tree writes nothing.
+    for case in [
+        "if true; then ls assets; fi",
+        "if true; then cd rust/agenthub-runtime; fi && ls assets",
+        "while true; do ls assets; done",
+        "for f in x; do cd /tmp; done && ls",
+    ] {
+        assert_eq!(at(case), None, "{case}");
+    }
+
     // A `cd` operand with no literal prefix is refused by name, not resolved as a directory that cannot exist: the
     // base it would leave behind is one the guard only thinks it knows.
     for case in [
