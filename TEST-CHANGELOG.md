@@ -270,3 +270,15 @@ Red before the asset lands, measured at this tip on main's revision-6 asset `3e7
 (`:1668`). With the revision-9 asset `44be3f195328` (`wt/lead/owner-actions/seat-guard-rev9-from-main.patch`,
 sha256 `806536475a20`) applied the same suite is 30 passed, 0 failed. The three red rows are the point: they pin the
 asset's rule, so the split landing cannot pass by accident.
+
+## 2026-10-21 - the guard redacts results, refuses environment dumps, and answers claude-code (rust, branch owner/seat-guard-rev9)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, 30 → 35 rows. The rev-9 lead-asset rows now assert that `lead` and
+`go-dev` are both refused the guard (commit by pathspec, `git apply`, `patch -p1`, `git mv`, a TargetFile write).
+New: `a_tool_result_loses_the_secret_values_and_keeps_its_shape` (through `node seat-guard.ts --redact`: a carried
+value, a `NAME=value`, a JWT, an `sk-` key and a Bearer token are gone, newlines and clean text are kept),
+`an_environment_dump_is_refused_and_a_scoped_environment_is_not`,
+`a_gh_api_read_of_a_credential_surface_is_refused_and_ci_reads_are_not`,
+`a_claude_call_reaches_the_rule_its_omp_name_reaches` (each claude tool name against the agy path's verdict for the
+same call) and `a_claude_post_call_answers_empty_and_logs_one_line`. The file is rustfmt-formatted and one
+single-element loop is unrolled for clippy. Measured: `cargo test --offline` 194 + 1 + 35 + 1 passed, 0 failed.
