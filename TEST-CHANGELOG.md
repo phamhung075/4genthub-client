@@ -284,3 +284,15 @@ error, so a guard registered only there logs `ok` for a call that failed, and cl
 event (`seats/architect/RULING-2026-10-21-claude-hook-mode.md` §1, correction 2). The test keeps every other
 assertion it had (foreign file untouched, own file rewritten then cleared, the const as the gate, the one-way check
 that a true flag needs an asset carrying the dispatch).
+
+## 2026-10-21 - a proposal cites a row or a census ref
+
+`internal/clientskills/propose_test.go` gains `TestProposeCitesTheCensusRefsItPrints`, a table of the decision's
+five cases (`DECISION-2026-10-21-skill-drafting.md`, slice 0) plus a sixth: a `guard:` skill on a refusal id, on a
+`seat <seat> <ts>` line, a `jev:` skill on a decision line, a `send:` skill on an audit line and a `row-tag:` skill
+on a row all propose and print the signal they matched; a `guard:` skill on a queue row is still refused (the
+pre-existing case, unchanged); and a `guard:` skill citing a JEV ref is refused, because the kind must equal the
+stream the declared signal names. The evidence seam is a field on the fixture, so a case hands over `Fact`s rather
+than writing stream files. `TestProposeRefusesAnIDThatIsNotAQueueRow` becomes
+`TestProposeRefusesAValueThatIsNeitherARowNorACensusRef`: the widened rule it pinned is repealed by this change, so
+the case now asserts the refusal that names both accepted kinds.
