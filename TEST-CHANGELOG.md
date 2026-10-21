@@ -5,7 +5,9 @@ rows whose `cd` sits after a `case` arm, closing the gap the gate measured on th
 only when it opened the statement, and only one word past the pattern, so a prefix after the arm was named
 `command`): `case x in x) cd <tree>;; esac && rm -r assets`, the same arm inside `if ... then ... fi` and inside a
 `while` body, and the arm with `command` / `builtin` / `time` / `!` before the `cd`. All seven are ALLOW on the
-1504-line image `23003fc6` and on its first normalizer (`1b383967`); the second normalizer
+1504-line image `23003fc6`. On its first normalizer (`1b383967`) six are ALLOW - the arm behind `if` and behind
+`while` and the four prefixed arms; the plain `case x in x) cd <tree>;; esac && rm -r assets` is refused there as
+`protected-paths`, because that normalizer reads an arm only when `case` opens the statement. The second normalizer
 (`PATCH-2026-10-21-guard-cd-compound-normalizer.diff`, v2: the arm rule moves into `commandAt`'s own scan loop)
 denies all seven. Re-measured through the agy seam on the 38-row table: 21 fail at `23003fc6`, 6 at `1b383967`, 0 at
 v2, and the 83-row quoting table is verdict-identical between v1 and v2. `cargo fmt --check` clean.
