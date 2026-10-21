@@ -3,11 +3,12 @@
 Two tests, both in `rust/agenthub-runtime`. `supervisor::tests::the_claude_settings_run_the_seat_guard_on_both_phases`
 forces the writer on (`write_claude_guard_settings_when`) and reads the file it wrote, asserting each phase's
 command is exactly `node "$PI_CODING_AGENT_DIR/hooks/pre/seat-guard.ts" --claude-hook pre|post`; it then asserts a
-file left by an earlier start is rewritten while the guard carries the mode and removed while it does not, and that
-production's gate is the `GUARD_HAS_CLAUDE_HOOK` const - with a one-way check that a true flag implies the asset
-really carries the dispatch, so prose in a comment cannot open it. `runner::tests::claude_argv_names_the_seats_settings_only_while_the_file_is_there`
-pins the flag follows the file, and now writes that file through the same writer with the gate forced on: no
-`--settings` while the seat dir has none, `--settings <seat>/settings.json` once the writer has run. Measured:
+foreign `settings.json` is left alone, while the writer's own file is rewritten when the guard carries the mode and
+removed when it does not, and that production's gate is the `GUARD_HAS_CLAUDE_HOOK` const - with a one-way check
+that a true flag implies the asset really carries the dispatch, so prose in a comment cannot open it.
+`runner::tests::claude_argv_names_the_seats_settings_only_while_the_file_is_there` pins that the flag follows the
+file the writer wrote: no `--settings` while the seat dir has none, `--settings <seat>/settings.json` once the writer
+has run, and none again for a file this runtime did not write. Measured:
 `cargo test --offline` in the crate at the tip, 194 passed 0 failed (bin), 1 (held_send), 27 (seat_guard), 1 (umask);
 `go test ./...` in `agenthub_client` all packages ok at the same tip.
 

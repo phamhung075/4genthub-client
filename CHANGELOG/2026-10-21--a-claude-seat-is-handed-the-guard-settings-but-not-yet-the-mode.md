@@ -29,9 +29,15 @@ an earlier start left behind. The flag is an explicit const in `supervisor/mod.r
 the asset's own header describes `--agy-hook` in prose, so a comment mentioning the claude flag would open a
 substring gate while no mode exists.
 
-The flag flips in the same change as the owner's guard patch
-(`~/.config/4genthub/rooms/4genthub-min/seats/go-dev/PATCH-2026-10-21-seat-guard-claude-hook.md`). Until then a
-claude seat is unchanged: no settings file, no flag, no false assurance.
+The landing is **two steps**, both named in the owner's patch
+(`~/.config/4genthub/rooms/4genthub-min/seats/go-dev/PATCH-2026-10-21-seat-guard-claude-hook.md`): the owner first
+applies the `--claude-hook` mode to `assets/seat-guard.ts`, then this flag flips — one line, a seat may make it.
+Until then a claude seat is unchanged: no settings file, no flag, no false assurance.
+
+The file is the writer's own, and only its own: `is_claude_guard_settings` compares the bytes with what the writer
+produces, so a `settings.json` someone else put in the seat dir is neither cleared when the guard lacks the mode nor
+handed to claude as `--settings`. The seat dir is the runtime's to fill, not to empty — the same rule the agy
+installer beside it follows when it refuses a foreign file.
 
 ## Verification
 

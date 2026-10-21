@@ -151,10 +151,11 @@ fn child_argv(
             );
             // THE SEAT'S GUARD, as claude can read one: claude runs a hook only when a settings file names it, and
             // the supervisor writes that file for a claude seat whose guard carries the claude mode (see
-            // `write_claude_guard_settings`). The flag follows the file - claude refuses to start on a `--settings`
-            // path that is not there, so a seat with no guard is launched without the flag, never with a broken one.
+            // `write_claude_guard_settings`). The flag follows the file the writer wrote - claude refuses to start on
+            // a `--settings` path that is not there, and a `settings.json` this runtime did not write is not the
+            // guard's - so a seat with no guard is launched without the flag, never with a broken or foreign one.
             let settings = seat_dir.join(crate::supervisor::CLAUDE_SETTINGS_FILE);
-            if settings.is_file() {
+            if crate::supervisor::is_claude_guard_settings(&settings) {
                 argv.push("--settings".to_string());
                 argv.push(settings.to_string_lossy().to_string());
             }
@@ -2394,6 +2395,13 @@ mod tests {
             argv.windows(2)
                 .any(|pair| pair[0] == "--settings" && pair[1] == expected),
             "the seat's own settings file is what runs its guard: {argv:?}"
+        );
+        // A file this runtime did not write is not the guard's, so it is not what the seat is started on.
+        fs::write(&file, "{\"permissions\":{\"deny\":[]}}\n").expect("foreign settings");
+        let argv = child_argv(&AgentRuntime::ClaudeCode, &dir, &seat).expect("argv");
+        assert!(
+            !argv.iter().any(|a| a == "--settings"),
+            "a foreign settings file is not handed to claude: {argv:?}"
         );
         fs::remove_dir_all(&dir).expect("cleanup");
     }

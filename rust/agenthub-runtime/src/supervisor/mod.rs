@@ -477,10 +477,18 @@ fn claude_guard_settings() -> String {
 /// `assets/seat-guard.ts`, which `protectedPath` refuses to a seat, and it is written for the owner at
 /// `seats/go-dev/PATCH-2026-10-21-seat-guard-claude-hook.md`. This flag, not a substring of the asset, is the
 /// gate: the asset's own header already describes `--agy-hook` in prose, so a comment mentioning the claude flag
-/// would flip a substring test open while no mode exists and plant a hook that answers nothing. Flip it in the
-/// same change as the owner's patch; `the_claude_settings_run_the_seat_guard_on_both_phases` fails if the flag is
-/// true while the asset lacks the mode.
-pub(crate) const GUARD_HAS_CLAUDE_HOOK: bool = false;
+/// would flip a substring test open while no mode exists and plant a hook that answers nothing. It lands in two
+/// steps - the owner's asset patch, then this flag - and `the_claude_settings_run_the_seat_guard_on_both_phases`
+/// fails if it is true while the asset lacks the mode.
+const GUARD_HAS_CLAUDE_HOOK: bool = false;
+
+/// Whether `path` is the file this runtime wrote: byte for byte the text `claude_guard_settings` produces. A file
+/// that differs was put there by someone else, and a seat's own directory is the runtime's to fill, not to empty -
+/// the agy installer beside it refuses a foreign file rather than rewriting it, and so does this one clear only its
+/// own.
+pub(crate) fn is_claude_guard_settings(path: &Path) -> bool {
+    fs::read_to_string(path).is_ok_and(|text| text == claude_guard_settings() + "\n")
+}
 
 /// Write the claude seat's settings file, or clear one left by an earlier start. A guard without the
 /// `--claude-hook` mode is one that never reads this payload and never answers, so writing the file for it would
@@ -497,7 +505,7 @@ pub(crate) fn write_claude_guard_settings_when(
 ) -> Result<(), String> {
     let path = seat_dir.join(CLAUDE_SETTINGS_FILE);
     if !guard_carries_mode {
-        if path.exists() {
+        if is_claude_guard_settings(&path) {
             fs::remove_file(&path).map_err(|e| format!("cannot clear {}: {e}", path.display()))?;
         }
         return Ok(());
@@ -4933,16 +4941,23 @@ mod tests {
                 "{phase} must run the seat's own guard"
             );
         }
-        // A file an earlier start left behind is rewritten while the guard carries the mode, and cleared while it
-        // does not, so the runner never hands claude a file the writer would not stand behind.
+        // A file the writer did not produce is not its to clear: a seat's own directory is the runtime's to fill, not
+        // to empty, as the agy installer beside it already refuses a foreign file. Its own file is rewritten while
+        // the guard carries the mode, and cleared while it does not.
         fs::write(&path, "{\"stale\":true}").unwrap();
+        write_claude_guard_settings_when(&seat_dir, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{\"stale\":true}",
+            "a settings file the writer did not write is left alone"
+        );
         write_claude_guard_settings_when(&seat_dir, true).unwrap();
         assert!(
             !fs::read_to_string(&path).unwrap().contains("stale"),
             "the entry is rewritten, not kept"
         );
         write_claude_guard_settings_when(&seat_dir, false).unwrap();
-        assert!(!path.exists(), "a guard without the mode leaves no file");
+        assert!(!path.exists(), "the writer clears the file it wrote");
         // The gate production uses is the const, and a true flag is only sound for an asset that carries the
         // dispatch. Prose that merely mentions the flag cannot open it.
         write_claude_guard_settings(&seat_dir).unwrap();
