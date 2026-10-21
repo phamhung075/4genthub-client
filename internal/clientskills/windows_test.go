@@ -98,8 +98,8 @@ func TestLoadEvidenceReadsTheTypedStreams(t *testing.T) {
 	repo := fixtureRefusalSpool(t)
 
 	evidence := LoadEvidence(stateRoot, "room", repo)
-	if len(evidence.Skipped) > 0 {
-		t.Fatalf("skipped = %v, want none", evidence.Skipped)
+	if len(evidence.Skips) > 0 {
+		t.Fatalf("skips = %v, want none", evidence.Skips)
 	}
 	values := map[string][]string{}
 	for _, fact := range evidence.Facts {
@@ -136,13 +136,14 @@ func TestTheWindowsDemoteAndPromote(t *testing.T) {
 	repo := fixtureRefusalSpool(t)
 	evidence := LoadEvidence(stateRoot, "room", repo)
 	recent := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	old := time.Date(2019, 6, 1, 0, 0, 0, 0, time.UTC)
 	evidence.Rows = []RailRow{
-		{ID: "qitem-old-1", State: "done", Updated: time.Date(2019, 6, 1, 0, 0, 0, 0, time.UTC)},
-		{ID: "qitem-old-2", State: "done", Updated: time.Date(2019, 6, 2, 0, 0, 0, 0, time.UTC)},
-		{ID: "qitem-1", State: "done", Updated: recent},
-		{ID: "qitem-2", State: "done", Updated: recent},
-		{ID: "qitem-3", State: "done", Updated: recent},
-		{ID: "qitem-4", State: "pending", Updated: recent},
+		{ID: "qitem-old-1", State: "done", Created: old, Updated: old},
+		{ID: "qitem-old-2", State: "done", Created: old, Updated: old},
+		{ID: "qitem-1", State: "done", Created: recent, Updated: recent},
+		{ID: "qitem-2", State: "done", Created: recent, Updated: recent},
+		{ID: "qitem-3", State: "done", Created: recent, Updated: recent},
+		{ID: "qitem-4", State: "pending", Created: recent, Updated: recent},
 	}
 
 	rows, notes, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
@@ -219,17 +220,86 @@ func TestAnUnreadStreamIsNamedAndNotCounted(t *testing.T) {
 	writeRecordFile(t, tree.Root, "share/fresh", `{"state":"provisional","since":"`+sha+`"}`)
 
 	evidence := LoadEvidence("", "room", "")
-	if len(evidence.Skipped) == 0 {
-		t.Fatal("skipped is empty: a state root that was never read must be named")
+	if len(evidence.Skips) == 0 {
+		t.Fatal("skips is empty: a state root that was never read must be named")
 	}
 	rows, notes, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
 	if err != nil {
 		t.Fatalf("census: %v", err)
 	}
-	if len(notes) == 0 || !strings.HasPrefix(notes[0], "streams: ") {
-		t.Errorf("notes = %v, want one naming the streams", notes)
+	if len(notes) == 0 || !strings.HasPrefix(notes[0], "unread: ") {
+		t.Errorf("notes = %v, want one naming an unread stream", notes)
 	}
 	if rows[0].Verdict != VerdictHold {
-		t.Errorf("verdict = %q, want hold with no landings measured", rows[0].Verdict)
+		t.Errorf("verdict = %q, want hold with its stream unread", rows[0].Verdict)
+	}
+	if len(rows[0].Unread) != 1 || rows[0].Unread[0] != StreamGuard {
+		t.Errorf("unread = %v, want [guard]", rows[0].Unread)
+	}
+}
+
+// A signal that fires on half of its own stream inside the window is a tautology and decides nothing: a tag
+// every gate row carries would demote every skill declaring it. The skill keeps `hold` and the signal is
+// named in `broad`, so a reader sees why it was not acted on. The floor is BroadMinFacts - the demote case
+// above is one refusal out of one, and it must still demote.
+func TestASignalThatFiresOnHalfItsStreamIsTooBroad(t *testing.T) {
+	tree, sha := gitTree(t, map[string]string{
+		"share/tagged/SKILL.md": skillHeader("tagged", "row-tag: gate"),
+	})
+	writeRecordFile(t, tree.Root, "share/tagged", `{"state":"trusted","since":"`+sha+`"}`)
+
+	recent := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	evidence := Evidence{Rows: []RailRow{
+		{ID: "qitem-1", State: "done", Tags: []string{"gate"}, Created: recent, Updated: recent},
+		{ID: "qitem-2", State: "done", Tags: []string{"gate"}, Created: recent, Updated: recent},
+		{ID: "qitem-3", State: "done", Tags: []string{"defect"}, Created: recent, Updated: recent},
+		{ID: "qitem-4", State: "pending", Tags: []string{"defect"}, Created: recent, Updated: recent},
+	}}
+	rows, _, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	row := rows[0]
+	if row.Verdict != VerdictHold {
+		t.Errorf("verdict = %q, want hold: a signal matching half its stream is too broad", row.Verdict)
+	}
+	if len(row.Broad) != 1 || row.Broad[0] != "row-tag: gate" {
+		t.Errorf("broad = %v, want [row-tag: gate]", row.Broad)
+	}
+	if row.Occurrences != 0 {
+		t.Errorf("occurrences = %d, want 0: a broad signal decides nothing", row.Occurrences)
+	}
+}
+
+// A missing stream is not observed, so it decides nothing: the row keeps `hold`, names the stream, and is
+// NOT promoted even though three items landed. This is the acceptance's "no guessed verdict" - promotion
+// asserts zero occurrences, and zero from a file nobody opened is not evidence.
+func TestASkippedStreamIsReportedAndNotJudged(t *testing.T) {
+	tree, sha := gitTree(t, map[string]string{
+		"share/fresh/SKILL.md": skillHeader("fresh", "send: no link"),
+	})
+	writeRecordFile(t, tree.Root, "share/fresh", `{"state":"provisional","since":"`+sha+`"}`)
+
+	recent := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	evidence := Evidence{
+		Skips: []Skip{{Stream: StreamSend, Reason: "no state root, so the send audit was not read"}},
+		Rows: []RailRow{
+			{ID: "qitem-1", State: "done", Created: recent, Updated: recent},
+			{ID: "qitem-2", State: "done", Created: recent, Updated: recent},
+			{ID: "qitem-3", State: "done", Created: recent, Updated: recent},
+		},
+	}
+	rows, notes, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	if len(notes) == 0 || !strings.Contains(notes[0], "send audit") {
+		t.Errorf("notes = %v, want one naming the send audit", notes)
+	}
+	if rows[0].Verdict != VerdictHold {
+		t.Errorf("verdict = %q, want hold: an unread stream is not silence", rows[0].Verdict)
+	}
+	if len(rows[0].Unread) != 1 || rows[0].Unread[0] != StreamSend {
+		t.Errorf("unread = %v, want [send]", rows[0].Unread)
 	}
 }

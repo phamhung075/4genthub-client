@@ -190,3 +190,8 @@ fixture rail with three landings and two older ones that must not count, a trust
 an errored TOOL line that stays `hold` (`commands: 1`, `occurrences: 0`), and a census with no state root
 whose notes name the unread streams instead of promoting on silence. `TestLoadEvidenceReadsTheTypedStreams`
 pins the loader's field-per-signal contract, including that an allowed send is not a fact.
+Two more cases pin the rules that keep the census off a bad numerator: `TestASignalThatFiresOnHalfItsStreamIsTooBroad`
+(a `row-tag: gate` signal on two of four window rows is reported `broad` and the skill stays `hold`, while the
+one-of-one refusal above still demotes) and `TestASkippedStreamIsReportedAndNotJudged` (a `send:` skill with no
+audit on disk keeps `hold` with `unread: send` even though three items landed - promotion is an assertion of
+zero occurrences, and zero from an unopened file is not evidence).

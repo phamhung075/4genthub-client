@@ -61,9 +61,27 @@ type RailRow struct {
 // that could not be read is simply absent, and Skipped says so: an absent stream must never read as "no
 // occurrence", which would promote a skill nobody watched.
 type Evidence struct {
-	Facts   []Fact
-	Rows    []RailRow
-	Skipped []string
+	Facts []Fact
+	Rows  []RailRow
+	// Skips names every stream that was NOT read, by stream. It decides a skill's verdict: a stream nobody
+	// opened cannot report an occurrence, and counting that as silence would promote on a file no one read.
+	Skips []Skip
+}
+
+// Skip is one stream the loader could not read, and why.
+type Skip struct {
+	Stream string
+	Reason string
+}
+
+// Unread reports whether the stream was skipped.
+func (e Evidence) Unread(stream string) bool {
+	for _, skip := range e.Skips {
+		if skip.Stream == stream {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadEvidence reads the streams for one room. stateRoot is the client's state root (`clientenv.ResolveStateRoot`);
@@ -82,10 +100,10 @@ func LoadEvidence(stateRoot, room, repo string) Evidence {
 	return evidence
 }
 
-// add keeps a stream's note when it had one.
-func (e *Evidence) add(note string) {
-	if note != "" {
-		e.Skipped = append(e.Skipped, note)
+// add keeps a stream's skip when it had one.
+func (e *Evidence) add(skip Skip) {
+	if skip.Reason != "" {
+		e.Skips = append(e.Skips, skip)
 	}
 }
 
@@ -140,6 +158,31 @@ func rowOccurrences(rows []RailRow, tag string, since time.Time) []Occurrence {
 	return found
 }
 
+// StreamSize counts the facts of a signal's stream inside the window: the denominator of the "too broad"
+// rule. A stream with nothing in the window has size zero, and no ratio can be taken from it.
+func (e Evidence) StreamSize(signal Signal, since time.Time) int {
+	stream, ok := attributedStreams[signal.Kind]
+	if !ok {
+		return 0
+	}
+	if stream == StreamQueue {
+		size := 0
+		for _, row := range e.Rows {
+			if !row.Created.Before(since) {
+				size++
+			}
+		}
+		return size
+	}
+	size := 0
+	for _, fact := range e.Facts {
+		if fact.Stream == stream && !fact.At.Before(since) {
+			size++
+		}
+	}
+	return size
+}
+
 // Commands counts the TOOL lines whose target carries a declared command, at or after since. Literal,
 // case-sensitive, no globs - a command signal is a substring of what the tool was asked to do.
 func (e Evidence) Commands(signal Signal, since time.Time) int {
@@ -180,13 +223,13 @@ type Occurrence struct {
 
 // readGuard reads <git dir>/parked-diffs/refusals.jsonl - the spool a refused commit is written to, one line
 // per refusal. The rule is the field a `guard:` signal names (`docs-only`, `protected-path`).
-func readGuard(repo string, evidence *Evidence) string {
+func readGuard(repo string, evidence *Evidence) Skip {
 	if repo == "" {
-		return "no checkout, so the guard's refusals were not read"
+		return Skip{Stream: StreamGuard, Reason: "no checkout, so the guard's refusals were not read"}
 	}
 	path, err := refusalSpoolPath(repo)
 	if err != nil {
-		return fmt.Sprintf("the guard's refusal spool was not read: %v", err)
+		return Skip{Stream: StreamGuard, Reason: "the guard's refusal spool was not read: " + err.Error()}
 	}
 	readJSONLines(path, func(raw []byte) {
 		var line struct {
@@ -203,7 +246,7 @@ func readGuard(repo string, evidence *Evidence) string {
 		}
 		evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard, Value: line.Rule, At: at, Ref: line.ID})
 	})
-	return ""
+	return Skip{}
 }
 
 // refusalSpoolPath is the guard's own spool, asked of git rather than assumed: a linked worktree's git dir is
@@ -218,13 +261,13 @@ func refusalSpoolPath(repo string) (string, error) {
 
 // readSends reads each seat's comm-policy audit and keeps the REFUSED decisions: `Allowed:false` with the
 // policy's `Reason` is a send the room's links did not license, which is what a `send:` signal names.
-func readSends(stateRoot, room string, evidence *Evidence) string {
+func readSends(stateRoot, room string, evidence *Evidence) Skip {
 	if stateRoot == "" {
-		return "no state root, so the send audit was not read"
+		return Skip{Stream: StreamSend, Reason: "no state root, so the send audit was not read"}
 	}
 	paths, _ := filepath.Glob(filepath.Join(stateRoot, "seats", room, "*", "audit.jsonl"))
 	if len(paths) == 0 {
-		return ""
+		return Skip{Stream: StreamSend, Reason: "no seat of " + room + " has a send audit"}
 	}
 	for _, path := range paths {
 		readJSONLines(path, func(raw []byte) {
@@ -243,18 +286,18 @@ func readSends(stateRoot, room string, evidence *Evidence) string {
 				At: line.At, Ref: line.From + "->" + line.To})
 		})
 	}
-	return ""
+	return Skip{}
 }
 
 // readJev reads the machine-wide Jev decision log and keeps every decision's `kind`. The log is not per room,
 // so a `jev:` signal names a kind any seat's escalation of that shape produces.
-func readJev(stateRoot string, evidence *Evidence) string {
+func readJev(stateRoot string, evidence *Evidence) Skip {
 	if stateRoot == "" {
-		return "no state root, so the Jev decisions were not read"
+		return Skip{Stream: StreamJEV, Reason: "no state root, so the Jev decisions were not read"}
 	}
 	path := filepath.Join(stateRoot, jevLogFile)
 	if _, err := os.Stat(path); err != nil {
-		return ""
+		return Skip{Stream: StreamJEV, Reason: "no " + jevLogFile + " in " + stateRoot}
 	}
 	readJSONLines(path, func(raw []byte) {
 		var line struct {
@@ -268,7 +311,7 @@ func readJev(stateRoot string, evidence *Evidence) string {
 		evidence.Facts = append(evidence.Facts, Fact{Stream: StreamJEV, Value: line.Kind,
 			At: line.Timestamp, Ref: line.ID})
 	})
-	return ""
+	return Skip{}
 }
 
 // jevLogFile is the log clientjev writes.
@@ -277,11 +320,14 @@ const jevLogFile = "jev_decisions.log"
 // readTools reads each seat's tool-calls file. Every line becomes a TOOL fact whose Value is the target a
 // `command:` signal matches; the outcome is NOT kept, because TOOL is counts only and a kept outcome is an
 // invitation to demote on it.
-func readTools(stateRoot, room string, evidence *Evidence) string {
+func readTools(stateRoot, room string, evidence *Evidence) Skip {
 	if stateRoot == "" {
-		return "no state root, so the seats' tool calls were not read"
+		return Skip{Stream: StreamTool, Reason: "no state root, so the seats' tool calls were not read"}
 	}
 	paths, _ := filepath.Glob(filepath.Join(stateRoot, "rooms", room, "seats", "*", "tool-calls.jsonl"))
+	if len(paths) == 0 {
+		return Skip{Stream: StreamTool, Reason: "no seat of " + room + " has a tool-calls file"}
+	}
 	for _, path := range paths {
 		seat := filepath.Base(filepath.Dir(path))
 		readJSONLines(path, func(raw []byte) {
@@ -296,7 +342,7 @@ func readTools(stateRoot, room string, evidence *Evidence) string {
 				At: line.At, Ref: seat})
 		})
 	}
-	return ""
+	return Skip{}
 }
 
 // readJSONLines feeds every non-empty line of path to each, and a missing file is nothing to read.

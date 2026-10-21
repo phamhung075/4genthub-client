@@ -25,6 +25,11 @@ const (
 	VerdictPromotable = "promotable"
 )
 
+// BroadMinFacts is the smallest window a "too broad" judgement is made from. Below it the ratio is noise:
+// one refusal out of one is not a tautology, it is a stream too young to have a denominator, and refusing to
+// act on it would make a demote impossible in a quiet room.
+const BroadMinFacts = 4
+
 // PromotionWindow is how many landed items promote a provisional skill. Three is OpenSpace's two with one
 // more for a repo whose items are larger than a benchmark task.
 const PromotionWindow = 3
@@ -39,8 +44,8 @@ func (t Tree) CensusWithEvidence(room string, resolve Resolver, evidence Evidenc
 		return nil, nil, err
 	}
 	var notes []string
-	if len(evidence.Skipped) > 0 {
-		notes = append(notes, "streams: "+strings.Join(evidence.Skipped, "; "))
+	for _, skip := range evidence.Skips {
+		notes = append(notes, "unread: "+skip.Stream+": "+skip.Reason)
 	}
 	for i := range rows {
 		row := &rows[i]
@@ -59,9 +64,43 @@ func (t Tree) CensusWithEvidence(room string, resolve Resolver, evidence Evidenc
 			continue
 		}
 		row.Window = sha
+		if len(signals) == 0 {
+			row.Verdict = VerdictNoSignal
+			continue
+		}
+		if unread := unreadStreams(signals, evidence); len(unread) > 0 {
+			// A signal whose stream nobody read decides nothing: the row keeps S1's verdict and names the
+			// gap. Promotion needs zero occurrences, and zero from an unopened file is not evidence.
+			row.Unread = unread
+			row.Verdict = VerdictHold
+			continue
+		}
 		applyWindow(row, signals, evidence, since)
 	}
 	return rows, notes, nil
+}
+
+// unreadStreams is the set of streams this skill's signals depend on that were not read, in signal order.
+func unreadStreams(signals []Signal, evidence Evidence) []string {
+	var unread []string
+	for _, signal := range signals {
+		stream, ok := attributedStreams[signal.Kind]
+		if !ok || !evidence.Unread(stream) || contains(unread, stream) {
+			continue
+		}
+		unread = append(unread, stream)
+	}
+	return unread
+}
+
+// contains reports whether values holds value.
+func contains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 // applyWindow decides one row's verdict from its declared signals and the facts since its window opened.
@@ -73,19 +112,22 @@ func applyWindow(row *Row, signals []Signal, evidence Evidence, since time.Time)
 	occurrences := 0
 	commands := 0
 	for _, signal := range signals {
-		for _, occurrence := range evidence.Occurrences(signal, since) {
-			occurrences++
-			refs = append(refs, occurrence.Stream+":"+occurrence.Ref)
+		matched := evidence.Occurrences(signal, since)
+		if tooBroad(len(matched), evidence.StreamSize(signal, since)) {
+			// The signal fires on half its own stream: a tag every gate row carries would demote every
+			// skill that declares it, which teaches the loop nothing. It is named and decides nothing.
+			row.Broad = append(row.Broad, signal.String())
+		} else {
+			for _, occurrence := range matched {
+				occurrences++
+				refs = append(refs, occurrence.Stream+":"+occurrence.Ref)
+			}
 		}
 		commands += evidence.Commands(signal, since)
 	}
 	row.Occurrences = occurrences
 	row.Commands = commands
 	row.Landed = evidence.Landed(since)
-	if len(signals) == 0 {
-		row.Verdict = VerdictNoSignal
-		return
-	}
 	switch {
 	case row.State == StateTrusted && occurrences > 0:
 		row.Verdict = VerdictDemote
@@ -95,6 +137,13 @@ func applyWindow(row *Row, signals []Signal, evidence Evidence, since time.Time)
 	default:
 		row.Verdict = VerdictHold
 	}
+}
+
+// tooBroad is the admission rule applied to a declared signal: a signal that matched at least half of its
+// stream's facts inside the window says nothing about this skill, because it would equally have matched the
+// skill beside it.
+func tooBroad(matched, total int) bool {
+	return total >= BroadMinFacts && matched*2 >= total
 }
 
 // dedupe keeps the first of each id, so a signal matched by two facts of one refusal is cited once.

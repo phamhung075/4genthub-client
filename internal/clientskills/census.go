@@ -62,6 +62,12 @@ type Row struct {
 	Commands    int      `json:"commands,omitempty"`
 	Landed      int      `json:"landed,omitempty"`
 	Refs        []string `json:"refs,omitempty"`
+	// Broad lists a declared signal that fired on half of its stream inside the window: a tautology, which
+	// decides nothing (the design note's demote loop).
+	Broad []string `json:"broad,omitempty"`
+	// Unread lists the streams this skill's signals name that were not read: the row decides nothing about
+	// them, so it keeps `hold` rather than reading the gap as silence.
+	Unread []string `json:"unread,omitempty"`
 	// Fault is the one-line reason a record or a SKILL.md could not be read; empty otherwise.
 	Fault string `json:"fault,omitempty"`
 }

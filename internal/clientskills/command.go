@@ -117,7 +117,7 @@ func runSkillsEvidence(args []string, stdout, stderr io.Writer) int {
 	resolver, note := evidenceResolver(room, root)
 	stateRoot, _ := clientenv.ResolveStateRoot("")
 	evidence := LoadEvidence(stateRoot, room, root)
-	evidence.Rows, note = railRows(room, note)
+	note = railRows(&evidence, room, note)
 	rows, windowNotes, err := tree.CensusWithEvidence(room, resolver, evidence, root)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam skills evidence: %v\n", err)
@@ -181,6 +181,12 @@ func writeEvidenceText(w io.Writer, report EvidenceReport) {
 		}
 		if len(row.Refs) > 0 {
 			fmt.Fprintf(w, " refs:%s", strings.Join(row.Refs, ","))
+		}
+		if len(row.Unread) > 0 {
+			fmt.Fprintf(w, " unread:%s", strings.Join(row.Unread, ","))
+		}
+		if len(row.Broad) > 0 {
+			fmt.Fprintf(w, " broad:%s", strings.Join(row.Broad, ","))
 		}
 		if len(row.Broken) > 0 {
 			fmt.Fprintf(w, " broken:%s", strings.Join(row.Broken, ","))
@@ -271,14 +277,18 @@ func evidenceResolver(room, root string) (Resolver, string) {
 // railRows hands the census the room's rows, because the census reads no socket: the runtime's own reader
 // answers here, and a rail that cannot be reached leaves the landed count at zero - a skill is then not
 // promoted on a number nobody measured, and the note says why.
-func railRows(room, note string) ([]RailRow, string) {
+func railRows(evidence *Evidence, room, note string) string {
 	client := clientruntime.NewClient("")
 	if !client.Reachable() {
-		return nil, joinNotes(note, "the room's queue is not reachable, so landings were not counted")
+		evidence.Skips = append(evidence.Skips, Skip{Stream: StreamQueue,
+			Reason: "the room's queue is not reachable, so landings were not counted"})
+		return joinNotes(note, "the room's queue is not reachable, so landings were not counted")
 	}
 	raw, err := client.QueueList(room, clientruntime.QueueListFilter{})
 	if err != nil {
-		return nil, joinNotes(note, "the room's queue could not be listed: "+err.Error())
+		evidence.Skips = append(evidence.Skips, Skip{Stream: StreamQueue,
+			Reason: "the room's queue could not be listed: " + err.Error()})
+		return joinNotes(note, "the room's queue could not be listed: "+err.Error())
 	}
 	rows := make([]RailRow, 0, len(raw))
 	for _, row := range raw {
@@ -287,7 +297,8 @@ func railRows(room, note string) ([]RailRow, string) {
 		rows = append(rows, RailRow{ID: row.QitemID, State: row.State, Tags: row.Tags,
 			Created: created, Updated: updated})
 	}
-	return rows, note
+	evidence.Rows = rows
+	return note
 }
 
 // joinNotes appends one note to another without a stray separator.
