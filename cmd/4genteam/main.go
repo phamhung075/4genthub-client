@@ -37,6 +37,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientroom"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientseat"
+	"github.com/phamhung075/4genthub-client/internal/clientskills"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientteam"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
@@ -128,6 +129,9 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientfacts.Commands()...)
 	// The room's derived seat worktrees: the same derivation `up` creates and doctor's row reports.
 	registry = append(registry, clientworktree.Commands()...)
+	// The skill tree's own verbs: `skills evidence` reads each record and prints a verdict. Read-only, and
+	// the tree is the source - nothing here writes it.
+	registry = append(registry, clientskills.Commands()...)
 	return append(registry,
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])"),
 	)
