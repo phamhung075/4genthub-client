@@ -332,6 +332,7 @@ delivery never installs it:
 | [`seat-runtime-switch`](skills/client/seat-runtime-switch/SKILL.md) | move one seat to another runtime or model, check it, brief it |
 | [`spawn-team`](skills/client/spawn-team/SKILL.md) | continue or spawn an agent team |
 | [`offpeak-gate`](skills/client/offpeak-gate/SKILL.md) | decide whether DeepSeek seats may start at off-peak billing |
+| [`room-respawn`](skills/client/room-respawn/SKILL.md) | rebuild, respawn on fresh seat processes and reseat in one command (`scripts/respawn.sh ROOM`) |
 
 ### Using this tree from another project
 
