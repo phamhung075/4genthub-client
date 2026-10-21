@@ -1,3 +1,16 @@
+## 2026-10-21 - a claude seat is handed the guard it never ran (rust, branch 4genthub-min/claude-guard-settings)
+
+Two tests, both in `rust/agenthub-runtime`. `supervisor::tests::the_claude_settings_run_the_seat_guard_on_both_phases`
+reads a written settings file and asserts each phase's command ends with `seat-guard.ts" --claude-hook pre|post`,
+carries THIS seat's path (a seat dir with a space in it, which the quoting must survive), and that the phases differ;
+it then asserts the file's existence EQUALS whether the bundled guard carries `--claude-hook` - so the day the
+owner's guard patch lands, the same test starts asserting the content instead of the gate - and that a file left by
+an earlier start is rewritten rather than kept. `runner::tests::claude_argv_names_the_seats_settings_only_while_the_file_is_there`
+pins the flag follows the file: no `--settings` while the seat dir has none, `--settings <seat>/settings.json` once
+the supervisor writes one. Measured: `cargo test --offline` in the crate, 194 passed 0 failed (bin), 27 (seat_guard),
+1, 1; `go test ./...` and `go vet ./...` in `agenthub_client` clean; `go build ./...`/`go vet ./...`/`go test ./...`
+in `agenthub_go` clean at the rebased tip.
+
 ## 2026-10-21 - the seat guard's import rule and its revision-6 source table (rust, branch 4genthub-min/guard-imports-a-tree)
 
 `rust/agenthub-runtime/tests/seat_guard.rs` gains `a_stash_entry_is_read_whatever_verb_imports_it`: a fixture

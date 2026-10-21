@@ -451,6 +451,45 @@ fn agy_guard_entry() -> serde_json::Value {
     })
 }
 
+/// The settings file a claude seat is launched with (`--settings`); the runner adds the flag when it is there.
+pub(crate) const CLAUDE_SETTINGS_FILE: &str = "settings.json";
+
+/// The settings a claude seat's own file carries: the seat guard on both phases, the phase as its argument. agy
+/// is told the same thing in one global file (`agy_guard_entry`); claude has no global hook file a per-seat entry
+/// could live in, so the file is the seat's own and the command names the seat's own guard.
+fn claude_guard_settings(seat_dir: &Path) -> String {
+    let guard = seat_dir.join("hooks").join("pre").join("seat-guard.ts");
+    let quoted = guard
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let command = |phase: &str| format!("node \"{quoted}\" --claude-hook {phase}");
+    serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{"matcher": "*",
+                "hooks": [{"type": "command", "timeout": 10, "command": command("pre")}]}],
+            "PostToolUse": [{"matcher": "*",
+                "hooks": [{"type": "command", "timeout": 10, "command": command("post")}]}],
+        }
+    })
+    .to_string()
+}
+
+/// Write the claude seat's settings file, or clear one left by an earlier start. A guard without the
+/// `--claude-hook` mode is one that never reads this payload and never answers, so writing the file for it would
+/// plant a hook no tool call is checked by; the runner's flag follows this file, so the two cannot disagree.
+fn write_claude_guard_settings(seat_dir: &Path) -> Result<(), String> {
+    let path = seat_dir.join(CLAUDE_SETTINGS_FILE);
+    if !SEAT_TOOL_HOOK.contains("--claude-hook") {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| format!("cannot clear {}: {e}", path.display()))?;
+        }
+        return Ok(());
+    }
+    fs::write(&path, claude_guard_settings(seat_dir) + "\n")
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
 /// Make sure agy's global `hooks.json` carries the seat guard, and touch nothing else in it: the file also holds
 /// other tools' hooks. A file that is not a JSON object is an error rather than a file to overwrite.
 fn install_agy_guard_hook(home: &Path) -> Result<(), String> {
@@ -1086,6 +1125,15 @@ impl RoomSupervisor {
             .map_err(|e| format!("cannot create the seat's hook dir: {e}"))?;
         fs::write(hook_dir.join("seat-guard.ts"), SEAT_TOOL_HOOK)
             .map_err(|e| format!("cannot write the seat's tool hook: {e}"))?;
+        // THE CLAUDE SEAT'S HOOK FILE, in the same window as the guard it runs. claude runs no hook it is not
+        // handed, and this is the only way the seat's rules reach it (the guard is the file omp loads); the runner
+        // adds `--settings` while this file exists, so the argv never names a file that is not there.
+        if matches!(
+            AgentRuntime::from_str_loose(&seat.runtime),
+            AgentRuntime::ClaudeCode
+        ) {
+            write_claude_guard_settings(&seat_dir)?;
+        }
         install_seat_skills(&self.base_state_dir, room, &seat.seat_key, &seat_dir)?;
         if matches!(
             AgentRuntime::from_str_loose(&seat.runtime),
@@ -4838,6 +4886,62 @@ mod tests {
             Some(document),
             "the room's own record carries it, so a later route cannot install the old document"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A claude seat's settings name the seat's own guard on both phases, with the phase as the argument, and the
+    /// command carries the seat's own path. The file exists exactly when the bundled guard carries the mode it
+    /// names: a hook the guard does not read is a hook that checks nothing, and the runner's `--settings` flag
+    /// follows this file (`write_claude_guard_settings`), so the two cannot disagree.
+    #[test]
+    fn the_claude_settings_run_the_seat_guard_on_both_phases() {
+        let dir = scratch("claude-settings");
+        let seat_dir = dir.join("seats").join("go dev");
+        fs::create_dir_all(&seat_dir).unwrap();
+        let path = seat_dir.join(CLAUDE_SETTINGS_FILE);
+        let carries_mode = SEAT_TOOL_HOOK.contains("--claude-hook");
+        write_claude_guard_settings(&seat_dir).unwrap();
+        assert_eq!(
+            path.exists(),
+            carries_mode,
+            "the file and the guard's mode must agree"
+        );
+        let text = if path.exists() {
+            fs::read_to_string(&path).unwrap()
+        } else {
+            claude_guard_settings(&seat_dir)
+        };
+        let settings: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let command = |phase: &str| {
+            settings["hooks"][phase][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        };
+        for (phase, word) in [("PreToolUse", "pre"), ("PostToolUse", "post")] {
+            let line = command(phase);
+            assert!(
+                line.ends_with(&format!("seat-guard.ts\" --claude-hook {word}"))
+                    && line.contains(&seat_dir.to_string_lossy().to_string()),
+                "{phase} must run THIS seat's guard: {line}"
+            );
+        }
+        assert_ne!(
+            command("PreToolUse"),
+            command("PostToolUse"),
+            "the phases differ"
+        );
+        // A file an earlier start left behind is rewritten when the guard carries the mode and cleared when it does
+        // not, so what the runner sees is always this guard's answer.
+        fs::write(&path, "{\"stale\":true}").unwrap();
+        write_claude_guard_settings(&seat_dir).unwrap();
+        assert_eq!(path.exists(), carries_mode);
+        if path.exists() {
+            assert!(
+                !fs::read_to_string(&path).unwrap().contains("stale"),
+                "the entry is rewritten, not kept"
+            );
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
