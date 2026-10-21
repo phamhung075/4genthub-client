@@ -24,6 +24,41 @@ Measured 2026-10-21 at `3e009d79` plus this diff against the rev-9 asset: `cargo
 design (the asset refuses what the ruling allows), the ancestry case green, and the six quoting reds main already
 carries. On the un-split test the same measurement left a `sleep 60` running after the binary exited.
 
+## 2026-10-21 - the cd test carries the case-arm rows too
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, `a_quoted_cd_names_the_directory_the_next_statement_writes_in`: seven
+rows whose `cd` sits after a `case` arm, closing the gap the gate measured on the first normalizer (a `case` was read
+only when it opened the statement, and only one word past the pattern, so a prefix after the arm was named
+`command`): `case x in x) cd <tree>;; esac && rm -r assets`, the same arm inside `if ... then ... fi` and inside a
+`while` body, and the arm with `command` / `builtin` / `time` / `!` before the `cd`. All seven are ALLOW on the
+1504-line image `23003fc6`. On its first normalizer (`1b383967`) six are ALLOW - the arm behind `if` and behind
+`while` and the four prefixed arms; the plain `case x in x) cd <tree>;; esac && rm -r assets` is refused there as
+`protected-paths`, because that normalizer reads an arm only when `case` opens the statement. The second normalizer
+(`PATCH-2026-10-21-guard-cd-compound-normalizer.diff`, v2: the arm rule moves into `commandAt`'s own scan loop)
+denies all seven. Re-measured through the agy seam on the 38-row table: 21 fail at `23003fc6`, 6 at `1b383967`, 0 at
+v2, and the 83-row quoting table is verdict-identical between v1 and v2. `cargo fmt --check` clean.
+
+## 2026-10-21 - the cd test carries the compound rows the M3' verdict found open
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, `a_quoted_cd_names_the_directory_the_next_statement_writes_in`: the
+rows whose `cd` sits at a command position a compound hides - `if true; then cd <tree>; fi && rm -r assets`, the
+`... && rm -r assets; fi`, `; fi; rm -r assets` and `else true` forms, `while` and `until ... do cd <tree>; break;
+done && rm -r assets`, `for ... done && rm -r assets`, `select ... do cd <tree>; break; done && rm -r assets`,
+`case x in x) cd <tree>;; esac && rm -r assets`, the brace group `{ cd <tree>; } && rm -r assets` (its `cd` is the
+shell's, not a subshell's), the exec prefixes `command`/`builtin`/`time`/`!` before `cd`, and `then ! cd <tree>` -
+plus `if true; then cd $D; fi && rm -r assets` refused as `unresolvable-target` and the same `if` form with
+`git add assets` (`git-imports-a-tree`). Ten rows that must stay allowed pin the normalizer: reads inside a
+compound, `cd /tmp` inside a `for`, a brace body used as a scope-free read, `git commit -m done`, and
+`command git add assets` (an argument, not a command word).
+
+Every deny row is ALLOW on the 1504-line image `23003fc6` (the shipped quoting diff, 9/9 hunks on base `109cbeca`),
+measured through the agy seam: the `cd` read stops at `then`/`do`/`in`/`}` and at the prefixes. Red until the asset
+normalizes command position, which is the owner's next apply
+(`PATCH-2026-10-21-guard-cd-compound-normalizer.diff`: braces are not scopes, and `commandAt` skips the compound
+keywords and exec prefixes before the command name). Measured at `replay.ts` (the `23003fc6` bytes): 16 of 48 rows
+fail; at the patched bytes, 0 of 48. `cargo fmt --check` clean; `cargo test --offline --test seat_guard` at the
+branch's rev-9 asset is 31 passed / 10 failed, all ten on rows the staged diffs carry.
+
 ## 2026-10-21 - the claude entry is never written, and a stale one is still removed
 
 `internal/clientguard/runtimes_test.go`: `TestTheClaudeEntryIsNeverWrittenAndTheAgyOneIs` replaces the deleted skip
@@ -103,6 +138,7 @@ reddens `TestASeatSkillsLandingIsItsOwnSeat` (landed 2, want 1); disabling the b
 guard and the resolved-path dedupe reddens `TestEachWorktreeSpoolIsReadOnceWhateverItsChildren` (stream size 4,
 want 1); the `From->To`-only send ref reddens `TestTwoRefusalsBetweenOnePairAreTwoOccurrences` (1 occurrence, want
 2); the literal `strings.Contains` reddens `TestTheToolStreamCountsBothMcpSpellings` (1 command, want 2).
+
 ## 2026-10-21 - the quoting suite carries the gate's B1 fix: the directory a quoted `cd` names, and the two flipped rows (rust, branch 4genthub-min/rev9-tests-fold)
 
 `rust/agenthub-runtime/tests/seat_guard.rs`, on `ca22c477`. Gate `qitem-20261021181739-9da6703153f7` found a quoted

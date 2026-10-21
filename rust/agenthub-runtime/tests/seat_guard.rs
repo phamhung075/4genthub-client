@@ -2114,6 +2114,69 @@ fn a_quoted_cd_names_the_directory_the_next_statement_writes_in() {
         assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
     }
 
+    // A `cd` inside an `if`/`while`/`for` body is the same shell, not a subshell: the directory it moves to is the
+    // one the statements after the compound write in. Measured by the gate 2026-10-21 (VERDICT-2026-10-21-m3p.md):
+    // every row below is ALLOW on the 1504-line image `23003fc6`, because the `cd` read stops at `then`/`do`.
+    for case in [
+        "if true; then cd rust/agenthub-runtime; fi && rm -r assets",
+        "if true; then cd rust/agenthub-runtime && rm -r assets; fi",
+        "if true; then cd rust/agenthub-runtime; fi; rm -r assets",
+        "if true; then cd rust/agenthub-runtime; else true; fi && rm -r assets",
+        "while true; do cd rust/agenthub-runtime; break; done && rm -r assets",
+        "until false; do cd rust/agenthub-runtime; break; done && rm -r assets",
+        "for f in x; do cd rust/agenthub-runtime; done && rm -r assets",
+        "select x in a; do cd rust/agenthub-runtime; break; done && rm -r assets",
+        "case x in x) cd rust/agenthub-runtime;; esac && rm -r assets",
+        // A brace group is not a subshell either: its `cd` is the shell's, so the write after the close is in the
+        // tree. `( … )` is the only form that restores, which the allow rows above pin.
+        "{ cd rust/agenthub-runtime; } && rm -r assets",
+        // The prefixes run their operand in this shell, so `command cd` moves it exactly as `cd` does.
+        "command cd rust/agenthub-runtime && rm -r assets",
+        "builtin cd rust/agenthub-runtime && rm -r assets",
+        "time cd rust/agenthub-runtime && rm -r assets",
+        "! cd rust/agenthub-runtime && rm -r assets",
+        "then ! cd rust/agenthub-runtime && rm -r assets",
+        // An ARM's command is a command position too, and the `case` may itself follow a keyword: the arm rule was
+        // read only when `case` opened the statement and only one word past the pattern, so both rows were ALLOW
+        // (gate, 2026-10-21). A prefix after the arm is the same shell exactly as one at the start.
+        "case x in x) cd rust/agenthub-runtime;; esac && rm -r assets",
+        "if true; then case x in x) cd rust/agenthub-runtime;; esac; fi && rm -r assets",
+        "while true; do case x in x) cd rust/agenthub-runtime;; esac; break; done && rm -r assets",
+        "case x in x) command cd rust/agenthub-runtime;; esac && rm -r assets",
+        "case x in x) builtin cd rust/agenthub-runtime;; esac && rm -r assets",
+        "case x in x) time cd rust/agenthub-runtime;; esac && rm -r assets",
+        "case x in x) ! cd rust/agenthub-runtime;; esac && rm -r assets",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    // A cd the guard cannot name is refused wherever it sits, compound or not.
+    assert_eq!(
+        at("if true; then cd $D; fi && rm -r assets").as_deref(),
+        Some("unresolvable-target")
+    );
+    assert_eq!(
+        at("if true; then cd rust/agenthub-runtime; fi && git add assets").as_deref(),
+        Some("git-imports-a-tree")
+    );
+
+    // The reads stay the seat's own: a compound whose body only looks at the tree writes nothing, and the
+    // normalizer does not over-refuse ordinary commands - a `cd` ARGUMENT is not a `cd`, and `done` as a message is
+    // not a keyword at command position.
+    for case in [
+        "if true; then ls assets; fi",
+        "if true; then cd rust/agenthub-runtime; fi && ls assets",
+        "while true; do ls assets; done",
+        "for f in x; do cd /tmp; done && ls",
+        "if [ -d rust ]; then cd rust; fi && ls",
+        "f() { cd rust/agenthub-runtime; } && echo ok",
+        "for f in a b; do cd rust/agenthub-runtime; done",
+        "grep -n cd rust/agenthub-runtime && ls",
+        "git commit -m done",
+        "if true; then command git add assets; fi",
+    ] {
+        assert_eq!(at(case), None, "{case}");
+    }
+
     // A `cd` operand with no literal prefix is refused by name, not resolved as a directory that cannot exist: the
     // base it would leave behind is one the guard only thinks it knows.
     for case in [
