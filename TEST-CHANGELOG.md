@@ -9,6 +9,13 @@ control refuses and whose quoted forms (`"…"` and `'…'`) must refuse with th
 (`git-imports-a-tree`) - plus both `git -C` spellings, and five reads that must stay allowed. On the pre-fix patch
 the test fails on the seven quoted rows; on the fixed asset it passes.
 
+`a_quoted_cd_names_the_directory_the_next_statement_writes_in` gains the gate's M3' rows: a group's own `cd`
+(`(cd rust/agenthub-runtime && rm -r assets)`, the `{ … ; }` form, and `cd … && (rm -r assets)`) is judged inside
+the group while `(cd rust/agenthub-runtime) && rm -r assets` is judged in the call's own directory, and a `cd`
+operand with no literal prefix (`$D`, `"$D"`, `${D}`) is refused `unresolvable-target` instead of leaving a base the
+guard only thinks it knows. Five allow rows stand beside them, including `(cd build && rm -r x)` and
+`(cd /tmp && ls)`.
+
 Two rows flip to the ruling's semantics: `rm -rf $SCRATCH/x` and `mkdir -p $SCRATCH/x` move out of the allow
 lists of `an_ordinary_deletion_still_stays_the_seat_s_own` and `an_ordinary_touch_or_mkdir_stays_the_seat_s_own` and
 are asserted `unresolvable-target`; three doc comments that called a variable target "the seat's own" are corrected,
@@ -19,7 +26,8 @@ quotes (the gate's m1 asked for the control or the clause dropped).
 Measured (2026-10-21, `wt/go-dev-fold` at `ca22c477` plus this change, patched asset in a scratch crate):
 `cargo test --offline` - 194 (bin), 1 (held_send), 40 (seat_guard, 0 failed), 1 (umask); `cargo fmt --check` clean;
 `cargo clippy --offline --all-targets -D warnings` clean. Same suite on the pre-fix patched asset: seat_guard 39
-passed, 1 failed (the new test only).
+passed, 1 failed (the new test only); on rev-9's own asset: 34 passed, 6 failed - the five rows the v1 diff fixes
+and the new `cd` test.
 
 ## 2026-10-21 - the rev-9 suite re-expressed on 109cbeca: quoting, unresolvable words, a pathspec file, and the result handler (rust, branch 4genthub-min/rev9-tests-fold)
 

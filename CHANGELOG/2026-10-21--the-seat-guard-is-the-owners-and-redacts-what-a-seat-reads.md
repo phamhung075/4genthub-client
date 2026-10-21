@@ -23,7 +23,7 @@ Three owner commits on `owner/seat-guard-rev9`, on top of `d5249fc0` (the revisi
 
 ### Fixed
 
-- **Quoted words are paths, and a patch path list is a document** (patch sha256 `2c06477d6031`, rows
+- **Quoted words are paths, and a patch path list is a document** (patch sha256 `8ad5df0e10bc`, rows
   `qitem-20261021175414-01510c9cbd55`/`qitem-20261021181739-9da6703153f7`). One scanner (`scan`) replaces the regex
   that blanked every quoted span before the extractors ran, so a quoted target is judged as the path it names
   (`cp evil.ts "rust/agenthub-runtime/assets/seat-guard.ts"` is `protected-paths`) while the rules that judge what is
@@ -32,7 +32,10 @@ Three owner commits on `owner/seat-guard-rev9`, on top of `d5249fc0` (the revisi
   `pathspec-from-file`: the file names a set the guard never sees. The `cd` the extractor resolves a relative target
   against is now read from the scanner's word, so a quoted `cd` no longer hides the directory the next statement
   writes in (`cd "rust/agenthub-runtime" && rm -r assets` is `protected-paths`; `git -C "<tree>"` is read the same
-  way).
+  way). A group is a scope of its own, so its own `cd` moves the base for the statements inside it and its close
+  restores the base the call started in (`(cd <tree> && rm -r assets)` is refused, `(cd <tree>) && rm -r assets` is
+  judged where it runs), and a `cd` operand with no literal prefix (`$D`, `${D}`) is refused
+  `unresolvable-target` instead of leaving a base the guard only thinks it knows.
 - `tests/seat_guard.rs` is rustfmt-clean, and one `clippy::single_element_loop` from the rev-9 suite is gone; CI's
   `cargo fmt --check` and `cargo clippy -D warnings` refused both at `d5249fc0`.
 
@@ -41,8 +44,8 @@ Three owner commits on `owner/seat-guard-rev9`, on top of `d5249fc0` (the revisi
 At `c9dc09c4` in `rust/agenthub-runtime`: `cargo fmt --check` clean, `cargo clippy --offline --all-targets -D
 warnings` clean, `cargo test --offline` 194 + 1 + 35 + 1 passed, 0 failed. `go test ./...` in the client: all ok.
 Final asset sha256 `7e122de891f3`, 1267 lines. On top of it the quoting/pathspec patch
-(`PATCH-2026-10-21-guard-quoting-pathspec.diff`, sha256 `2c06477d6031`) rebuilds the asset to 1432 lines, sha256
-`52b88b01a899`: `cargo test --offline` 194 + 1 + 40 + 1 passed, `cargo fmt --check` and `cargo clippy --offline
+(`PATCH-2026-10-21-guard-quoting-pathspec.diff`, sha256 `8ad5df0e10bc`) rebuilds the asset to 1504 lines, sha256
+`23003fc61942`: `cargo test --offline` 194 + 1 + 40 + 1 passed, `cargo fmt --check` and `cargo clippy --offline
 --all-targets -D warnings` clean.
 
 ## After the gate

@@ -1866,8 +1866,42 @@ fn a_quoted_cd_names_the_directory_the_next_statement_writes_in() {
         "git -C \"rust/agenthub-runtime\" status",
         "cd \"a b\" && ls",
         "cd \"build\" && rm -r x",
+        // A group is its own scope: the write inside it is judged there, the one after it is judged in the call's
+        // own directory, and a group is not a way to hide either.
+        "(cd rust/agenthub-runtime) && rm -r assets",
+        "(cd build && rm -r x)",
+        "(cd /tmp && ls)",
+        "(cd \"rust/agenthub-runtime\" && ls assets)",
+        "cd rust/agenthub-runtime && (ls assets)",
     ] {
         assert_eq!(at(case), None, "{case}");
+    }
+
+    // A group's own `cd` moves the base for the statements inside it (M3', measured by the gate 2026-10-21: both
+    // group forms were ALLOWED at rev-9, because the delimiter stayed on the command word).
+    for case in [
+        "(cd rust/agenthub-runtime && rm -r assets)",
+        "{ cd rust/agenthub-runtime && rm -r assets; }",
+        "cd rust/agenthub-runtime && (rm -r assets)",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    for case in [
+        "(cd rust/agenthub-runtime && git add assets)",
+        "{ cd \"rust/agenthub-runtime\" && git add assets; }",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
+    }
+
+    // A `cd` operand with no literal prefix is refused by name, not resolved as a directory that cannot exist: the
+    // base it would leave behind is one the guard only thinks it knows.
+    for case in [
+        "cd $D && rm -r assets",
+        "cd \"$D\" && rm -r assets",
+        "cd ${D} && rm -r assets",
+        "cd $D && git add assets",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("unresolvable-target"), "{case}");
     }
 }
 
