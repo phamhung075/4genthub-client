@@ -459,8 +459,9 @@ fn a_seat_cannot_edit_the_config_or_the_log_the_guard_rests_on() {
 /// Deleting or rewriting in place what enforces the rules puts the seat outside them as surely as editing it does:
 /// `rm`, `sed -i`, `truncate`, `dd of=`, an `mv` away and an `ln` over the file were all judged by NO rule, because
 /// writeTargets saw only a redirect, a `tee` and a copy target. The park record and the room's budget are the same
-/// kind of state, so they are named here too. A glob (`rm <seat dir>/*`), `find -delete`, `xargs rm` and a command
-/// inside quotes are still unjudged: the guard is a net for a seat's mistakes, not a sandbox.
+/// kind of state, so they are named here too. A glob is judged as the prefix it names (`rm <seat dir>/*` is the
+/// seat's directory), and one with no literal prefix is refused by name (`unresolvable-target`). `find -delete`,
+/// `xargs rm` and a command inside quotes are still unjudged: the guard is a net for a seat's mistakes, not a sandbox.
 #[test]
 fn a_seat_cannot_delete_or_rewrite_the_files_the_rules_rest_on() {
     let root = fresh_dir("state");
@@ -515,8 +516,9 @@ fn a_seat_cannot_delete_or_rewrite_the_files_the_rules_rest_on() {
     );
 }
 
-/// The net is not a blanket ban on deleting or rewriting: a seat's own worktree, the temp dir and a target it
-/// cannot judge (a variable) stay its own.
+/// The net is not a blanket ban on deleting or rewriting: a seat's own worktree and the temp dir stay its own. A
+/// target the guard cannot resolve (a variable) is REFUSED by name instead - silently dropped was how the metavar
+/// hole worked, and a deletion judged as if it named nothing is the one that reaches the asset.
 #[test]
 fn an_ordinary_deletion_still_stays_the_seat_s_own() {
     let seat = fresh_dir("seat");
@@ -530,13 +532,18 @@ fn an_ordinary_deletion_still_stays_the_seat_s_own() {
     for cmd in [
         format!("rm -rf {WORKTREE}/dist"),
         "rm /tmp/scratch".to_string(),
-        "rm -rf $SCRATCH/x".to_string(),
         format!("sed -i s/x/y/ {WORKTREE}/main.go"),
         format!("dd if=/dev/zero of={WORKTREE}/big.bin count=1"),
         format!("mv {WORKTREE}/a.go {WORKTREE}/b.go"),
     ] {
         assert_eq!(run(cmd.clone()), None, "{cmd}");
     }
+    // A target the guard cannot resolve is refused, not allowed: the same deletion with a variable was an allow
+    // while the target readers dropped the metavar, so the call was judged as if it named nothing.
+    assert_eq!(
+        run("rm -rf $SCRATCH/x".to_string()).as_deref(),
+        Some("unresolvable-target")
+    );
 }
 
 /// The launcher names the directories a seat may write, and the list IS the scope: both of the seat's worktrees
@@ -693,9 +700,9 @@ fn a_seat_cannot_touch_or_mkdir_a_path_no_rule_would_see() {
     }
 }
 
-/// The net is not a blanket ban on making directories: the worktree, the seat's own directory, the temp dir and a
-/// target it cannot judge (a variable) stay the seat's own, and a segment that merely STARTS with a protected one
-/// (`hooks/preflight`) is not protected.
+/// The net is not a blanket ban on making directories: the worktree, the seat's own directory and the temp dir stay
+/// the seat's own, and a segment that merely STARTS with a protected one (`hooks/preflight`) is not protected. A
+/// target the guard cannot resolve (a variable) is REFUSED by name, the same flip the deletion case carries.
 #[test]
 fn an_ordinary_touch_or_mkdir_stays_the_seat_s_own() {
     let seat = fresh_dir("seat");
@@ -712,11 +719,14 @@ fn an_ordinary_touch_or_mkdir_stays_the_seat_s_own() {
         format!("rmdir {WORKTREE}/build/probe"),
         format!("mkdir -p {WORKTREE}/hooks/preflight"),
         format!("touch {}", seat.join("notes.txt").display()),
-        "mkdir -p $SCRATCH/x".to_string(),
         "touch /tmp/probe-file".to_string(),
     ] {
         assert_eq!(run(cmd.clone()), None, "{cmd}");
     }
+    assert_eq!(
+        run("mkdir -p $SCRATCH/x".to_string()).as_deref(),
+        Some("unresolvable-target")
+    );
 }
 
 /// A SEAT DOES NOT RAISE ITS OWN CEILING. The verb writes the room's limits THROUGH the client, so it never names a
@@ -1762,8 +1772,22 @@ fn a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is() {
         format!("touch \"{asset}\""),
         "mkdir -p \"rust/agenthub-runtime/assets\"".to_owned(),
         "rm -r \"rust/agenthub-runtime/assets\"".to_owned(),
-        // The unquoted control the rows above are judged by, and the two glob forms of the same directory.
-        "rm -r rust/agenthub-runtime/assets".to_owned(),
+        // The unquoted control each quoted row above is judged by: the same path, the same rule.
+        format!("cp evil.ts {asset}"),
+        format!("printf x > {asset}"),
+        format!("printf x >> {asset}"),
+        format!("printf x 2> {asset}"),
+        format!("dd if=evil.ts of={asset}"),
+        format!("install evil.ts {asset}"),
+        format!("mv evil.ts {asset}"),
+        format!("rsync -a evil.ts {asset}"),
+        format!("echo evil | tee {asset}"),
+        format!("sed -i s/o/e/ {asset}"),
+        format!("truncate -s 0 {asset}"),
+        format!("unlink {asset}"),
+        format!("touch {asset}"),
+        "mkdir -p rust/agenthub-runtime/assets".to_owned(),
+        // The two glob forms of the same directory.
         "rm -r rust/agenthub-runtime/assets/*".to_owned(),
         "rm -r 'rust/agenthub-runtime/assets'/*".to_owned(),
     ] {
@@ -1800,6 +1824,51 @@ fn a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is() {
         reason.contains("/home/other/main/my file.ts is outside"),
         "the quoted path keeps its space: {reason}"
     );
+}
+
+/// The directory a `cd` names is the DIRECTORY, not its spelling. The extractor resolves a relative target against
+/// the directory the call runs in, so `cd "rust/agenthub-runtime"` read through the erasure's blanked word resolved
+/// to `""`, left the base where it was, and the next statement's `assets` was judged as a path outside the guard
+/// (measured by the gate 2026-10-21: `cd "<tree>" && rm -r assets` was ALLOW, and `git -C "<tree>"` the same). Each
+/// quoted row stands beside its unquoted control, and the reads stay allowed.
+#[test]
+fn a_quoted_cd_names_the_directory_the_next_statement_writes_in() {
+    let repo = tracked("guard-quoted-cd");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+
+    // The unquoted control first, then the same statement with the directory quoted both ways.
+    for case in [
+        "cd rust/agenthub-runtime && rm -r assets",
+        "cd \"rust/agenthub-runtime\" && rm -r assets",
+        "cd 'rust/agenthub-runtime' && rm -r assets",
+        "cd rust/agenthub-runtime && rm -r assets/*",
+        "cd \"rust/agenthub-runtime\" && rm -r assets/*",
+        "cd rust/agenthub-runtime && mv assets /tmp/gone",
+        "cd \"rust/agenthub-runtime\" && mv assets /tmp/gone",
+        "cd \"rust/agenthub-runtime\" && touch assets/seat-guard.ts",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    for case in [
+        "cd rust/agenthub-runtime && git add assets",
+        "cd \"rust/agenthub-runtime\" && git add assets",
+        "git -C \"rust/agenthub-runtime\" rm -r assets",
+        "git -C \"rust/agenthub-runtime\" add assets",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
+    }
+
+    // Reading under the same directory stays the seat's own, and so does a directory the rules do not rest on.
+    for case in [
+        "cd \"rust/agenthub-runtime\" && ls assets",
+        "cd \"rust/agenthub-runtime\" && cat assets/seat-guard.ts",
+        "git -C \"rust/agenthub-runtime\" status",
+        "cd \"a b\" && ls",
+        "cd \"build\" && rm -r x",
+    ] {
+        assert_eq!(at(case), None, "{case}");
+    }
 }
 
 /// A word the guard cannot resolve is REFUSED, not dropped: a variable (quoted or not), a glob with no literal

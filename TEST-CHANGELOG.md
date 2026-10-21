@@ -1,3 +1,26 @@
+## 2026-10-21 - the quoting suite carries the gate's B1 fix: the directory a quoted `cd` names, and the two flipped rows (rust, branch 4genthub-min/rev9-tests-fold)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, on `ca22c477`. Gate `qitem-20261021181739-9da6703153f7` found a quoted
+`cd` resolving through the erasure's blanked word (`cd "rust/agenthub-runtime"` was `cd ""`), so the next
+statement's relative target resolved outside the guard and the protected assets directory was deletable, movable and
+stageable. New test `a_quoted_cd_names_the_directory_the_next_statement_writes_in`: five statements whose unquoted
+control refuses and whose quoted forms (`"…"` and `'…'`) must refuse with the same rule - `rm -r assets`,
+`rm -r assets/*`, `mv assets /tmp/gone`, `touch assets/seat-guard.ts` (`protected-paths`), `git add assets`
+(`git-imports-a-tree`) - plus both `git -C` spellings, and five reads that must stay allowed. On the pre-fix patch
+the test fails on the seven quoted rows; on the fixed asset it passes.
+
+Two rows flip to the ruling's semantics: `rm -rf $SCRATCH/x` and `mkdir -p $SCRATCH/x` move out of the allow
+lists of `an_ordinary_deletion_still_stays_the_seat_s_own` and `an_ordinary_touch_or_mkdir_stays_the_seat_s_own` and
+are asserted `unresolvable-target`; three doc comments that called a variable target "the seat's own" are corrected,
+and the glob clause now says a glob is judged as its literal prefix and one with no prefix is refused by name.
+`a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is` gains the unquoted control for every write verb it
+quotes (the gate's m1 asked for the control or the clause dropped).
+
+Measured (2026-10-21, `wt/go-dev-fold` at `ca22c477` plus this change, patched asset in a scratch crate):
+`cargo test --offline` - 194 (bin), 1 (held_send), 40 (seat_guard, 0 failed), 1 (umask); `cargo fmt --check` clean;
+`cargo clippy --offline --all-targets -D warnings` clean. Same suite on the pre-fix patched asset: seat_guard 39
+passed, 1 failed (the new test only).
+
 ## 2026-10-21 - the rev-9 suite re-expressed on 109cbeca: quoting, unresolvable words, a pathspec file, and the result handler (rust, branch 4genthub-min/rev9-tests-fold)
 
 `rust/agenthub-runtime/tests/seat_guard.rs`, cut from `owner/seat-guard-rev9` @ `109cbeca`. Four rows, each written
