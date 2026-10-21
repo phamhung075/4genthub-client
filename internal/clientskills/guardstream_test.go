@@ -52,6 +52,24 @@ func TestTheGuardStreamReadsTheSeatsBlockedToolLines(t *testing.T) {
 	}
 }
 
+// TestAJevOccurrenceCarriesARefAReaderCanFollow: the log writes no id, so the ref is the line's own timestamp
+// and tier. A `jev:` ref with nothing after it is a demotion nobody can look up (the S2 verdict's minor).
+func TestAJevOccurrenceCarriesARefAReaderCanFollow(t *testing.T) {
+	stateRoot := t.TempDir()
+	writeFile(t, filepath.Join(stateRoot, jevLogFile),
+		`{"timestamp":"2026-10-21T10:04:00Z","kind":"escalation","tier":"seat","outcome":"escalated-to-lead"}`+"\n")
+
+	evidence := LoadEvidence(stateRoot, "room", "")
+	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	found := evidence.Occurrences(Signal{Kind: SignalJEV, Value: "escalation"}, since)
+	if len(found) != 1 {
+		t.Fatalf("occurrences = %d, want 1: %v", len(found), found)
+	}
+	if want := "jev:2026-10-21T10:04:00Z seat"; found[0].Ref != want {
+		t.Fatalf("ref = %q, want %q", found[0].Ref, want)
+	}
+}
+
 // TestTheGuardStreamIsUnreadOnlyWhenNoProducerExists: both producers are append-on-event files, so an absent
 // file is measured silence. The stream is unread only when there is nothing to read at all, because a stream
 // nobody opened must never promote a skill.

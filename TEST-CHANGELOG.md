@@ -235,4 +235,6 @@ contributes none, and one readable producer keeps the stream out of `unread`) an
 `TestTheGuardStreamIsUnreadOnlyWhenNoProducerExists` (no spool and no log is unread; a present but empty log is
 measured silence). Two cases in `record_test.go`: `TestATrailingSecondRecordIsRefused` (a second JSON value is
 refused by name) and `TestAQueueLookupThatCouldNotBeMadeIsNotBroken` (the daemon's `unknown qitem_id` is
-checked-and-absent; a failed call is unchecked with its reason).
+checked-and-absent; a failed call is unchecked with its reason). `TestAJevOccurrenceCarriesARefAReaderCanFollow`
+pins the JEV ref as the line's own `timestamp` and `tier`, and the JEV fixture no longer invents an `id` the
+log never writes.

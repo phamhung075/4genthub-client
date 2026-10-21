@@ -115,11 +115,17 @@ func runSkillsEvidence(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam skills evidence: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
 	}
-	stateRoot, _ := clientenv.ResolveStateRoot("")
+	// A state root that could not be resolved is a reason the four state-root streams were not read, so it is
+	// named with them instead of being dropped: the streams then report themselves unread and the report says
+	// why (the S2 verdict's minor).
+	stateRoot, rootErr := clientenv.ResolveStateRoot("")
 	rows, notes, err := CensusRoom(stateRoot, room, root)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam skills evidence: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
+	}
+	if rootErr != nil {
+		notes = append([]string{"the state root was not resolved: " + rootErr.Error()}, notes...)
 	}
 	if name := opts["skill"]; name != "" {
 		filtered := rows[:0]

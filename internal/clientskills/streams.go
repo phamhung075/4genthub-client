@@ -348,16 +348,24 @@ func readJev(stateRoot string, evidence *Evidence) Skip {
 		return Skip{Stream: StreamJEV, Reason: "no " + jevLogFile + " in " + stateRoot}
 	}
 	readJSONLines(path, func(raw []byte) {
+		// The log carries no id (measured 2026-10-21: keys timestamp, kind, model, confidence_threshold,
+		// summary, detail, choices, tier, category, outcome, questions - 0 of 512 lines had one), so the ref a
+		// reader follows is the line's own identity: its timestamp, in the log's order. A `jev:` ref with
+		// nothing after it is a demotion nobody can look up, which is what the S2 verdict's minor measured.
 		var line struct {
 			Timestamp time.Time `json:"timestamp"`
 			Kind      string    `json:"kind"`
-			ID        string    `json:"id"`
+			Tier      string    `json:"tier"`
 		}
 		if json.Unmarshal(raw, &line) != nil || line.Kind == "" || line.Timestamp.IsZero() {
 			return
 		}
+		ref := "jev:" + line.Timestamp.UTC().Format(time.RFC3339Nano)
+		if line.Tier != "" {
+			ref += " " + line.Tier
+		}
 		evidence.Facts = append(evidence.Facts, Fact{Stream: StreamJEV, Value: line.Kind,
-			At: line.Timestamp, Ref: line.ID})
+			At: line.Timestamp, Ref: ref})
 	})
 	return Skip{}
 }

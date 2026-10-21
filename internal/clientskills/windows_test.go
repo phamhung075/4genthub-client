@@ -61,8 +61,8 @@ func toolLine(at, tool, target, outcome string) string {
 }
 
 // jevLine is one Jev decision.
-func jevLine(at, kind, id string) string {
-	return fmt.Sprintf(`{"timestamp":"%s","kind":%q,"tier":"seat","outcome":"decided","id":%q}`, at, kind, id)
+func jevLine(at, kind, tier string) string {
+	return fmt.Sprintf(`{"timestamp":"%s","kind":%q,"tier":%q,"outcome":"decided"}`, at, kind, tier)
 }
 
 // fixtureStateRoot writes the three streams the census reads from the state root and returns that root.
@@ -75,7 +75,7 @@ func fixtureStateRoot(t *testing.T) string {
 	writeFile(t, filepath.Join(root, "rooms", "room", "seats", "a", "tool-calls.jsonl"),
 		toolLine("2026-10-21T10:02:00Z", "bash", "room queue create --tag defect", "error")+"\n"+
 			toolLine("2026-10-21T10:03:00Z", "bash", "go test ./...", "ok")+"\n")
-	writeFile(t, filepath.Join(root, jevLogFile), jevLine("2026-10-21T10:04:00Z", "escalation", "jev-1")+"\n")
+	writeFile(t, filepath.Join(root, jevLogFile), jevLine("2026-10-21T10:04:00Z", "escalation", "seat")+"\n")
 	return root
 }
 

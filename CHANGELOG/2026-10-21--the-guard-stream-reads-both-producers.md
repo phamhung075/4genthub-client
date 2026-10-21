@@ -30,6 +30,13 @@ Two minors from the S1 verdict, both in the record path:
   decision written twice or two pasted together, and reading the first while dropping the rest is how a
   decision goes silently missing.
 
+Two more minors from the same verdict, in the readers beside it: a JEV occurrence's ref was taken from an
+`id` the log never writes (0 of 512 lines - keys `timestamp`, `kind`, `model`, `confidence_threshold`,
+`summary`, `detail`, `choices`, `tier`, `category`, `outcome`, `questions`), so a demoted row printed
+`jev:` with nothing to follow; it is now the line's own timestamp and tier. And `skills evidence` dropped
+`ResolveStateRoot`'s error, which then named all four state-root streams unread with no reason - the error is
+now named with them.
+
 Verification: `go test ./...` in `agenthub_client` - every package ok, including three new cases (the spool's
 `docs_only` matches `docs-only` and keeps the spool id as the ref; a blocked tool line is a fact while an `ok`
 line is not; the stream is unread only when no producer file exists) and the two minor fixes. Live over a
