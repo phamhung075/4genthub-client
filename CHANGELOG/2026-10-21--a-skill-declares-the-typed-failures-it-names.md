@@ -13,7 +13,7 @@ literal substring of a tool target. Each rule has one owner in its scope - `work
 (`architect-workflow`, `fe-dev-role`, `go-dev-role`, `lead-role`, `reviewer-workflow`) - so one refusal
 demotes one skill. The ruling's table named no reviewer owner; the gate measured the consequence - a reviewer
 `env-secret` refusal matched no declaration - and the gap is closed here by declaring the rule on the
-reviewer's own workflow skill, the one reader of that seat's facts (measured after the declaration: 7 reviewer
+reviewer's own workflow skill, the one reader of that seat's facts (measured after the declaration: 2 reviewer
 `env-secret` occurrences, seat-scoped). The 9
 skills that name no typed failure stay `no-signal` and are listed with the rule or verb that would arm each.
 
