@@ -252,3 +252,21 @@ refused by name) and `TestAQueueLookupThatCouldNotBeMadeIsNotBroken` (the daemon
 checked-and-absent; a failed call is unchecked with its reason). `TestAJevOccurrenceCarriesARefAReaderCanFollow`
 pins the JEV ref as the line's own `timestamp` and `tier`, and the JEV fixture no longer invents an `id` the
 log never writes.
+
+## 2026-10-21 - revision 9 of the seat guard's suite lands before its asset (rust, branch 4genthub-min/rev9-tests-on-main)
+
+`rust/agenthub-runtime/tests/seat_guard.rs` arrives whole from `4genthub-min/guard-imports-a-tree` (`7f4512c`), on
+a branch cut from client main `ec09aa0f` because the guard branch is not mergeable (a merge of it reverts
+`supervisor.go` and `room.go`). Thirty rows: the twenty-seven already on main, the two index rows of revision 8
+(`the_index_is_written_by_path_so_the_path_is_read`, `the_index_is_read_where_the_verb_names_no_path`) and
+`the_pathspec_is_read_as_the_set_it_covers`, which reads a pathspec as the set of paths it covers - `rm -r` and `mv`
+of the assets directory, `git add`/`commit`/`checkout HEAD --` over it, the whole-index forms `git add -u`, `-a`,
+`-p` and `git commit -a`/`-am`, a three-statement chain denying at its first firing rule, plus controls that must
+stay ALLOWED because over-refusal is the other failure mode.
+
+Red before the asset lands, measured at this tip on main's revision-6 asset `3e7c033aa2e1`: 27 passed, 3 failed -
+`the_index_is_written_by_path_so_the_path_is_read` (`tests/seat_guard.rs:1381`),
+`the_index_is_read_where_the_verb_names_no_path` (`:1480`) and `the_pathspec_is_read_as_the_set_it_covers`
+(`:1668`). With the revision-9 asset `44be3f195328` (`wt/lead/owner-actions/seat-guard-rev9-from-main.patch`,
+sha256 `806536475a20`) applied the same suite is 30 passed, 0 failed. The three red rows are the point: they pin the
+asset's rule, so the split landing cannot pass by accident.

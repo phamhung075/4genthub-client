@@ -1177,6 +1177,10 @@ fn a_destination_flag_is_refused_on_a_writing_form() {
         "git apply --prefix=hooks/pre/ src.patch",
         "git apply --unsafe-paths src.patch",
         "patch -d out -p1 < src.patch",
+        // The attached spellings were the gap the reviewer measured: the short-form test matched a bare `-d` only,
+        // so `-dout` and a `-d` tucked behind `-p1` walked past the refusal while the split form tripped it.
+        "patch -dout -p1 < src.patch",
+        "patch -p1 -dhooks < src.patch",
     ] {
         assert_eq!(
             bash(&format!("cd {here} && {case}")).as_deref(),
@@ -1342,6 +1346,249 @@ fn a_stash_entry_is_read_whatever_verb_imports_it() {
     }
 }
 
+/// Staging writes by PATH (revision 7, task 1c06bcd0): `git update-index --add --cacheinfo` writes the index and not
+/// the file, so one `git checkout-index -f` afterwards puts a modified guard on disk without a single refused write -
+/// the chain the reviewer measured, which falsified revision 5's premise. The verbs are read as names of what they
+/// write; `--index-info` has no name (its rows come from stdin) and `checkout-index --prefix` names its own
+/// destination, so both fail closed on this same rule.
+#[test]
+fn the_index_is_written_by_path_so_the_path_is_read() {
+    let repo = stashed("guard-index-writes");
+    let here = repo.display();
+    let blob = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", &format!("HEAD:{GUARD_PATH}")])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    // Eight refusals: both spellings of --cacheinfo, the stdin form, a named path in three verbs, the
+    // destination-rewriting form, and `commit --`.
+    for case in [
+        format!("git update-index --add --cacheinfo 100644,{blob},{GUARD_PATH}"),
+        format!("git update-index --add --cacheinfo=100644,{blob},{GUARD_PATH}"),
+        "git update-index --index-info".to_owned(),
+        format!("git update-index --assume-unchanged -- {GUARD_PATH}"),
+        "git checkout-index --prefix=/tmp/x/ -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        format!("git add -- {GUARD_PATH}"),
+        format!("git rm --cached -- {GUARD_PATH}"),
+        format!("git commit -m x -- {GUARD_PATH}"),
+    ] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case}"
+        );
+    }
+    // Four controls: the same verbs on a path that is not the owner's, and the no-op refresh.
+    for case in [
+        "git update-index --refresh".to_owned(),
+        "git add -n -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        "git rm -n -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        "git commit -m note -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+    ] {
+        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
+    }
+    // The lead lands the asset by committing it, so the index route is open to the lead: the sanctioned path must not
+    // become a dead end, and `pushAuthority` already decides who the lead is for the push rule.
+    assert_eq!(
+        refusal_for_seat(
+            &fresh_dir("lead-index"),
+            WORKTREES,
+            "agenthub--room--lead",
+            "lead",
+            "run_command",
+            serde_json::json!({ "CommandLine": format!("cd {here} && git add -- {GUARD_PATH}") }),
+        ),
+        None,
+        "the lead stages the guard"
+    );
+}
+
+/// The index is a MEDIUM (revision 8, the architect's addendum): the verbs that name no path - `commit`, and
+/// `checkout-index -a` - turn whatever the index holds into a commit or a file, so the index itself is read; a
+/// directory operand names the guard inside it without naming it; and `read-tree` of a STASH entry imports one.
+/// The lead is the asset's owner, so every one of these paths is open to the lead for `seat-guard.ts` alone.
+#[test]
+fn the_index_is_read_where_the_verb_names_no_path() {
+    let repo = stashed("guard-index-parity");
+    let here = repo.display();
+    let blob = |spec: &str| {
+        String::from_utf8(
+            Command::new("git")
+                .args(["rev-parse", spec])
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned()
+    };
+    // A blob that DIFFERS from HEAD's: the index route is about replacing the entry, and an entry equal to HEAD's
+    // is invisible to the parity read - so the fixture writes the seat's bytes first and hashes them.
+    let carried = repo.parent().unwrap().join("carried-guard.ts");
+    std::fs::write(&carried, "const victim = 1;\n").unwrap();
+    let guard_blob = String::from_utf8(
+        Command::new("git")
+            .args(["hash-object", "-w", carried.to_str().unwrap()])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    let src_blob = blob("HEAD:rust/agenthub-runtime/src/lib.rs");
+    // Six controls first: a commit-relative tree and a HEAD reset, the same verbs on paths that are not the
+    // owner's, and a directory rename outside the protected paths.
+    for case in [
+        "git read-tree -u --reset HEAD".to_owned(),
+        // The reset that keeps its meaning: an unstaging and a HEAD reset write nothing protected.
+        "git reset".to_owned(),
+        "git reset --mixed HEAD".to_owned(),
+        // The NAMED form of checkout-index stays useful; the whole-index forms below are refused.
+        "git checkout-index -f -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        format!("git update-index --cacheinfo 100644,{src_blob},rust/agenthub-runtime/src/lib.rs"),
+        "git mv rust/agenthub-runtime/src/lib.rs rust/agenthub-runtime/src/moved.ts".to_owned(),
+    ] {
+        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
+    }
+    // Nine refusals that need no poisoned index: the stdin forms, a directory operand, a rename, a stash tree.
+    for case in [
+        "git update-index --stdin".to_owned(),
+        "git update-index --index-info".to_owned(),
+        "git rm -r rust/agenthub-runtime/assets".to_owned(),
+        format!("git mv {GUARD_PATH} rust/agenthub-runtime/assets/copy.ts"),
+        "git read-tree -u --reset stash@{1}".to_owned(),
+        // One step removed from read-tree: `reset --mixed <stash>` puts the entry in the index, which is what
+        // `checkout-index -a` or a whole-index commit would then carry (the reviewer's measured chain).
+        "git reset --mixed stash@{1}".to_owned(),
+        "git reset stash@{1}".to_owned(),
+        // Whole-index materialisation, refused outright (lead, 2026-10-21): the pair `reset --mixed <stash>`
+        // then `checkout-index -a -f` needs no index the hook can see as dirty at call time.
+        "git checkout-index -a -f".to_owned(),
+        "git checkout-index --all -f".to_owned(),
+        "git checkout-index -f".to_owned(),
+    ] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case}"
+        );
+    }
+    // The two parity refusals need the index poisoned OUT OF BAND, which is what the fixture does: the hook sees
+    // only a command line, and `git commit` / `git checkout-index -a` name nothing at all.
+    let poison = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{guard_blob},{GUARD_PATH}"),
+        ])
+        .current_dir(&repo)
+        .status()
+        .unwrap();
+    assert!(poison.success(), "the fixture must be able to poison the index");
+    for case in ["git commit -m x", "git checkout-index -a -f"] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case} over a poisoned index"
+        );
+    }
+    // The control that keeps the parity honest: the same commit over a CLEAN index is the seat's own.
+    assert!(Command::new("git")
+        .args(["reset", "-q"])
+        .current_dir(&repo)
+        .status()
+        .unwrap()
+        .success());
+    for case in ["git commit -m x"] {
+        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case} over a clean index");
+    }
+    // The asset's owner. The lead lands the guard, so the index route and the patch reader are open to it for
+    // `seat-guard.ts`; every other protected path - an installed hook, the git hooks - stays refused.
+    let patches = patch_dir(
+        "lead-asset-patch",
+        &[
+            ("guard.patch", patch_doc(GUARD_PATH)),
+            // A second protected name in the same document must still refuse the call: the exemption is the
+            // asset, not the file that carries it.
+            (
+                "both.patch",
+                format!(
+                    "{}{}",
+                    patch_doc(GUARD_PATH),
+                    patch_doc("scripts/git-hooks/pre-commit")
+                ),
+            ),
+        ],
+    );
+    let lead = |name: &str, args: serde_json::Value| {
+        refusal_for_seat(
+            &fresh_dir("lead-asset"),
+            WORKTREES,
+            "agenthub--room--lead",
+            "lead",
+            name,
+            args,
+        )
+    };
+    for allowed in [
+        serde_json::json!({ "CommandLine": format!("cd {here} && git commit -m z -- {GUARD_PATH}") }),
+        serde_json::json!({ "CommandLine": format!("cd {} && git apply guard.patch", patches.display()) }),
+        serde_json::json!({ "CommandLine": format!("cd {} && patch -p1 < guard.patch", patches.display()) }),
+        serde_json::json!({ "TargetFile": GUARD_PATH }),
+    ] {
+        let name = if allowed.get("TargetFile").is_some() { "write_to_file" } else { "run_command" };
+        assert_eq!(lead(name, allowed.clone()), None, "the lead lands the asset: {allowed}");
+    }
+    for refused in [
+        serde_json::json!({ "CommandLine": format!("cd {here} && git commit -m z -- scripts/git-hooks/pre-commit") }),
+        // The DESTINATION is a path the verb writes too: the lead may move the asset, not install it as a hook.
+        serde_json::json!({ "CommandLine": format!("cd {here} && git mv {GUARD_PATH} hooks/pre/seat-guard.ts") }),
+        serde_json::json!({ "TargetFile": "scripts/git-hooks/pre-commit" }),
+        serde_json::json!({ "CommandLine": format!("cd {} && git apply both.patch", patches.display()) }),
+    ] {
+        let name = if refused.get("TargetFile").is_some() { "write_to_file" } else { "run_command" };
+        assert!(lead(name, refused.clone()).is_some(), "the lead's exemption is the asset only: {refused}");
+    }
+    // The exemption is the LEAD's, not the asset's: the same three calls from a seat that does not land the guard
+    // are refused (the lead asked whether an exemption row is safe when a non-lead tool call writes - it is,
+    // because grant is a function of the seat and each row is measured under both).
+    let seat = |name: &str, args: serde_json::Value| {
+        refusal_for_seat(
+            &fresh_dir("seat-asset"),
+            WORKTREES,
+            "agenthub--room--go-dev",
+            "go-dev",
+            name,
+            args,
+        )
+    };
+    for refused in [
+        serde_json::json!({ "CommandLine": format!("cd {} && git apply guard.patch", patches.display()) }),
+        serde_json::json!({ "CommandLine": format!("cd {} && patch -p1 < guard.patch", patches.display()) }),
+        serde_json::json!({ "TargetFile": GUARD_PATH }),
+    ] {
+        let name = if refused.get("TargetFile").is_some() { "write_to_file" } else { "run_command" };
+        // A command that would import the asset is refused as git-imports-a-tree, a write-tool call on it as
+        // protected-paths: both are the guard refusing, and the lead's grant is what keeps them apart.
+        let seen = seat(name, refused.clone()).unwrap_or_default();
+        assert!(
+            seen.contains("(git-imports-a-tree)") || seen.contains("(protected-paths)"),
+            "a seat that does not land the guard is refused: {refused} -> {seen}"
+        );
+    }
+}
+
 #[test]
 fn the_refusals_name_no_deploy_and_no_ownership_claim() {
     // The needle is spelled in two pieces so the file that forbids the claim is not itself a hit for it: the task's
@@ -1374,4 +1621,92 @@ fn the_refusals_name_no_deploy_and_no_ownership_claim() {
         !docker.contains("deploy"),
         "the docker refusal asserts no deploy model: {docker}"
     );
+}
+
+/// A repository whose HEAD tracks the guard beside two ordinary files, one of them the source `git add src/` names.
+/// The probes below are the architect's ruling, run for real: every one of the six was ALLOWED at revision 8 and
+/// landed the guard's deletion or its bytes in HEAD.
+fn tracked(tag: &str) -> PathBuf {
+    let dir = fresh_dir(tag);
+    std::fs::create_dir_all(dir.join("rust/agenthub-runtime/assets")).unwrap();
+    std::fs::create_dir_all(dir.join("rust/agenthub-runtime/src")).unwrap();
+    std::fs::create_dir_all(dir.join("other")).unwrap();
+    let git = |args: &[&str], label: &str| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {label} must succeed");
+    };
+    git(&["init", "-q", "."], "init");
+    git(&["config", "user.email", "seat@guard.test"], "email");
+    git(&["config", "user.name", "seat"], "name");
+    std::fs::write(dir.join(GUARD_PATH), "const real = 1;\n").unwrap();
+    std::fs::write(dir.join("rust/agenthub-runtime/src/lib.rs"), "a\n").unwrap();
+    std::fs::write(dir.join("other/one.txt"), "c\n").unwrap();
+    std::fs::write(dir.join("newfile"), "n\n").unwrap();
+    git(&["add", "--", "."], "add");
+    git(&["commit", "-qm", "base"], "commit");
+    dir
+}
+
+#[test]
+fn the_pathspec_is_read_as_the_set_it_covers() {
+    let repo = tracked("guard-pathspec-set");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+    // The six refusals and the two chains (revision 9). A directory operand names the guard inside it, so every
+    // one of these is refused before it runs - the shell forms by the set the write target covers, the git forms by
+    // the set the pathspec covers, and the two whole-tree verbs by naming no path at all.
+    for case in [
+        "rm -r rust/agenthub-runtime/assets",
+        "mv rust/agenthub-runtime/assets /tmp/assets-moved",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    for case in [
+        "git add rust/agenthub-runtime/assets",
+        "git commit -m x -- rust/agenthub-runtime/assets",
+        "git checkout HEAD -- rust/agenthub-runtime/assets",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
+    }
+    for case in ["git add -u", "git add -a", "git add -p", "git commit -am x", "git commit -a -m x"] {
+        assert_eq!(at(case).as_deref(), Some("git-destructive"), "{case}");
+    }
+    // The chain the reviewer executed: one call, three calls, same verdict at the first statement that would. The
+    // rule that answers is the first one in the list to fire - `git-imports-a-tree` reads the `git add` statement
+    // before `protected-paths` is reached - and what matters is that the call does not run.
+    assert_eq!(
+        at("rm -r rust/agenthub-runtime/assets && git add rust/agenthub-runtime/assets && git commit -m x -- rust/agenthub-runtime/assets")
+            .as_deref(),
+        Some("git-imports-a-tree")
+    );
+    // One level up, and a copy INTO the protected directory: a path no rule saw at revision 8.
+    for case in [
+        "rm -r rust/agenthub-runtime",
+        "cp other/one.txt rust/agenthub-runtime/assets/",
+    ] {
+        assert_eq!(at(case).as_deref(), Some("protected-paths"), "{case}");
+    }
+    // The controls the ruling pins as allowed: an over-broad refusal would be a finding. `git add src/` and a
+    // directory rename outside the protected paths are habits, and both stay allowed.
+    for case in [
+        "git add -- rust/agenthub-runtime/src/lib.rs",
+        "git add -N -- newfile",
+        "git add rust/agenthub-runtime/src/",
+        "git commit -m x -- rust/agenthub-runtime/src/lib.rs",
+        "git commit -m x",
+        "git rm -r other",
+        "git mv other other2",
+        "git checkout HEAD -- other",
+        "rm -r other",
+        "git read-tree -u --reset HEAD",
+        "git diff HEAD -- rust/agenthub-runtime/src/lib.rs",
+    ] {
+        assert_eq!(at(case), None, "{case}");
+    }
 }
