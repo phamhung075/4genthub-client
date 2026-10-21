@@ -29,6 +29,17 @@ const (
 	// Integration is the room's own worktree: the place a room's seats meet through a merge of their
 	// tips, and only the lead writes there.
 	Integration = "integration"
+	// Skills is `doctor`'s row about the skill census: what every skill a room delivers declares, and
+	// whether the typed streams have contradicted it. Like Worktrees it is a fact about the room, not
+	// about a process, so it has no pid and no heartbeat to age.
+	Skills = "skills"
+	// SkillsDemote is the skills row's first failing state: a `trusted` skill a declared signal has
+	// contradicted inside its window. The reasons name the skill and the rows that did it.
+	SkillsDemote = "skills_demote"
+	// SkillsBroken is the skills row's second failing state: a record that cannot be read, or one citing
+	// an evidence id that does not resolve. A decision citing something that does not exist is not a
+	// decision, so it fails the row whether or not anything was demoted.
+	SkillsBroken = "skills_broken"
 	// Clone is `doctor`'s row about the SHARED checkout: a change sitting in it belongs to no seat, because
 	// a seat commits in its own worktree. 4.1's third measured failure was a generated file and eleven
 	// landing-branch files sitting changed there with no seat owning them, and nothing read the checkout at

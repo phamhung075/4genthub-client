@@ -139,11 +139,11 @@ type doctorJSONRow struct {
 // doctorJSONRows pairs every row with the lines the human report prints beside it, from the wrapper that
 // carries them: ONE rule for the JSON and the lines, so the two surfaces cannot disagree about a row.
 func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
-	seatRows []seatSkillsRow, orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
+	seatRows []seatSkillsRow, censusRows []skillsRow, orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
 	out := make([]doctorJSONRow, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, doctorJSONRow{Health: row,
-			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, seatRows, orphanRows, identityRows)})
+			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, seatRows, censusRows, orphanRows, identityRows)})
 	}
 	return out
 }
@@ -151,7 +151,7 @@ func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, c
 // rowReasons finds one row's reasons: the wrapper is matched on (safeguard, room), the pair the report
 // itself matches a row by.
 func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
-	seatRows []seatSkillsRow, orphanRows []orphanRow, identityRows []identityRow) []string {
+	seatRows []seatSkillsRow, censusRows []skillsRow, orphanRows []orphanRow, identityRows []identityRow) []string {
 	for _, worktree := range worktreeRows {
 		if worktree.Row.Safeguard == row.Safeguard && worktree.Row.Room == row.Room {
 			return worktreeLines(worktree)
@@ -170,6 +170,11 @@ func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRow
 	for _, seat := range seatRows {
 		if seat.Row.Safeguard == row.Safeguard && seat.Row.Room == row.Room {
 			return seatLines(seat)
+		}
+	}
+	for _, census := range censusRows {
+		if census.Row.Safeguard == row.Safeguard && census.Row.Room == row.Room {
+			return skillsLines(census)
 		}
 	}
 	for _, orphan := range orphanRows {
@@ -227,6 +232,13 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 	for _, seatRow := range seatRows {
 		rows = append(rows, seatRow.Row)
 	}
+	// The skills row (the design note's S4): the census per room - what each skill declares and whether the
+	// typed streams have contradicted it. It reads the same function `skills evidence` prints, so the two
+	// surfaces cannot report different numbers, and it repairs nothing.
+	censusRows := skillsRowFor(room, root)
+	for _, census := range censusRows {
+		rows = append(rows, census.Row)
+	}
 	orphanRows := orphanRowsFor(room)
 	for _, orphan := range orphanRows {
 		rows = append(rows, orphan.Row)
@@ -241,7 +253,7 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 		rows = append(rows, identity.Row)
 	}
 	if asJSON {
-		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, seatRows, orphanRows, identityRows), "", "  ")
+		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, seatRows, censusRows, orphanRows, identityRows), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam doctor: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
@@ -276,6 +288,11 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 		}
 		for _, seatRow := range seatRows {
 			for _, line := range seatLines(seatRow) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
+		for _, census := range censusRows {
+			for _, line := range skillsLines(census) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
@@ -315,6 +332,16 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 				continue
 			}
 			for _, line := range worktreeReasonLines(worktreeRow) {
+				fmt.Fprintln(stderr, line)
+			}
+		}
+		// The skills row's reasons, on stderr: the skill and the row or id that failed it are why the row is
+		// down, and a refusal that does not name them is not actionable.
+		for _, census := range censusRows {
+			if census.Row.Safeguard != row.Safeguard || census.Row.Room != row.Room {
+				continue
+			}
+			for _, line := range skillsReasonLines(census) {
 				fmt.Fprintln(stderr, line)
 			}
 		}

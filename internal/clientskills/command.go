@@ -116,13 +116,8 @@ func runSkillsEvidence(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "4genteam skills evidence: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
 	}
-	tree := Tree{Root: root}
-
-	resolver, note := evidenceResolver(room, root)
 	stateRoot, _ := clientenv.ResolveStateRoot("")
-	evidence := LoadEvidence(stateRoot, room, root)
-	note = railRows(&evidence, room, note)
-	rows, windowNotes, err := tree.CensusWithEvidence(room, resolver, evidence, root)
+	rows, notes, err := CensusRoom(stateRoot, room, root)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam skills evidence: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
@@ -147,11 +142,8 @@ func runSkillsEvidence(args []string, stdout, stderr io.Writer) int {
 		SkillsRoot: root,
 		Counts:     Count(rows),
 		Skills:     rows,
+		Notes:      notes,
 	}
-	if note != "" {
-		report.Notes = append(report.Notes, note)
-	}
-	report.Notes = append(report.Notes, windowNotes...)
 
 	if opts["json"] == "true" {
 		body, err := json.MarshalIndent(report, "", "  ")
@@ -303,6 +295,25 @@ func railRows(evidence *Evidence, room, note string) string {
 	}
 	evidence.Rows = rows
 	return note
+}
+
+// CensusRoom is the WHOLE census for one room - the tree's skills, the room's rail rows, the typed streams
+// and the resolution of every evidence id - and it is the one composition: `skills evidence` prints its
+// rows and `doctor`'s skills row reads them, so the two surfaces cannot report different numbers. The notes
+// are everything that could not be read, in the same order a report prints them.
+func CensusRoom(stateRoot, room, root string) ([]Row, []string, error) {
+	resolver, note := evidenceResolver(room, root)
+	evidence := LoadEvidence(stateRoot, room, root)
+	note = railRows(&evidence, room, note)
+	rows, notes, err := (Tree{Root: root}).CensusWithEvidence(room, resolver, evidence, root)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := make([]string, 0, len(notes)+1)
+	if note != "" {
+		out = append(out, note)
+	}
+	return rows, append(out, notes...), nil
 }
 
 // joinNotes appends one note to another without a stray separator.

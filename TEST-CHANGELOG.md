@@ -211,3 +211,16 @@ ambiguity rule and that `room/tool` lands in the room-level copy.
 `TestSeatFromSessionMatchesOnlyThisRoomsSeat` pins that the room inside a session name is the guard. The verb
 reads the rail and the worktree through two package-level seams (`queueRow`, `callerWorktree`), so no test
 reaches a daemon or a real worktree.
+
+## 2026-10-21 - doctor's `skills` row
+
+`internal/clientlifecycle/skillsrow_test.go` (new), five cases driven through two seams (`skillsTreeRoot`,
+`censusFor`) over a real tree and written-down census rows, so the row's rules are tested rather than the
+census's own fixtures: `TestASkillsRowFailsOnADemoteAndNamesTheRowsThatDidIt` (state `skills_demote`, the
+reason names `share/queue-row-schema`, the signal, the occurrence count and `qitem-1,qitem-2`, and
+`clientservices.NotRunning` counts the row down), `TestASkillsRowFailsOnABrokenRecordAndNamesTheMissingID`
+(`skills_broken`, the reason carries `qitem-gone does not resolve`),
+`TestAPromotableSkillIsADetailAndNotAFailure` (`running`, no reason lines at all, the detail carries
+`landed 3`), `TestASkillsRowWithNoTreeSaysWhatItCouldNotLookAt` (an unset tree is a note, never a verdict)
+and `TestASkillsRowSurfacesACensusNote` (an unreadable stream rides beside the row). The census composition
+those cases stand in for is `clientskills.CensusRoom`, called by both this row and `skills evidence`.
