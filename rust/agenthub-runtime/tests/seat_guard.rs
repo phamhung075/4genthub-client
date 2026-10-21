@@ -1045,3 +1045,333 @@ fn a_lane_is_admitted_by_the_seat_key_and_only_that_prefix() {
         "the unset launch keeps today's refusal byte for byte"
     );
 }
+
+// ---- git-imports-a-tree -----------------------------------------------------------------------------------------
+// A patch NAMES a file to read and a tree to write, so the protected path never appears as an argument a
+// write-target rule could see: at the pin, `git apply`, `git am`, `patch`, `git stash pop`, `git checkout --` and
+// `git restore` all wrote the guard that refuses them (measured 2026-10-20, task 1c06bcd0). Every case below is a
+// row of that task's probe table.
+
+/// The file the guard protects by basename, anywhere in a tree.
+const GUARD_PATH: &str = "rust/agenthub-runtime/assets/seat-guard.ts";
+
+/// One hunk that rewrites `path`, in the header form git emits, so a case differs from its neighbour only in the
+/// header shape it is testing.
+fn patch_doc(path: &str) -> String {
+    format!(
+        "diff --git a/{path} b/{path}\nindex 1111111..2222222 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,2 +1,2 @@\n-old\n+new\n"
+    )
+}
+
+/// A directory of patch documents, written the way a seat writes its own: the guard is handed an absolute `cd` in
+/// the statement, which is the directory a patch path resolves against.
+fn patch_dir(tag: &str, files: &[(&str, String)]) -> PathBuf {
+    let dir = fresh_dir(tag);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, body) in files {
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+    dir
+}
+
+/// A repository with two stashes: `stash@{1}` rewrites the guard, `stash@{0}` rewrites an ordinary file. Both
+/// sides of the stash rule are told apart in the same run instead of in two runs that could age apart.
+fn stashed(tag: &str) -> PathBuf {
+    let dir = fresh_dir(tag);
+    std::fs::create_dir_all(dir.join("rust/agenthub-runtime/assets")).unwrap();
+    std::fs::create_dir_all(dir.join("rust/agenthub-runtime/src")).unwrap();
+    let git = |args: &[&str], label: &str| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {label} must succeed");
+    };
+    git(&["init", "-q", "."], "init");
+    git(&["config", "user.email", "seat@guard.test"], "config email");
+    git(&["config", "user.name", "seat"], "config name");
+    std::fs::write(dir.join(GUARD_PATH), "base\n").unwrap();
+    std::fs::write(dir.join("rust/agenthub-runtime/src/lib.rs"), "base\n").unwrap();
+    git(&["add", "--", "rust/agenthub-runtime"], "add");
+    git(&["commit", "-qm", "base"], "commit");
+    std::fs::write(dir.join(GUARD_PATH), "changed\n").unwrap();
+    git(&["stash", "push", "-q", "-m", "guard", "--", GUARD_PATH], "stash the guard");
+    std::fs::write(dir.join("rust/agenthub-runtime/src/lib.rs"), "changed\n").unwrap();
+    git(
+        &["stash", "push", "-q", "-m", "src", "--", "rust/agenthub-runtime/src/lib.rs"],
+        "stash src",
+    );
+    dir
+}
+
+#[test]
+fn a_patch_that_names_the_guard_is_refused() {
+    let dir = patch_dir(
+        "git-imports-headers",
+        &[
+            ("guard.patch", patch_doc(GUARD_PATH)),
+            (
+                "binary.patch",
+                format!("diff --git a/{GUARD_PATH} b/{GUARD_PATH}\nnew file mode 100644\nindex 0000000..2222222\nGIT binary patch\nliteral 8\nPc$@XM0T?U00000\n"),
+            ),
+            (
+                "deleted.patch",
+                format!("diff --git a/{GUARD_PATH} b/{GUARD_PATH}\ndeleted file mode 100644\nindex 2222222..0000000\n--- a/{GUARD_PATH}\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-old\n-new\n"),
+            ),
+            (
+                "quoted.patch",
+                format!("diff --git \"a/{GUARD_PATH}\" \"b/{GUARD_PATH}\"\n--- \"a/{GUARD_PATH}\"\n+++ \"b/{GUARD_PATH}\"\n@@ -1,2 +1,2 @@\n-old\n+new\n"),
+            ),
+            ("hooks.patch", patch_doc("scripts/git-hooks/pre-commit")),
+            ("hooksprefix.patch", patch_doc("hooks/pre/seat-guard-hook.ts")),
+            ("gemini.patch", patch_doc(".gemini/config/hooks.json")),
+            ("src.patch", patch_doc("rust/agenthub-runtime/src/lib.rs")),
+        ],
+    );
+    let here = dir.display();
+    // The header forms: a plain patch, one whose prefix -p2 strips, a binary block, a deletion whose `---` side
+    // names the file, a quoted header, and a path inside a protected directory.
+    for case in [
+        "git apply guard.patch",
+        "git apply -p2 guard.patch",
+        "git apply binary.patch",
+        "git apply deleted.patch",
+        "git apply quoted.patch",
+        "git apply hooks.patch",
+        "git apply hooksprefix.patch",
+        "git apply gemini.patch",
+        "patch -p1 < guard.patch",
+    ] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case}"
+        );
+    }
+    // `patch` reads the same document through a redirect, and the plain suffix test still lets an ordinary patch
+    // through: -p and the include/exclude filters cannot hide a tail, so they stay allowed.
+    assert_eq!(
+        bash(&format!("cd {here} && git apply src.patch")),
+        None,
+        "a patch that names no protected path is the room's landing verb"
+    );
+}
+
+#[test]
+fn a_destination_flag_is_refused_on_a_writing_form() {
+    let dir = patch_dir(
+        "git-imports-destination",
+        &[
+            ("guard.patch", patch_doc(GUARD_PATH)),
+            ("src.patch", patch_doc("rust/agenthub-runtime/src/lib.rs")),
+        ],
+    );
+    let here = dir.display();
+    // A header naming no protected path still lands in one when the destination is rewritten, so the flags are
+    // refused rather than composed: the workaround is `cd <dir> && patch …`, which the rule already resolves.
+    for case in [
+        "git apply --directory=rust/agenthub-runtime/assets src.patch",
+        "git apply --prefix=hooks/pre/ src.patch",
+        "git apply --unsafe-paths src.patch",
+        "patch -d out -p1 < src.patch",
+    ] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case}"
+        );
+    }
+    // The write-nothing forms are allowed, whatever flags they carry.
+    for case in [
+        "git apply --check guard.patch",
+        "git apply --stat guard.patch",
+        "git apply --check --directory=rust/agenthub-runtime/assets src.patch",
+        "patch --dry-run -p1 < guard.patch",
+    ] {
+        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
+    }
+}
+
+#[test]
+fn a_patch_from_stdin_is_refused() {
+    let dir = patch_dir("git-imports-stdin", &[("guard.patch", patch_doc(GUARD_PATH))]);
+    let here = dir.display();
+    // There is no document to read, so the guard cannot see what it writes: both spellings are refused, and
+    // `git am` with no argument is the same shape.
+    for case in [
+        "cat guard.patch | git apply",
+        "git apply -",
+        "git am",
+        "patch -p1",
+    ] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn git_am_reads_every_message_of_an_mbox() {
+    let dir = patch_dir(
+        "git-imports-mbox",
+        &[(
+            "two.patch",
+            format!(
+                "From 1111111 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] one\n\ndiff --git a/rust/agenthub-runtime/src/lib.rs b/rust/agenthub-runtime/src/lib.rs\n--- a/rust/agenthub-runtime/src/lib.rs\n+++ b/rust/agenthub-runtime/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n-- \n2.39.0\n\nFrom 2222222 Mon Sep 17 00:00:00 2001\nSubject: [PATCH] two\n\ndiff --git a/{GUARD_PATH} b/{GUARD_PATH}\n--- a/{GUARD_PATH}\n+++ b/{GUARD_PATH}\n@@ -1 +1 @@\n-old\n+new\n"
+            ),
+        )],
+    );
+    let here = dir.display();
+    assert_eq!(
+        bash(&format!("cd {here} && git am two.patch")).as_deref(),
+        Some("git-imports-a-tree"),
+        "the second message carries the guard"
+    );
+    // Its own control verbs import nothing.
+    for case in ["git am --continue", "git am --abort", "git am --skip"] {
+        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
+    }
+}
+
+#[test]
+fn checkout_restore_and_stash_are_read_before_they_write() {
+    let repo = stashed("git-imports-stash");
+    let here = repo.display();
+    // The index and a stash entry can hold a modified guard only if a write produced it; a stash the OWNER made is
+    // exactly the case that must be read rather than assumed.
+    for case in [
+        format!("cd {here} && git stash pop stash@{{1}}"),
+        format!("cd {here} && git stash apply stash@{{1}}"),
+    ] {
+        assert_eq!(bash(&case).as_deref(), Some("git-imports-a-tree"), "{case}");
+    }
+    for case in [
+        format!("cd {here} && git stash pop"),
+        "git checkout -- rust/agenthub-runtime/src/lib.rs".to_owned(),
+        "git restore --source=HEAD~1 rust/agenthub-runtime/src/lib.rs".to_owned(),
+    ] {
+        assert_eq!(bash(&case), None, "{case}");
+    }
+    for case in [
+        format!("git checkout -- {}", GUARD_PATH),
+        format!("git restore --source=HEAD~1 {GUARD_PATH}"),
+        format!("git restore {GUARD_PATH}"),
+    ] {
+        assert_eq!(bash(&case).as_deref(), Some("git-imports-a-tree"), "{case}");
+    }
+    // A committed tree is sanctioned content, so the verbs that only import one stay allowed.
+    assert_eq!(bash("git cherry-pick abc1234"), None);
+}
+
+/// The SOURCE of an import, not the verb (revision 6, task 1c06bcd0): a stash entry IS a commit, the owner makes
+/// stashes unguarded, and five verbs import one. The rule resolves each operand against `git reflog refs/stash`, so a
+/// plain commit stays the sanctioned path while an entry that carries the guard is refused whichever verb reaches it.
+#[test]
+fn a_stash_entry_is_read_whatever_verb_imports_it() {
+    let repo = stashed("git-imports-stash-source");
+    let git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} must succeed");
+    };
+    // One branch that differs only outside the protected paths, so the last control below is not vacuous.
+    let base = String::from_utf8(
+        Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    git(&["checkout", "-q", "-b", "side"]);
+    std::fs::write(repo.join("rust/agenthub-runtime/src/lib.rs"), "side\n").unwrap();
+    git(&["add", "--", "rust/agenthub-runtime/src/lib.rs"]);
+    git(&["commit", "-qm", "side"]);
+    git(&["checkout", "-q", &base]);
+    let here = repo.display();
+    // Nine refusals: the stash entry is reached by name in each, and the alias row is one tool call, where the name
+    // does not exist yet at hook time - so it is the statement's own memory of the branch that catches it.
+    for case in [
+        "git stash branch b stash@{1}".to_owned(),
+        "git cherry-pick stash@{1}".to_owned(),
+        "git merge stash@{1}".to_owned(),
+        "git rebase stash@{1}".to_owned(),
+        "git checkout stash@{1}".to_owned(),
+        "git switch stash@{1}".to_owned(),
+        "git switch -c x stash@{1}".to_owned(),
+        "git branch sneaky stash@{1} && git cherry-pick sneaky".to_owned(),
+        format!("git stash push -- {GUARD_PATH}"),
+    ] {
+        assert_eq!(
+            bash(&format!("cd {here} && {case}")).as_deref(),
+            Some("git-imports-a-tree"),
+            "{case}"
+        );
+    }
+    // The path-free push reverts whatever the tree changed to HEAD, so the tree itself is read.
+    std::fs::write(repo.join(GUARD_PATH), "dirty\n").unwrap();
+    assert_eq!(
+        bash(&format!("cd {here} && git stash push -m x")).as_deref(),
+        Some("git-imports-a-tree"),
+        "a path-free stash push over a modified guard"
+    );
+    std::fs::write(repo.join(GUARD_PATH), "base\n").unwrap();
+    // Five controls: a plain commit, a name it creates, a branch that differs only outside the protected paths, and
+    // the two read-only views of the stash.
+    for case in [
+        "git cherry-pick HEAD".to_owned(),
+        "git switch -c y HEAD".to_owned(),
+        "git checkout side".to_owned(),
+        "git stash list".to_owned(),
+        "git stash show -p".to_owned(),
+    ] {
+        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
+    }
+}
+
+#[test]
+fn the_refusals_name_no_deploy_and_no_ownership_claim() {
+    // The needle is spelled in two pieces so the file that forbids the claim is not itself a hit for it: the task's
+    // check is a repository-wide grep, and an assertion quoting the sentence would fail that grep.
+    let forge = concat!("deploys ", "production");
+    let asset = std::fs::read_to_string(guard()).unwrap();
+    assert!(
+        !asset.contains(forge),
+        "the guard's own words must not claim that a push to main ships a deploy (task 59a3f1b1)"
+    );
+    let push = refusal(
+        &fresh_dir("guard-push-wording"),
+        WORKTREES,
+        "run_command",
+        serde_json::json!({ "CommandLine": "git push origin main" }),
+    )
+    .expect("a seat still does not push");
+    assert!(
+        push.contains("only the lead pushes") && !push.contains("deploy"),
+        "the push refusal names who may push and no deploy model: {push}"
+    );
+    let docker = refusal(
+        &fresh_dir("guard-docker-wording"),
+        WORKTREES,
+        "run_command",
+        serde_json::json!({ "CommandLine": "docker ps" }),
+    )
+    .expect("a seat still does not run docker");
+    assert!(
+        !docker.contains("deploy"),
+        "the docker refusal asserts no deploy model: {docker}"
+    );
+}
