@@ -454,10 +454,15 @@ fn agy_guard_entry() -> serde_json::Value {
 /// The settings file a claude seat is launched with (`--settings`); the runner adds the flag when it is there.
 pub(crate) const CLAUDE_SETTINGS_FILE: &str = "settings.json";
 
-/// The settings a claude seat's own file carries: the seat guard on both phases, the phase as its argument. agy
-/// is told the same thing in one global file (`agy_guard_entry`); claude has no global hook file a per-seat entry
-/// could live in, so the file is the seat's own and the command resolves the seat's guard from the agent dir the
-/// supervisor exports for every seat (`PI_CODING_AGENT_DIR`), the same path agy's entry names.
+/// The settings a claude seat's own file carries: the seat guard on every event that carries a decision or an
+/// outcome, the phase as its argument. agy is told the same thing in one global file (`agy_guard_entry`); claude has
+/// no global hook file a per-seat entry could live in, so the file is the seat's own and the command resolves the
+/// seat's guard from the agent dir the supervisor exports for every seat (`PI_CODING_AGENT_DIR`), the same path
+/// agy's entry names.
+///
+/// `PostToolUseFailure` is its own event and its own entry: `PostToolUse` carries `tool_response` and no error, so a
+/// guard registered only there logs `ok` for a call that failed. The three entries share one command because the
+/// guard reads `hook_event_name` from the payload.
 fn claude_guard_settings() -> String {
     let command = |phase: &str| {
         format!("node \"$PI_CODING_AGENT_DIR/hooks/pre/seat-guard.ts\" --claude-hook {phase}")
@@ -467,6 +472,8 @@ fn claude_guard_settings() -> String {
             "PreToolUse": [{"matcher": "*",
                 "hooks": [{"type": "command", "timeout": 10, "command": command("pre")}]}],
             "PostToolUse": [{"matcher": "*",
+                "hooks": [{"type": "command", "timeout": 10, "command": command("post")}]}],
+            "PostToolUseFailure": [{"matcher": "*",
                 "hooks": [{"type": "command", "timeout": 10, "command": command("post")}]}],
         }
     })
@@ -4932,7 +4939,11 @@ mod tests {
                 .unwrap_or_default()
                 .to_string()
         };
-        for (phase, word) in [("PreToolUse", "pre"), ("PostToolUse", "post")] {
+        for (phase, word) in [
+            ("PreToolUse", "pre"),
+            ("PostToolUse", "post"),
+            ("PostToolUseFailure", "post"),
+        ] {
             assert_eq!(
                 command(phase),
                 format!(

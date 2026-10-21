@@ -274,3 +274,13 @@ absolutely, `TestARuntimeInNoConfigAndOnNoPathIsNotARow`, `TestARuntimeFoundOnly
 `TestARuntimeWithNoHookSurfaceSaysSoAndIsNotARefusal`, `TestAConfigThatCannotBeReadIsALineAndNotAFailure`,
 `TestTheRowForAHomeThatCannotBeResolvedPrintsItsReason` and `TestTheDoctorReportCarriesTheRuntimeRows` pin the
 rows, their lines, the reason on both surfaces, and that no case refuses `doctor`.
+
+## 2026-10-21 - the claude settings file names three events, not two
+
+`supervisor::tests::the_claude_settings_run_the_seat_guard_on_both_phases` (rust, `agenthub_runtime`) now reads
+three entries out of the file the writer produced - `PreToolUse` (pre), `PostToolUse` (post) and
+`PostToolUseFailure` (post) - instead of two. The third is the point: `PostToolUse` carries `tool_response` and no
+error, so a guard registered only there logs `ok` for a call that failed, and claude fires the failure as its own
+event (`seats/architect/RULING-2026-10-21-claude-hook-mode.md` §1, correction 2). The test keeps every other
+assertion it had (foreign file untouched, own file rewritten then cleared, the const as the gate, the one-way check
+that a true flag needs an asset carrying the dispatch).
