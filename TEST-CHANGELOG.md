@@ -199,14 +199,15 @@ zero occurrences, and zero from an unopened file is not evidence).
 ## 2026-10-21 - `skills propose`: the write path and its refusals
 
 `internal/clientskills/propose_test.go` (new). `TestProposeWritesAnUncommittedRecordAndDraft` reads the
-proposal back through `ReadRecord`: `provisional`/`fix`, `since` = the fixture tree's `HEAD`, the cited row
-as evidence, and the draft's bytes as `SKILL.md`; then it asserts the repository state a gate reviews - the
-two paths in `git status --porcelain`, nothing in `git diff --cached`, one commit in `git log`. Each refusal
-has its own case and asserts that nothing was written: `TestProposeRefusesAnUnresolvedEvidenceID` (the id is
-in the message), `TestProposeRefusesASkillThatDeclaresNoSignalTheRowsCarry` (a `guard:` skill, and the
-message names `row-tag`), `TestProposeRefusesAProposalThatChangesNoLine` (the same proposal twice, the record
-byte-identical afterwards), `TestProposeRefusesAnotherSeatsWorktree` (both paths in the message) and
+proposal back through `ReadRecord`: `provisional`/`fix`, `since` = the fixture tree's `HEAD`, the cited row as
+evidence, the `--risk` line it was given, and the draft's bytes as `SKILL.md`; then it asserts the repository
+state a gate reviews - the two paths in `git status --porcelain`, nothing in `git diff --cached`, one commit
+in `git log`. Each refusal has its own case and asserts that nothing was written:
+`TestProposeRefusesAnUnresolvedEvidenceID` (the id is in the message),
+`TestProposeRefusesASkillThatDeclaresNoSignalTheRowsCarry` (a `guard:` skill, and the message names `row-tag`), `TestProposeRefusesAProposalThatChangesNoLine` (the same proposal twice, the record byte-identical
+afterwards), `TestProposeRefusesAnotherSeatsWorktree` (both paths in the message) and
 `TestProposeRefusesAnIDThatIsNotAQueueRow`. `TestProposeNamesTheLevelWhenTwoLevelsDeliverTheName` pins the
-ambiguity rule and that `room/tool` lands in the room-level copy. `TestSeatFromSessionMatchesOnlyThisRoomsSeat`
-pins that the room inside a session name is the guard. The verb reads the rail and the worktree through two
-package-level seams (`queueRow`, `callerWorktree`), so no test reaches a daemon or a real worktree.
+ambiguity rule and that `room/tool` lands in the room-level copy.
+`TestSeatFromSessionMatchesOnlyThisRoomsSeat` pins that the room inside a session name is the guard. The verb
+reads the rail and the worktree through two package-level seams (`queueRow`, `callerWorktree`), so no test
+reaches a daemon or a real worktree.

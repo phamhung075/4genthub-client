@@ -22,11 +22,11 @@ import (
 )
 
 const proposeUsage = `usage: 4genteam skills propose [ROOM] --skill NAME --change fix|derived|captured
-                              --from QITEM[,QITEM] [--draft FILE] [--skills-root DIR]
+                              --from QITEM[,QITEM] [--draft FILE] [--risk TEXT] [--skills-root DIR]
 
-Write a PROPOSAL for one skill, into the caller's own worktree and nowhere else: the skill's
-` + RecordFile + ` naming the change and the cited evidence, and - when --draft is given - that file's
-bytes as the new ` + SkillFile + `, verbatim. Nothing is committed: the change is left uncommitted for a
+Write a PROPOSAL for one skill, into the caller's own worktree and nowhere else: a provisional record.json
+naming the change, the cited evidence and the risk --risk states, and - when --draft is given - that
+file's bytes as the new SKILL.md, verbatim. Nothing is committed: the change is left uncommitted for a
 gate to review.
 
 It refuses, each by name: an evidence id that does not resolve, a skill that declares no signal the
@@ -236,6 +236,7 @@ func runSkillsPropose(args []string, stdout, stderr io.Writer) int {
 		{Name: "change", Value: true},
 		{Name: "from", Value: true},
 		{Name: "draft", Value: true},
+		{Name: "risk", Value: true},
 		{Name: "skills-root", Value: true},
 	})
 	if err != nil {
@@ -318,20 +319,19 @@ func runSkillsPropose(args []string, stdout, stderr io.Writer) int {
 		return clientcmd.ExitUsage
 	}
 
-	// The record a proposal writes carries the STATE it already had: a proposal says what changed and what
-	// cites it, and resetting a trusted skill to provisional is a decision for the gate that lands it.
-	record, _, err := ReadRecord(skill.Dir)
-	if err != nil {
-		fmt.Fprintf(stderr, "4genteam skills propose: %v\n", err)
-		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
-	}
+	// The record a proposal writes is a STUB for a change under review: provisional, whatever the skill
+	// claimed before, because the proposal restarts the window at HEAD (below) and the gate that lands it
+	// states the trust it earned. The risk line is the one the caller names; with none, it stays empty -
+	// inventing a risk would be writing a decision nobody took.
+	record := DefaultRecord()
 	record.Change = change
 	record.Evidence = cites
+	record.Risk = strings.TrimSpace(opts["risk"])
 	var notes []string
 	if head := headCommit(root); head != "" {
 		record.Since = head
 	} else {
-		notes = append(notes, root+" is not inside a git worktree, so the record keeps the since it had")
+		notes = append(notes, root+" is not inside a git worktree, so the record has no since")
 	}
 	rendered, err := RenderRecord(record)
 	if err != nil {

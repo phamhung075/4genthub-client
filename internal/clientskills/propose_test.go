@@ -103,7 +103,7 @@ func TestProposeWritesAnUncommittedRecordAndDraft(t *testing.T) {
 	}
 
 	code, stdout, stderr := fixture.propose(t, "--skill", "tool", "--change", "fix",
-		"--from", "qitem-1", "--draft", draft)
+		"--from", "qitem-1", "--draft", draft, "--risk", "the cited refusal was a race, not a rule")
 	if code != 0 {
 		t.Fatalf("propose: exit %d, stderr %q", code, stderr)
 	}
@@ -122,6 +122,9 @@ func TestProposeWritesAnUncommittedRecordAndDraft(t *testing.T) {
 	}
 	if len(record.Evidence) != 1 || record.Evidence[0] != "qitem-1" {
 		t.Fatalf("record evidence = %v, want the cited row", record.Evidence)
+	}
+	if record.Risk != "the cited refusal was a race, not a rule" {
+		t.Fatalf("record risk = %q, want the one --risk named", record.Risk)
 	}
 	if got := readText(t, filepath.Join(fixture.skillDir(t), SkillFile)); got != revision {
 		t.Fatalf("SKILL.md is not the draft verbatim:\n%s", got)

@@ -2,7 +2,7 @@
 
 `4genteam skills evidence` says what a skill's record claims and whether it survived. This is the other
 half of the loop: `4genteam skills propose ROOM --skill S --change fix|derived|captured --from
-QITEM[,QITEM] [--draft FILE]` turns cited evidence into a change a gate can read - the skill's
+QITEM[,QITEM] [--draft FILE] [--risk TEXT]` turns cited evidence into a change a gate can read - the skill's
 `record.json` naming the change and its evidence, and `--draft`'s bytes as the new `SKILL.md`, verbatim.
 
 **It never commits, and it never writes outside the caller's own worktree.** The caller is
@@ -25,17 +25,17 @@ Three refusals, each naming what it refused:
   what is on disk, so running the same proposal twice refuses instead of rewriting a file with its own
   bytes.
 
-Two smaller decisions. The record a proposal writes **carries the state it already had** (absent means
-provisional): a proposal says what changed and what cites it, while resetting a trusted skill is a decision
-for the gate that lands it. And `since` becomes the tree's `HEAD`, because a proposal windows from where it
-starts; a tree outside git keeps the `since` it had and the report says so.
+The record it writes is a **stub**: `provisional` whatever the skill claimed before, the change, the cited
+evidence, the risk `--risk` states (empty when none is named - inventing one would be a decision nobody
+took), and `since` = the tree's `HEAD`, because a proposal windows from where it starts and the gate that
+lands it states the trust the change earned. A tree outside git leaves `since` empty and the report says so.
 
 A name the tree delivers at two levels is refused with both candidates listed, unless `--skill` carries the
 level as `LEVEL/NAME` - two levels are two files, and a proposal must say which one it edits.
 
 Verification: `go test ./...` in `agenthub_client` - every package ok. Live, in this seat's worktree over a
 throwaway tree (since no skill carries a `signals:` block yet): the happy path wrote `record.json` (`fix`,
-`since` = HEAD, the cited row) and the draft into `SKILL.md`, `git log` unchanged, nothing staged; the same
+`since` = HEAD, the cited row, the named risk) and the draft into `SKILL.md`, `git log` unchanged, nothing staged; the same
 proposal again refused `changes no line`; an unknown `qitem-…` refused naming the daemon's answer; a
 `--skills-root` in the shared checkout refused `outside your own worktree`; no seat named refused. The
 throwaway tree was moved out and the worktree is clean.
