@@ -1,3 +1,24 @@
+## 2026-10-21 - main's rev-9 asset flips the claude gate, and the two cases that called claude unguarded move
+
+Merging client main `185cb47e` brings `rust/agenthub-runtime/assets/seat-guard.ts` at 1267 lines (sha256
+`7e122de891f3`), which dispatches `--claude-hook` (the branch's 928-line asset had no claude code at all), so
+`internal/clientguard`'s `guardCarriesClaudeHook` flips to true to match rust's `GUARD_HAS_CLAUDE_HOOK`.
+`TestTheClaudeGateMatchesTheRuntimesFlag` failed on the merge with exactly that disagreement - "guardCarriesClaudeHook
+is false and rust's GUARD_HAS_CLAUDE_HOOK is true" - and that test is why the flip and the merge came together.
+Two cases had been using claude as the runtime the guard cannot guard, which is no longer a state of the table:
+`TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone` names a mode the guard does not answer (`--no-such-hook`)
+for the unguarded line, and `TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays` asserts that claude's
+row now reads as an unguarded FILE (`no seat-guard entry in /home/reader/.claude/settings.json`, with the install
+verb), while a synthetic row keeps `no entry is placed - the guard this client ships has no <mode> mode` covered.
+
+Measured (2026-10-21, merge `c16eb16f` plus this change): `go test -count=1 ./...` 35 packages ok, 0 fail;
+`go vet ./...` rc 0; `gofmt -l internal/ cmd/` clean; `cargo test --offline` 194 + 1 + 41 (`seat_guard`: 34 passed,
+7 failed) + 1 (`umask_at_the_entry`). The 7 are main's own set, measured identically on `185cb47e` alone - the
+quoted-cd, quoted-target, pathspec, pid-mark, unresolvable-word and the two ordinary-write rows the owner's asset
+fix turns green. One measurement note worth keeping: the `seat_guard` harness runs `node` with the crate directory
+as its cwd, so a run inside a MID-MERGE worktree answers 11 failures (the guard reads the real repo's index, where
+`MERGE_HEAD` and unmerged entries sit); the same tree after the merge commit answers the 7.
+
 ## 2026-10-21 - the gate's first review of the skill signals: scope, spelling and one spool read (go, branch 4genthub-min/runtime-hooks)
 
 `internal/clientskills` gains the tests the review found missing, one per finding.

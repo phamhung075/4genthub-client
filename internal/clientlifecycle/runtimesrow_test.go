@@ -57,13 +57,29 @@ func TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays(t *testing.T)
 		t.Errorf("the line names the file absolutely, the path install writes: %s", placed)
 	}
 
-	// claude has no mode in the guard this client ships: the row says so and does not claim an entry.
-	gated := strings.Join(runtimeLines(rows[1]), "\n")
-	if !strings.Contains(gated, "no entry is placed") || !strings.Contains(gated, "--claude-hook") {
+	// claude's mode is in the guard this client ships, so its row reads as an unguarded FILE: the path the entry
+	// would be in, and the verb that writes it.
+	unplaced := strings.Join(runtimeLines(rows[1]), "\n")
+	if !strings.Contains(unplaced, "no seat-guard entry in /home/reader/.claude/settings.json") {
+		t.Errorf("the line names the file install writes: %s", unplaced)
+	}
+	if !strings.Contains(unplaced, "`4genteam guard install` writes it") {
+		t.Errorf("the line names the verb that writes the entry: %s", unplaced)
+	}
+	if strings.Contains(unplaced, "the guard's entry is in") {
+		t.Errorf("a row with no entry must not read as guarded: %s", unplaced)
+	}
+	// A row whose mode the guard does not answer is the other shape, and it must not read as an installable entry.
+	gated := strings.Join(runtimeLines(runtimeRow{
+		Row:  clientservices.Health{Safeguard: "guard_example"},
+		Hook: clientguard.RuntimeHook{Runtime: "example", Dir: "/opt/example", Config: ".example/hooks.json", Mode: "--no-such-hook"},
+		Home: "/home/reader",
+	}), "\n")
+	if !strings.Contains(gated, "no entry is placed") || !strings.Contains(gated, "--no-such-hook mode") {
 		t.Errorf("the line names the missing mode: %s", gated)
 	}
-	if strings.Contains(gated, "the guard's entry is in") {
-		t.Errorf("a row whose mode the guard lacks must not read as guarded: %s", gated)
+	if strings.Contains(gated, "the guard's entry is in") || strings.Contains(gated, "guard install") {
+		t.Errorf("a row whose mode the guard lacks must not read as guarded or installable: %s", gated)
 	}
 }
 
