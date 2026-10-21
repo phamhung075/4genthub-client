@@ -248,8 +248,11 @@ func TestTheToolStreamIsCountsOnly(t *testing.T) {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
 	row := rows[0]
-	if row.Verdict != VerdictHold {
-		t.Errorf("verdict = %q, want hold: an errored TOOL target never demotes", row.Verdict)
+	// R2 of the signal ruling: a declaration made only of `command:` facts has no failure stream at all, so the
+	// verdict is `no-signal` - the one that already means "nobody can hold it to account" - and not `hold`. The
+	// errored call is still counted and still never demotes: TOOL is use, never outcome.
+	if row.Verdict != VerdictNoSignal {
+		t.Errorf("verdict = %q, want no-signal: a command counts use, and a failed use demotes nobody", row.Verdict)
 	}
 	if row.Occurrences != 0 {
 		t.Errorf("occurrences = %d, want 0: a tool line is not an attributed occurrence", row.Occurrences)
@@ -349,5 +352,296 @@ func TestASkippedStreamIsReportedAndNotJudged(t *testing.T) {
 	}
 	if len(rows[0].Unread) != 1 || rows[0].Unread[0] != StreamSend {
 		t.Errorf("unread = %v, want [send]", rows[0].Unread)
+	}
+}
+
+// TestASeatSkillIsJudgedOnItsOwnSeat is R1 of the signal ruling: the same rule refused by two seats is one
+// occurrence for the seat that states the rule and two for a skill the room owns. Without the scope a seat skill
+// demotes on its neighbours' refusals - measured on 2026-10-21 as go-dev-role 152 facts of which 44 were its own.
+func TestASeatSkillIsJudgedOnItsOwnSeat(t *testing.T) {
+	tree, sha := gitTree(t, map[string]string{
+		"rooms/room/go-dev/role/SKILL.md": skillHeader("role", "guard: env-secret"),
+		"share/roomskill/SKILL.md":        skillHeader("roomskill", "guard: env-secret"),
+	})
+	writeRecordFile(t, tree.Root, "rooms/room/go-dev/role", `{"state":"trusted","since":"`+sha+`"}`)
+	writeRecordFile(t, tree.Root, "share/roomskill", `{"state":"trusted","since":"`+sha+`"}`)
+
+	stateRoot := fixtureStateRoot(t)
+	repo := fixtureRefusalSpool(t)
+	evidence := LoadEvidence(stateRoot, "room", repo)
+	at := time.Date(2026, 10, 21, 10, 30, 0, 0, time.UTC)
+	evidence.Facts = append(evidence.Facts,
+		Fact{Stream: StreamGuard, Value: "env-secret", At: at, Ref: "own", Seat: "go-dev"},
+		Fact{Stream: StreamGuard, Value: "env-secret", At: at, Ref: "neighbour", Seat: "reviewer"})
+
+	rows, _, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	got := map[string]Row{}
+	for _, row := range rows {
+		got[row.Level+"/"+row.Name] = row
+	}
+	seatRow, ok := got["seat:go-dev/role"]
+	if !ok {
+		t.Fatalf("no seat row: %v", got)
+	}
+	// Its own fact only: the reviewer's refusals of the same rule are not failures of this seat's rule, and the
+	// fixture's spool line carries another rule.
+	if seatRow.Occurrences != 1 || len(seatRow.Refs) != 1 || seatRow.Refs[0] != "guard:own" {
+		t.Errorf("seat skill = %d occurrences %v, want 1 [guard:own]", seatRow.Occurrences, seatRow.Refs)
+	}
+	roomRow, ok := got["share/roomskill"]
+	if !ok {
+		t.Fatalf("no room row: %v", got)
+	}
+	if roomRow.Occurrences != 2 {
+		t.Errorf("room skill occurrences = %d, want 2: the room owns every seat's facts", roomRow.Occurrences)
+	}
+}
+
+// TestRefusalSpoolsOfTheRoomsWorktreesAreAllRead is R3: a refused commit lands in the git dir of the worktree it
+// was attempted in, so a census that read only the caller's checkout saw one seat's refusals out of six.
+func TestRefusalSpoolsOfTheRoomsWorktreesAreAllRead(t *testing.T) {
+	stateRoot := fixtureStateRoot(t)
+	caller := fixtureRefusalSpool(t)
+
+	// One seat's worktree under the room, with its own spool and its own rule.
+	wt := filepath.Join(stateRoot, "rooms", "room", "wt", "go-dev")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, wt, "init", "-q")
+	gitDir := git(t, wt, "rev-parse", "--absolute-git-dir")
+	writeFile(t, filepath.Join(gitDir, "parked-diffs", "refusals.jsonl"),
+		`{"id":"rf-wt","ts":"2026-10-21T10:06:00Z","seat":"go-dev","rule":"worktree_scope"}`+"\n")
+
+	evidence := LoadEvidence(stateRoot, "room", caller)
+	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	found := evidence.Occurrences(Signal{Kind: SignalGuard, Value: "worktree-scope"}, since, "go-dev")
+	if len(found) != 1 || found[0].Ref != "rf-wt" {
+		t.Fatalf("the worktree spool was not read: %+v", found)
+	}
+	if found[0].Seat != "go-dev" {
+		t.Fatalf("the spool line's own seat was not kept: %q", found[0].Seat)
+	}
+	// And the caller's own spool is still read: the union adds, it does not replace.
+	if got := evidence.Occurrences(Signal{Kind: SignalGuard, Value: "docs-only"}, since, ""); len(got) != 1 {
+		t.Fatalf("the caller's spool was lost: %+v", got)
+	}
+}
+
+// TestAHoldRowCitesItsOccurrences: a row that holds on real refusals names them. Before this, only `demote`
+// filled Refs, so a skill holding on 152 occurrences showed a number with no id to follow.
+func TestAHoldRowCitesItsOccurrences(t *testing.T) {
+	tree, sha := gitTree(t, map[string]string{
+		"share/holder/SKILL.md": skillHeader("holder", "guard: env-secret"),
+	})
+	// Provisional: it cannot promote (no landings) and cannot demote (not trusted), so it holds - with refusals.
+	writeRecordFile(t, tree.Root, "share/holder", `{"state":"provisional","since":"`+sha+`"}`)
+
+	evidence := LoadEvidence(fixtureStateRoot(t), "room", fixtureRefusalSpool(t))
+	at := time.Date(2026, 10, 21, 10, 30, 0, 0, time.UTC)
+	evidence.Facts = append(evidence.Facts, Fact{Stream: StreamGuard, Value: "env-secret", At: at, Ref: "rf-hold"})
+
+	rows, _, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Verdict != VerdictHold {
+		t.Fatalf("verdict = %q, want hold", row.Verdict)
+	}
+	if row.Occurrences != 1 || len(row.Refs) != 1 || row.Refs[0] != "guard:rf-hold" {
+		t.Errorf("hold = %d occurrences %v, want 1 citing guard:rf-hold", row.Occurrences, row.Refs)
+	}
+}
+
+// TestASeatSkillsLandingIsItsOwnSeat is the gate's B1: the per-seat scope reached occurrences, stream size and
+// command counts but NOT landings, so every seat-tier skill printed the room's `landed` - this room's five seat
+// workflows each reported 44, the same 44 closed guide rows - and a provisional seat skill was promoted on other
+// seats' rows. A landing now counts only for a row handed to the skill's own seat; a `share` skill, which is
+// judged on the room, still counts every seat's row.
+func TestASeatSkillsLandingIsItsOwnSeat(t *testing.T) {
+	tree, sha := gitTree(t, map[string]string{
+		"rooms/room/go-dev/role/SKILL.md": skillHeader("role", "row-tag: guide"),
+		"share/allseats/SKILL.md":         skillHeader("allseats", "row-tag: guide"),
+	})
+	writeRecordFile(t, tree.Root, "rooms/room/go-dev/role", `{"state":"provisional","since":"`+sha+`"}`)
+	writeRecordFile(t, tree.Root, "share/allseats", `{"state":"provisional","since":"`+sha+`"}`)
+
+	recent := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	evidence := Evidence{
+		Room: "room",
+		Rows: []RailRow{
+			{ID: "qitem-own", State: "done", Tags: []string{"guide"}, Created: recent, Updated: recent,
+				Destination: "agenthub--room--go-dev"},
+			{ID: "qitem-other", State: "done", Tags: []string{"guide"}, Created: recent, Updated: recent,
+				Destination: "agenthub--room--reviewer"},
+		},
+	}
+	rows, _, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	got := map[string]Row{}
+	for _, row := range rows {
+		got[row.Level+"/"+row.Name] = row
+	}
+	if seatRow := got["seat:go-dev/role"]; seatRow.Landed != 1 {
+		t.Errorf("seat skill landed = %d, want 1: the reviewer's closed row is not this seat's landing",
+			seatRow.Landed)
+	}
+	if shareRow := got["share/allseats"]; shareRow.Landed != 2 {
+		t.Errorf("share skill landed = %d, want 2: the room owns every seat's landing", shareRow.Landed)
+	}
+}
+
+// TestARowNamingItsSeatBareIsThatSeatsRow is the gate's B2: the store holds a third spelling - the bare seat
+// name (`reviewer`, 34 rows in this room; `lead` 16) - and the row reader answered "" for it, which `inScope`
+// counts as EVERY scope. One reviewer row then demoted all five seat skills. The room's own seat keys are the
+// authority for that spelling; a destination naming no seat of the room still answers "" and, by `inScope`'s
+// rule, counts for every scope - unknown attribution is nobody's, not another seat's.
+func TestARowNamingItsSeatBareIsThatSeatsRow(t *testing.T) {
+	tree, sha := gitTree(t, map[string]string{
+		"rooms/room/go-dev/role/SKILL.md": skillHeader("role", "row-tag: guide"),
+		"share/everyrow/SKILL.md":         skillHeader("everyrow", "row-tag: guide"),
+	})
+	writeRecordFile(t, tree.Root, "rooms/room/go-dev/role", `{"state":"provisional","since":"`+sha+`"}`)
+	writeRecordFile(t, tree.Root, "share/everyrow", `{"state":"provisional","since":"`+sha+`"}`)
+
+	recent := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	evidence := Evidence{
+		Room:  "room",
+		Seats: map[string]bool{"go-dev": true, "lead": true, "reviewer": true},
+		Rows: []RailRow{
+			{ID: "qitem-own", State: "done", Tags: []string{"guide"}, Created: recent, Updated: recent,
+				Destination: "go-dev"},
+			{ID: "qitem-reviewer", State: "done", Tags: []string{"guide"}, Created: recent, Updated: recent,
+				Destination: "reviewer"},
+		},
+	}
+	for destination, want := range map[string]string{
+		"go-dev": "go-dev", "reviewer": "reviewer", "owner-session": "", "": "",
+	} {
+		if got := evidence.seatOf(destination); got != want {
+			t.Errorf("seatOf(%q) = %q, want %q", destination, got, want)
+		}
+	}
+
+	rows, _, err := tree.CensusWithEvidence("room", nil, evidence, tree.Root)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	got := map[string]Row{}
+	for _, row := range rows {
+		got[row.Level+"/"+row.Name] = row
+	}
+	if seatRow := got["seat:go-dev/role"]; seatRow.Occurrences != 1 {
+		t.Errorf("seat skill occurrences = %d, want 1: the bare `reviewer` row is the reviewer's, not every seat's",
+			seatRow.Occurrences)
+	}
+	if shareRow := got["share/everyrow"]; shareRow.Occurrences != 2 {
+		t.Errorf("share skill occurrences = %d, want 2", shareRow.Occurrences)
+	}
+	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	if size := evidence.StreamSize(Signal{Kind: SignalRowTag, Value: "guide"}, since, "go-dev"); size != 1 {
+		t.Errorf("go-dev stream size = %d, want 1: a bare destination is a seat, so the row is not this scope's",
+			size)
+	}
+
+	// A destination the room does not spell as a seat (`owner-session`, 16 rows here) stays unattributed, and an
+	// unattributed row counts for every scope.
+	evidence.Rows = append(evidence.Rows, RailRow{ID: "qitem-owner", State: "done", Tags: []string{"guide"},
+		Created: recent, Updated: recent, Destination: "owner-session"})
+	if found := evidence.rowOccurrences("guide", since, "go-dev"); len(found) != 2 {
+		t.Errorf("go-dev occurrences with an unattributed row = %d, want 2: unknown attribution is nobody's",
+			len(found))
+	}
+}
+
+// TestEachWorktreeSpoolIsReadOnceWhateverItsChildren is the gate's M1: `roomWorktreeDirs` hands every child of a
+// seat worktree to git, and git's discovery walks UP, so one worktree's `refusals.jsonl` was appended once per
+// child (measured 9-12 times per worktree). Occurrences survived on its dedupe; StreamSize did not, so the
+// `tooBroad` denominator was multiplied by the child count and a signal that fires on its whole stream never read
+// broad. A worktree with two ordinary child directories and a plain file must yield its distinct line ONCE.
+func TestEachWorktreeSpoolIsReadOnceWhateverItsChildren(t *testing.T) {
+	stateRoot := t.TempDir()
+	wt := filepath.Join(stateRoot, "rooms", "room", "wt", "go-dev")
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, wt, "init", "-q")
+	gitDir := git(t, wt, "rev-parse", "--absolute-git-dir")
+	writeFile(t, filepath.Join(gitDir, "parked-diffs", "refusals.jsonl"),
+		`{"id":"rf-once","ts":"2026-10-21T10:06:00Z","seat":"go-dev","rule":"worktree_scope"}`+"\n")
+	for _, child := range []string{"notes", "docs"} {
+		if err := os.MkdirAll(filepath.Join(wt, child), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A plain file is not a worktree, and git cannot be asked about it: neither may contribute a read.
+	writeFile(t, filepath.Join(wt, "README.txt"), "not a repository\n")
+
+	evidence := LoadEvidence(stateRoot, "room", "")
+	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	signal := Signal{Kind: SignalGuard, Value: "worktree-scope"}
+	if size := evidence.StreamSize(signal, since, ""); size != 1 {
+		t.Fatalf("guard stream size = %d, want 1: the spool was read once per child of %s", size, wt)
+	}
+	found := evidence.Occurrences(signal, since, "")
+	if len(found) != 1 || found[0].Ref != "rf-once" {
+		t.Fatalf("occurrences = %+v, want the one spool line rf-once", found)
+	}
+}
+
+// TestTwoRefusalsBetweenOnePairAreTwoOccurrences is the gate's m1: a send fact's ref was `From->To` alone, so two
+// refusals between one pair with the same Reason collapsed through Occurrences' dedupe while both counted in
+// StreamSize - the count and the citations disagreed. The ref carries the decision's time now.
+func TestTwoRefusalsBetweenOnePairAreTwoOccurrences(t *testing.T) {
+	stateRoot := t.TempDir()
+	writeFile(t, filepath.Join(stateRoot, "seats", "room", "a", "audit.jsonl"),
+		auditLine("2026-10-21T10:00:00Z", false, "no link")+"\n"+
+			auditLine("2026-10-21T10:01:00Z", false, "no link")+"\n")
+
+	evidence := LoadEvidence(stateRoot, "room", "")
+	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	signal := Signal{Kind: SignalSend, Value: "no link"}
+	found := evidence.Occurrences(signal, since, "")
+	if len(found) != 2 {
+		t.Fatalf("occurrences = %d, want 2: two refused sends are two decisions: %+v", len(found), found)
+	}
+	if found[0].Ref == found[1].Ref {
+		t.Fatalf("both refusals cite %q: the ref has to tell them apart", found[0].Ref)
+	}
+	if size := evidence.StreamSize(signal, since, ""); size != 2 {
+		t.Fatalf("send stream size = %d, want 2: the citation count and the denominator must agree", size)
+	}
+}
+
+// TestTheToolStreamCountsBothMcpSpellings is the gate's m2: `command: mcp:manage_task` is a substring of
+// `mcp:manage_task.list` but not of `xd://mcp__agenthub_http_manage_task` (343 of those calls in this room), so
+// command counts understated. One normalisation - the text after the declaration's last `:` is the tool's own
+// name - counts both; a declaration with no `:` is still matched by its own text alone, and nothing globs.
+func TestTheToolStreamCountsBothMcpSpellings(t *testing.T) {
+	stateRoot := t.TempDir()
+	writeFile(t, filepath.Join(stateRoot, "rooms", "room", "seats", "a", "tool-calls.jsonl"),
+		toolLine("2026-10-21T10:00:00Z", "mcp", "mcp:manage_task.list", "ok")+"\n"+
+			toolLine("2026-10-21T10:01:00Z", "mcp", "xd://mcp__agenthub_http_manage_task", "ok")+"\n"+
+			toolLine("2026-10-21T10:02:00Z", "bash", "go test ./...", "ok")+"\n")
+
+	evidence := LoadEvidence(stateRoot, "room", "")
+	since := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	if got := evidence.Commands(Signal{Kind: SignalCommand, Value: "mcp:manage_task"}, since, ""); got != 2 {
+		t.Errorf("mcp:manage_task commands = %d, want 2: both spellings of the one tool", got)
+	}
+	if got := evidence.Commands(Signal{Kind: SignalCommand, Value: "go test"}, since, ""); got != 1 {
+		t.Errorf("go test commands = %d, want 1: a declaration with no `:` is matched by its own text", got)
+	}
+	if got := evidence.Commands(Signal{Kind: SignalCommand, Value: "mcp:manage_context"}, since, ""); got != 0 {
+		t.Errorf("mcp:manage_context commands = %d, want 0: a name the log does not carry counts nothing", got)
 	}
 }

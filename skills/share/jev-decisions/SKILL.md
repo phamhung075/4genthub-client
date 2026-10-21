@@ -8,6 +8,9 @@ metadata:
     sibling_skills:
       - room-decision-request
       - verification-before-completion
+signals:
+  - command: 4genteam decide
+  - command: 4genteam complete
 ---
 
 # Jev decisions

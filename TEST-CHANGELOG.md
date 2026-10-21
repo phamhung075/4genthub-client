@@ -24,6 +24,85 @@ Measured 2026-10-21 at `3e009d79` plus this diff against the rev-9 asset: `cargo
 design (the asset refuses what the ruling allows), the ancestry case green, and the six quoting reds main already
 carries. On the un-split test the same measurement left a `sleep 60` running after the binary exited.
 
+## 2026-10-21 - the claude entry is never written, and a stale one is still removed
+
+`internal/clientguard/runtimes_test.go`: `TestTheClaudeEntryIsNeverWrittenAndTheAgyOneIs` replaces the deleted skip
+case - with claude and agy on PATH it runs the install over a home that has an owner's `.claude/settings.json` and
+one that has none (two runs), asserts the claude row reports no entry, that its note names `<seat dir>/settings.json`
+and why an owner-wide entry is refused (duplicate or dead), that the file is byte-identical where it exists and is
+not created where it does not, and that agy's entry lands in the same run.
+`TestAStaleClaudeEntryIsReportedAndRemoved` writes an older build's entry by hand and asserts the report calls it
+stale and names the uninstall verb, that `UninstallRuntimeHooks` removes exactly the guard definitions, and that the
+owner's `env` key, their hook and their `PreToolUse` array survive. `TestTheClaudeWriteAndRemoveHalf` and
+`TestTheClaudeGateMatchesTheRuntimesFlag` are deleted: the writer they exercised and the two-language constant they
+pinned no longer exist. `TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone` loses its "a mode the guard lacks"
+row; `internal/clientlifecycle/runtimesrow_test.go` carries `SeatFile` on claude's fixture and expects the seat-file
+line instead of the install verb.
+
+## 2026-10-21 - the claude entry's unconditional skip is deleted
+
+`internal/clientguard/runtimes_test.go`: `TestTheClaudeEntryIsNotWrittenWhileTheAssetHasNoMode` returned
+`t.Skip` whenever `guardCarriesClaudeHook` was true, and the constant is true on this branch because the shipped
+asset answers `--claude-hook`, so the case asserted nothing on any run. Deleted rather than re-pinned; the
+replacement is the ruling's one test (`RULING-2026-10-21-claude-guard-writer` §5), which arrives with the change
+that removes the claude writer. `go test ./internal/clientguard/` green after the deletion.
+
+## 2026-10-21 - main's rev-9 asset flips the claude gate, and the two cases that called claude unguarded move
+
+Merging client main `185cb47e` brings `rust/agenthub-runtime/assets/seat-guard.ts` at 1267 lines (sha256
+`7e122de891f3`), which dispatches `--claude-hook` (the branch's 928-line asset had no claude code at all), so
+`internal/clientguard`'s `guardCarriesClaudeHook` flips to true to match rust's `GUARD_HAS_CLAUDE_HOOK`.
+`TestTheClaudeGateMatchesTheRuntimesFlag` failed on the merge with exactly that disagreement - "guardCarriesClaudeHook
+is false and rust's GUARD_HAS_CLAUDE_HOOK is true" - and that test is why the flip and the merge came together.
+Two cases had been using claude as the runtime the guard cannot guard, which is no longer a state of the table:
+`TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone` names a mode the guard does not answer (`--no-such-hook`)
+for the unguarded line, and `TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays` asserts that claude's
+row now reads as an unguarded FILE (`no seat-guard entry in /home/reader/.claude/settings.json`, with the install
+verb), while a synthetic row keeps `no entry is placed - the guard this client ships has no <mode> mode` covered.
+
+Measured (2026-10-21, merge `c16eb16f` plus this change): `go test -count=1 ./...` 35 packages ok, 0 fail;
+`go vet ./...` rc 0; `gofmt -l internal/ cmd/` clean; `cargo test --offline` 194 + 1 + 41 (`seat_guard`: 34 passed,
+7 failed) + 1 (`umask_at_the_entry`). The 7 are main's own set, measured identically on `185cb47e` alone - the
+quoted-cd, quoted-target, pathspec, pid-mark, unresolvable-word and the two ordinary-write rows the owner's asset
+fix turns green. One measurement note worth keeping: the `seat_guard` harness runs `node` with the crate directory
+as its cwd, so a run inside a MID-MERGE worktree answers 11 failures (the guard reads the real repo's index, where
+`MERGE_HEAD` and unmerged entries sit); the same tree after the merge commit answers the 7.
+
+## 2026-10-21 - the gate's first review of the skill signals: scope, spelling and one spool read (go, branch 4genthub-min/runtime-hooks)
+
+`internal/clientskills` gains the tests the review found missing, one per finding.
+`TestASeatSkillsLandingIsItsOwnSeat` (B1): a `seat:go-dev` skill and a `share` skill both declare `row-tag: guide`
+over one go-dev and one reviewer closed row - landed 1 and 2, where the unscoped count answered 2 and 2, which is
+why every seat workflow printed the room's 44. `TestARowNamingItsSeatBareIsThatSeatsRow` (B2, M3): the destinations
+`go-dev`, `reviewer` (bare), `owner-session` and `""` read through `Evidence.seatOf`, then a census over a bare
+`go-dev` row and a bare `reviewer` row asserts the seat skill counts 1 occurrence (the reviewer's row is not every
+seat's) and a go-dev stream size of 1, while an unattributed `owner-session` row still counts for every scope.
+`TestSeatFromSessionMatchesOnlyThisRoomsSeat` (M3) takes the room's seat set now and covers the `<seat>@<room>`
+branch propose.go gained untested (`lead@4genthub-min` -> `lead`, `lead@other-room` -> ""), the bare spelling with
+and without a seat set, and `owner-session` staying unattributed.
+`TestEachWorktreeSpoolIsReadOnceWhateverItsChildren` (M1): one worktree with two ordinary child directories and a
+plain file yields a guard stream size of 1 and one occurrence; the unguarded loop read the same spool once per
+child. `TestTwoRefusalsBetweenOnePairAreTwoOccurrences` (m1): two refused sends between one pair with one Reason are
+two occurrences with distinct refs, and the stream size agrees with the citation count.
+`TestTheToolStreamCountsBothMcpSpellings` (m2): `command: mcp:manage_task` counts `mcp:manage_task.list` and
+`xd://mcp__agenthub_http_manage_task` (2, not 1), while `go test` stays a literal match and a name the log does not
+carry counts 0. `TestASeatSkillIsJudgedOnItsOwnSeat` checks `len(row.Refs)` before indexing it (m3), so
+"occurrences but no refs" fails with a message instead of panicking.
+
+`readGuard` now asks git about a candidate only when it carries `.git` and keys each read by the resolved spool
+path, `Evidence` carries the room and its seat set (`clientservices.LiveSeats`, an unreadable record meaning an
+empty set), `seatFromSession` is the one destination reader and takes that set, `LandedFor` takes the scope, and a
+send fact's ref carries the decision's time.
+
+Measured (2026-10-21, worktree `wt/go-dev-signals` at 211eff11 plus these changes): `go build ./...` clean;
+`go test -count=1 ./internal/clientskills/` 51 tests pass, 0 fail; `go test -count=1 ./...` 35 packages ok, 0
+failed. Every new test was run against its own revert: `LandedFor(signals, since, "")`
+reddens `TestASeatSkillsLandingIsItsOwnSeat` (landed 2, want 1); disabling the bare-seat branch reddens
+`TestSeatFromSessionMatchesOnlyThisRoomsSeat` (`reviewer` -> "") and `TestARowNamingItsSeatBareIsThatSeatsRow`
+(`seatOf("go-dev")` -> "", seat occurrences 2, stream size 2, unattributed count 3); dropping readGuard's `.git`
+guard and the resolved-path dedupe reddens `TestEachWorktreeSpoolIsReadOnceWhateverItsChildren` (stream size 4,
+want 1); the `From->To`-only send ref reddens `TestTwoRefusalsBetweenOnePairAreTwoOccurrences` (1 occurrence, want
+2); the literal `strings.Contains` reddens `TestTheToolStreamCountsBothMcpSpellings` (1 command, want 2).
 ## 2026-10-21 - the quoting suite carries the gate's B1 fix: the directory a quoted `cd` names, and the two flipped rows (rust, branch 4genthub-min/rev9-tests-fold)
 
 `rust/agenthub-runtime/tests/seat_guard.rs`, on `ca22c477`. Gate `qitem-20261021181739-9da6703153f7` found a quoted
@@ -340,6 +419,38 @@ checked-and-absent; a failed call is unchecked with its reason). `TestAJevOccurr
 pins the JEV ref as the line's own `timestamp` and `tier`, and the JEV fixture no longer invents an `id` the
 log never writes.
 
+`internal/clientguard/runtimes_test.go` and `internal/clientlifecycle/runtimesrow_test.go` cover the owner-wide
+half of the guard. `TestInstallPlacesTheAgyEntryKeepsTheOwnersFileAndIsByteStable` runs the installer against a
+home holding another tool's `herdr` entry and asserts that key and the owner's indentation survive, that the two
+commands read back from the file equal the text `supervisor/mod.rs` writes (spelled in the test, not built by
+the code under test), that no temporary file is left behind, and that a second install moves not one byte.
+`TestTheEntryGuardsTheSeatAndIsASilentNoOpOutsideOne` RUNS the command the entry carries through `sh` in both
+states: outside a seat it prints agy's own pass-through and never execs the guard, inside one it execs the guard
+from `PI_CODING_AGENT_DIR` (a stand-in script, so the assertion is on behaviour). `TestTheClaudeEntryIsNotWrittenWhileTheAssetHasNoMode`
+and `TestTheClaudeGateMatchesTheRuntimesFlag` pin the gate: claude's row is a row, no entry is written, and the
+constant here equals the runtime's `GUARD_HAS_CLAUDE_HOOK`. `TestARuntimeWithNoHookSurfaceGetsARowAndNoWrite`
+and `TestARuntimeThatIsNotOnPathAndHasNoConfigDirIsNotReported` pin codex and the silence for an undetected
+runtime; `TestTheEntryIsFoundOnlyWithItsMode` is the gate's n3 (an entry under a mode this guard does not write
+reads as missing); `TestAConfigThisClientCannotReadIsReportedAndNotOverwritten` asserts a non-object file is
+refused by name and left byte-identical; `TestUninstallTakesTheEntryBackOutAndKeepsTheOwnersHooks` covers the
+removal; `TestTheInstallLinesSayWhereTheEntryIsOrWhyThereIsNone` and `TestTheAgyEntryIsTheRuntimesOwnObject`
+cover the verb's lines and the entry's shape. On the doctor side
+`TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays` names the binary's path and the config
+absolutely, `TestARuntimeInNoConfigAndOnNoPathIsNotARow`, `TestARuntimeFoundOnlyByItsConfigDirectoryStillGetsARow`,
+`TestARuntimeWithNoHookSurfaceSaysSoAndIsNotARefusal`, `TestAConfigThatCannotBeReadIsALineAndNotAFailure`,
+`TestTheRowForAHomeThatCannotBeResolvedPrintsItsReason` and `TestTheDoctorReportCarriesTheRuntimeRows` pin the
+rows, their lines, the reason on both surfaces, and that no case refuses `doctor`.
+
+## 2026-10-21 - the claude settings file names three events, not two
+
+`supervisor::tests::the_claude_settings_run_the_seat_guard_on_both_phases` (rust, `agenthub_runtime`) now reads
+three entries out of the file the writer produced - `PreToolUse` (pre), `PostToolUse` (post) and
+`PostToolUseFailure` (post) - instead of two. The third is the point: `PostToolUse` carries `tool_response` and no
+error, so a guard registered only there logs `ok` for a call that failed, and claude fires the failure as its own
+event (`seats/architect/RULING-2026-10-21-claude-hook-mode.md` §1, correction 2). The test keeps every other
+assertion it had (foreign file untouched, own file rewritten then cleared, the const as the gate, the one-way check
+that a true flag needs an asset carrying the dispatch).
+
 ## 2026-10-21 - revision 9 of the seat guard's suite lands before its asset (rust, branch 4genthub-min/rev9-tests-on-main)
 
 `rust/agenthub-runtime/tests/seat_guard.rs` arrives whole from `4genthub-min/guard-imports-a-tree` (`7f4512c`), on
@@ -403,3 +514,43 @@ their own `row-tag:` value, a guard-only skill claims none, and a skill whose de
 claims none either (the old count answered 3 for all four). `TestTheWindowsDemoteAndPromote` keeps its 3 but its
 fixture rows now carry the tag the promoted skill declares, because an unattributed landing is exactly what the
 new rule stops counting.
+
+## 2026-10-21 - a seat skill sees its own seat's future, and a hold cites what it holds on
+
+- `TestASeatSkillIsJudgedOnItsOwnSeat` (R1): one `seat:go-dev` skill and one `share` skill over the same rule,
+  with a `go-dev` fact and a `reviewer` fact supplied by the test. The seat row counts 1 with `guard:own` and the
+  room row counts 2 - the same facts, two scopes.
+- `TestRefusalSpoolsOfTheRoomsWorktreesAreAllRead` (R3): a git worktree under `<state root>/rooms/room/wt/go-dev`
+  carrying its own `parked-diffs/refusals.jsonl` beside the caller's repo. Both spools are read, the worktree
+  line's own `seat` is kept, and the caller's line is not lost.
+- `TestAHoldRowCitesItsOccurrences`: a provisional skill with one attributed fact holds and cites `guard:rf-hold`
+  (before this, only `demote` filled refs).
+- `TestTheToolStreamIsCountsOnly` now expects `no-signal` rather than `hold` (R2): a declaration made only of
+  `command:` signals has no failure stream, while the errored call is still counted and still demotes nobody.
+  `TestTheWindowsDemoteAndPromote` keeps its demote; its share-level fixture is now read under the room scope,
+  which is what `share` means.
+- `guardstream_test.go` passes the room scope (`""`) to `Occurrences`, whose signature gained it.
+
+Measured (2026-10-21, this branch after the gate's first review): `go test -count=1 ./internal/clientskills/` 51
+tests pass, 0 fail. Reverting the scope wiring - `inScope` answering true and `applyWindow`'s `scope := ""` -
+reddens `TestASeatSkillIsJudgedOnItsOwnSeat` by name, seat skill = 2 occurrences `[guard:neighbour guard:own]`
+against the 1 it asserts, and with it the two scope tests the review added (a seat skill landed 2 where the
+reviewer's closed row is not its landing; a bare `reviewer` row counted 2 occurrences and a go-dev stream size of
+2, each a 1). `TestRefusalSpoolsOfTheRoomsWorktreesAreAllRead`, `TestAHoldRowCitesItsOccurrences` and
+`TestTheToolStreamIsCountsOnly` stay green under that revert, because each is a room-scope case - `share`, or an
+explicit `"go-dev"` scope handed to `Occurrences` - so they pin the rule without depending on `applyWindow`'s
+wiring. The verdict's claim that the revert reddens all four by name does not hold for these three.
+
+## 2026-10-21 - the gate's four majors on the owner-wide guard entries
+
+`TestAnUnreadableConfigRefusesTheInstall` (M1: a directory where the config file should be, so the case does not
+depend on the test's uid; `runInstall` = ExitRefused, the row names the file, the refusal says why),
+`TestABlankOrBomConfigTakesTheEntry` (M1's other half: "", whitespace, BOM, BOM+`{}` all take the entry),
+`TestTheClaudeWriteAndRemoveHalf` (M3: absent/null/empty/owner file, idempotence, removal keeping the owner's
+definitions, a non-array phase refused by name, absent and null removal answering nothing),
+`TestUninstallTakesTheRuntimeEntryOutBeforeTheDeletedCheckout` (M4: entry gone, exit non-zero, `herdr` kept),
+`TestASymlinkedConfigKeepsItsLink` (m3: the link survives and the managed target gains the entry), and
+`TestTheDoctorReportCarriesTheRuntimeRows` rewritten (m1: it drove `runtimeRowFor` and `doctorJSONRows` itself;
+it now runs `runDoctor` and asserts the human lines and the `--json` reasons). `newHealthFixture` gained
+`runtimeRowFor`/`runtimeHome`/`runtimeHooks` stubs (m2), so the doctor cases no longer read the operator's home
+and PATH.

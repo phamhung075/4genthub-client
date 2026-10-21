@@ -1,12 +1,15 @@
 ---
 name: friction-triage
 description: Use when friction reports are waiting - dedupe them, rank them by cost and frequency, name one fix owner and one size, and close the loop back to the reporter.
+signals:
+  - command: submit_feedback
 ---
 
 # Friction triage (lead)
 
-The funnel's decision point. Reports arrive through the shipped feedback channel (grouped by `layer`) and as
-items tagged `friction`.
+The funnel's decision point. Reports arrive through the shipped feedback channel (`submit_feedback`, grouped by
+`layer`) and as rows tagged `finding`. The daemon's tag list is closed and has no `friction` tag (measured: 2 810
+rows, 0 `friction`), so a report is never found by that tag.
 
 ## Steps
 

@@ -1,6 +1,8 @@
 ---
 name: friction-report
-description: Use when a seat hits friction - a missing tool, a constraint, a slow or failing step, or a rule that blocks good work. File one report through the existing feedback channel and continue; the room tracks that same text as an item tagged `friction`. Never a silent workaround.
+description: Use when a seat hits friction - a missing tool, a constraint, a slow or failing step, or a rule that blocks good work. File one report through the existing feedback channel and continue; the room tracks that same text as an item tagged `finding` with its layer in the body - the daemon's tag list is closed and has no `friction` tag, so never create one. Never a silent workaround.
+signals:
+  - command: submit_feedback
 ---
 
 # Friction report
@@ -20,9 +22,12 @@ hides the fix.
    `4genteam feedback --layer <layer> --text "<body>"`, or the `submit_feedback` MCP tool when the runtime
    has no CLI. **Do not invent a second channel, a form, or a new route.** The `layer` vocabulary is closed:
    `runtime | client | cloud | seat-context | workspace | other` - pick the layer where it actually broke.
-2. Make it trackable: the room's view is the same text as one item tagged `friction` (the queue row or board
-   item your room uses). One report, two views - the channel for the owner's reading, the tagged item for
-   tracking. It is the room's way of tracking the report, not a second obligation.
+2. Make it trackable: the room's view is the same text as one item tagged `finding`, carrying the `layer` you
+   chose in the body (the queue row or board item your room uses). `finding` is on the daemon's closed tag list
+   (`internal/clientruntime/queue.go`, `QueueTags`); `friction` is not, and the daemon refuses a create that
+   carries a tag off that list - so create the `finding` item and never invent a tag. One report, two views -
+   the channel for the owner's reading, the tagged item for tracking. It is the room's way of tracking the
+   report, not a second obligation.
 3. Continue the work. If the rule is genuinely wrong, say so in the report; do not break it silently.
 
 ## The body (fixed skeleton, inside --text)

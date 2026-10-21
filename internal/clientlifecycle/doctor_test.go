@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientguard"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
@@ -56,7 +57,11 @@ func newHealthFixture(t *testing.T, listedRooms []string) *healthFixture {
 	previousOrphans := orphanRowsFor
 	previousClone, previousHooks := cloneRowFor, hooksRowFor
 	previousSeats := seatsRowFor
+	previousRuntimeRow := runtimeRowFor
+	previousRuntimeHome, previousRuntimeHooks := runtimeHome, runtimeHooks
 	t.Cleanup(func() {
+		runtimeRowFor = previousRuntimeRow
+		runtimeHome, runtimeHooks = previousRuntimeHome, previousRuntimeHooks
 		clientservices.AgentStatePath = previousStatePath
 		clientservices.Now, clientservices.Live = previousNow, previousLive
 		orphanRowsFor = previousOrphans
@@ -75,6 +80,11 @@ func newHealthFixture(t *testing.T, listedRooms []string) *healthFixture {
 	// The seats row runs the skills check, which needs a runtime and a room record: no test in this file has
 	// either, so the default is a report with no seats row. A case that wants the row replaces this.
 	seatsRowFor = func(string, string) []seatSkillsRow { return nil }
+	// The runtime rows read the operator's own home and PATH: agy, claude and codex detected on this machine would
+	// change what every case below sees. The default is a home with no runtime config and no runtime found; the
+	// case that asserts the rows replaces both seams.
+	runtimeHome = func() (string, error) { return t.TempDir(), nil }
+	runtimeHooks = func(string) []clientguard.RuntimeHook { return nil }
 
 	clientservices.AgentStatePath = func() (string, error) { return filepath.Join(stateDir, "agent.json"), nil }
 

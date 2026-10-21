@@ -139,11 +139,12 @@ type doctorJSONRow struct {
 // doctorJSONRows pairs every row with the lines the human report prints beside it, from the wrapper that
 // carries them: ONE rule for the JSON and the lines, so the two surfaces cannot disagree about a row.
 func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
+	runtimeRows []runtimeRow,
 	seatRows []seatSkillsRow, censusRows []skillsRow, orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
 	out := make([]doctorJSONRow, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, doctorJSONRow{Health: row,
-			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, seatRows, censusRows, orphanRows, identityRows)})
+			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, runtimeRows, seatRows, censusRows, orphanRows, identityRows)})
 	}
 	return out
 }
@@ -151,6 +152,7 @@ func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, c
 // rowReasons finds one row's reasons: the wrapper is matched on (safeguard, room), the pair the report
 // itself matches a row by.
 func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
+	runtimeRows []runtimeRow,
 	seatRows []seatSkillsRow, censusRows []skillsRow, orphanRows []orphanRow, identityRows []identityRow) []string {
 	for _, worktree := range worktreeRows {
 		if worktree.Row.Safeguard == row.Safeguard && worktree.Row.Room == row.Room {
@@ -165,6 +167,11 @@ func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRow
 	for _, hooks := range hooksRows {
 		if hooks.Row.Safeguard == row.Safeguard && hooks.Row.Room == row.Room {
 			return hooksLines(hooks)
+		}
+	}
+	for _, runtime := range runtimeRows {
+		if runtime.Row.Safeguard == row.Safeguard && runtime.Row.Room == row.Room {
+			return runtimeLines(runtime)
 		}
 	}
 	for _, seat := range seatRows {
@@ -225,6 +232,12 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	// The runtime rows: one per runtime CLI this machine has, and whether its owner-wide config carries the seat
+	// guard's entry. Like the hooks and clone rows they are the MACHINE's and carry no room.
+	runtimeRows := runtimeRowFor(room)
+	for _, runtime := range runtimeRows {
+		rows = append(rows, runtime.Row)
+	}
 	// The seats row (the ruling's one check): `running`, or `skills_stale` when a seat loaded something
 	// other than the set the runtime installed for it. It is the SAME function `up` runs, so the two cannot
 	// disagree about a seat.
@@ -253,7 +266,7 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 		rows = append(rows, identity.Row)
 	}
 	if asJSON {
-		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, seatRows, censusRows, orphanRows, identityRows), "", "  ")
+		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, runtimeRows, seatRows, censusRows, orphanRows, identityRows), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam doctor: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
@@ -283,6 +296,11 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 		}
 		for _, hooks := range hooksRows {
 			for _, line := range hooksLines(hooks) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
+		for _, runtime := range runtimeRows {
+			for _, line := range runtimeLines(runtime) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
