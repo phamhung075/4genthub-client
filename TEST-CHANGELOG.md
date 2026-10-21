@@ -1,3 +1,33 @@
+## 2026-10-21 - the rev-9 suite re-expressed on 109cbeca: quoting, unresolvable words, a pathspec file, and the result handler (rust, branch 4genthub-min/rev9-tests-fold)
+
+`rust/agenthub-runtime/tests/seat_guard.rs`, cut from `owner/seat-guard-rev9` @ `109cbeca`. Four rows, each written
+against this tree's own helpers (`rule_of`, `tracked`, `bash`) rather than replayed from `8b00747b`:
+`a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is` (B1) - one row per write verb of the ruling's
+table, double- and single-quoted, beside its unquoted control, plus the controls that must stay allowed (a quoted
+statement separator, a quoted `>` that starts no redirect, a path with a real space, `cp a b`) and a refusal whose
+reason keeps the space and loses the quotes. `a_word_the_guard_cannot_resolve_is_refused` (B1) - a variable quoted
+and unquoted, and a glob with no literal prefix, each `unresolvable-target`, beside the literal-prefix rows
+(`rm -r rust/agenthub-runtime/assets/*` denied, `rm -r 'build'/*` and `rm -rf dist/*` allowed) and the two
+frozen-path globs. `a_pathspec_file_is_refused_whatever_verb_reads_it` (B2) - ten spellings over seven verbs plus
+`-` and `/dev/stdin`, each `pathspec-from-file`. `the_result_handler_redacts_what_the_model_reads` (M1) - the
+asset's default export is imported with a fake `pi` that records the handlers it registers; `tool_call` opens a
+call and `tool_result` carries a value, and the returned content must not contain it and must name the placeholder.
+A patch that deletes the `tool_result` handler and keeps `--redact` passes every earlier row; this is the pin.
+
+The five fold fixes are re-expressed on this tree: `rule_of` restores the per-rule pin (m2) - seven owner-asset
+calls now assert `protected-paths` for the two `TargetFile` writes and `git-imports-a-tree` for the git forms, not
+"some refusal"; the carried guard blob lives in a directory of the run's own (the fold's temp-dir collision);
+bare `git checkout-index -f` stays out of the refusal list (the fold's over-refusal, probed: exits 0, writes
+nothing); the redactor's child gets its own `PI_CODING_AGENT_DIR` and must exit 0; and the count comments are
+corrected - twelve refusals and one chain in the pathspec test, eight in the no-poisoned-index block, whose
+duplicate `--index-info` row is gone.
+
+Measured (2026-10-21, `wt/go-dev-fold` at 109cbeca plus this change): `cargo test --offline` - 194 (bin), 1
+(held_send), 39 (seat_guard: 36 passed), 1 (umask) - and of those the 3 failed are BY DESIGN - `a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is`,
+`a_word_the_guard_cannot_resolve_is_refused` and `a_pathspec_file_is_refused_whatever_verb_reads_it` are the
+owner's asset fix and turn green when it lands. The three reds are the gate's B1/B2, the driver is green against
+this asset (the handler exists; the row pins it against deletion).
+
 ## 2026-10-21 - a claude seat is handed the guard it never ran (rust, branch 4genthub-min/claude-guard-settings)
 
 Two tests, both in `rust/agenthub-runtime`. `supervisor::tests::the_claude_settings_run_the_seat_guard_on_both_phases`

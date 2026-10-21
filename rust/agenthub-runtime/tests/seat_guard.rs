@@ -28,6 +28,16 @@ fn fresh_dir(tag: &str) -> PathBuf {
     ))
 }
 
+/// The rule a refusal names, from the reason a seat reads: the text between the first `(` and the first `)` of
+/// `blocked by seat guard (<rule>): ...`.
+fn rule_of(reason: &str) -> String {
+    reason
+        .split(['(', ')'])
+        .nth(1)
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// The rule that refused the call, or `None` when it was allowed.
 fn verdict(name: &str, args: serde_json::Value) -> Option<String> {
     verdict_in(&fresh_dir("test"), name, args)
@@ -48,7 +58,7 @@ fn verdict_with(
     args: serde_json::Value,
 ) -> Option<String> {
     refusal(dir, worktrees, name, args).map(|r| {
-        let rule = r.split(['(', ')']).nth(1).unwrap_or_default().to_owned();
+        let rule = rule_of(&r);
         let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap_or_default();
         assert!(
             log.contains(&format!("\"rule\":\"{rule}\"")),
@@ -1003,7 +1013,7 @@ fn a_lane_is_admitted_by_the_seat_key_and_only_that_prefix() {
             "write_to_file",
             serde_json::json!({ "TargetFile": path }),
         )
-        .map(|r| r.split(['(', ')']).nth(1).unwrap_or_default().to_owned())
+        .map(|r| rule_of(&r))
     };
 
     assert_eq!(
@@ -1360,7 +1370,7 @@ fn a_stash_entry_is_read_whatever_verb_imports_it() {
     }
 }
 
-/// Staging writes by PATH (revision 7, task 1c06bcd0): `git update-index --add --cacheinfo` writes the index and not
+/// Staging writes by PATH (the index-route addendum of 2026-10-21, task 1c06bcd0): `git update-index --add --cacheinfo` writes the index and not
 /// the file, so one `git checkout-index -f` afterwards puts a modified guard on disk without a single refused write -
 /// the chain the reviewer measured, which falsified revision 5's premise. The verbs are read as names of what they
 /// write; `--index-info` has no name (its rows come from stdin) and `checkout-index --prefix` names its own
@@ -1422,7 +1432,7 @@ fn the_index_is_written_by_path_so_the_path_is_read() {
     );
 }
 
-/// The index is a MEDIUM (revision 8, the architect's addendum): the verbs that name no path - `commit`, and
+/// The index is a MEDIUM (the index-route addendum of 2026-10-21): the verbs that name no path - `commit`, and
 /// `checkout-index -a` - turn whatever the index holds into a commit or a file, so the index itself is read; a
 /// directory operand names the guard inside it without naming it; and `read-tree` of a STASH entry imports one.
 /// The asset is the owner's, so every one of these paths is refused to every seat, the lead included.
@@ -1444,8 +1454,12 @@ fn the_index_is_read_where_the_verb_names_no_path() {
         .to_owned()
     };
     // A blob that DIFFERS from HEAD's: the index route is about replacing the entry, and an entry equal to HEAD's
-    // is invisible to the parity read - so the fixture writes the seat's bytes first and hashes them.
-    let carried = repo.parent().unwrap().join("carried-guard.ts");
+    // is invisible to the parity read - so the fixture writes the seat's bytes first and hashes them. The file lives
+    // in a directory of this run's own, because the temp root is shared across runs and two runs would hash each
+    // other's bytes.
+    let carried_dir = fresh_dir("guard-index-carried");
+    std::fs::create_dir_all(&carried_dir).unwrap();
+    let carried = carried_dir.join("carried-guard.ts");
     std::fs::write(&carried, "const victim = 1;\n").unwrap();
     let guard_blob = String::from_utf8(
         Command::new("git")
@@ -1473,10 +1487,10 @@ fn the_index_is_read_where_the_verb_names_no_path() {
     ] {
         assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
     }
-    // Nine refusals that need no poisoned index: the stdin forms, a directory operand, a rename, a stash tree.
+    // Eight refusals that need no poisoned index: the stdin form, a directory operand, a rename, a stash tree.
+    // (`--index-info` is pinned once, in the block above; a second copy adds no coverage.)
     for case in [
         "git update-index --stdin".to_owned(),
-        "git update-index --index-info".to_owned(),
         "git rm -r rust/agenthub-runtime/assets".to_owned(),
         format!("git mv {GUARD_PATH} rust/agenthub-runtime/assets/copy.ts"),
         "git read-tree -u --reset stash@{1}".to_owned(),
@@ -1488,7 +1502,8 @@ fn the_index_is_read_where_the_verb_names_no_path() {
         // then `checkout-index -a -f` needs no index the hook can see as dirty at call time.
         "git checkout-index -a -f".to_owned(),
         "git checkout-index --all -f".to_owned(),
-        "git checkout-index -f".to_owned(),
+        // The bare `checkout-index -f` is NOT in this list: probed, it exits 0 and writes nothing (the
+        // materialisation needs `-a` or `--all`), so a refusal pinned on it would be an over-refusal.
     ] {
         assert_eq!(
             bash(&format!("cd {here} && {case}")).as_deref(),
@@ -1565,18 +1580,27 @@ fn the_index_is_read_where_the_verb_names_no_path() {
             } else {
                 "run_command"
             };
-            let seen = refusal_for_seat(
-                &fresh_dir(&format!("{key}-asset")),
-                WORKTREES,
-                session,
-                key,
-                name,
-                refused.clone(),
-            )
-            .unwrap_or_default();
-            assert!(
-                !seen.is_empty(),
-                "no seat lands the guard, {key} included: {refused}"
+            let seen = rule_of(
+                &refusal_for_seat(
+                    &fresh_dir(&format!("{key}-asset")),
+                    WORKTREES,
+                    session,
+                    key,
+                    name,
+                    refused.clone(),
+                )
+                .unwrap_or_default(),
+            );
+            // A `run_command` that names the asset is read by the shell's import rule; a `write_to_file` names its
+            // path, so the write-target rule answers it. The pair is pinned, not "either rule".
+            let want = if name == "write_to_file" {
+                "protected-paths"
+            } else {
+                "git-imports-a-tree"
+            };
+            assert_eq!(
+                seen, want,
+                "no seat lands the guard, {key} included: {refused} answers {seen}"
             );
         }
     }
@@ -1651,9 +1675,9 @@ fn the_pathspec_is_read_as_the_set_it_covers() {
     let repo = tracked("guard-pathspec-set");
     let here = repo.display();
     let at = |case: &str| bash(&format!("cd {here} && {case}"));
-    // The six refusals and the two chains (revision 9). A directory operand names the guard inside it, so every
-    // one of these is refused before it runs - the shell forms by the set the write target covers, the git forms by
-    // the set the pathspec covers, and the two whole-tree verbs by naming no path at all.
+    // Twelve refusals and one chain (revision 9). A directory operand names the guard inside it, so every one of
+    // these is refused before it runs - the shell forms by the set the write target covers, the git forms by the set
+    // the pathspec covers, and the five whole-tree forms by naming no path at all.
     for case in [
         "rm -r rust/agenthub-runtime/assets",
         "mv rust/agenthub-runtime/assets /tmp/assets-moved",
@@ -1710,6 +1734,130 @@ fn the_pathspec_is_read_as_the_set_it_covers() {
     }
 }
 
+/// A target is the PATH, not the spelling (the architect's 2026-10-21 quoting and pathspec ruling): a quoted word
+/// names the same file as the same word unquoted. Every row is a probe the ruling measured; the controls are the
+/// over-refusals it forbids, so a guard that refused every quoted word or every command word would fail here beside
+/// the one that judged none of them.
+#[test]
+fn a_quoted_target_is_judged_by_the_rule_its_unquoted_control_is() {
+    let repo = tracked("guard-quoted-target");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+    let asset = GUARD_PATH;
+
+    for case in [
+        format!("cp evil.ts \"{asset}\""),
+        format!("cp evil.ts '{asset}'"),
+        format!("printf x > \"{asset}\""),
+        format!("printf x >> \"{asset}\""),
+        format!("printf x 2> \"{asset}\""),
+        format!("dd if=evil.ts of=\"{asset}\""),
+        format!("install evil.ts \"{asset}\""),
+        format!("mv evil.ts \"{asset}\""),
+        format!("rsync -a evil.ts \"{asset}\""),
+        format!("echo evil | tee \"{asset}\""),
+        format!("sed -i s/o/e/ \"{asset}\""),
+        format!("truncate -s 0 \"{asset}\""),
+        format!("unlink \"{asset}\""),
+        format!("touch \"{asset}\""),
+        "mkdir -p \"rust/agenthub-runtime/assets\"".to_owned(),
+        "rm -r \"rust/agenthub-runtime/assets\"".to_owned(),
+        // The unquoted control the rows above are judged by, and the two glob forms of the same directory.
+        "rm -r rust/agenthub-runtime/assets".to_owned(),
+        "rm -r rust/agenthub-runtime/assets/*".to_owned(),
+        "rm -r 'rust/agenthub-runtime/assets'/*".to_owned(),
+    ] {
+        assert_eq!(at(&case).as_deref(), Some("protected-paths"), "{case}");
+    }
+
+    // The controls: a glob WITH a literal prefix the rules can read, a quoted word that is not a command, a path with
+    // a space that is not protected, and a redirect whose word is quoted rather than a command's. An over-broad
+    // refusal is a finding, so these must pass beside the rows above.
+    for case in [
+        "rm -r 'build'/*".to_owned(),
+        "rm -rf dist/*".to_owned(),
+        "cp a/*.ts dir/".to_owned(),
+        "echo \"git push origin main\"".to_owned(),
+        "echo \"a;b\"".to_owned(),
+        "echo \"a; git push origin main\"".to_owned(),
+        format!("echo \"x > {asset}\""),
+        "printf x > \"a b.txt\"".to_owned(),
+        "cp evil.ts \"my file.ts\"".to_owned(),
+        "cp a b".to_owned(),
+    ] {
+        assert_eq!(at(&case), None, "{case}");
+    }
+
+    // A quoted path keeps its SPACE and loses its quotes: the refusal names one path, not two words.
+    let reason = refusal(
+        &fresh_dir("guard-quoted-space"),
+        WORKTREES,
+        "run_command",
+        serde_json::json!({ "CommandLine": "printf x > \"/home/other/main/my file.ts\"" }),
+    )
+    .expect("a redirect outside the worktrees is refused");
+    assert!(
+        reason.contains("/home/other/main/my file.ts is outside"),
+        "the quoted path keeps its space: {reason}"
+    );
+}
+
+/// A word the guard cannot resolve is REFUSED, not dropped: a variable (quoted or not), a glob with no literal
+/// prefix, and the frozen plan files reached through a glob. Each was silently an allow while the erasure dropped
+/// quoted spans and `NOT_A_TARGET` dropped metavariables, so a call was judged as if it named nothing.
+#[test]
+fn a_word_the_guard_cannot_resolve_is_refused() {
+    let repo = tracked("guard-unresolvable-target");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+
+    // A word that names no readable path at all: a variable (quoted or not) and a glob with no literal prefix. Each
+    // used to be dropped by the target readers, so the call was judged as if it named nothing.
+    for case in [
+        "cp evil.ts $TARGET".to_owned(),
+        "rm -r \"$DIR/assets\"".to_owned(),
+        "rm -r *".to_owned(),
+    ] {
+        assert_eq!(at(&case).as_deref(), Some("unresolvable-target"), "{case}");
+    }
+
+    for case in ["echo x >> NEXT-GEN*.md", "rm -rf ai_docs/reports-status/*"] {
+        assert_eq!(at(case).as_deref(), Some("frozen-paths"), "{case}");
+    }
+}
+
+/// A PATHSPEC read from a file, or from stdin, names a set the guard never sees: the ruling refuses the flag
+/// outright on every verb that carries it, in both spellings, and the older allowance for `-`/`/dev/stdin` goes
+/// with the rest. A file of paths is a document, the same class as a patch document.
+#[test]
+fn a_pathspec_file_is_refused_whatever_verb_reads_it() {
+    let repo = tracked("guard-pathspec-file");
+    let here = repo.display();
+    let at = |case: &str| bash(&format!("cd {here} && {case}"));
+
+    // A PATHSPEC read from a file, and one read from stdin: the rows are written by the seat and never appear on the
+    // command line, so no rule can read which paths they name. `=-` and `=/dev/stdin` were the only spellings the
+    // older rule saw.
+    for case in [
+        "git add --pathspec-from-file=psf.txt".to_owned(),
+        "git add --pathspec-from-file psf.txt".to_owned(),
+        "git rm -r --pathspec-from-file=psf.txt".to_owned(),
+        "git commit -m x --pathspec-from-file=psf.txt".to_owned(),
+        "git checkout --pathspec-from-file=psf.txt".to_owned(),
+        "git restore --pathspec-from-file=psf.txt".to_owned(),
+        "git reset --pathspec-from-file=psf.txt".to_owned(),
+        "git stash push --pathspec-from-file=psf.txt".to_owned(),
+        "git add --pathspec-from-file=-".to_owned(),
+        "git add --pathspec-from-file=/dev/stdin".to_owned(),
+    ] {
+        assert_eq!(at(&case).as_deref(), Some("pathspec-from-file"), "{case}");
+    }
+
+    for case in ["echo x >> NEXT-GEN*.md", "rm -rf ai_docs/reports-status/*"] {
+        assert_eq!(at(case).as_deref(), Some("frozen-paths"), "{case}");
+    }
+}
+
 /// The redactor through its own seam, `node seat-guard.ts --redact`: the function the post-execution hook applies
 /// to every tool result, so the model and the transcript never read the value. `env` is the seat's environment.
 fn redacted(env: &[(&str, &str)], text: &str) -> String {
@@ -1717,6 +1865,9 @@ fn redacted(env: &[(&str, &str)], text: &str) -> String {
     command
         .arg(guard())
         .arg("--redact")
+        // The child gets a directory of its own, so a redactor that writes (or fails) into the seat's real agent
+        // directory cannot pass on a file the test harness happened to leave there.
+        .env("PI_CODING_AGENT_DIR", fresh_dir("redact"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -1732,7 +1883,9 @@ fn redacted(env: &[(&str, &str)], text: &str) -> String {
         .unwrap()
         .write_all(text.as_bytes())
         .unwrap();
-    String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "the redactor answers and exits 0");
+    String::from_utf8(out.stdout).unwrap()
 }
 
 /// The measured leak (2026-10-21): a value printed WITHOUT its name - a webhook config, a `printenv` - reached a
@@ -1741,15 +1894,15 @@ fn redacted(env: &[(&str, &str)], text: &str) -> String {
 #[test]
 fn a_tool_result_loses_the_secret_values_and_keeps_its_shape() {
     let carried = "fake0carried0value0for0test";
-    let out = redacted(
-        &[("AGENTHUB_TOKEN", carried)],
-        &format!("url: https://x/triggerbuild?token={carried}\nplain {carried}\nnext line\n"),
-    );
+    let shape =
+        format!("url: https://x/triggerbuild?token={carried}\nplain {carried}\nnext line\n");
+    let out = redacted(&[("AGENTHUB_TOKEN", carried)], &shape);
     assert!(!out.contains(carried), "{out}");
     assert!(out.contains("<redacted:AGENTHUB_TOKEN>"), "{out}");
-    assert!(
-        out.ends_with("next line\n"),
-        "the newlines survive: {out:?}"
+    assert_eq!(
+        out.matches('\n').count(),
+        shape.matches('\n').count(),
+        "the result keeps its line count: {out:?}"
     );
 
     let out = redacted(&[], "AGENTHUB_TOKEN=abc123def456\nkeep this\n");
@@ -1765,13 +1918,106 @@ fn a_tool_result_loses_the_secret_values_and_keeps_its_shape() {
     for secret in [jwt, key, "fake0bearer0value0x"] {
         assert!(!out.contains(secret), "{secret} survived: {out}");
     }
+    assert!(
+        out.contains("<redacted:jwt>") && out.contains("<redacted:key>"),
+        "each shape is named in its placeholder: {out}"
+    );
     assert!(out.starts_with("a ") && out.contains(" b\nc "), "{out}");
+
+    // The shape reads a NAME this seat does not carry: no environment of the test names DB_PASSWORD, so only the
+    // `NAME=value` pattern can take `hunter2` out of the result.
+    let pair = redacted(&[], "DB_PASSWORD=hunter2\nkeep me\n");
+    assert!(
+        !pair.contains("hunter2"),
+        "the value must not survive: {pair}"
+    );
+    assert!(pair.contains("keep me"), "{pair}");
 
     let clean = "git status\nOn branch main\n";
     assert_eq!(
         redacted(&[], clean),
         clean,
         "a result with no secret is unchanged"
+    );
+}
+
+/// The handler the LEAK was in, exercised where omp runs it: the asset's default export is handed a fake `pi` that
+/// records the handlers it registers, a `tool_call` is fired to open a call, then a `tool_result` carrying a value in
+/// its text. A patch that deletes the `tool_result` handler and keeps `--redact` passes every row above, so this is
+/// the only pin on the override the model actually reads (`pi.on("tool_result")`).
+#[test]
+fn the_result_handler_redacts_what_the_model_reads() {
+    let dir = fresh_dir("guard-tool-result");
+    std::fs::create_dir_all(&dir).unwrap();
+    let carried = "fake0carried0value0for0driver";
+    let asset = serde_json::to_string(&guard().display().to_string()).unwrap();
+    let driver = dir.join("driver.mjs");
+    std::fs::write(
+        &driver,
+        format!(
+            r#"import hook from {asset};
+const handlers = new Map();
+hook({{ on(name, fn) {{ handlers.set(name, fn); }} }});
+if (!handlers.has("tool_result")) {{
+  process.stdout.write(JSON.stringify({{ handlers: [...handlers.keys()] }}));
+}} else {{
+  const call = await handlers.get("tool_call")({{
+    toolName: "bash",
+    toolCallId: "call-1",
+    input: {{ command: "git status" }},
+  }});
+  const out = await handlers.get("tool_result")({{
+    toolCallId: "call-1",
+    isError: false,
+    content: [{{ type: "text", text: "printenv said: " + process.env.AGENTHUB_TOKEN }}],
+  }});
+  process.stdout.write(JSON.stringify({{ call: call ?? null, out: out ?? null }}));
+}}
+"#
+        ),
+    )
+    .unwrap();
+
+    let out = Command::new("node")
+        .arg(&driver)
+        .env("AGENTHUB_SEAT", "dev")
+        .env("AGENTHUB_SESSION_NAME", "agenthub--room--dev")
+        .env("AGENTHUB_WORKTREES", WORKTREES)
+        .env("PI_CODING_AGENT_DIR", &dir)
+        .env("AGENTHUB_TOKEN", carried)
+        .env_remove("OPENRIG_SESSION_NAME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("node is needed to run the seat guard");
+    assert!(
+        out.status.success(),
+        "the driver runs: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let answer: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("the driver answers JSON");
+    assert!(
+        answer.get("handlers").is_none(),
+        "the asset registers no tool_result handler: it answers {:?}",
+        answer["handlers"]
+    );
+    assert!(
+        answer["call"].is_null(),
+        "git status is allowed, so the call opens: {:?}",
+        answer["call"]
+    );
+    let text = answer["out"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the result handler answers content: {answer}"));
+    assert!(
+        !text.contains(carried),
+        "the value must not reach the model: {text}"
+    );
+    assert!(
+        text.contains("<redacted:AGENTHUB_TOKEN>"),
+        "the placeholder names what left the text: {text}"
     );
 }
 
@@ -1785,10 +2031,17 @@ fn an_environment_dump_is_refused_and_a_scoped_environment_is_not() {
             "env",
             "env | grep -c TOKEN",
             "export -p",
+            "declare -p",
+            "declare -p AGENTHUB_TOKEN",
             "set",
         ],
     );
-    allowed(&["env -u TMUX tmux ls", "FOO=1 git status", "set -e"]);
+    allowed(&[
+        "env -u TMUX tmux ls",
+        "FOO=1 git status",
+        "set -e",
+        "compgen -v > /dev/null",
+    ]);
 }
 
 #[test]
@@ -1798,9 +2051,14 @@ fn a_gh_api_read_of_a_credential_surface_is_refused_and_ci_reads_are_not() {
         &[
             "gh api repos/o/r/hooks",
             "gh api /repos/o/r/actions/secrets",
+            "gh api repos/o/r/keys",
         ],
     );
-    allowed(&["gh api repos/o/r/actions/runs"]);
+    allowed(&[
+        "gh api repos/o/r/actions/runs",
+        "gh pr list",
+        "gh api repos/o/r/pulls?state=open",
+    ]);
 }
 
 /// One claude-code hook call, `node seat-guard.ts --claude-hook <phase>`, with claude's payload on stdin: the
@@ -1844,13 +2102,7 @@ fn claude_rule(tool: &str, input: serde_json::Value) -> Option<String> {
         Some("allow") => None,
         Some("deny") => {
             let reason = out["permissionDecisionReason"].as_str().unwrap();
-            Some(
-                reason
-                    .split(['(', ')'])
-                    .nth(1)
-                    .unwrap_or_default()
-                    .to_owned(),
-            )
+            Some(rule_of(reason))
         }
         other => panic!("claude reads allow or deny, not {other:?}"),
     }
