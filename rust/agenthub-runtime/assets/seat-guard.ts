@@ -20,7 +20,7 @@
 // "blocked"; a blocked call carries the `rule` that refused it. An MCP call is the tool mcp__<server>_<tool>
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -185,6 +185,12 @@ function destroys({ verb, args }: { verb: string; args: string[] }): string {
   if (verb === "stash" && /^(drop|clear)$/.test(args[0] ?? "")) return "git stash drop/clear deletes stashed work";
   if (verb === "push" && (args.some((a) => /^--force/.test(a) || a.startsWith("+")) || hasShort(args, "f"))) return "a force push rewrites the remote";
   if (verb === "add" && (args.includes("--all") || args.includes(".") || hasShort(args, "A"))) return "git add -A/. stages other seats' and stray files; commit with a pathspec: git commit -- <paths>";
+  // A WHOLE-TREE STAGING IS REFUSED OUTRIGHT (revision 9): `add -a|-u|--update|-p|--patch` and `commit -a|--all`
+  // name no path, so the guard cannot read what they stage - and `git commit -am x` with the guard modified landed
+  // its bytes in HEAD while the index read stayed clean. A pathspec is the only form the guard can judge.
+  if (verb === "add" && (args.includes("--update") || args.includes("--patch") || hasShort(args, "a") || hasShort(args, "u") || hasShort(args, "p")))
+    return "git add/commit -a/-u/-A stages or commits the whole tree; name the paths you changed: git add -- <paths>";
+  if (verb === "commit" && (args.includes("--all") || hasShort(args, "a"))) return "git add/commit -a/-u/-A stages or commits the whole tree; name the paths you changed: git commit -m <msg> -- <paths>";
   if (verb === "commit" && args.includes("--amend")) return "git commit --amend rewrites a commit; make a new commit";
   return "";
 }
@@ -309,6 +315,16 @@ function listedPaths(here: string, ...args: string[]): string[] {
     : [];
 }
 
+// The path a `update-index --cacheinfo` row writes: `<mode>,<object>,<path>`, the path being everything after the
+// second comma because a path may contain commas itself.
+function cacheinfoPath(args: string[]): string | null {
+  const inline = args.find((a) => a.startsWith("--cacheinfo="))?.slice("--cacheinfo=".length);
+  const value = inline ?? (args.includes("--cacheinfo") ? args[args.indexOf("--cacheinfo") + 1] : undefined);
+  if (!value) return null;
+  const fields = value.split(",");
+  return fields.length >= 3 ? fields.slice(2).join(",") : null;
+}
+
 const unreadableStash =
   "the stash entry cannot be read, so the guard cannot see what it writes; look at it with `git stash show -p` and apply it with the owner";
 
@@ -355,30 +371,36 @@ function killReason(part: string): string {
 const WRITE_TOOLS = new Set(["edit", "write", "ast_edit", "write_to_file", "replace_file_content", "multi_replace_file_content"]);
 const REDIRECT = /(?<![-=>])>>?\s*([^\s|;&<>()]+)/g;
 
+const NOT_A_TARGET = /^(""|'')$|^\/dev\/null$|[$`]/;
+
+// One bash statement's write targets: the redirect, `tee`, and the last argument of cp/mv/install/rsync, the
+// operands of rm/rmdir and of an in-place editor, and dd's `of=`.
+function statementTargets(part: string): string[] {
+  const raw: string[] = [];
+  for (const m of part.matchAll(REDIRECT)) raw.push(m[1]);
+  const operands = (rest: string) => rest.trim().split(/\s+/).filter((a) => a && !a.startsWith("-"));
+  const tee = part.match(TEE_CALL);
+  if (tee) raw.push(...operands(tee[1]));
+  const copy = part.match(COPY_CALL);
+  if (copy) raw.push(...operands(copy[1]).slice(-1));
+  const move = part.match(MOVE_CALL);
+  if (move) raw.push(...operands(move[1]));
+  const destroy = part.match(DESTROY_CALL);
+  if (destroy) raw.push(...operands(destroy[1]));
+  const emptyPath = part.match(EMPTY_PATH_CALL);
+  if (emptyPath) raw.push(...operands(emptyPath[1]));
+  const inPlace = part.match(IN_PLACE_CALL);
+  if (inPlace && IN_PLACE.test(inPlace[1])) raw.push(...operands(inPlace[1]).slice(-1));
+  const dd = part.match(DD_CALL);
+  if (dd) for (const m of dd[1].matchAll(DD_OF)) raw.push(m[1]);
+  return raw.filter((p) => p && !NOT_A_TARGET.test(p));
+}
+
 function writeTargets(tool: string, input: Record<string, unknown>): string[] {
   const raw: string[] = [];
   if (WRITE_TOOLS.has(tool)) raw.push(String(input.path ?? ""));
-  else if (tool === "bash") {
-    for (const part of statements(input)) {
-      for (const m of part.matchAll(REDIRECT)) raw.push(m[1]);
-      const operands = (rest: string) => rest.trim().split(/\s+/).filter((a) => a && !a.startsWith("-"));
-      const tee = part.match(TEE_CALL);
-      if (tee) raw.push(...operands(tee[1]));
-      const copy = part.match(COPY_CALL);
-      if (copy) raw.push(...operands(copy[1]).slice(-1));
-      const move = part.match(MOVE_CALL);
-      if (move) raw.push(...operands(move[1]));
-      const destroy = part.match(DESTROY_CALL);
-      if (destroy) raw.push(...operands(destroy[1]));
-      const emptyPath = part.match(EMPTY_PATH_CALL);
-      if (emptyPath) raw.push(...operands(emptyPath[1]));
-      const inPlace = part.match(IN_PLACE_CALL);
-      if (inPlace && IN_PLACE.test(inPlace[1])) raw.push(...operands(inPlace[1]).slice(-1));
-      const dd = part.match(DD_CALL);
-      if (dd) for (const m of dd[1].matchAll(DD_OF)) raw.push(m[1]);
-    }
-  }
-  return raw.filter((p) => p && p !== "/dev/null" && !/^(""|'')$/.test(p) && !/[$`]/.test(p));
+  else if (tool === "bash") for (const part of statements(input)) raw.push(...statementTargets(part));
+  return raw.filter((p) => p && !NOT_A_TARGET.test(p));
 }
 
 // The directories the launcher gives this seat, `AGENTHUB_WORKTREES`: the room spec's own directory for it first -
@@ -425,6 +447,68 @@ const PROTECTED_DIRS = /(^|\/)(hooks\/pre|scripts\/git-hooks|\.git\/hooks)(\/|$)
 const protectedPath = (abs: string): boolean =>
   PROTECTED_DIRS.test(abs) || basename(abs) === "seat-guard.ts" || abs.endsWith("/.gemini/config/hooks.json") ||
   (dirname(abs) === seatDir && SEAT_FILES[basename(abs)] === true) || abs === roomBudget;
+
+// THE ASSET IS THE OWNER'S (owner ruling, 2026-10-21). No seat authors `seat-guard.ts`, the lead included: the
+// code that enforces a seat's rules is not that seat's to change, so the owner lands every guard revision and the
+// reviewer gates it. Revision 8's lead exemption (`assetOwner = pushAuthority`) is not carried.
+const blocked = (abs: string): boolean => protectedPath(abs);
+
+// The index is a medium: a poisoned index carries the guard, and the verb that turns it into a file on disk
+// (checkout-index) or into a commit (commit) names no path at all. Parity is read from git rather than trusted:
+// `diff --cached --name-only` is what the index would change against HEAD, filtered by `blocked`. An unreadable
+// index fails CLOSED - a guard that cannot see the index must not act as if it were clean.
+const indexHoldsBlocked = (here: string): boolean => {
+  const out = spawnSync("git", ["-C", here, "diff", "--cached", "--name-only"], { encoding: "utf8" });
+  if (out.status !== 0) return true;
+  return String(out.stdout ?? "")
+    .split("\n")
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .some((name) => blocked(absolute(resolve(here, name))));
+};
+
+// A PATHSPEC NAMES A SET, and an operand written as a directory names the guard inside it without naming it
+// (revision 9, RULING-2026-10-21-pathspec-expansion-and-whole-tree-forms.md): at revision 8
+// `rm -r <assets dir> && git add <dir> && git commit -m x -- <dir>` was allowed as one call and as three, and
+// HEAD's asset was gone. `covers` is the one predicate every protection test runs an operand through: the operand
+// itself, every line of `git ls-files -- <operand>` (a path tracked but no longer on disk), and a bounded on-disk
+// walk of a directory (a file too new to be tracked). Symlinks are not followed and the walk stops at COVER_LIMIT
+// entries, so a loop or a huge tree cannot turn a hook into a scan. An operand neither git nor the disk can
+// expand contributes only itself - the verb then fails on its own, which is the verdict it deserves.
+const COVER_LIMIT = 4096;
+function covers(here: string, operand: string): string[] {
+  const names = new Set<string>([operand]);
+  const out = spawnSync("git", ["-C", here, "ls-files", "--", operand], { encoding: "utf8" });
+  if (out.status === 0)
+    for (const name of String(out.stdout ?? "").split("\n")) if (name.trim()) names.add(name.trim());
+  const queue = [resolve(here, operand)];
+  let seen = 0;
+  while (queue.length && seen < COVER_LIMIT) {
+    const dir = queue.pop() as string;
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (++seen > COVER_LIMIT) break;
+      const abs = join(dir, entry);
+      let stat;
+      try {
+        stat = lstatSync(abs);
+      } catch {
+        continue;
+      }
+      names.add(abs);
+      if (stat.isDirectory()) queue.push(abs);
+    }
+  }
+  return [...names];
+}
+
+// The set an operand LIST covers, as one list: every protection test over operands goes through this.
+const covered = (here: string, operands: string[]): string[] => operands.flatMap((op) => covers(here, unquote(op)));
 
 // ---- the room's rail, read-only --------------------------------------------------------------------------------
 // A create is judged against the room's OWN store: `<state root>/rooms/<room>/queue.sqlite`, beside the room's
@@ -627,12 +711,12 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
         const git = gitOf(part);
         const words = part.trim().split(/\s+/);
         const isPatch = !git && words[0] === "patch";
-        if (!isPatch && !(git && /^(apply|am|branch|checkout|restore|stash|switch|cherry-pick|merge|rebase)$/.test(git.verb))) continue;
+        if (!isPatch && !(git && /^(apply|am|branch|checkout|restore|stash|switch|cherry-pick|merge|rebase|update-index|checkout-index|add|rm|mv|commit|read-tree|reset)$/.test(git.verb))) continue;
         const here = git ? resolve(dir, part.match(/(?:^|\s)-C\s+(\S+)/)?.[1] ?? ".") : dir;
 
         if (git && /^(checkout|restore)$/.test(git.verb) && (git.verb === "restore" || git.args.includes("--"))) {
           const after = git.verb === "checkout" ? git.args.slice(git.args.indexOf("--") + 1) : git.args;
-          if (after.filter((a) => !a.startsWith("-")).some((p) => protectedPath(absolute(resolve(here, unquote(p))))))
+          if (covered(here, after.filter((a) => !a.startsWith("-"))).some((p) => blocked(absolute(resolve(here, unquote(p))))))
             return OWNERS_GUARD;
           continue;
         }
@@ -667,7 +751,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
             const ref = rest.find((a) => !a.startsWith("-")) ?? "stash@{0}";
             const names = stashWrites(here, ref);
             if (!names) return unreadableStash;
-            if (names.some((p) => protectedPath(absolute(resolve(here, p))))) return OWNERS_GUARD;
+            if (names.some((p) => blocked(absolute(resolve(here, p))))) return OWNERS_GUARD;
             continue;
           }
           if (sub === "push") {
@@ -678,9 +762,64 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
               dash >= 0
                 ? git.args.slice(dash + 1).filter((a) => !a.startsWith("-"))
                 : [...listedPaths(here, "diff"), ...listedPaths(here, "diff", "--cached")];
-            if (named.some((p) => protectedPath(absolute(resolve(here, p))))) return OWNERS_GUARD;
+            if (named.some((p) => blocked(absolute(resolve(here, p))))) return OWNERS_GUARD;
             continue;
           }
+          continue;
+        }
+
+        // ---- the index side ---------------------------------------------------------------------------------
+        // The index is a MEDIUM, not a staging area (revision 8, ADDENDUM-2026-10-21-index-route-revision-7.md). At
+        // revision 6 all nine of these were allowed and the chain landed: `update-index --add --cacheinfo` writes
+        // the index and not the file, so one `checkout-index -f` puts a modified guard on disk, and one `commit --
+        // <guard>` makes it HEAD - no refused write anywhere in it. The verbs are read as names of what they write,
+        // the index's own content is read where the verb names nothing (`commit`, `checkout-index`), a source the
+        // guard CAN read is read (`read-tree` of a stash entry), and a source it cannot read is refused
+        // (`--index-info`/`--stdin`: the rows arrive on stdin, and the hook sees a command line only).
+        if (git && /^(update-index|checkout-index|add|rm|mv|commit|read-tree|reset)$/.test(git.verb)) {
+          if (git.args.some((a) => a === "--index-info" || a === "--stdin" || /^--pathspec-from-file=(-|\/dev\/stdin)$/.test(a)))
+            return "the paths arrive on stdin, so the guard cannot see which one they write: name the path, or land the change as a commit";
+          if (git.verb === "read-tree" || git.verb === "reset") {
+            // A tree operand is `checkout` of a commit and stays allowed; a STASH entry is the same namespace the
+            // revision-6 rule already reads, and `read-tree -u --reset <stash>` is a one-command import of it.
+            // `reset --mixed <stash>` is the same import one step removed: it puts the entry in the index, which is
+            // what `checkout-index -a` and a whole-index `commit` would then carry (measured by the reviewer).
+            const imported = git.args
+              .filter((a) => !a.startsWith("-"))
+              .map((op) => resolved(here, unquote(op)))
+              .find((sha) => sha !== null && stashEntries(here).has(sha));
+            if (imported) return OWNERS_GUARD;
+            continue;
+          }
+          if (git.verb === "checkout-index" && git.args.some((a) => a === "--prefix" || a.startsWith("--prefix=")))
+            return "checkout-index --prefix names its own destination, so the guard cannot see the paths it writes: check the index out in place";
+          if (git.verb === "checkout-index") {
+            // WHOLE-INDEX MATERIALISATION IS REFUSED OUTRIGHT (lead, 2026-10-21): `-a`/`--all` and the no-operand
+            // form write every index row, so a poisoned index becomes a guard on disk in one command even when the
+            // index looked clean when the hook ran - and `git reset --mixed <stash> && git checkout-index -a -f` is
+            // the pair that would use it. Naming the paths keeps the verb useful (the seat's own files).
+            const noOperand = !git.args.some((a) => !a.startsWith("-"));
+            if (noOperand || git.args.some((a) => a === "--all" || /^-[A-Za-z]*a/.test(a)))
+              return "checkout-index writes the whole index in this form, so the guard cannot see what it materialises: name the paths you are checking out";
+          }
+          // `commit` reads its operands after `--` only: without one the option VALUES (`-m <msg>`) are
+          // indistinguishable from paths. `rm`/`mv` operands are expanded, because a directory names the guard
+          // inside it without naming it.
+          const operands =
+            git.verb === "commit" && !git.args.includes("--")
+              ? []
+              : git.args.includes("--")
+                ? git.args.slice(git.args.indexOf("--") + 1)
+                : git.args.filter((a) => !a.startsWith("-"));
+          const named = [
+            ...(cacheinfoPath(git.args) ? [cacheinfoPath(git.args) as string] : []),
+            ...covered(here, operands),
+          ];
+          if (named.some((p) => blocked(absolute(resolve(here, unquote(p)))))) return OWNERS_GUARD;
+          // Parity: the two verbs that turn an index row into a file or a commit name no path at all, so the
+          // index itself is read. This is the sentence revision 5 assumed, enforced instead of asserted.
+          if (/^(commit|checkout-index)$/.test(git.verb) && indexHoldsBlocked(here))
+            return "the index holds a change to a protected path, so this command would put it on disk or in a commit: land the guard change as a commit the lead merges";
           continue;
         }
 
@@ -701,7 +840,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
         }
         if (text === null)
           return "the patch file cannot be read, so the guard cannot see what it writes; name a file inside your worktrees";
-        if (patchNames(text).some((p) => protectedPath(absolute(resolve(here, p))))) return OWNERS_GUARD;
+        if (patchNames(text).some((p) => blocked(absolute(resolve(here, p))))) return OWNERS_GUARD;
       }
       return "";
     },
@@ -726,10 +865,30 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
   },
   {
     rule: "protected-paths",
-    check: (tool, input) =>
-      writeTargets(tool, input).some((p) => protectedPath(absolute(p)))
+    // The shell side of the same set (revision 9): `rm -r rust/agenthub-runtime/assets` and `mv <dir>` name a
+    // directory and not the guard inside it, so a target is judged as the set it covers. A statement's `cd` moves
+    // the base it is resolved against - the hook's own cwd is the tool call's, not the directory the statement names.
+    check: (tool, input) => {
+      const targets = writeTargets(tool, input);
+      let hit = targets.some((p) => blocked(absolute(p)));
+      if (!hit && tool === "bash") {
+        let dir = process.cwd();
+        for (const part of statements(input)) {
+          const cd = part.trim().match(/^cd\s+(\S+)/);
+          if (cd) {
+            dir = resolve(dir, unquote(cd[1]));
+            continue;
+          }
+          if (covered(dir, statementTargets(part)).some((p) => blocked(absolute(resolve(dir, unquote(p)))))) {
+            hit = true;
+            break;
+          }
+        }
+      }
+      return hit
         ? "the git hooks, the seat guard, and the config, log, budget and park record it rests on, are the owner's to change"
-        : "",
+        : "";
+    },
   },
   {
     // The launcher names the directories this seat may write, its own first (AGENTHUB_WORKTREES, set by the

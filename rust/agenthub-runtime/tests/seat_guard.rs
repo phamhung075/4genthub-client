@@ -1393,9 +1393,8 @@ fn the_index_is_written_by_path_so_the_path_is_read() {
     ] {
         assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case}");
     }
-    // The lead lands the asset by committing it, so the index route is open to the lead: the sanctioned path must not
-    // become a dead end, and `pushAuthority` already decides who the lead is for the push rule.
-    assert_eq!(
+    // The asset is the owner's (owner ruling, 2026-10-21): the index route is refused to the lead like any seat.
+    assert!(
         refusal_for_seat(
             &fresh_dir("lead-index"),
             WORKTREES,
@@ -1403,16 +1402,16 @@ fn the_index_is_written_by_path_so_the_path_is_read() {
             "lead",
             "run_command",
             serde_json::json!({ "CommandLine": format!("cd {here} && git add -- {GUARD_PATH}") }),
-        ),
-        None,
-        "the lead stages the guard"
+        )
+        .is_some(),
+        "the lead does not stage the guard"
     );
 }
 
 /// The index is a MEDIUM (revision 8, the architect's addendum): the verbs that name no path - `commit`, and
 /// `checkout-index -a` - turn whatever the index holds into a commit or a file, so the index itself is read; a
 /// directory operand names the guard inside it without naming it; and `read-tree` of a STASH entry imports one.
-/// The lead is the asset's owner, so every one of these paths is open to the lead for `seat-guard.ts` alone.
+/// The asset is the owner's, so every one of these paths is refused to every seat, the lead included.
 #[test]
 fn the_index_is_read_where_the_verb_names_no_path() {
     let repo = stashed("guard-index-parity");
@@ -1513,14 +1512,12 @@ fn the_index_is_read_where_the_verb_names_no_path() {
     for case in ["git commit -m x"] {
         assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case} over a clean index");
     }
-    // The asset's owner. The lead lands the guard, so the index route and the patch reader are open to it for
-    // `seat-guard.ts`; every other protected path - an installed hook, the git hooks - stays refused.
+    // The asset is the owner's (owner ruling, 2026-10-21): every route that would write `seat-guard.ts` - a commit by
+    // pathspec, a patch reader, a write tool - is refused to the lead exactly as to any other seat.
     let patches = patch_dir(
-        "lead-asset-patch",
+        "seat-asset-patch",
         &[
             ("guard.patch", patch_doc(GUARD_PATH)),
-            // A second protected name in the same document must still refuse the call: the exemption is the
-            // asset, not the file that carries it.
             (
                 "both.patch",
                 format!(
@@ -1531,61 +1528,21 @@ fn the_index_is_read_where_the_verb_names_no_path() {
             ),
         ],
     );
-    let lead = |name: &str, args: serde_json::Value| {
-        refusal_for_seat(
-            &fresh_dir("lead-asset"),
-            WORKTREES,
-            "agenthub--room--lead",
-            "lead",
-            name,
-            args,
-        )
-    };
-    for allowed in [
-        serde_json::json!({ "CommandLine": format!("cd {here} && git commit -m z -- {GUARD_PATH}") }),
-        serde_json::json!({ "CommandLine": format!("cd {} && git apply guard.patch", patches.display()) }),
-        serde_json::json!({ "CommandLine": format!("cd {} && patch -p1 < guard.patch", patches.display()) }),
-        serde_json::json!({ "TargetFile": GUARD_PATH }),
-    ] {
-        let name = if allowed.get("TargetFile").is_some() { "write_to_file" } else { "run_command" };
-        assert_eq!(lead(name, allowed.clone()), None, "the lead lands the asset: {allowed}");
-    }
-    for refused in [
-        serde_json::json!({ "CommandLine": format!("cd {here} && git commit -m z -- scripts/git-hooks/pre-commit") }),
-        // The DESTINATION is a path the verb writes too: the lead may move the asset, not install it as a hook.
-        serde_json::json!({ "CommandLine": format!("cd {here} && git mv {GUARD_PATH} hooks/pre/seat-guard.ts") }),
-        serde_json::json!({ "TargetFile": "scripts/git-hooks/pre-commit" }),
-        serde_json::json!({ "CommandLine": format!("cd {} && git apply both.patch", patches.display()) }),
-    ] {
-        let name = if refused.get("TargetFile").is_some() { "write_to_file" } else { "run_command" };
-        assert!(lead(name, refused.clone()).is_some(), "the lead's exemption is the asset only: {refused}");
-    }
-    // The exemption is the LEAD's, not the asset's: the same three calls from a seat that does not land the guard
-    // are refused (the lead asked whether an exemption row is safe when a non-lead tool call writes - it is,
-    // because grant is a function of the seat and each row is measured under both).
-    let seat = |name: &str, args: serde_json::Value| {
-        refusal_for_seat(
-            &fresh_dir("seat-asset"),
-            WORKTREES,
-            "agenthub--room--go-dev",
-            "go-dev",
-            name,
-            args,
-        )
-    };
-    for refused in [
-        serde_json::json!({ "CommandLine": format!("cd {} && git apply guard.patch", patches.display()) }),
-        serde_json::json!({ "CommandLine": format!("cd {} && patch -p1 < guard.patch", patches.display()) }),
-        serde_json::json!({ "TargetFile": GUARD_PATH }),
-    ] {
-        let name = if refused.get("TargetFile").is_some() { "write_to_file" } else { "run_command" };
-        // A command that would import the asset is refused as git-imports-a-tree, a write-tool call on it as
-        // protected-paths: both are the guard refusing, and the lead's grant is what keeps them apart.
-        let seen = seat(name, refused.clone()).unwrap_or_default();
-        assert!(
-            seen.contains("(git-imports-a-tree)") || seen.contains("(protected-paths)"),
-            "a seat that does not land the guard is refused: {refused} -> {seen}"
-        );
+    for (session, key) in [("agenthub--room--lead", "lead"), ("agenthub--room--go-dev", "go-dev")] {
+        for refused in [
+            serde_json::json!({ "CommandLine": format!("cd {here} && git commit -m z -- {GUARD_PATH}") }),
+            serde_json::json!({ "CommandLine": format!("cd {} && git apply guard.patch", patches.display()) }),
+            serde_json::json!({ "CommandLine": format!("cd {} && patch -p1 < guard.patch", patches.display()) }),
+            serde_json::json!({ "CommandLine": format!("cd {} && git apply both.patch", patches.display()) }),
+            serde_json::json!({ "CommandLine": format!("cd {here} && git mv {GUARD_PATH} hooks/pre/seat-guard.ts") }),
+            serde_json::json!({ "TargetFile": GUARD_PATH }),
+            serde_json::json!({ "TargetFile": "scripts/git-hooks/pre-commit" }),
+        ] {
+            let name = if refused.get("TargetFile").is_some() { "write_to_file" } else { "run_command" };
+            let seen = refusal_for_seat(&fresh_dir(&format!("{key}-asset")), WORKTREES, session, key, name, refused.clone())
+                .unwrap_or_default();
+            assert!(!seen.is_empty(), "no seat lands the guard, {key} included: {refused}");
+        }
     }
 }
 
