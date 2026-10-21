@@ -182,3 +182,11 @@ Measured while building it, which is the inversion this change makes: with the f
 fixtures untouched, the two tests that pinned the carried cwd failed - `TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec`
 exited 3 with `seat go-dev works in /declared/go-dev, not in <room>/wt/go-dev`, and the own-spec test read
 back the cwds the record no longer has. `go test ./...` in `agenthub_client`: every package ok; `go vet ./...` clean.
+
+2026-10-21: `internal/clientskills` gains the S2 windows. `windows_test.go` builds its fixtures in a real
+temporary git repository (`gitTree`, commits dated 2020 so a fact recorded "now" is inside every window)
+and drives `CensusWithEvidence`: one `demote` from a fixture refusal spool, one `promotable` from a
+fixture rail with three landings and two older ones that must not count, a trusted `command:` skill with
+an errored TOOL line that stays `hold` (`commands: 1`, `occurrences: 0`), and a census with no state root
+whose notes name the unread streams instead of promoting on silence. `TestLoadEvidenceReadsTheTypedStreams`
+pins the loader's field-per-signal contract, including that an allowed send is not a fact.

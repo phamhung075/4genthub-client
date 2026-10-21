@@ -53,6 +53,15 @@ type Row struct {
 	Evidence []string `json:"evidence"`
 	Broken   []string `json:"broken"`
 	Verdict  string   `json:"verdict"`
+	// Window is the commit the S2 windows measure from: the record's `since`, or the skill's first commit
+	// when the record names none. It is empty for a tree-only census.
+	Window string `json:"window,omitempty"`
+	// Occurrences counts the typed facts a declared signal matched inside the window, and Refs names them.
+	// Commands counts TOOL lines whose target carried a declared `command:` - counted, never judged.
+	Occurrences int      `json:"occurrences,omitempty"`
+	Commands    int      `json:"commands,omitempty"`
+	Landed      int      `json:"landed,omitempty"`
+	Refs        []string `json:"refs,omitempty"`
 	// Fault is the one-line reason a record or a SKILL.md could not be read; empty otherwise.
 	Fault string `json:"fault,omitempty"`
 }
@@ -227,6 +236,8 @@ type Counts struct {
 	Hold        int `json:"hold"`
 	NoSignal    int `json:"no-signal"`
 	Broken      int `json:"broken-record"`
+	Demote      int `json:"demote"`
+	Promotable  int `json:"promotable"`
 	Trusted     int `json:"trusted"`
 	Provisional int `json:"provisional"`
 }
@@ -243,6 +254,10 @@ func Count(rows []Row) Counts {
 			counts.NoSignal++
 		case VerdictBrokenRecord:
 			counts.Broken++
+		case VerdictDemote:
+			counts.Demote++
+		case VerdictPromotable:
+			counts.Promotable++
 		}
 		switch row.State {
 		case StateTrusted:

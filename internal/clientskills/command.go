@@ -1,7 +1,7 @@
-// The `4genteam skills` verb's first sub-verb, `evidence`: the S1 census. It reads each skill's record and
-// declared signals and prints the one verdict the tree alone can justify - hold, no-signal or
-// broken-record. The windows that turn a signal into `promotable`/`demote` need commits and the typed
-// failure streams, and they are NOT here: a verdict this client cannot justify is worse than a smaller one.
+// The `4genteam skills` verb's `evidence` sub-verb: the census. It reads each skill's record, its declared
+// signals and the typed streams since the commit that set the record's state, and prints one verdict per
+// skill - hold, no-signal, broken-record, promotable or demote. A stream it could not read is named in the
+// report's notes instead of being counted as silence.
 package clientskills
 
 import (
@@ -14,10 +14,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-
 	"strings"
+	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
@@ -114,7 +115,10 @@ func runSkillsEvidence(args []string, stdout, stderr io.Writer) int {
 	tree := Tree{Root: root}
 
 	resolver, note := evidenceResolver(room, root)
-	rows, err := tree.Census(room, resolver)
+	stateRoot, _ := clientenv.ResolveStateRoot("")
+	evidence := LoadEvidence(stateRoot, room, root)
+	evidence.Rows, note = railRows(room, note)
+	rows, windowNotes, err := tree.CensusWithEvidence(room, resolver, evidence, root)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam skills evidence: %v\n", err)
 		return clientcmd.CodeOf(err, clientcmd.ExitUsage)
@@ -143,6 +147,7 @@ func runSkillsEvidence(args []string, stdout, stderr io.Writer) int {
 	if note != "" {
 		report.Notes = append(report.Notes, note)
 	}
+	report.Notes = append(report.Notes, windowNotes...)
 
 	if opts["json"] == "true" {
 		body, err := json.MarshalIndent(report, "", "  ")
@@ -160,9 +165,9 @@ func runSkillsEvidence(args []string, stdout, stderr io.Writer) int {
 // writeEvidenceText prints the human report. The first line is the measurement, then one line per skill:
 // level/name, state, verdict, and the counts a reader needs to know whether the row is silent by accident.
 func writeEvidenceText(w io.Writer, report EvidenceReport) {
-	fmt.Fprintf(w, "room: %s  skills: %d  hold: %d  no-signal: %d  broken-record: %d  trusted: %d\n",
+	fmt.Fprintf(w, "room: %s  skills: %d  hold: %d  no-signal: %d  broken-record: %d  demote: %d  promotable: %d  trusted: %d\n",
 		report.Room, report.Counts.Skills, report.Counts.Hold, report.Counts.NoSignal,
-		report.Counts.Broken, report.Counts.Trusted)
+		report.Counts.Broken, report.Counts.Demote, report.Counts.Promotable, report.Counts.Trusted)
 	fmt.Fprintf(w, "tree: %s\n", report.SkillsRoot)
 	for _, note := range report.Notes {
 		fmt.Fprintf(w, "note: %s\n", note)
@@ -171,6 +176,12 @@ func writeEvidenceText(w io.Writer, report EvidenceReport) {
 		label := row.Level + "/" + row.Name
 		fmt.Fprintf(w, "%-52s %-11s %-13s signals:%d evidence:%d",
 			label, row.State, row.Verdict, len(row.Signals), len(row.Evidence))
+		if row.Occurrences > 0 || row.Commands > 0 || row.Landed > 0 {
+			fmt.Fprintf(w, " occ:%d cmd:%d landed:%d", row.Occurrences, row.Commands, row.Landed)
+		}
+		if len(row.Refs) > 0 {
+			fmt.Fprintf(w, " refs:%s", strings.Join(row.Refs, ","))
+		}
 		if len(row.Broken) > 0 {
 			fmt.Fprintf(w, " broken:%s", strings.Join(row.Broken, ","))
 		}
@@ -255,6 +266,36 @@ func evidenceResolver(room, root string) (Resolver, string) {
 		}
 	}
 	return resolver, strings.Join(notes, "; ")
+}
+
+// railRows hands the census the room's rows, because the census reads no socket: the runtime's own reader
+// answers here, and a rail that cannot be reached leaves the landed count at zero - a skill is then not
+// promoted on a number nobody measured, and the note says why.
+func railRows(room, note string) ([]RailRow, string) {
+	client := clientruntime.NewClient("")
+	if !client.Reachable() {
+		return nil, joinNotes(note, "the room's queue is not reachable, so landings were not counted")
+	}
+	raw, err := client.QueueList(room, clientruntime.QueueListFilter{})
+	if err != nil {
+		return nil, joinNotes(note, "the room's queue could not be listed: "+err.Error())
+	}
+	rows := make([]RailRow, 0, len(raw))
+	for _, row := range raw {
+		created, _ := time.Parse(time.RFC3339Nano, row.TsCreated)
+		updated, _ := time.Parse(time.RFC3339Nano, row.TsUpdated)
+		rows = append(rows, RailRow{ID: row.QitemID, State: row.State, Tags: row.Tags,
+			Created: created, Updated: updated})
+	}
+	return rows, note
+}
+
+// joinNotes appends one note to another without a stray separator.
+func joinNotes(existing, added string) string {
+	if existing == "" {
+		return added
+	}
+	return existing + "; " + added
 }
 
 // isGitWorktree reports whether dir is inside a repository, using one command rather than treating every
