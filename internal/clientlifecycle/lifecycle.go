@@ -322,6 +322,16 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
 		return clientcmd.ExitRoomRefused
 	}
+	// THE SEATS' DIRECTORIES ARE THE ROOM'S OWN, and they are settled BEFORE the process probe, the daemon,
+	// the worktrees step and the first launch: a spec whose cwds name anything but the derived paths is a
+	// definition this verb will not start (seat-worktrees.md - the main checkout takes only the land). The
+	// filled spec is the one the worktrees step ensures, the one the daemon is handed, and therefore the one
+	// spec.json records, so `doctor`'s F1 compares a pane against the path `up` actually launched it in.
+	spec, err = seatCwdsByDerivation(name, spec)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
+		return clientcmd.ExitRoomRefused
+	}
 	// THE PROCESS PROBE RUNS FIRST, BEFORE THE DAEMON, AGENT OR A SEAT (7.12). Every step below reads or
 	// signals processes - `--respawn` stops the daemon and agent, `startAgent` decides whether to start,
 	// and the start grace waits on the report - so a machine whose pgrep or pkill cannot run would act on
@@ -685,40 +695,55 @@ func roomSpecFor(name, teamDir, stateDir string) (clientruntime.RoomSpec, error)
 			"%s defines the room %q, not %q - --room must name the room the definition defines. %s",
 			teamDir, spec.Room, name, upUsage)
 	}
-	return carrySeatCwds(spec, stateDir), nil
+	return spec, nil
 }
 
-// carrySeatCwds folds each seat's working directory from the room's OWN spec file into the definition's
-// spec. The definition is the authority on what a seat IS; the live file is the only record of where it
-// was told to work, because a definition states a cwd only when someone meant to change it. A missing,
-// unreadable or malformed live file leaves the definition untouched - the room then starts exactly as
-// the definition says, which is what `up` did before this pass existed.
-func carrySeatCwds(spec clientruntime.RoomSpec, stateDir string) clientruntime.RoomSpec {
-	raw, err := os.ReadFile(clientruntime.RoomSpecPath(stateDir, spec.Room))
+// seatCwdsByDerivation is where a seat works, and the ruling has ONE answer
+// (ai_docs/core-architecture/seat-worktrees.md): <room>/wt/<key>, derived from the room's seats.
+//
+// It used to be carried forward instead - carrySeatCwds copied whatever cwd the live spec.json held into
+// the definition's blank ones - and that is how a seat came to launch in the shared checkout while
+// doctor's F1 compared its pane against the derived path and refused it (measured 2026-10-21: the lead at
+// /home/daihu/__projects__/4genthub vs <room>/wt/lead, go-dev at wt/go-dev-root vs wt/go-dev). A blank cwd
+// is therefore FILLED from the derivation, so the start, the record it writes and F1 cannot disagree, and a
+// cwd that names anything else is refused BEFORE the first seat starts, naming the seat, its declared
+// path, the derived one and the two ways to settle it.
+func seatCwdsByDerivation(name string, spec clientruntime.RoomSpec) (clientruntime.RoomSpec, error) {
+	roomDir, err := worktreeRoomDir(name)
 	if err != nil {
-		return spec
+		return spec, fmt.Errorf("the seats' worktrees cannot be derived: %w", err)
 	}
-	var live clientruntime.RoomSpec
-	if json.Unmarshal(raw, &live) != nil {
-		return spec
+	seats := make([]clientservices.SeatType, 0, len(spec.Seats))
+	for _, seat := range spec.Seats {
+		seats = append(seats, clientservices.SeatType{Key: seat.SeatKey, Type: seat.SeatType})
 	}
-	// A LIVE cwd that is absent or blank is not a directory to move a seat to: it is the state this fix
-	// exists to stop writing, so it carries nothing.
-	liveCwds := make(map[string]string, len(live.Seats))
-	for _, seat := range live.Seats {
-		if seat.Cwd != nil && strings.TrimSpace(*seat.Cwd) != "" {
-			liveCwds[seat.SeatKey] = *seat.Cwd
-		}
-	}
-	for i := range spec.Seats {
-		if spec.Seats[i].Cwd != nil {
+	derived := make(map[string]string, len(seats))
+	for _, worktree := range clientservices.DerivedWorktrees(roomDir, name, seats) {
+		if worktree.SeatKey == clientservices.Integration {
 			continue
 		}
-		if cwd, found := liveCwds[spec.Seats[i].SeatKey]; found {
-			spec.Seats[i].Cwd = &cwd
-		}
+		derived[worktree.SeatKey] = worktree.Path
 	}
-	return spec
+	for i := range spec.Seats {
+		want, found := derived[spec.Seats[i].SeatKey]
+		if !found {
+			// A seat with no key has no address and no path; DerivedWorktrees skips it for the same reason.
+			continue
+		}
+		declared := ""
+		if spec.Seats[i].Cwd != nil {
+			declared = strings.TrimSpace(*spec.Seats[i].Cwd)
+		}
+		if declared != "" && filepath.Clean(declared) != filepath.Clean(want) {
+			return spec, fmt.Errorf(
+				"seat %s works in %s, not in %s, which is the worktree this room derives for it: drop the "+
+					"seat's cwd so it is derived, or move what is there to the derived path (%s)",
+				spec.Seats[i].SeatKey, declared, want, upUsage)
+		}
+		cwd := want
+		spec.Seats[i].Cwd = &cwd
+	}
+	return spec, nil
 }
 
 // seatStartPlan is the check-then-start decision, pure so it can be pinned without a daemon.

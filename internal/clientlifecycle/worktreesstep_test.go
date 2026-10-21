@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
@@ -156,3 +157,63 @@ func TestUpWorktreesStepKeepsItsRootAndSaysSoWhenTheSeatsSpanTwoRepositories(t *
 		t.Errorf("the disagreement is not named: %q", errOut.String())
 	}
 }
+
+// The derived path is the seat's directory (seat-worktrees.md), so a blank cwd is filled from it: the
+// spec `up` starts is the spec spec.json records, and doctor's F1 compares a pane against exactly this
+// path. Measured 2026-10-21, before this: the lead launched in the shared checkout and go-dev in
+// wt/go-dev-root, neither of them the derived path, so F1 could not pass for either seat.
+func TestUpFillsABlankSeatCwdFromTheDerivation(t *testing.T) {
+	room := worktreeRoomDir
+	worktreeRoomDir = func(string) (string, error) { return "/state/rooms/demo", nil }
+	t.Cleanup(func() { worktreeRoomDir = room })
+
+	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{
+		{SeatKey: "lead", SeatType: "lead"},
+		{SeatKey: "reviewer", SeatType: "reviewer"},
+		// Already the derived path: kept, not rewritten, and a trailing separator is not a difference.
+		{SeatKey: "go-dev", SeatType: "developer", Cwd: strptr("/state/rooms/demo/wt/go-dev/")},
+	}}
+	filled, err := seatCwdsByDerivation("demo", spec)
+	if err != nil {
+		t.Fatalf("seatCwdsByDerivation refused a spec it derives: %v", err)
+	}
+	derived := map[string]string{}
+	for _, worktree := range clientservices.DerivedWorktrees("/state/rooms/demo", "demo", []clientservices.SeatType{
+		{Key: "lead", Type: "lead"}, {Key: "reviewer", Type: "reviewer"}, {Key: "go-dev", Type: "developer"},
+	}) {
+		derived[worktree.SeatKey] = worktree.Path
+	}
+	for _, seat := range filled.Seats {
+		if seat.Cwd == nil {
+			t.Fatalf("seat %s was left without a cwd", seat.SeatKey)
+		}
+		if got, want := *seat.Cwd, derived[seat.SeatKey]; got != want {
+			t.Errorf("seat %s cwd=%q, want the derived %q", seat.SeatKey, got, want)
+		}
+	}
+}
+
+// A cwd that names something else is refused before the first seat starts, and the message carries the
+// seat, its declared path and the derived one: the two ways out are dropping the cwd or moving what is
+// there. The main checkout is the measured case - the lead of this very room.
+func TestUpRefusesASeatCwdThatIsNotTheDerivedWorktree(t *testing.T) {
+	room := worktreeRoomDir
+	worktreeRoomDir = func(string) (string, error) { return "/state/rooms/demo", nil }
+	t.Cleanup(func() { worktreeRoomDir = room })
+
+	spec := clientruntime.RoomSpec{Room: "demo", Seats: []clientruntime.SeatSpec{
+		{SeatKey: "lead", SeatType: "lead", Cwd: strptr("/home/daihu/__projects__/4genthub")},
+		{SeatKey: "go-dev", SeatType: "developer"},
+	}}
+	_, err := seatCwdsByDerivation("demo", spec)
+	if err == nil {
+		t.Fatal("a seat declared in the shared checkout was accepted")
+	}
+	for _, want := range []string{"seat lead", "/home/daihu/__projects__/4genthub", "/state/rooms/demo/wt/lead"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+func strptr(s string) *string { return &s }

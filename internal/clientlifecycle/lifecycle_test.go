@@ -299,71 +299,6 @@ func TestUpRoomOnlyReturnsTheRoomsVerdictAndStopsThere(t *testing.T) {
 	}
 }
 
-// TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec pins the defect measured on 2026-10-17: the live room spec
-// carried five distinct per-seat cwds, and `up --team` - which starts the room from the definition and
-// lets the runtime WRITE spec.json - replaced them with what the definition says (nothing), moving every
-// seat to one directory. The definition wins where it declares a cwd: that is an edit, not a default.
-func TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec(t *testing.T) {
-	restoreAll(t)
-	root := t.TempDir()
-	directory := filepath.Join(root, "rooms", "my-room")
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	live := `{"room":"my-room","seats":[` +
-		`{"seat_key":"lead","cwd":"/work/lead"},` +
-		`{"seat_key":"go-dev","cwd":"/work/go-dev"},` +
-		`{"seat_key":"reviewer","cwd":"   "}]}`
-	if err := os.WriteFile(filepath.Join(directory, "spec.json"), []byte(live), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	team := `{"room":{"slug":"my-room"},` +
-		`"seats":[{"seat_key":"lead","seat_type":"developer","runtime":"omp"},` +
-		`{"seat_key":"go-dev","seat_type":"developer","runtime":"omp","cwd":"/declared/go-dev"},` +
-		`{"seat_key":"fe-dev","seat_type":"developer","runtime":"omp"}],` +
-		`"links":[{"from":"lead","kind":"delegates_to","to":"go-dev"},` +
-		`{"from":"lead","kind":"delegates_to","to":"fe-dev"}],"seat_overlays":{}}`
-	teamDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(teamDir, "team.json"), []byte(team), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	ensureDaemon = func(string, io.Writer) (string, error) { return "/tmp/daemon.log", nil }
-	var sent clientruntime.RoomSpec
-	ensureRoom = func(_ string, spec clientruntime.RoomSpec, _ string, _ io.Writer, _ io.Writer) int {
-		sent = spec
-		return clientcmd.ExitOK
-	}
-
-	var out, errOut bytes.Buffer
-	code := (upCommand{}).Run(context.Background(),
-		[]string{"my-room", "--team", teamDir, "--state-root", root, "--room-only"}, &out, &errOut)
-	if code != clientcmd.ExitOK {
-		t.Fatalf("exit %d (stderr %q)", code, errOut.String())
-	}
-	got := map[string]string{}
-	for _, seat := range sent.Seats {
-		value := "<nil>"
-		if seat.Cwd != nil {
-			value = *seat.Cwd
-		}
-		got[seat.SeatKey] = value
-	}
-	want := map[string]string{
-		"lead":   "/work/lead",
-		"go-dev": "/declared/go-dev",
-		"fe-dev": "<nil>",
-	}
-	for seat, value := range want {
-		if got[seat] != value {
-			t.Errorf("%s cwd = %q, want %q (all: %v)", seat, got[seat], value, got)
-		}
-	}
-	if len(got) != len(want) {
-		t.Errorf("seats = %v, want exactly %d", got, len(want))
-	}
-}
-
 // TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition: `up ROOM` with no --team is exactly what heal's
 // safeguard repair runs (clientheal's Up seam execs `up ROOM`), so a room that already has its record must
 // start from it. Before this, the usage gate refused the invocation every time and the safeguard finding was
@@ -376,12 +311,18 @@ func TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition(t *testing.T) {
 		t.Fatal(err)
 	}
 	live := `{"room":"my-room","seats":[` +
-		`{"seat_key":"lead","seat_type":"developer","runtime":"omp","cwd":"/work/lead"},` +
-		`{"seat_key":"go-dev","seat_type":"developer","runtime":"omp","cwd":"/work/go-dev"}],` +
+		`{"seat_key":"lead","seat_type":"developer","runtime":"omp"},` +
+		`{"seat_key":"go-dev","seat_type":"developer","runtime":"omp"}],` +
 		`"links":[{"from":"lead","kind":"delegates_to","to":"go-dev"}]}`
 	if err := os.WriteFile(filepath.Join(directory, "spec.json"), []byte(live), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
+	// The room directory is the ONE resolution up, doctor and the worktree verbs share (worktreeRoomDir),
+	// so the derived paths come from the seam rather than from the flag this test passes.
+	roomDir := worktreeRoomDir
+	worktreeRoomDir = func(string) (string, error) { return directory, nil }
+	t.Cleanup(func() { worktreeRoomDir = roomDir })
 
 	ensureDaemon = func(string, io.Writer) (string, error) { return "/tmp/daemon.log", nil }
 	started := false
@@ -409,7 +350,13 @@ func TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition(t *testing.T) {
 		}
 		got[seat.SeatKey] = value
 	}
-	want := map[string]string{"lead": "/work/lead", "go-dev": "/work/go-dev"}
+	// THE RECORD NAMES NO CWD, and the start writes the derived one (seat-worktrees.md): that is what makes
+	// doctor's F1 able to decide for a seat launched from this record instead of comparing a pane against a
+	// path nobody launches into.
+	want := map[string]string{
+		"lead":   filepath.Join(directory, "wt", "lead"),
+		"go-dev": filepath.Join(directory, "wt", "go-dev"),
+	}
 	for seat, value := range want {
 		if got[seat] != value {
 			t.Errorf("%s cwd = %q, want %q (all: %v)", seat, got[seat], value, got)

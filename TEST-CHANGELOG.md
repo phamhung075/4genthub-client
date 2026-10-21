@@ -166,3 +166,19 @@ refusal IS tested, and the verb was verified by hand against a corrupt file in t
 - `commpolicy.TestBypassSuspected`: the predecessor's rows are removed with the deleted case (they pinned
   a channel no binary can use); `TestBypassSuspectedNilKnown` now proves the nil-known behaviour on
   `tmux send-keys`. `clientsync/agent_test.go` reads the frame key `room`.
+
+## The seat cwd: filled from the derivation, or refused
+
+`TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec` is DELETED - it pinned `carrySeatCwds`, carrying a live
+`spec.json` cwd into a definition that declared none, which the architect's ruling removes. Two rows replace
+it: `TestUpFillsABlankSeatCwdFromTheDerivation` (the fill equals `clientservices.DerivedWorktrees` for a lead,
+a reviewer and a seat already at its path, trailing separator included) and
+`TestUpRefusesASeatCwdThatIsNotTheDerivedWorktree` (the refusal names the seat, the declared shared checkout
+and the derived path). `TestUpStartsARoomFromItsOwnSpecWithNoTeamDefinition` kept its subject - a room starts
+from its own record - and changed its fixture: the record names no cwd and the test now asserts the derived
+path reaches the room start.
+
+Measured while building it, which is the inversion this change makes: with the fill in place and the old
+fixtures untouched, the two tests that pinned the carried cwd failed - `TestUpKeepsEachSeatsCwdFromTheRoomsOwnSpec`
+exited 3 with `seat go-dev works in /declared/go-dev, not in <room>/wt/go-dev`, and the own-spec test read
+back the cwds the record no longer has. `go test ./...` in `agenthub_client`: every package ok; `go vet ./...` clean.
