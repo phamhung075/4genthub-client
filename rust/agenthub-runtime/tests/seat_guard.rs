@@ -1098,10 +1098,21 @@ fn stashed(tag: &str) -> PathBuf {
     git(&["add", "--", "rust/agenthub-runtime"], "add");
     git(&["commit", "-qm", "base"], "commit");
     std::fs::write(dir.join(GUARD_PATH), "changed\n").unwrap();
-    git(&["stash", "push", "-q", "-m", "guard", "--", GUARD_PATH], "stash the guard");
+    git(
+        &["stash", "push", "-q", "-m", "guard", "--", GUARD_PATH],
+        "stash the guard",
+    );
     std::fs::write(dir.join("rust/agenthub-runtime/src/lib.rs"), "changed\n").unwrap();
     git(
-        &["stash", "push", "-q", "-m", "src", "--", "rust/agenthub-runtime/src/lib.rs"],
+        &[
+            "stash",
+            "push",
+            "-q",
+            "-m",
+            "src",
+            "--",
+            "rust/agenthub-runtime/src/lib.rs",
+        ],
         "stash src",
     );
     dir
@@ -1201,7 +1212,10 @@ fn a_destination_flag_is_refused_on_a_writing_form() {
 
 #[test]
 fn a_patch_from_stdin_is_refused() {
-    let dir = patch_dir("git-imports-stdin", &[("guard.patch", patch_doc(GUARD_PATH))]);
+    let dir = patch_dir(
+        "git-imports-stdin",
+        &[("guard.patch", patch_doc(GUARD_PATH))],
+    );
     let here = dir.display();
     // There is no document to read, so the guard cannot see what it writes: both spellings are refused, and
     // `git am` with no argument is the same shape.
@@ -1494,7 +1508,10 @@ fn the_index_is_read_where_the_verb_names_no_path() {
         .current_dir(&repo)
         .status()
         .unwrap();
-    assert!(poison.success(), "the fixture must be able to poison the index");
+    assert!(
+        poison.success(),
+        "the fixture must be able to poison the index"
+    );
     for case in ["git commit -m x", "git checkout-index -a -f"] {
         assert_eq!(
             bash(&format!("cd {here} && {case}")).as_deref(),
@@ -1509,9 +1526,11 @@ fn the_index_is_read_where_the_verb_names_no_path() {
         .status()
         .unwrap()
         .success());
-    for case in ["git commit -m x"] {
-        assert_eq!(bash(&format!("cd {here} && {case}")), None, "{case} over a clean index");
-    }
+    assert_eq!(
+        bash(&format!("cd {here} && git commit -m x")),
+        None,
+        "git commit -m x over a clean index"
+    );
     // The asset is the owner's (owner ruling, 2026-10-21): every route that would write `seat-guard.ts` - a commit by
     // pathspec, a patch reader, a write tool - is refused to the lead exactly as to any other seat.
     let patches = patch_dir(
@@ -1528,7 +1547,10 @@ fn the_index_is_read_where_the_verb_names_no_path() {
             ),
         ],
     );
-    for (session, key) in [("agenthub--room--lead", "lead"), ("agenthub--room--go-dev", "go-dev")] {
+    for (session, key) in [
+        ("agenthub--room--lead", "lead"),
+        ("agenthub--room--go-dev", "go-dev"),
+    ] {
         for refused in [
             serde_json::json!({ "CommandLine": format!("cd {here} && git commit -m z -- {GUARD_PATH}") }),
             serde_json::json!({ "CommandLine": format!("cd {} && git apply guard.patch", patches.display()) }),
@@ -1538,10 +1560,24 @@ fn the_index_is_read_where_the_verb_names_no_path() {
             serde_json::json!({ "TargetFile": GUARD_PATH }),
             serde_json::json!({ "TargetFile": "scripts/git-hooks/pre-commit" }),
         ] {
-            let name = if refused.get("TargetFile").is_some() { "write_to_file" } else { "run_command" };
-            let seen = refusal_for_seat(&fresh_dir(&format!("{key}-asset")), WORKTREES, session, key, name, refused.clone())
-                .unwrap_or_default();
-            assert!(!seen.is_empty(), "no seat lands the guard, {key} included: {refused}");
+            let name = if refused.get("TargetFile").is_some() {
+                "write_to_file"
+            } else {
+                "run_command"
+            };
+            let seen = refusal_for_seat(
+                &fresh_dir(&format!("{key}-asset")),
+                WORKTREES,
+                session,
+                key,
+                name,
+                refused.clone(),
+            )
+            .unwrap_or_default();
+            assert!(
+                !seen.is_empty(),
+                "no seat lands the guard, {key} included: {refused}"
+            );
         }
     }
 }
@@ -1631,7 +1667,13 @@ fn the_pathspec_is_read_as_the_set_it_covers() {
     ] {
         assert_eq!(at(case).as_deref(), Some("git-imports-a-tree"), "{case}");
     }
-    for case in ["git add -u", "git add -a", "git add -p", "git commit -am x", "git commit -a -m x"] {
+    for case in [
+        "git add -u",
+        "git add -a",
+        "git add -p",
+        "git commit -am x",
+        "git commit -a -m x",
+    ] {
         assert_eq!(at(case).as_deref(), Some("git-destructive"), "{case}");
     }
     // The chain the reviewer executed: one call, three calls, same verdict at the first statement that would. The
@@ -1681,8 +1723,15 @@ fn redacted(env: &[(&str, &str)], text: &str) -> String {
     for (name, value) in env {
         command.env(name, value);
     }
-    let mut child = command.spawn().expect("node is needed to run the seat guard");
-    child.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+    let mut child = command
+        .spawn()
+        .expect("node is needed to run the seat guard");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(text.as_bytes())
+        .unwrap();
     String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
 }
 
@@ -1698,7 +1747,10 @@ fn a_tool_result_loses_the_secret_values_and_keeps_its_shape() {
     );
     assert!(!out.contains(carried), "{out}");
     assert!(out.contains("<redacted:AGENTHUB_TOKEN>"), "{out}");
-    assert!(out.ends_with("next line\n"), "the newlines survive: {out:?}");
+    assert!(
+        out.ends_with("next line\n"),
+        "the newlines survive: {out:?}"
+    );
 
     let out = redacted(&[], "AGENTHUB_TOKEN=abc123def456\nkeep this\n");
     assert!(!out.contains("abc123def456"), "{out}");
@@ -1706,21 +1758,35 @@ fn a_tool_result_loses_the_secret_values_and_keeps_its_shape() {
 
     let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0LW9ubHkifQ.ZmFrZS1zaWduYXR1cmUtdGVzdA";
     let key = "sk-fake0test0key0only0000000";
-    let out = redacted(&[], &format!("a {jwt} b\nc {key} d\nAuthorization: Bearer fake0bearer0value0x\n"));
+    let out = redacted(
+        &[],
+        &format!("a {jwt} b\nc {key} d\nAuthorization: Bearer fake0bearer0value0x\n"),
+    );
     for secret in [jwt, key, "fake0bearer0value0x"] {
         assert!(!out.contains(secret), "{secret} survived: {out}");
     }
     assert!(out.starts_with("a ") && out.contains(" b\nc "), "{out}");
 
     let clean = "git status\nOn branch main\n";
-    assert_eq!(redacted(&[], clean), clean, "a result with no secret is unchanged");
+    assert_eq!(
+        redacted(&[], clean),
+        clean,
+        "a result with no secret is unchanged"
+    );
 }
 
 #[test]
 fn an_environment_dump_is_refused_and_a_scoped_environment_is_not() {
     refused(
         "env-dump",
-        &["printenv", "printenv AGENTHUB_TOKEN", "env", "env | grep -c TOKEN", "export -p", "set"],
+        &[
+            "printenv",
+            "printenv AGENTHUB_TOKEN",
+            "env",
+            "env | grep -c TOKEN",
+            "export -p",
+            "set",
+        ],
     );
     allowed(&["env -u TMUX tmux ls", "FOO=1 git status", "set -e"]);
 }
@@ -1729,7 +1795,203 @@ fn an_environment_dump_is_refused_and_a_scoped_environment_is_not() {
 fn a_gh_api_read_of_a_credential_surface_is_refused_and_ci_reads_are_not() {
     refused(
         "gh-api-secret",
-        &["gh api repos/o/r/hooks", "gh api /repos/o/r/actions/secrets"],
+        &[
+            "gh api repos/o/r/hooks",
+            "gh api /repos/o/r/actions/secrets",
+        ],
     );
     allowed(&["gh api repos/o/r/actions/runs"]);
+}
+
+/// One claude-code hook call, `node seat-guard.ts --claude-hook <phase>`, with claude's payload on stdin: the
+/// answer it printed, parsed.
+fn claude_hook(dir: &Path, phase: &str, payload: serde_json::Value) -> serde_json::Value {
+    std::fs::create_dir_all(dir).unwrap();
+    let mut child = Command::new("node")
+        .arg(guard())
+        .args(["--claude-hook", phase])
+        .env("AGENTHUB_SEAT", "dev")
+        .env("AGENTHUB_SESSION_NAME", "agenthub--room--dev")
+        .env_remove("OPENRIG_SESSION_NAME")
+        .env_remove("AGENTHUB_LANES_ROOT")
+        .env("AGENTHUB_WORKTREES", WORKTREES)
+        .env("PI_CODING_AGENT_DIR", dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("node is needed to run the seat guard");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    serde_json::from_slice(&child.wait_with_output().unwrap().stdout)
+        .expect("the guard answers JSON")
+}
+
+/// The rule a claude PreToolUse call is refused by, or `None` when claude is told `allow`.
+fn claude_rule(tool: &str, input: serde_json::Value) -> Option<String> {
+    let answer = claude_hook(
+        &fresh_dir("claude"),
+        "pre",
+        serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": input}),
+    );
+    let out = &answer["hookSpecificOutput"];
+    assert_eq!(out["hookEventName"], "PreToolUse");
+    match out["permissionDecision"].as_str() {
+        Some("allow") => None,
+        Some("deny") => {
+            let reason = out["permissionDecisionReason"].as_str().unwrap();
+            Some(
+                reason
+                    .split(['(', ')'])
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        }
+        other => panic!("claude reads allow or deny, not {other:?}"),
+    }
+}
+
+/// claude's tool names reach the rule the same call reaches through the agy path, which maps to the omp names the
+/// rules are written in: one table, so a name that stops mapping fails here and not in a seat.
+#[test]
+fn a_claude_call_reaches_the_rule_its_omp_name_reaches() {
+    let outside = "/elsewhere/x.txt";
+    let cases: &[(&str, serde_json::Value, &str, serde_json::Value)] = &[
+        (
+            "Bash",
+            serde_json::json!({"command": "cat .env"}),
+            "run_command",
+            serde_json::json!({"CommandLine": "cat .env"}),
+        ),
+        (
+            "Bash",
+            serde_json::json!({"command": "git push origin main"}),
+            "run_command",
+            serde_json::json!({"CommandLine": "git push origin main"}),
+        ),
+        (
+            "Bash",
+            serde_json::json!({"command": "printenv"}),
+            "run_command",
+            serde_json::json!({"CommandLine": "printenv"}),
+        ),
+        (
+            "Bash",
+            serde_json::json!({"command": "env -u TMUX tmux ls"}),
+            "run_command",
+            serde_json::json!({"CommandLine": "env -u TMUX tmux ls"}),
+        ),
+        (
+            "Read",
+            serde_json::json!({"file_path": "/work/wt/dev/.env"}),
+            "view_file",
+            serde_json::json!({"AbsolutePath": "/work/wt/dev/.env"}),
+        ),
+        (
+            "Read",
+            serde_json::json!({"file_path": "/repo/README.md"}),
+            "view_file",
+            serde_json::json!({"AbsolutePath": "/repo/README.md"}),
+        ),
+        (
+            "Write",
+            serde_json::json!({"file_path": outside}),
+            "write_to_file",
+            serde_json::json!({"TargetFile": outside}),
+        ),
+        (
+            "Edit",
+            serde_json::json!({"file_path": outside}),
+            "write_to_file",
+            serde_json::json!({"TargetFile": outside}),
+        ),
+        (
+            "MultiEdit",
+            serde_json::json!({"file_path": outside}),
+            "write_to_file",
+            serde_json::json!({"TargetFile": outside}),
+        ),
+        (
+            "Write",
+            serde_json::json!({"file_path": "/work/wt/dev/src/a.rs"}),
+            "write_to_file",
+            serde_json::json!({"TargetFile": "/work/wt/dev/src/a.rs"}),
+        ),
+    ];
+    for (tool, input, agy, args) in cases {
+        let expected = verdict(agy, args.clone());
+        assert_eq!(claude_rule(tool, input.clone()), expected, "{tool} {input}");
+    }
+    // The rule-bearing cases are refused, so the table cannot pass on a guard that allows everything.
+    assert_eq!(
+        claude_rule(
+            "Bash",
+            serde_json::json!({"command": "git push origin main"})
+        )
+        .as_deref(),
+        Some("push")
+    );
+    assert!(claude_rule("Write", serde_json::json!({"file_path": outside})).is_some());
+    assert_eq!(
+        claude_rule(
+            "Bash",
+            serde_json::json!({"command": "env -u TMUX tmux ls"})
+        ),
+        None
+    );
+    assert_eq!(
+        claude_rule("Read", serde_json::json!({"file_path": "/repo/README.md"})),
+        None
+    );
+    for tool in [
+        "Grep",
+        "Glob",
+        "Task",
+        "WebFetch",
+        "WebSearch",
+        "BashOutput",
+    ] {
+        assert_eq!(
+            claude_rule(
+                tool,
+                serde_json::json!({"pattern": "x", "path": "/work/wt/dev"})
+            ),
+            None,
+            "{tool}"
+        );
+    }
+}
+
+/// PostToolUse answers `{}` and logs the call's outcome once; a refusal is logged by the pre phase as `blocked`.
+#[test]
+fn a_claude_post_call_answers_empty_and_logs_one_line() {
+    let dir = fresh_dir("claude-post");
+    let answer = claude_hook(
+        &dir,
+        "post",
+        serde_json::json!({"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "git status"}}),
+    );
+    assert_eq!(answer, serde_json::json!({}));
+    let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap();
+    let lines: Vec<serde_json::Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "{log}");
+    assert_eq!(lines[0]["outcome"], "ok");
+    assert_eq!(lines[0]["tool"], "bash");
+
+    let dir = fresh_dir("claude-deny");
+    claude_hook(
+        &dir,
+        "pre",
+        serde_json::json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "cat .env"}}),
+    );
+    let log = std::fs::read_to_string(dir.join("tool-calls.jsonl")).unwrap();
+    assert!(log.contains("\"outcome\":\"blocked\""), "{log}");
 }

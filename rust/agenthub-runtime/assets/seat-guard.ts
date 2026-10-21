@@ -1171,6 +1171,89 @@ async function agyHook(phase: string): Promise<void> {
   console.log(JSON.stringify({ decision: "allow" }));
 }
 
+// ---- claude-code ---------------------------------------------------------------------------------------------
+// claude runs a hook only when a settings file names it; the runtime writes that file per seat
+// (`write_claude_guard_settings`, supervisor/mod.rs) and hands it over as `--settings`, so this file is the one
+// the seat's rules live in for every runtime. A PreToolUse hook answers on stdout and exits 0, so the reason is
+// read from the decision rather than from an exit code: `deny` carries the rule and why, `allow` the rest.
+// PostToolUse logs the outcome and answers {}.
+//
+// claude's tool names are its own and the rules' vocabulary is omp's, so the calls that carry a command, a path or
+// a tree are mapped; any other name is kept, and no rule matches a name it does not know.
+
+type ClaudeCall = {
+  tool_name?: string;
+  tool_input?: Record<string, unknown>;
+  error?: string;
+};
+
+const CLAUDE_TOOLS: Record<string, string> = {
+  Bash: "bash",
+  BashOutput: "bash",
+  Read: "read",
+  Edit: "edit",
+  MultiEdit: "edit",
+  Write: "write",
+  Grep: "grep",
+  Glob: "glob",
+  Task: "task",
+  WebFetch: "webfetch",
+  WebSearch: "websearch",
+};
+
+function fromClaude(call: ClaudeCall): { tool: string; input: Record<string, unknown> } {
+  const input = call.tool_input ?? {};
+  const tool = CLAUDE_TOOLS[call.tool_name ?? ""] ?? (call.tool_name ?? "");
+  if (tool === "bash") return { tool, input: { command: input.command } };
+  if (tool === "read" || tool === "write" || tool === "edit") {
+    return { tool, input: { path: input.file_path ?? input.path } };
+  }
+  if (tool === "grep" || tool === "glob") {
+    return { tool, input: { path: input.path, pattern: input.pattern } };
+  }
+  return { tool, input };
+}
+
+function claudeAnswer(decision: "allow" | "deny", reason?: string): string {
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: decision,
+      ...(reason ? { permissionDecisionReason: reason } : {}),
+    },
+  });
+}
+
+async function claudeHook(phase: string): Promise<void> {
+  let raw = "";
+  for await (const chunk of process.stdin) raw += chunk;
+  const payload = JSON.parse(raw || "{}") as ClaudeCall;
+  const { tool, input } = fromClaude(payload);
+  const full = redact(describe(tool, input));
+  if (phase === "post") {
+    record({
+      tool,
+      target: full.slice(0, MAX_TARGET),
+      outcome: payload.error ? "error" : "ok",
+      ...(payload.error ? { error: redact(payload.error).slice(0, MAX_TARGET) } : {}),
+    });
+    console.log("{}");
+    return;
+  }
+  for (const { rule, check } of RULES) {
+    const reason = check(tool, input);
+    if (reason) {
+      record({ tool, target: full.slice(0, MAX_BLOCKED), outcome: "blocked", rule, error: reason });
+      console.log(claudeAnswer("deny", `blocked by seat guard (${rule}): ${reason}`));
+      return;
+    }
+  }
+  console.log(claudeAnswer("allow"));
+}
+
+const claudeFlag = process.argv.indexOf("--claude-hook");
+if (claudeFlag >= 0) await claudeHook(process.argv[claudeFlag + 1] ?? "");
+
 const agyFlag = process.argv.indexOf("--agy-hook");
 if (agyFlag >= 0) await agyHook(process.argv[agyFlag + 1] ?? "");
 

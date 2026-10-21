@@ -473,14 +473,13 @@ fn claude_guard_settings() -> String {
     .to_string()
 }
 
-/// Whether the bundled guard carries the `--claude-hook` mode. It does not yet: the mode is a patch on
-/// `assets/seat-guard.ts`, which `protectedPath` refuses to a seat, and it is written for the owner at
-/// `seats/go-dev/PATCH-2026-10-21-seat-guard-claude-hook.md`. This flag, not a substring of the asset, is the
-/// gate: the asset's own header already describes `--agy-hook` in prose, so a comment mentioning the claude flag
-/// would flip a substring test open while no mode exists and plant a hook that answers nothing. It lands in two
-/// steps - the owner's asset patch, then this flag - and `the_claude_settings_run_the_seat_guard_on_both_phases`
-/// fails if it is true while the asset lacks the mode.
-const GUARD_HAS_CLAUDE_HOOK: bool = false;
+/// Whether the bundled guard carries the `--claude-hook` mode. It does: the owner landed the mode in
+/// `assets/seat-guard.ts` (which `protectedPath` refuses to a seat) together with this flag. This flag, not a
+/// substring of the asset, is the gate: the asset's own header already describes `--agy-hook` in prose, so a
+/// comment mentioning the claude flag would flip a substring test open while no mode exists and plant a hook that
+/// answers nothing. `the_claude_settings_run_the_seat_guard_on_both_phases` fails if it is true while the asset
+/// lacks the mode.
+const GUARD_HAS_CLAUDE_HOOK: bool = true;
 
 /// Whether `path` is the file this runtime wrote: byte for byte the text `claude_guard_settings` produces. A file
 /// that differs was put there by someone else, and a seat's own directory is the runtime's to fill, not to empty -
