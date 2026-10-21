@@ -1,6 +1,6 @@
-// The `4genteam guard` verb: `install` puts the guard's hooks into a checkout, and `run` is what those hooks
-// call. Neither needs a room: the guard is a fact about a checkout, not about a room (one checkout holds every
-// room's worktrees).
+// The `4genteam guard` verb: `install` puts the guard's hooks into a checkout and its entries into the runtime
+// CLIs this machine has, and `run` is what those hooks call. Neither needs a room: the guard is a fact about a
+// checkout and about a home directory, not about a room (one checkout holds every room's worktrees).
 package clientguard
 
 import (
@@ -11,9 +11,10 @@ import (
 	"os"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
-const guardUsage = `usage: 4genteam guard install [--checkout DIR]
+const guardUsage = `usage: 4genteam guard install [--checkout DIR] [--home DIR]
        4genteam guard uninstall [--checkout DIR]
        4genteam guard run pre-commit|pre-push [args...]`
 
@@ -29,15 +30,17 @@ func Commands() []clientcmd.Command { return []clientcmd.Command{guardCommand{}}
 type guardCommand struct{}
 
 func (guardCommand) Name() string    { return "guard" }
-func (guardCommand) Summary() string { return "the git guard: install its hooks, or run one" }
+func (guardCommand) Summary() string { return "the guard: install its git hooks and runtime entries, or run one" }
 
 func (guardCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, guardUsage)
-		fmt.Fprintln(stdout, "\nThe git guard refuses a push from a seat, a commit made in the shared checkout and a commit whose")
+		fmt.Fprintln(stdout, "\nThe guard refuses a push from a seat, a commit made in the shared checkout and a commit whose")
 		fmt.Fprintln(stdout, "author is not the seat's own; it warns when a change looks like it carries a credential. It lives")
 		fmt.Fprintln(stdout, "in git, so it covers every runtime git runs under. `install` writes the hooks git resolves for the")
-		fmt.Fprintln(stdout, "checkout you run it in, and `run` is what those hooks call.")
+		fmt.Fprintln(stdout, "checkout you run it in, and the guarded entry each runtime CLI this machine has reads before a seat")
+		fmt.Fprintln(stdout, "exists (claude's `~/.claude/settings.json`, agy's `~/.gemini/config/hooks.json`); `run` is what")
+		fmt.Fprintln(stdout, "those hooks call.")
 		return clientcmd.ExitOK
 	}
 	if len(args) == 0 {
@@ -60,6 +63,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("guard install", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	checkout := flags.String("checkout", ".", "the checkout whose hooks git should run the guard from")
+	home := flags.String("home", "", "the home whose runtime config files are written (default: the registered user's home)")
 	if err := flags.Parse(args); err != nil {
 		return clientcmd.ExitUsage
 	}
@@ -79,6 +83,30 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "the git guard is in force for %s: %d hook(s) written, and the hooks folder git resolves is "+
 		"the one they went into\n", *checkout, len(installed))
+	// THE RUNTIME SIDE, in the same verb: the git guard covers git, and these entries are what covers a tool
+	// call in a claude or agy window. A machine with none of the runtimes installed writes nothing and says so
+	// in one line.
+	root := *home
+	if root == "" {
+		root, err = clientenv.RealHome()
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam guard install: cannot resolve the home whose runtime configs are "+
+				"written: %v\n", err)
+			return ExitRefused
+		}
+	}
+	hooks, err := InstallRuntimeHooks(root)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam guard install: %v\n", err)
+		return ExitRefused
+	}
+	if len(hooks) == 0 {
+		fmt.Fprintf(stdout, "no claude, agy or gemini config was found under %s, so no runtime entry was written\n", root)
+		return clientcmd.ExitOK
+	}
+	for _, hook := range hooks {
+		fmt.Fprintln(stdout, RuntimeInstallLine(hook))
+	}
 	return clientcmd.ExitOK
 }
 

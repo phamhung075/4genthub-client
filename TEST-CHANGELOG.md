@@ -252,3 +252,17 @@ refused by name) and `TestAQueueLookupThatCouldNotBeMadeIsNotBroken` (the daemon
 checked-and-absent; a failed call is unchecked with its reason). `TestAJevOccurrenceCarriesARefAReaderCanFollow`
 pins the JEV ref as the line's own `timestamp` and `tier`, and the JEV fixture no longer invents an `id` the
 log never writes.
+
+`internal/clientguard/runtimes_test.go` and `internal/clientlifecycle/runtimesrow_test.go` cover the owner-wide
+half of the guard. `TestInstallRuntimeHooksPlacesAGuardedEntryInEachRuntimeAndKeepsTheRestOfTheFile` writes both
+files through the installer and asserts the owner's `env`, their own hook definition, another tool's key in
+agy's file and the file's mode all survive, that the agy entry equals `agyGuardEntry()`, and that a second run
+adds nothing; `TestInstallWritesClaudeAndAgyButReportsGeminiAsHavingNoMode` pins gemini's note and that no file
+is written for it; `TestTheEntryIsFoundInTheFileTheRuntimeReads` covers both nesting shapes;
+`TestAConfigThisClientCannotReadIsReportedAndNotOverwritten` asserts a non-object file is refused by name and
+left byte-identical; `TestADetectedRuntimeWithoutTheEntryIsReportedWithTheFileThatIsMissing`,
+`TestARuntimeThatIsNotOnPathAndHasNoConfigDirIsNotReported` and `TestTheInstallLineSaysWhereTheEntryIsOrWhyThereIsNone`
+cover the report and the verb's line. On the doctor side `TestOneRowPerDetectedRuntimeSaysWhereItIsAndWhatItsConfigSays`,
+`TestARuntimeFoundOnlyByItsConfigDirectoryStillGetsARow`, `TestARuntimeWithNoGuardModeSaysSoAndIsNotARefusal`,
+`TestAConfigThatCannotBeReadIsALineAndNotAFailure` and `TestAHomeThatCannotBeResolvedIsOneRowWithItsReason` pin
+the rows, their lines, and that no case refuses `doctor`.
