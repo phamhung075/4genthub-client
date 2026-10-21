@@ -121,23 +121,33 @@ func ReadRecord(dir string) (Record, bool, error) {
 // proposal is a readable diff. It refuses an invalid record and writes nothing else - no directory is
 // created, because the skill directory must already exist for a record about it to mean anything.
 func WriteRecord(dir string, record Record) error {
-	if record.State == "" {
-		record.State = StateProvisional
-	}
-	if err := record.Validate(); err != nil {
-		return err
-	}
 	if !skillExists(dir) {
 		return usageError(dir + " holds no " + SkillFile + ", so it is not a skill to record")
 	}
-	body, err := json.MarshalIndent(record, "", "  ")
+	body, err := RenderRecord(record)
 	if err != nil {
 		return err
 	}
-	body = append(body, '\n')
 	path := filepath.Join(dir, RecordFile)
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		return fmt.Errorf("cannot write %s: %w", path, err)
 	}
 	return nil
+}
+
+// RenderRecord is the bytes WriteRecord would write, so a caller can tell whether a record would change
+// a file before it writes one - `skills propose` refuses a proposal that changes no line by comparing
+// what the record renders to what is on disk.
+func RenderRecord(record Record) ([]byte, error) {
+	if record.State == "" {
+		record.State = StateProvisional
+	}
+	if err := record.Validate(); err != nil {
+		return nil, err
+	}
+	body, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(body, '\n'), nil
 }

@@ -26,6 +26,8 @@ import (
 const EvidenceSchema = "4genteam.skills.evidence.v1"
 
 const skillsUsage = `usage: 4genteam skills evidence [ROOM] [--skill NAME] [--skills-root DIR] [--json]
+      4genteam skills propose [ROOM] --skill NAME --change fix|derived|captured --from QITEM[,QITEM]
+                               [--draft FILE] [--skills-root DIR]  (writes into YOUR worktree)
 
 Read every skill a room delivers - share/, the room's own, and each seat folder's - and print its state
 (provisional|trusted), its declared signals, its evidence, and one verdict: hold, no-signal (no declared
@@ -40,8 +42,8 @@ The tree is --skills-root, else $AGENTHUB_CLIENT_SKILLS (the one variable the ru
 ROOM comes from the argument, or $AGENTHUB_ROOM.
 `
 
-// skillsCommand is the family verb. Sub-verbs dispatch on the first positional, so `skills evidence` costs
-// one extra word and leaves room for `skills propose` in S3 without a second registration.
+// skillsCommand is the family verb. Sub-verbs dispatch on the first positional: `evidence` reads and reports,
+// `propose` writes an uncommitted proposal into the caller's own worktree, so the two never share a mode.
 type skillsCommand struct{}
 
 func (skillsCommand) Name() string    { return "skills" }
@@ -58,8 +60,10 @@ func (skillsCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 	switch args[0] {
 	case "evidence":
 		return runSkillsEvidence(args[1:], stdout, stderr)
+	case "propose":
+		return runSkillsPropose(args[1:], stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "4genteam skills: unknown sub-verb %q (known: evidence)\n", args[0])
+		fmt.Fprintf(stderr, "4genteam skills: unknown sub-verb %q (known: evidence, propose)\n", args[0])
 		return clientcmd.ExitUsage
 	}
 }
