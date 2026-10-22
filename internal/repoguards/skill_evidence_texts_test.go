@@ -61,7 +61,7 @@ func TestEveryCommitStepNamesTheCheckTheRulingChose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seat-crew: %v", err)
 	}
-	for _, want := range []string{"commit-msg", "blind to a pathspec commit's", "path set", "on main yet", "lands with the parked patch"} {
+	for _, want := range []string{"commit-msg", "blind to a pathspec commit's", "path set", "on main yet", "lands with the parked patch", "8 characters", "NOT exempt", "two DIFFERENT values"} {
 		if !strings.Contains(string(share), want) {
 			t.Errorf("seat-crew does not carry %q, so it moves the check to a home the ruling measured blind, or presents a parked arm as live", want)
 		}

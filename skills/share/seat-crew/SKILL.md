@@ -40,14 +40,19 @@ Rule of thumb: if the work makes more intermediate text than final text, a worke
 
 ## The Skill-Evidence trailer (2026-10-22)
 
-A commit whose path set carries a skill file - `skills/**`, and `agenthub_client/skills/**` in the client -
-carries exactly one `Skill-Evidence:` trailer, and its value is one of three shapes:
+A commit whose path set carries a skill file - the client commit spells it `skills/**`; the hub's own spelling
+is `agenthub_client/skills/**` - carries a `Skill-Evidence:` trailer, and its value is one of three shapes:
 
 ```
 Skill-Evidence: qitem-<14 digits>-<12 hex>                                # the row that ordered the edit
 Skill-Evidence: ... 4genteam skills evidence <args> ... <what it said>    # the census run you made
 Skill-Evidence: none - <reason>                                           # an edit no stream ordered
 ```
+
+One key is enough; repeating it with the SAME value is accepted, two DIFFERENT values are refused. The
+`none - <reason>` reason must be 8 characters or more (`none - typo` is refused), and the census command must be
+followed by 8 or more further characters, so the command alone does not pass. A message that starts `Merge ` and
+a commit made on a host that is not a seat are exempt; the lead is NOT exempt.
 
 The check is the commit wrapper `scripts/git-hooks/git_commit_capture.py` - the one place that sees the PATH SET
 and the MESSAGE together - and it runs in whichever repo you commit IN: in the hub by that path, in the client by
