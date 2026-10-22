@@ -320,6 +320,66 @@ func TestPinsCompareStates(t *testing.T) {
 	})
 }
 
+// submoduleFixture is the shape this room has: the hub RECORDS the client sha as a gitlink, and the client
+// CHECKOUT - a separate repo inside it - is the only place that sha is an object. hubHead is the hub's own
+// HEAD, which is what a seat working in a hub worktree passes as its head.
+func submoduleFixture(t *testing.T) (hub, client, pin, hubHead string) {
+	t.Helper()
+	isolateGit(t)
+	hub = newRepo(t, filepath.Join(t.TempDir(), "hub"))
+	writeFile(t, hub, "README.md", "hub\n")
+	commit(t, hub, "hub")
+	client = newRepo(t, filepath.Join(hub, gitlinkName))
+	writeFile(t, client, "a.txt", "one\n")
+	pin = commit(t, client, "one")
+	runGit(t, hub, "update-index", "--add", "--cacheinfo", "160000,"+pin+","+gitlinkName)
+	runGit(t, hub, "commit", "-qm", "pin")
+	return hub, client, pin, runGit(t, hub, "rev-parse", "HEAD")
+}
+
+// TestPinsResolvesTheGitlinkInTheSubmoduleCheckout: the pin's commit lives in the submodule checkout, not in
+// the repo that records it, so the comparison and the reported head are that checkout's. A seat in a hub
+// worktree, answering pins.state=unavailable "Invalid symmetric difference" every session, is this case.
+func TestPinsResolvesTheGitlinkInTheSubmoduleCheckout(t *testing.T) {
+	hub, client, pin, hubHead := submoduleFixture(t)
+
+	got := pinsFacts(hub, hubHead, hub, "main")
+	if got.State != "same" || got.Pin != pin || got.Head != pin || got.Ahead != 0 || got.Behind != 0 {
+		t.Fatalf("pins = %+v, want state same, pin and head %s, ahead 0 behind 0", got, pin)
+	}
+
+	// Discovery without --pins-repo: the caller's own tree carries the gitlink, so it IS the pinning repo.
+	got = pinsFacts(hub, hubHead, "", "main")
+	if got.State != "same" || got.Repo != hub {
+		t.Fatalf("pins = %+v, want state same against the caller's own repo %s", got, hub)
+	}
+
+	// One client commit after the pin: the submodule's head is one ahead, and the hub's head is not consulted.
+	writeFile(t, client, "b.txt", "two\n")
+	commit(t, client, "two")
+	got = pinsFacts(hub, hubHead, hub, "main")
+	if got.State != "ahead" || got.Ahead != 1 || got.Behind != 0 {
+		t.Fatalf("pins = %+v, want state ahead 1 behind 0", got)
+	}
+}
+
+// TestPinsUnavailableWhenNeitherRepoHoldsThePin: a gitlink naming a commit neither repo has is a fetch away,
+// and the reason says which submodule checkout was read instead of reporting the hub's own git error.
+func TestPinsUnavailableWhenNeitherRepoHoldsThePin(t *testing.T) {
+	hub, _, _, hubHead := submoduleFixture(t)
+	absent := strings.Repeat("a", 40)
+	runGit(t, hub, "update-index", "--add", "--cacheinfo", "160000,"+absent+","+gitlinkName)
+	runGit(t, hub, "commit", "-qm", "a pin the checkout does not hold")
+
+	got := pinsFacts(hub, hubHead, hub, "main")
+	if got.State != "unavailable" || !strings.Contains(got.Reason, gitlinkName) || !strings.Contains(got.Reason, "submodule") {
+		t.Fatalf("pins = %+v, want unavailable with a reason naming the %s submodule", got, gitlinkName)
+	}
+	if got.Pin != absent {
+		t.Fatalf("pins.Pin = %q, want the sha the hub records %q", got.Pin, absent)
+	}
+}
+
 func TestPinsDiscoveryFindsTheParentRepo(t *testing.T) {
 	isolateGit(t)
 	root := t.TempDir()

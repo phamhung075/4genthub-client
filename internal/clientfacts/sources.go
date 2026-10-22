@@ -18,6 +18,10 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
+// gitlinkName is the one submodule this workspace pins: the hub records agenthub_client as a gitlink, and the
+// commit it records is the pin every session start reads.
+const gitlinkName = "agenthub_client"
+
 // The sources are function values for one reason: a test pins the WHOLE block without a daemon, a hub, a
 // network or `gh`. Only repoFacts and pinsFacts run git, against the fixture the test builds.
 var (
@@ -126,10 +130,14 @@ func minInt(a, b int) int {
 	return b
 }
 
-// pinsFacts is the pin-vs-worktree fact. The pinning repo is either named (--pins-repo) or found as the
-// PARENT of this repo's main worktree, which is the layout seats measured by hand: the hub repo holds
-// `agenthub_client` as a gitlink, and its gitlink at ref is the pin this worktree's HEAD is compared with.
-// Discovery is verified, not guessed: the parent must be a git worktree whose tree carries the gitlink.
+// pinsFacts is the pin-vs-worktree fact. The pinning repo is either named (--pins-repo) or found: this repo
+// itself when its tree carries the gitlink at ref (a seat whose worktree IS the hub), else the PARENT of this
+// repo's main worktree (a seat whose worktree is the client submodule). Discovery is verified, not guessed.
+//
+// The pin is compared with the HEAD of the repo that HOLDS its objects: a hub records the client sha and the
+// client checkout holds the commit, so the comparison runs in that checkout and Head reports its HEAD. Read in
+// the repo that records the pin, the compare is "Invalid symmetric difference" - the sha is not an object
+// there - and that is why the fact answered unavailable to every seat in a hub worktree.
 func pinsFacts(dir, head, pinsRepo, pinsRef string) Pins {
 	pins := Pins{Ref: pinsRef, Head: head}
 	if head == "" {
@@ -138,7 +146,7 @@ func pinsFacts(dir, head, pinsRepo, pinsRef string) Pins {
 	}
 	repo := strings.TrimSpace(pinsRepo)
 	if repo == "" {
-		found, err := discoverPinsRepo(dir)
+		found, err := discoverPinsRepo(dir, pinsRef)
 		if err != nil {
 			pins.State, pins.Reason = "unavailable", err.Error()
 			return pins
@@ -152,9 +160,24 @@ func pinsFacts(dir, head, pinsRepo, pinsRef string) Pins {
 		return pins
 	}
 	pins.Pin = pin
+	home, err := pinHome(dir, repo, pin)
+	if err != nil {
+		pins.State, pins.Reason = "unavailable", err.Error()
+		return pins
+	}
+	if !samePath(home, dir) {
+		// The caller is the repo that RECORDS the pin, not the one that holds it: the pin measures the
+		// submodule checkout, so that checkout's HEAD is the head this fact reports.
+		if resolved, err := git(home, "rev-parse", "HEAD"); err == nil {
+			pins.Head = strings.TrimSpace(resolved)
+		} else {
+			pins.State, pins.Reason = "unavailable", err.Error()
+			return pins
+		}
+	}
 	// Same rule as repoFacts: A...B prints the commits in A that B lacks (pin-only = behind) first, then the
 	// commits in B that A lacks (HEAD-only = ahead). Measured on the fixture, not assumed.
-	if counts, err := git(dir, "rev-list", "--left-right", "--count", pin+"..."+head); err == nil {
+	if counts, err := git(home, "rev-list", "--left-right", "--count", pins.Pin+"..."+pins.Head); err == nil {
 		fields := strings.Fields(counts)
 		if len(fields) == 2 {
 			pins.Behind, _ = strconv.Atoi(fields[0])
@@ -165,7 +188,7 @@ func pinsFacts(dir, head, pinsRepo, pinsRef string) Pins {
 		return pins
 	}
 	switch {
-	case pin == head:
+	case pins.Pin == pins.Head:
 		pins.State = "same"
 	case pins.Ahead > 0 && pins.Behind == 0:
 		pins.State = "ahead"
@@ -177,10 +200,32 @@ func pinsFacts(dir, head, pinsRepo, pinsRef string) Pins {
 	return pins
 }
 
-// discoverPinsRepo finds the repo that pins this one, or says why it cannot: the first `git worktree list`
-// entry is the main worktree, whose parent is the pinning repo when the layout is the workspace's
-// (<root>/<worktrees>/<seat> under a hub that holds agenthub_client as a gitlink).
-func discoverPinsRepo(dir string) (string, error) {
+// pinHome is the repo that holds the pin's commit: this repo when it resolves the sha (the caller is the
+// submodule checkout, or the pin is a commit the caller already carries), else the pinning repo's checkout of
+// the gitlink. A sha that neither holds is not a fact this block can report, and the reason names the
+// submodule checkout that was read, so the reader knows which one to fetch.
+func pinHome(dir, pinsRepo, pin string) (string, error) {
+	if _, err := git(dir, "rev-parse", "--verify", "--quiet", pin+"^{commit}"); err == nil {
+		return dir, nil
+	}
+	sub := filepath.Join(pinsRepo, gitlinkName)
+	if _, err := git(sub, "rev-parse", "--verify", "--quiet", pin+"^{commit}"); err == nil {
+		return sub, nil
+	}
+	return "", fmt.Errorf("the pin %s is not an object in %s or in its %s submodule checkout: fetch %s in %s, or check the pin",
+		pin, pinsRepo, gitlinkName, gitlinkName, sub)
+}
+
+// discoverPinsRepo finds the repo that pins this one, or says why it cannot. Two verified shapes, in order:
+// THIS repo when its own tree at ref carries the gitlink (a seat whose worktree is the hub - the workspace's
+// parent is a directory of repos, not a worktree), else the parent of this repo's main worktree (a seat whose
+// worktree is the client submodule, whose parent is the hub).
+func discoverPinsRepo(dir, ref string) (string, error) {
+	if root, err := git(dir, "rev-parse", "--show-toplevel"); err == nil {
+		if _, err := pinAt(strings.TrimSpace(root), ref); err == nil {
+			return strings.TrimSpace(root), nil
+		}
+	}
 	out, err := git(dir, "worktree", "list", "--porcelain")
 	if err != nil {
 		return "", fmt.Errorf("the pinning repo could not be discovered: %v", err)
@@ -206,16 +251,16 @@ func discoverPinsRepo(dir string) (string, error) {
 	return parent, nil
 }
 
-// pinAt is the gitlink `ls-tree` reports for agenthub_client at ref: "<mode> commit <sha>\t<name>". The mode
+// pinAt is the gitlink `ls-tree` reports for gitlinkName at ref: "<mode> commit <sha>\t<name>". The mode
 // must be 160000 - a plain tree at that name is not a pin, and saying it was would be a wrong fact.
 func pinAt(repo, ref string) (string, error) {
-	out, err := git(repo, "ls-tree", ref, "--", "agenthub_client")
+	out, err := git(repo, "ls-tree", ref, "--", gitlinkName)
 	if err != nil {
 		return "", fmt.Errorf("the pin at %s could not be read: %v", ref, err)
 	}
 	fields := strings.Fields(out)
 	if len(fields) < 3 || fields[0] != "160000" {
-		return "", fmt.Errorf("the pin at %s could not be read: %s holds no agenthub_client gitlink", ref, repo)
+		return "", fmt.Errorf("the pin at %s could not be read: %s holds no %s gitlink", ref, repo, gitlinkName)
 	}
 	return fields[2], nil
 }
