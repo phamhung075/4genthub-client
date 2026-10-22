@@ -29,6 +29,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientguard"
 	"github.com/phamhung075/4genthub-client/internal/clientheal"
 	"github.com/phamhung075/4genthub-client/internal/clientlifecycle"
+	"github.com/phamhung075/4genthub-client/internal/clientllmproxy"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientoutbox"
 	"github.com/phamhung075/4genthub-client/internal/clientpolicy"
@@ -112,6 +113,9 @@ func commands() []clientcmd.Command {
 	registry = append(registry, clientroom.Commands()...)
 	registry = append(registry, clientheal.Commands()...)
 	registry = append(registry, clientguard.Commands()...)
+	// The model-egress listener: one loopback proxy per runtime whose base URL is verified, so every seat's
+	// model request is redacted before it leaves this machine.
+	registry = append(registry, clientllmproxy.Commands()...)
 	registry = append(registry, clientoffpeak.Commands()...)
 	registry = append(registry, clientseat.Commands()...)
 	registry = append(registry, clientpolicy.Commands()...)
