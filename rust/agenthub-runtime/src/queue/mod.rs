@@ -310,8 +310,9 @@ const BODY_FIELDS: [(&str, usize); 4] = [
 ];
 
 /// The create-only body grammar: exactly four lines, in order, one key each, single-line non-empty values
-/// inside their caps. Every refusal is one line naming the rule and the field, the same sentence the Go
-/// client writes (`internal/clientruntime/queue.go`), because both seams refuse the same input.
+/// inside their caps. Every refusal names the rule and the field, the same sentence the Go client writes
+/// (`internal/clientruntime/queue.go`), because both seams refuse the same input; a body over more than one
+/// field cap is refused ONCE, with one line per over-cap field, so a caller fixes them in one pass.
 fn validate_body_schema(body: &str) -> Result<(), String> {
     let lines: Vec<&str> = if body.is_empty() {
         Vec::new()
@@ -341,6 +342,7 @@ fn validate_body_schema(body: &str) -> Result<(), String> {
             .collect::<Vec<_>>()
             .join("\n"));
     }
+    let mut over: Vec<String> = Vec::new();
     for (index, (name, cap)) in BODY_FIELDS.iter().enumerate() {
         let value = lines[index]
             .strip_prefix(&format!("{}: ", name))
@@ -350,11 +352,14 @@ fn validate_body_schema(body: &str) -> Result<(), String> {
         }
         let chars = value.chars().count();
         if chars > *cap {
-            return Err(format!(
+            over.push(format!(
                 "body field '{}' cap: {} chars exceeds the {}-char cap",
                 name, chars, cap
             ));
         }
+    }
+    if !over.is_empty() {
+        return Err(over.join("\n"));
     }
     Ok(())
 }
@@ -1941,6 +1946,29 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             err, "body field 'next' cap: 79 chars exceeds the 78-char cap",
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_body_over_several_field_caps_is_refused_once_naming_each_in_body_order() {
+        let (_dir, store) = temp_store();
+        let body = format!(
+            "facts: {}\nrule: {}\ndecision: {}\nnext: {}",
+            "f".repeat(281),
+            "r".repeat(111),
+            "d".repeat(101),
+            "n".repeat(79)
+        );
+        let err = store
+            .create(typed(None, &["gate"], "s", &body))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "body field 'facts' cap: 281 chars exceeds the 280-char cap\n\
+             body field 'rule' cap: 111 chars exceeds the 110-char cap\n\
+             body field 'decision' cap: 101 chars exceeds the 100-char cap\n\
+             body field 'next' cap: 79 chars exceeds the 78-char cap",
             "{err}"
         );
     }

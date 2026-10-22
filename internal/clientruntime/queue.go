@@ -163,12 +163,21 @@ type RowSchemaRefused struct{ Message string }
 
 func (e *RowSchemaRefused) Error() string { return e.Message }
 
+// BodyFieldCap is one body line's value cap: the key and the chars its value may take.
+type BodyFieldCap struct {
+	Key string
+	Cap int
+}
+
 // bodyFields is the ruled grammar: keys in order and the per-field value caps. The prefixes and newlines
 // cost 32 chars, so the caps (280+110+100+78 = 568) sum with them to the store's 600-char body cap exactly.
-var bodyFields = []struct {
-	key string
-	cap int
-}{{"facts", 280}, {"rule", 110}, {"decision", 100}, {"next", 78}}
+var bodyFields = []BodyFieldCap{{"facts", 280}, {"rule", 110}, {"decision", 100}, {"next", 78}}
+
+// BodyFieldCaps is bodyFields for a caller that RENDERS the rule rather than enforcing it - the queue help
+// prints these numbers, and a help that carries its own copy drifts from the refusal. The slice is a copy.
+func BodyFieldCaps() []BodyFieldCap {
+	return append([]BodyFieldCap(nil), bodyFields...)
+}
 
 // validateCreateRow is the client half of the create-time rule. It runs BEFORE the round trip so a seat is
 // told in one line and writes nothing; the daemon checks the same rule as the authority over its store.
@@ -193,7 +202,7 @@ func validateBodySchema(body string) error {
 		key, _, found := strings.Cut(line, ": ")
 		position := -1
 		for i, field := range bodyFields {
-			if field.key == key {
+			if field.Key == key {
 				position = i
 				break
 			}
@@ -212,18 +221,22 @@ func validateBodySchema(body string) error {
 	if len(lines) < len(bodyFields) {
 		missing := make([]string, 0, len(bodyFields)-len(lines))
 		for _, field := range bodyFields[len(lines):] {
-			missing = append(missing, fmt.Sprintf("body schema: field '%s' is missing", field.key))
+			missing = append(missing, fmt.Sprintf("body schema: field '%s' is missing", field.Key))
 		}
 		return errors.New(strings.Join(missing, "\n"))
 	}
+	var over []string
 	for index, field := range bodyFields {
-		value := strings.TrimPrefix(lines[index], field.key+": ")
+		value := strings.TrimPrefix(lines[index], field.Key+": ")
 		if value == "" {
-			return fmt.Errorf("body schema: field '%s' is empty", field.key)
+			return fmt.Errorf("body schema: field '%s' is empty", field.Key)
 		}
-		if chars := utf8.RuneCountInString(value); chars > field.cap {
-			return fmt.Errorf("body field '%s' cap: %d chars exceeds the %d-char cap", field.key, chars, field.cap)
+		if chars := utf8.RuneCountInString(value); chars > field.Cap {
+			over = append(over, fmt.Sprintf("body field '%s' cap: %d chars exceeds the %d-char cap", field.Key, chars, field.Cap))
 		}
+	}
+	if len(over) > 0 {
+		return errors.New(strings.Join(over, "\n"))
 	}
 	return nil
 }

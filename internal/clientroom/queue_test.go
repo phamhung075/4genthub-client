@@ -490,7 +490,8 @@ func TestRoomQueueListNamesTheSeatSoTheDaemonCanRateLimit(t *testing.T) {
 func TestQueueUsageStatesTheTypedRowRules(t *testing.T) {
 	var out strings.Builder
 	printQueueUsage(&out, "create")
-	for _, want := range []string{"low|normal|high", "prod-break", "<= 120", "body <= 600", "no change since"} {
+	for _, want := range []string{"low|normal|high", "prod-break", "<= 120", "body <= 600", "no change since",
+		"facts <= 280, rule <= 110, decision <= 100, next <= 78", "naming every over-cap line"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("usage lacks %q:\n%s", want, out.String())
 		}

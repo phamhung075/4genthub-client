@@ -249,6 +249,9 @@ func TestQueueCreateRefusesEachBodySchemaViolationBeforeAnyFrame(t *testing.T) {
 			"body schema: field 'decision' is empty"},
 		{"per-field cap", longNext, []string{"gate"},
 			"body field 'next' cap: 79 chars exceeds the 78-char cap"},
+		{"two fields over their caps", "facts: " + strings.Repeat("f", 281) + "\nrule: b\ndecision: c\nnext: " + strings.Repeat("n", 79), []string{"gate"},
+			"body field 'facts' cap: 281 chars exceeds the 280-char cap\n" +
+				"body field 'next' cap: 79 chars exceeds the 78-char cap"},
 		{"no tags", schemaBody, nil,
 			"tag rule: a create carries at least one allowed tag"},
 	}

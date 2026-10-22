@@ -123,6 +123,8 @@ func printQueueUsage(out io.Writer, sub string) {
 	fmt.Fprintln(out, "its transitions oldest to newest.")
 	fmt.Fprintln(out, "\nRows are typed; the daemon refuses a create that breaks a rule and names the rule and its cap: priority is")
 	fmt.Fprintln(out, "low, normal or high (default normal); high requires --tag prod-break; summary <= 120 chars, body <= 600;")
+	fmt.Fprintln(out, "each body line's value is capped at "+queueBodyFieldCaps()+", and a create over one or")
+	fmt.Fprintln(out, "more of them is refused once, naming every over-cap line;")
 	fmt.Fprintln(out, "tags are lowercase kebab from "+strings.Join(clientruntime.QueueTags, ", ")+".")
 	fmt.Fprintln(out, "A create's --to is a session name, a seat key, or <seat>@<room>: all three are stored as the session")
 	fmt.Fprintln(out, "name the nudge pass matches, and a value naming no seat of the room is refused before anything is written.")
@@ -135,6 +137,17 @@ func printQueueUsage(out io.Writer, sub string) {
 	fmt.Fprintln(out, "\nExit codes (design §2.5): 0 the daemon answered; 2 an operation the daemon refused (a row that is not")
 	fmt.Fprintln(out, "pending, an unknown id, a value the store will not take); 3 a usage error, a missing actor, or a room")
 	fmt.Fprintln(out, "the daemon does not know.")
+}
+
+// queueBodyFieldCaps renders the ruled per-field caps as the help names them, from clientruntime's own
+// table: a help that carried its own copy of the numbers would drift from the refusal the client writes.
+func queueBodyFieldCaps() string {
+	caps := clientruntime.BodyFieldCaps()
+	parts := make([]string, 0, len(caps))
+	for _, field := range caps {
+		parts = append(parts, fmt.Sprintf("%s <= %d", field.Key, field.Cap))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // queueArgs is one queue sub-verb's resolved arguments: the pair every sub-verb prints (room, state dir,
