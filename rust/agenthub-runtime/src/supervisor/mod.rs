@@ -2103,6 +2103,12 @@ impl RoomSupervisor {
             // (`queue::unblock_dependents` returns the row to `pending` in the close's own transaction).
             .filter(|row| row.state != "blocked")
             .filter(|row| names.iter().any(|name| name == &row.destination_session))
+            // A ROW THAT NAMED WHEN TO ASK AGAIN IS NOT ASKED BEFORE THEN. `wake_after_seconds` counted from
+            // the row's last transition is the row's own word; the alert and the nudge pass both stand on
+            // this list, so reading it here is what keeps an owner-decision row that named hours from being
+            // raised (and ladder-spent) seconds after it was written. Measured 2026-10-22 (lead's review item
+            // 5): three attempts inside 19s on a row only the owner could answer.
+            .filter(|row| row.wake_due(Utc::now()))
             .map(|row| row.qitem_id)
             .collect())
     }
@@ -3946,6 +3952,39 @@ mod tests {
         for id in expected_ids {
             assert!(waiting.contains(&id), "{id} missing from {waiting:?}");
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A row that named an interval is not waiting work until the interval elapses: the join drops it, so
+    /// neither the status alert nor the nudge pass raises a row that said when to ask again. Measured
+    /// 2026-10-22 (lead's review item 5): an owner-decision row that named hours was nudged at 1s/2s/4s and
+    /// spent its whole three-attempt ladder in 19 seconds.
+    #[tokio::test]
+    async fn waiting_rows_hold_a_row_until_the_interval_it_named_has_elapsed() {
+        let dir = scratch("waiting-rows-wake");
+        let seat = seat_key("wake");
+        write_spec(&dir, "demo", &seat);
+        let session = RoomSupervisor::session_name("demo", &seat);
+        let supervisor = supervisor_at(&dir);
+        let (due_at, sleeping) = {
+            let store = supervisor.queue_store("demo").expect("open the rail");
+            let mut due = waiting_row("lead", session.clone(), "due now");
+            due.wake_after_seconds = Some(0);
+            let due = store.create(due).expect("create");
+            let mut sleeping = waiting_row("lead", session.clone(), "asleep for an hour");
+            sleeping.wake_after_seconds = Some(3600);
+            let sleeping = store.create(sleeping).expect("create");
+            (due.qitem_id, sleeping.qitem_id)
+        };
+
+        let waiting = supervisor
+            .waiting_rows("demo", &session, &seat)
+            .expect("the rail is readable");
+        assert!(waiting.contains(&due_at), "a due row is waiting work: {waiting:?}");
+        assert!(
+            !waiting.contains(&sleeping),
+            "a row that named 3600s must not be raised before then: {waiting:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

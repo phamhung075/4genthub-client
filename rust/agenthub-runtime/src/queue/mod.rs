@@ -26,6 +26,7 @@
 //! `handed-off` being intermediate is why `close` with reason `handed_off_to` records two transitions
 //! (…→handed-off, handed-off→done): the row ends `done`, and the trail still shows who it was handed to.
 
+use chrono::{DateTime, Duration as TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -72,6 +73,31 @@ pub struct Row {
     pub ts_created: String,
     pub ts_updated: String,
     pub transitions: Vec<Transition>,
+}
+
+impl Row {
+    /// When this row says it may be raised again: its own `wake_after_seconds` counted from its LAST
+    /// transition. `None` for a row that names no interval - that row is due at once, which is every row
+    /// that does not say otherwise.
+    ///
+    /// The interval is the row's own word, and until 2026-10-22 no who-behind read it: an owner-decision row
+    /// that named hours was nudged at 1s/2s/4s and spent its whole ladder in 19 seconds (lead's review item 5, row
+    /// qitem-20261022200205). A negative interval is read as 0 rather than as "in the past", so a bad value cannot
+    /// make the row due before its last transition.
+    pub fn wake_due_at(&self) -> Option<DateTime<Utc>> {
+        let seconds = self.wake_after_seconds?;
+        let from = DateTime::parse_from_rfc3339(&self.ts_updated)
+            .ok()?
+            .with_timezone(&Utc);
+        Some(from + TimeDelta::seconds(seconds.max(0)))
+    }
+
+    /// Whether the row's interval has elapsed: a row that is not due is not "work waiting", it is work that
+    /// said when to ask again. An unparseable stamp leaves the row due, because a stamp this store wrote
+    /// failing to parse is not the row's reason to wait.
+    pub fn wake_due(&self, now: DateTime<Utc>) -> bool {
+        self.wake_due_at().map(|at| now >= at).unwrap_or(true)
+    }
 }
 
 /// One append-only transition: who moved the row, when, from where to where, and why.
@@ -1475,6 +1501,44 @@ mod tests {
         assert!(err.contains(&row.qitem_id), "{}", err);
         assert!(err.contains("in-progress"), "{}", err);
         assert_eq!(store.show(&row.qitem_id).unwrap().transitions.len(), 2);
+    }
+
+    #[test]
+    fn a_rows_wake_interval_counts_from_its_last_transition() {
+        let now = Utc::now();
+        let mut row = Row {
+            qitem_id: "qitem-x".into(),
+            state: "pending".into(),
+            summary: "s".into(),
+            body: "b".into(),
+            source_session: "lead".into(),
+            destination_session: "go-dev".into(),
+            chain_of_record: Vec::new(),
+            reply_to: None,
+            blocked_on: None,
+            wake_after_seconds: None,
+            closure_reason: None,
+            closure_target: None,
+            priority: "normal".into(),
+            tags: vec!["handoff".into()],
+            tier: None,
+            ts_created: (now - TimeDelta::seconds(600)).to_rfc3339(),
+            ts_updated: (now - TimeDelta::seconds(600)).to_rfc3339(),
+            transitions: Vec::new(),
+        };
+        assert!(row.wake_due(now), "no interval: due at once");
+        row.wake_after_seconds = Some(300);
+        assert!(row.wake_due(now), "300s after a 600s-old transition is due");
+        assert_eq!(
+            row.wake_due_at().map(|at| at.timestamp()),
+            Some((now - TimeDelta::seconds(300)).timestamp())
+        );
+        row.wake_after_seconds = Some(3600);
+        assert!(!row.wake_due(now), "an hour has not passed");
+        assert!(!row.wake_due(now - TimeDelta::seconds(3000)), "nor before it");
+        assert!(row.wake_due(now + TimeDelta::seconds(3000)), "and it is due after");
+        row.wake_after_seconds = Some(-90);
+        assert!(row.wake_due(now), "a negative interval is 0, never a time before the transition");
     }
 
     #[test]
