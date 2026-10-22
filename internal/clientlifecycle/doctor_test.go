@@ -80,6 +80,15 @@ func newHealthFixture(t *testing.T, listedRooms []string) *healthFixture {
 	// The seats row runs the skills check, which needs a runtime and a room record: no test in this file has
 	// either, so the default is a report with no seats row. A case that wants the row replaces this.
 	seatsRowFor = func(string, string) []seatSkillsRow { return nil }
+	// The model-egress row's verdict is a probe of fixed ports, which this suite never touches (TestMain).
+	// The default here is the row RUNNING with a placeholder detail line, so a case about the safeguard rows
+	// is not made red by model egress; the case that asserts the row replaces this.
+	previousLlmRows := llmRowsFor
+	t.Cleanup(func() { llmRowsFor = previousLlmRows })
+	llmRowsFor = func(string) []llmRow {
+		return []llmRow{{Row: clientservices.Health{Safeguard: clientservices.Llm, State: clientservices.Running, AgeS: clientservices.UnknownAge},
+			Detail: "llm: 2 proxied routes, 3 unproxied (omp-deepseek, codex-unselected, agy), 0 withheld today"}}
+	}
 	// The runtime rows read the operator's own home and PATH: agy, claude and codex detected on this machine would
 	// change what every case below sees. The default is a home with no runtime config and no runtime found; the
 	// case that asserts the rows replaces both seams.

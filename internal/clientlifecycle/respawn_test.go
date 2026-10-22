@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientllmproxy"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 )
@@ -353,6 +354,17 @@ func TestMain(m *testing.M) {
 		_, _ = os.Stderr.WriteString("clientlifecycle.test: refusing to run as a re-executed client: " + strings.Join(os.Args[1:], " ") + "\n")
 		os.Exit(97)
 	}
+	// THE MODEL-EGRESS LISTENERS ARE PROCESSES ON FIXED PORTS, and no test in this suite may bind 7391 or
+	// 7392 or read this machine's live listeners. The default is a machine where every listener is up, so a
+	// case about another row is not made red by model egress; a case about model egress replaces these three
+	// seams itself (llm_test.go).
+	llmMissing = func() []string { return nil }
+	llmWait = func(clientllmproxy.Listener, time.Duration) bool { return true }
+	llmListening = func(clientllmproxy.Listener) bool { return true }
+	// And the redirect writer: `up`'s default state root in these cases is the machine's own, so a test
+	// that reached the real writer would rewrite the operator's .env. A case about the redirect replaces
+	// this seam and points it at a temp root.
+	llmEnsureEnv = func(string) ([]string, error) { return nil, nil }
 	os.Exit(m.Run())
 }
 
