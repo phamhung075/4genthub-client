@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,7 +27,7 @@ func TestStorePersistenceAndOrdering(t *testing.T) {
 	err = store.Enqueue(Intent{
 		ClientEventID: "dec-1",
 		TaskID:        "task-1",
-		Kind:          "claimed",
+		Kind:          "status_changed",
 		BaseSeq:       &baseSeq,
 		Payload:       map[string]any{"seat": "dev"},
 		CreatedAt:     t0.Add(1 * time.Minute),
@@ -131,10 +132,10 @@ func TestManagerDrainAndPull(t *testing.T) {
 						TaskID:    "task-200",
 						Seq:       2,
 						UserSeq:   15,
-						Kind:      "assigned",
+						Kind:      "status_changed",
 						ActorKind: "human",
 						ActorID:   "user-1",
-						Payload:   map[string]any{"assignee": "4genthub-min/lead"},
+						Payload:   map[string]any{"assignee": "4genthub-min/lead", "status": "in_progress"},
 						CreatedAt: time.Now().Format(time.RFC3339),
 					},
 				},
@@ -185,8 +186,9 @@ func TestManagerDrainAndPull(t *testing.T) {
 	if wokenRoom != "4genthub-min" || wokenSeat != "lead" {
 		t.Errorf("Unexpected wake target: %s/%s", wokenRoom, wokenSeat)
 	}
-	if wokenText == "" {
-		t.Errorf("Expected wake text, got empty string")
+	// The brief is the status_changed case's, not the fallback: a swallowed case would still wake the seat.
+	if !strings.Contains(wokenText, "moved to in_progress") {
+		t.Errorf("Expected the status_changed brief, got %q", wokenText)
 	}
 
 	// Second sync should not drain anything because outbox is empty
@@ -207,7 +209,7 @@ func TestManagerRejection(t *testing.T) {
 	_ = store.Enqueue(Intent{
 		ClientEventID: "evt-stale-1",
 		TaskID:        "task-300",
-		Kind:          "claimed",
+		Kind:          "status_changed",
 		Payload:       map[string]any{"seat": "go-dev"},
 		CreatedAt:     time.Now(),
 	})
