@@ -38,6 +38,43 @@ Rule of thumb: if the work makes more intermediate text than final text, a worke
   Name a room only when it is not your own. Measured 2026-10-18: 147 calls failed by typing the id where
   the room belonged, and the verb then answered `the ROOM comes first`.
 
+## The Skill-Evidence trailer (2026-10-22)
+
+A commit whose path set carries a skill file - the client commit spells it `skills/**`; the hub's own spelling
+is `agenthub_client/skills/**` - carries a `Skill-Evidence:` trailer, and its value is one of three shapes:
+
+```
+Skill-Evidence: qitem-<14 digits>-<12 hex>                                # the row that ordered the edit
+Skill-Evidence: ... 4genteam skills evidence <args> ... <what it said>    # the census run you made
+Skill-Evidence: none - <reason>                                           # an edit no stream ordered
+```
+
+One key is enough; repeating it with the SAME value is accepted, two DIFFERENT values are refused. The
+`none - <reason>` reason must be 8 characters or more (`none - typo` is refused), and the census command must be
+followed by 8 or more further characters, so the command alone does not pass. A message that starts `Merge ` and
+a commit made on a host that is not a seat are exempt; the lead is NOT exempt.
+
+The check is the commit wrapper `scripts/git-hooks/git_commit_capture.py` - the one place that sees the PATH SET
+and the MESSAGE together - and it runs in whichever repo you commit IN: in the hub by that path, in the client by
+the same file's absolute path (`$HOME/__projects__/4genthub/scripts/git-hooks/git_commit_capture.py`),
+because clients keep no copy. A hook cannot host this check: a `commit-msg` hook is blind to a pathspec commit's
+path set (the ruling measured it), so a plain `git commit -- <paths>` meets no check at all - commit through the
+wrapper. The skills arm is NOT on main yet: it lands with the parked patch
+(`seats/go-dev/PATCH-2026-10-22-skill-evidence-trailer.{diff,md}`, at the owner's apply), so today the wrapper
+refuses a docs-only commit and does not yet refuse a missing `Skill-Evidence:` - until it does, the trailer is
+the seat's word, not a refusal. The guard judges SHAPE ONLY: no daemon, no census re-run, no verdict. A skill path is not a document - a `SKILL.md`
+is executable instruction - so a skills-only commit is judged by this trailer instead of being refused as
+docs-only. The value names what the edit came from, never a coverage claim:
+
+- the **row** that ordered it, when a row did;
+- the **census run** and what it printed -
+  `4genteam skills evidence <room> --skills-root agenthub_client/skills` (add `--json` for a machine read),
+  with the row it moved;
+- `none - <reason>` for an owner ruling, a new skill, a rename or a typo.
+
+A ref you cannot produce is `none - <reason>`, never a guessed id: `4genteam skills propose --from <ref>`
+refuses a ref it cannot resolve, and the reviewer reads the value.
+
 ## How to start them
 
 **The tool paths.** Path A, `xd://mcp__deepseek_agent` with `{"prompt": "...", "cwd": "<worktree>"}`,
