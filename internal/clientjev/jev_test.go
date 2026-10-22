@@ -76,7 +76,7 @@ func TestEvaluateCriteriaFollowsTheConfiguredThreshold(t *testing.T) {
 	defer server.Close()
 	for threshold, want := range map[float64]Verdict{0.75: Accept, 0.9: Uncertain} {
 		cfg := Config{APIKey: "k", Model: "m", BaseURL: server.URL, Threshold: threshold}
-		got, reason, err := cfg.EvaluateCriteria(context.Background(), []string{"c"}, nil)
+		got, reason, err := cfg.EvaluateCriteria(context.Background(), []string{"c"}, nil, nil)
 		if err != nil || got != want {
 			t.Fatalf("threshold %v: verdict %q (%s), err %v, want %q", threshold, got, reason, err, want)
 		}
@@ -138,7 +138,7 @@ func TestTheCriteriaRequestCarriesTheEvidenceAndNothingElse(t *testing.T) {
 		"The numstat names exactly one path under CHANGELOG/",
 	}
 	cfg := Config{APIKey: "k", Model: "m", BaseURL: server.URL, Threshold: 0.8}
-	if verdict, reason, err := cfg.EvaluateCriteria(context.Background(), criteria, body); err != nil || verdict != Accept {
+	if verdict, reason, err := cfg.EvaluateCriteria(context.Background(), criteria, nil, body); err != nil || verdict != Accept {
 		t.Fatalf("verdict %q (%s), err %v", verdict, reason, err)
 	}
 	if path != "/systemone" || contentType != "application/json" || authorization != "Bearer k" {
@@ -224,7 +224,7 @@ func TestTheCriterionWordingDecidesAndTheRefusalNamesIt(t *testing.T) {
 	body.Test.Command = "go test -count=1 ./fastmcp/..."
 	body.Test.Failed = []string{}
 	cfg := Config{APIKey: "k", Model: "m", BaseURL: server.URL, Threshold: 0.8}
-	verdict, reason, err := cfg.EvaluateCriteria(context.Background(), []string{mechanical, content}, body)
+	verdict, reason, err := cfg.EvaluateCriteria(context.Background(), []string{mechanical, content}, nil, body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestAnUnreadableNumstatIsNeverSentAsZeros(t *testing.T) {
 	defer server.Close()
 	cfg := Config{APIKey: "k", Model: "m", BaseURL: server.URL, Threshold: 0.8}
 	body := clientevidence.Body{BaseSHA: "99cdc0ef", HeadSHA: "0c53c313", Numstat: "garbage\n"}
-	verdict, reason, err := cfg.EvaluateCriteria(context.Background(), []string{"it works"}, body)
+	verdict, reason, err := cfg.EvaluateCriteria(context.Background(), []string{"it works"}, nil, body)
 	if err == nil || verdict != Uncertain {
 		t.Fatalf("verdict %q, reason %q, err %v: want uncertain and an error", verdict, reason, err)
 	}

@@ -217,7 +217,12 @@ func (c Config) SelectChoices(ctx context.Context, summary, detail string, qs []
 // EvaluateCriteria asks whether each acceptance criterion holds for the evidence. Any answer at or
 // below 0.3 rejects, all at or above the configured threshold accept, anything else is uncertain; a missing answer or an
 // error is never an accept.
-func (c Config) EvaluateCriteria(ctx context.Context, criteria []string, evidence any) (Verdict, string, error) {
+//
+// settled is what the gate resolved each criterion to (RULING-2026-10-22-gate-criteria-resolved-facts),
+// keyed criterion_N and carrying VALUES only - a carried path as path#N, counts, the exit code, a sha prefix -
+// so a criterion about a file is settleable without the file crossing O9a's count-only wire. Nil adds no key,
+// which is why the decide path's state is byte-identical to a run without it.
+func (c Config) EvaluateCriteria(ctx context.Context, criteria []string, settled map[string][]string, evidence any) (Verdict, string, error) {
 	questions := make(map[string]any, len(criteria))
 	for i, criterion := range criteria {
 		questions[fmt.Sprintf("criterion_%d", i+1)] = map[string]any{"type": "noul", "instructions": criterion}
@@ -225,6 +230,11 @@ func (c Config) EvaluateCriteria(ctx context.Context, criteria []string, evidenc
 	state, err := countsState(evidence)
 	if err != nil {
 		return Uncertain, err.Error(), err
+	}
+	if len(settled) > 0 {
+		if m, ok := state.(map[string]any); ok {
+			m["resolved"] = settled
+		}
 	}
 	answers, err := c.call(ctx, questions, state)
 	if err != nil {

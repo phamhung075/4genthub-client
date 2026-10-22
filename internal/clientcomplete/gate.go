@@ -68,6 +68,13 @@ const shaPrefix = 7
 // parts, because a path is a fact this gate reads and the wire drops.
 type facts struct {
 	command, exitCode, path, sha, count bool
+	// paths are the carried paths the criterion names, counts the wire count keys it spells with THIS
+	// bundle's value ("lines_added 8"), and shaPrefix the register sha it names at the ruling's floor. They
+	// are what the judge is told a criterion RESOLVED to (RULING-2026-10-22-gate-criteria-resolved-facts):
+	// the fact crosses as data, never as a name, so a criterion about a file is settleable without the file.
+	paths     []string
+	counts    []string
+	shaPrefix string
 }
 
 // any reports whether the criterion names any register fact. Each fact stands on its own - that is the
@@ -83,8 +90,9 @@ func (f facts) any() bool { return f.command || f.exitCode || f.path || f.sha ||
 // the path with "<path>" before Jev sees it, so the judge would be asked whether "<path> is fixed" - a
 // claim whose only fact was removed. The gate knows that in the same millisecond it resolves the criterion,
 // so it refuses instead of spending a judge call and a completion cycle on a verdict it cannot defend.
-// A criterion that carries a path AND another fact stays admitted: the claim then survives the redaction
-// (precedent 35431928: "go -C agenthub_go test <path> -count=1 exits 0" closed at 0.96-0.98).
+// A criterion that carries a path AND another fact stays admitted: the claim then survives the redaction, and
+// the path reaches the judge as its row number with that row's counts (precedent 35431928: "go -C agenthub_go test
+// <path> -count=1 exits 0" closed at 0.96-0.98).
 func (f facts) pathOnly() bool { return f.path && !f.command && !f.exitCode && !f.sha && !f.count }
 
 // names says which of the register's facts a criterion names.
@@ -96,17 +104,62 @@ func (r register) names(criterion string) facts {
 	for _, p := range r.pathList() {
 		if p != "" && strings.Contains(c, p) {
 			f.path = true
-			break
+			f.paths = append(f.paths, p)
 		}
 	}
 	for _, s := range r.shas {
 		if len(s) >= shaPrefix && strings.Contains(strings.ToLower(c), strings.ToLower(s[:shaPrefix])) {
 			f.sha = true
+			f.shaPrefix = s[:shaPrefix]
 			break
 		}
 	}
-	f.count = r.namesACount(c)
+	f.counts = r.resolvedCounts(c)
+	f.count = len(f.counts) > 0
 	return f
+}
+
+// settled is what the criterion resolved to, in the judge's own words: each carried path as `path#N` with
+// the counts of row N in WireRows order, then the command, its exit code, the counts it spells and the sha
+// prefix, each by value. Empty for a criterion that resolves to nothing (the silent case, refused before any
+// call) and for a path those rows do not carry (an invented file stays SILENT, not judgeable).
+func (r register) settled(f facts) []string {
+	var out []string
+	index := r.pathIndex()
+	rows := r.counts.WireRows()
+	for _, p := range f.paths {
+		n, ok := index[p]
+		if !ok {
+			continue
+		}
+		if row := rows[n-1]; row.Binary {
+			out = append(out, fmt.Sprintf("path#%d (binary)", n))
+		} else {
+			out = append(out, fmt.Sprintf("path#%d (added %d, deleted %d)", n, row.Added, row.Deleted))
+		}
+	}
+	if f.command {
+		out = append(out, "command")
+	}
+	if f.exitCode {
+		out = append(out, fmt.Sprintf("exit code %d", r.exitCode))
+	}
+	out = append(out, f.counts...)
+	if f.shaPrefix != "" {
+		out = append(out, "sha "+f.shaPrefix)
+	}
+	return out
+}
+
+// pathIndex maps each carried path to its 1-based position in WireRows order - the SAME order changes[] is
+// in, so the judge's row N is the row the gate measured. Sorted by counts, not by parse order: the sequence
+// is a rule over counts and names nothing.
+func (r register) pathIndex() map[string]int {
+	index := make(map[string]int, len(r.counts.Rows))
+	for i, row := range r.counts.WireRows() {
+		index[row.Path] = i + 1
+	}
+	return index
 }
 
 // countKeys is the wire's count vocabulary and the value each key states. A key is a fact only when the
@@ -129,10 +182,15 @@ var countKeys = []struct {
 // "2c34515" into the tokens 2 and 34515, so a global match would admit "files_changed is 2" on a
 // three-file change whose sha carries a 2. No fixed radius either: "files_changed across the whole change
 // is 7" is still the key's own clause.
-func (r register) namesACount(c string) bool {
+func (r register) namesACount(c string) bool { return len(r.resolvedCounts(c)) > 0 }
+
+// resolvedCounts is namesACount with the answer kept: each wire count key the criterion spells with THIS
+// bundle's value, once, as "key value" - the fact the judge is told the criterion resolved to.
+func (r register) resolvedCounts(c string) []string {
 	c = strings.ToLower(c)
 	type occurrence struct {
 		start, end, value int
+		key               string
 	}
 	var keys []occurrence
 	for _, k := range countKeys {
@@ -143,12 +201,13 @@ func (r register) namesACount(c string) bool {
 				if i < 0 {
 					break
 				}
-				keys = append(keys, occurrence{start: from + i, end: from + i + len(form), value: value})
+				keys = append(keys, occurrence{start: from + i, end: from + i + len(form), value: value, key: k.key})
 				from += i + len(form)
 			}
 		}
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].start < keys[j].start })
+	var resolved []string
 	for i, key := range keys {
 		windowEnd := len(c)
 		for _, next := range keys[i+1:] {
@@ -158,10 +217,20 @@ func (r register) namesACount(c string) bool {
 			}
 		}
 		if n, ok := firstInteger(c[key.end:windowEnd]); ok && n == key.value {
-			return true
+			resolved = appendUnique(resolved, fmt.Sprintf("%s %d", key.key, n))
 		}
 	}
-	return false
+	return resolved
+}
+
+// appendUnique appends value unless it is already present, keeping the order the keys were found in.
+func appendUnique(values []string, value string) []string {
+	for _, have := range values {
+		if have == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // firstInteger is the first whole number in the text, tokenised exactly as containsInteger does (split on
@@ -243,8 +312,10 @@ func baseMismatchWarnings(ctx context.Context, criteria []string, base, head str
 // fact the bundle carries (silent) and the ones whose only fact is a path the wire redacts (blind), the ones
 // that were judgeable, and the register the bundle does carry. R6 of the ruling: a refusal is corrected by
 // REMOVING the claims the bundle cannot carry, so the reader must be told both which claims those are and
-// what the bundle does carry. The blind criterion's advice is the vocabulary the wire does carry - the test
-// command with its exit code, a base/head sha prefix, the counts - not the path that was just taken away.
+// what the bundle does carry. The blind criterion's advice is the facts that settle a file without naming it -
+// the row's counts, the command's exit code, a base/head sha prefix - because the judge is shown the criterion's
+// file as path#N (RULING-2026-10-22-gate-criteria-resolved-facts) and a row number alone is still only "it is in
+// the diff".
 func (r register) refusal(silent, blind, judgeable []int, criteria []string) string {
 	isSilent := make([]bool, len(criteria))
 	for _, i := range silent {
@@ -260,8 +331,10 @@ func (r register) refusal(silent, blind, judgeable []int, criteria []string) str
 		case isSilent[i]:
 			named = append(named, silentClaim(i, criterion))
 		case isBlind[i]:
-			named = append(named, fmt.Sprintf("criterion_%d %q names only a carried path, and the wire redacts a "+
-				"path to <path> before Jev sees it, so the criterion would be judged blind", i+1, criterion))
+			named = append(named, fmt.Sprintf("criterion_%d %q names only a carried path, and a carried path says "+
+				"only that the file is in the diff; pair it with its count (lines_changed %d, lines_added %d, "+
+				"lines_deleted %d), the command's exit code %d, or a sha prefix", i+1, criterion,
+				r.counts.Total(), r.counts.Added, r.counts.Deleted, r.exitCode))
 		}
 	}
 	ids := make([]string, 0, len(judgeable))
@@ -275,8 +348,9 @@ func (r register) refusal(silent, blind, judgeable []int, criteria []string) str
 	return fmt.Sprintf("unjudgeable: %s. The task cannot close and Jev was not asked; judgeable: %s. A criterion "+
 		"must name a fact the judge can read: the test command %q with its exit code %d, a base/head sha prefix "+
 		"(%s), or the counts (files_changed %d, lines_changed %d, lines_added %d, lines_deleted %d) with this "+
-		"bundle's value. The register also carries the numstat paths (%s), but the wire replaces a path with "+
-		"<path>, so a path is not enough on its own", strings.Join(named, "; "), carries, r.command, r.exitCode,
+		"bundle's value. The register also carries the numstat paths (%s), but the judge sees a path as its row "+
+		"number (path#N, N this bundle's WireRows position) and only beside another fact, so a path is not "+
+		"enough on its own", strings.Join(named, "; "), carries, r.command, r.exitCode,
 		strings.Join(r.shas, ", "), r.counts.Files(), r.counts.Total(), r.counts.Added, r.counts.Deleted,
 		strings.Join(r.pathList(), ", "))
 }
@@ -376,6 +450,7 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 	r := register{command: normaliseSpace(body.Test.Command), exitCode: body.Test.ExitCode, counts: stats,
 		shas: []string{body.BaseSHA, body.HeadSHA}}
 	var silent, blind, judgeable []int
+	settled := make(map[string][]string, len(criteria))
 	for i, criterion := range criteria {
 		f := r.names(criterion)
 		switch {
@@ -383,6 +458,9 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 			blind = append(blind, i)
 		case f.any():
 			judgeable = append(judgeable, i)
+			if entry := r.settled(f); len(entry) > 0 {
+				settled[fmt.Sprintf("criterion_%d", i+1)] = entry
+			}
 		default:
 			silent = append(silent, i)
 		}
@@ -391,7 +469,7 @@ func evaluate(ctx context.Context, cfg clientjev.Config, criteria []string, body
 		return result{Verdict: clientjev.Unjudgeable, Reasons: r.refusal(silent, blind, judgeable, criteria),
 			Checks: c, Evaluator: "deterministic"}
 	}
-	verdict, reasons, _ := cfg.EvaluateCriteria(ctx, criteria, body)
+	verdict, reasons, _ := cfg.EvaluateCriteria(ctx, criteria, settled, body)
 	return result{Verdict: verdict, Reasons: reasons, Checks: c, Evaluator: "jev"}
 }
 

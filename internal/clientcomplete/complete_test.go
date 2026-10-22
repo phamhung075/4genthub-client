@@ -612,8 +612,10 @@ func TestPathOnlyCriterionRefusesTheCompletion(t *testing.T) {
 		verdict.Verdict != clientjev.Unjudgeable {
 		t.Fatalf("a path-only criterion must stop the completion: exit %d out %q err %q", code, out, errs)
 	}
-	if !strings.Contains(errs, `criterion_1 "the file a.txt is changed"`) || !strings.Contains(errs, "judged blind") {
-		t.Errorf("the refusal must name the criterion and the redaction: err %q", errs)
+	if !strings.Contains(errs, `criterion_1 "the file a.txt is changed"`) ||
+		!strings.Contains(errs, "a carried path says only that the file is in the diff") ||
+		!strings.Contains(errs, "pair it with its count") {
+		t.Errorf("the refusal must name the criterion and the fact it needs: err %q", errs)
 	}
 	if !strings.Contains(errs, "the task was not completed") {
 		t.Errorf("the enforced refusal must say the task was not completed: err %q", errs)
@@ -818,6 +820,112 @@ func TestAPathPlusCountCriterionIsJudged(t *testing.T) {
 	if got.Verdict != clientjev.Accept || *hits != 1 {
 		t.Errorf("a path plus this bundle's count is readable, so it is judged: got %+v, %d calls", got, *hits)
 	}
+}
+
+// A criterion naming a carried path reaches the judge as path#N - the row's position in WireRows order, the
+// same sequence changes[] is in - with that row's counts. The file itself does not cross (O9a stands).
+func TestACarriedPathReachesTheJudgeAsItsRowNumber(t *testing.T) {
+	cfg, hits, states := stateServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	// measured()'s rows in WireRows order: seat_guard.rs 20/0, roombudget.go 12/3, park.go 8/2, seat-guard.ts 5/1.
+	got := evaluate(context.Background(), cfg,
+		[]string{"the numstat names internal/roombudget/roombudget.go and lines_changed is 51"}, measured())
+	if got.Verdict != clientjev.Accept || *hits != 1 {
+		t.Fatalf("a path plus a count is judgeable: got %+v, %d calls", got, *hits)
+	}
+	if len(*states) != 1 {
+		t.Fatalf("the judge was shown %d states, want 1", len(*states))
+	}
+	resolved, ok := (*states)[0]["resolved"].(map[string]any)
+	if !ok {
+		t.Fatalf("state has no resolved map: %v", (*states)[0])
+	}
+	entry, _ := resolved["criterion_1"].([]any)
+	want := []string{"path#2 (added 12, deleted 3)", "lines_changed 51"}
+	if len(entry) != len(want) {
+		t.Fatalf("resolved = %v, want %v", entry, want)
+	}
+	for i, w := range want {
+		if entry[i] != w {
+			t.Errorf("resolved[%d] = %v, want %q", i, entry[i], w)
+		}
+	}
+}
+
+// The privacy half of the ruling: the encoded request carries the row number and the counts and NONE of the
+// carried paths, so a judge settling a file criterion cannot read the file's name.
+func TestTheGateWireCarriesNoCarriedPath(t *testing.T) {
+	cfg, bodies := rawServer(t, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	got := evaluate(context.Background(), cfg,
+		[]string{"the numstat names internal/roombudget/roombudget.go and lines_changed is 51"}, measured())
+	if got.Verdict != clientjev.Accept || len(*bodies) != 1 {
+		t.Fatalf("got %+v, %d request bodies", got, len(*bodies))
+	}
+	body := (*bodies)[0]
+	for _, path := range []string{"roombudget", "seatpark", "seat_guard", "seat-guard"} {
+		if strings.Contains(body, path) {
+			t.Errorf("the request carries %q:\n%s", path, body)
+		}
+	}
+	if !strings.Contains(body, "path#2 (added 12, deleted 3)") {
+		t.Errorf("the request does not name the resolved row:\n%s", body)
+	}
+}
+
+// A path-only criterion keeps its verdict - a path alone says only that the file is in the diff - and the
+// refusal now teaches the counts that settle it instead of the redaction that used to hide it.
+func TestAPathOnlyCriterionIsRefusedWithTheCountsThatSettleIt(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg,
+		[]string{"the file internal/roombudget/roombudget.go is fixed"}, measured())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" || *hits != 0 {
+		t.Fatalf("got %+v, %d judge calls; want a deterministic refusal", got, *hits)
+	}
+	for _, want := range []string{"a carried path says only that the file is in the diff",
+		"pair it with its count (lines_changed 51, lines_added 45, lines_deleted 6)",
+		"the command's exit code 0", "a sha prefix"} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the refusal lacks %q:\n%s", want, got.Reasons)
+		}
+	}
+}
+
+// A path this bundle does not carry stays SILENT: the key resolves only carried rows, so a criterion
+// inventing a file cannot become judgeable through it.
+func TestACriterionNamingAnUncarriedPathIsStillSilent(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg,
+		[]string{"the file internal/nowhere/missing.go is fixed"}, measured())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" || *hits != 0 {
+		t.Fatalf("an uncarried path is not a fact: got %+v, %d judge calls", got, *hits)
+	}
+	if !strings.Contains(got.Reasons, `criterion_1 "the file internal/nowhere/missing.go is fixed" names no fact this bundle carries`) {
+		t.Errorf("the silent claim must be named as silent:\n%s", got.Reasons)
+	}
+	if strings.Contains(got.Reasons, "names only a carried path") {
+		t.Errorf("an uncarried path is SILENT, not a blind carried one:\n%s", got.Reasons)
+	}
+}
+
+// rawServer is stateServer that keeps each request's bytes, for the assertions whose subject is the encoded
+// payload rather than its parse.
+func rawServer(t *testing.T, reply string) (clientjev.Config, *[]string) {
+	t.Helper()
+	bodies := []string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, reply)
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("TYPESAFE_BASE_URL", srv.URL)
+	t.Setenv("TYPESAFE_API_KEY", "key-secret")
+	t.Setenv("JEV_DECISION_LOG_PATH", filepath.Join(t.TempDir(), "jev.log"))
+	cfg, err := clientjev.FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, &bodies
 }
 
 // TestEvidenceNotStoredNamesTheTaskUnchanged is the consequence line for a refused submission: the
