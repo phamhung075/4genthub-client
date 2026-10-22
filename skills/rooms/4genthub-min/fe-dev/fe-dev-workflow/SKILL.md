@@ -47,8 +47,7 @@ from your guess. You lead a crew of DeepSeek workers; the change is still yours.
      owner's deploy; before it, say the browser check is pending.
 6. **Record**: the commit body is the record (owner ruling 2026-10-21) - what was wrong, what changed,
    how it was verified and whether the browser check ran, naming the tests and their result. There is no
-   changelog file of any kind. A `TEST-CHANGELOG.md` line only for a test-suite change, and only in a repo
-   that still carries that file. One `=== Progress N ===` on the task.
+   changelog file of any kind. One `=== Progress N ===` on the task.
 7. **Commit by pathspec** through `python3 scripts/git-hooks/git_commit_capture.py -- -m "<type(scope): subject>" -- <paths>`,
    then `git show --numstat HEAD`.
 8. **Hand off**: a queue row to `reviewer` (branch, range, the checks and results, what the browser

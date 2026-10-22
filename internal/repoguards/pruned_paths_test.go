@@ -25,25 +25,20 @@ import (
 
 // allowedLiveReferences names the files that may still contain a pruned path as a string, and why. The
 // allowlist is exact files, never directories or prefixes: a whole directory on it would hide the next
-// drift inside.
+// drift inside. Five files, the number the ruling measured; the two workflow skills that carried a dead
+// "TEST-CHANGELOG.md line" clause lost the clause rather than gaining a row here, because a retired
+// convention needs no hand-out.
 var allowedLiveReferences = map[string]string{
-	// The skill now teaches the rule ("the commit body is the record") and has to name what it retired
-	// to be legible; its line is a live instruction, not a dangling citation.
+	// The 2026-10-09 incident where a `git restore` dropped a CHANGELOG.md layer.
 	"skills/client/watch-team/SKILL.md": "the measurement behind the rule it now teaches",
-	// The two workflow skills carry the same one-line carve-out: a TEST-CHANGELOG.md line only in a repo
-	// that still has that file. A seat reading a repo that never pruned needs the name.
-	"skills/rooms/4genthub-min/fe-dev/fe-dev-workflow/SKILL.md": "the carve-out for a repo that still has the file",
-	"skills/rooms/4genthub-min/go-dev/go-dev-workflow/SKILL.md": "the carve-out for a repo that still has the file",
-	// The queue-row schema's ruling quotes a live queue row about a landing, whose paths are data.
+	// A dated ruling record whose example row names a path.
 	"skills/share/queue-row-schema/RULING.md": "a quoted queue row, whose paths are data",
-	// Commit-path and numstat fixtures: the string is a plausible HUB commit path in a test table, not a
-	// citation of this repo's tree.
-	"internal/clientjev/jev_test.go":     "commit-path fixtures for another repo's trailer",
+	// The sample instruction the jev guard must refuse, and the numstat fixture it reads.
+	"internal/clientjev/jev_test.go": "commit-path fixtures for another repo's trailer",
+	// The doc-classifier fixtures for the path it classifies.
 	"internal/clientroom/report_test.go": "path-classification fixtures (a doc edit, a numstat line)",
-	// The skip rule that keeps the retired verb scanner out of changelog trees, in a comment.
+	// The skip that keeps a retired verb out of a retired tree.
 	"internal/retiredverbs/retiredverbs.go": "the comment that records why the scan skips the tree",
-	// Generated parity cases whose header names the command's origin.
-	"internal/secretscan/testdata/redact_cases.json": "the provenance header of generated fixtures",
 	// The guard's own data and code must name what they scan for.
 	"internal/repoguards/pruned_paths_test.go":      "the guard itself",
 	"internal/repoguards/testdata/pruned_paths.txt": "the guard's data",
@@ -64,8 +59,10 @@ func TestAPrunedPathWasDeletedByACommit(t *testing.T) {
 		t.Fatal("testdata/pruned_paths.txt lists nothing: an empty guard passes everything")
 	}
 	for _, path := range pruned {
-		// --all, because a prune may land on a branch that is not an ancestor of this checkout.
-		if strings.TrimSpace(runGit(t, root, "log", "--all", "--diff-filter=D", "--format=%H", "-1", "--", path)) == "" {
+		// --all, because a prune may land on a branch that is not an ancestor of this checkout. The
+		// trailing slash that marks a directory entry is trimmed for the pathspec: git resolves
+		// "CHANGELOG" to the tree whose files were deleted, and treats "CHANGELOG/" as no path at all.
+		if strings.TrimSpace(runGit(t, root, "log", "--all", "--diff-filter=D", "--format=%H", "-1", "--", strings.TrimSuffix(path, "/"))) == "" {
 			t.Errorf("%s has no deletion commit in history: the entry is a typo or a path that was never tracked", path)
 		}
 	}
@@ -199,7 +196,9 @@ func grepTracked(t *testing.T, root string, pruned []string) []prunedHit {
 	return hits
 }
 
-// repoRoot walks up from this package to the module root (the directory holding go.mod).
+// repoRoot walks up from this package's own directory until it finds the repository root (the directory
+// holding .git). No env var and no cwd assumption: a test binary run from the package directory, from a
+// worktree or from the main checkout all land here.
 func repoRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -207,12 +206,12 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("getwd: %v", err)
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatalf("no go.mod above %s", dir)
+			t.Fatalf("no .git above %s", dir)
 		}
 		dir = parent
 	}
