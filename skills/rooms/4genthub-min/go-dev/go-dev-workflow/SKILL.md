@@ -44,8 +44,10 @@ the source of truth over the tests. You lead a crew of DeepSeek workers; the cha
    tests - `cd agenthub_go && go test ./...`; for the client,
    `cd agenthub_client && go test ./... && (cd rust/agenthub-runtime && cargo test --offline)`.
    A red test you did not cause is still reported.
-6. **Record**: one changelog file `CHANGELOG/<date>--<title>.md` for a change that ships, a
-   `TEST-CHANGELOG.md` line for test changes, and one `=== Progress N ===` on the task.
+6. **Record**: the commit body is the record (owner ruling 2026-10-21) - what was wrong, what changed,
+   how it was tested, naming the commands and their result. There is no changelog file of any kind. A
+   `TEST-CHANGELOG.md` line only for a test-suite change, and only in a repo that still carries that file.
+   One `=== Progress N ===` on the task.
 7. **Commit by pathspec** through `python3 scripts/git-hooks/git_commit_capture.py -- -m "<type(scope): subject>" -- <paths>`
    (`git add -N` for a new file first). Then `git show --numstat HEAD`.
 8. **Hand off**: a queue row to `reviewer` with the branch, the commit range, the test commands and
