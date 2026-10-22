@@ -25,7 +25,6 @@ the previous chat and write share beside the new one.
 
 - **A seat that never writes** (lead, reviewer) is judged on chat share and on whether its gate or
   relay can be one row in and one verdict out.
-- **Changelog share of added lines** is the cost of the per-change changelog rule, not a fault.
 - **`notok`** mixes real errors with hook blocks, which are the guard working. Classify the
   `outcome` and `error` fields in `tool-calls.jsonl` before sending a seat a correction.
 

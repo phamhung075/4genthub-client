@@ -21,7 +21,6 @@ named below. Read the owner; do not copy it here.
 | Check | Owner |
 |---|---|
 | Fresh verification evidence before any completion claim | `verification-before-completion` |
-| A changelog entry for a shipped change | `changelog-updater` |
 | A test for the behavior I changed | `test-driven-development` |
 | The branch name and commit range reported to the lead | `seat-worktree` |
 

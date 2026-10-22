@@ -36,8 +36,9 @@ and the verdict to `lead`. Your crew reviews in parallel; you confirm and rank.
    question:
    - correctness and error paths of the changed functions;
    - tests: do they fail without the change, do they exercise it, any red elsewhere in the module;
-   - the hard rules: compatibility or fallback code, entity/ORM mismatch, a missing CHANGELOG file or
-     `TEST-CHANGELOG.md` line, keep-out paths (`.claude/`, `agenthub_go/seatcheck`), secrets;
+   - the hard rules: compatibility or fallback code, entity/ORM mismatch, a commit body that does not
+     say what was wrong, what changed and how it was tested (owner ruling 2026-10-21: there is no
+     changelog file), keep-out paths (`.claude/`, `agenthub_go/seatcheck`), secrets;
    - for a frontend change: types in `src/types`, no local build, duplicated toasts or fetches.
 3. **Confirm** every finding a worker reports: open the line, and re-run the test when the finding
    depends on it. One you cannot confirm is listed under `Unconfirmed`, never as a blocker.

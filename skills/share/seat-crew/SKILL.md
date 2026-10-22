@@ -24,7 +24,7 @@ scanning, drafting and parallel legwork. Your seat's `<seat>-workflow` says what
 
 Rule of thumb: if the work makes more intermediate text than final text, a worker does it.
 
-## Two rules the rail and the changelog enforce (2026-10-18)
+## The rule the rail enforces (2026-10-18)
 
 - **The queue verbs default the room.** Every `4genteam room queue` sub-verb takes `[ROOM]` as its first
   positional and fills it from `$AGENTHUB_ROOM` when it is left out, so a seat's own rail needs no room:
@@ -37,10 +37,6 @@ Rule of thumb: if the work makes more intermediate text than final text, a worke
 
   Name a room only when it is not your own. Measured 2026-10-18: 147 calls failed by typing the id where
   the room belonged, and the verb then answered `the ROOM comes first`.
-- **One changelog file per merged task, not per commit.** A task's fix, its test and its correction share
-  the one `CHANGELOG/<date>--<title>.md`, written with the task's first commit and finished before the
-  merge; a change after the merge is a new task and gets its own file. Test-suite changes go to
-  `TEST-CHANGELOG.md`. Measured 2026-10-18: 56 of 71 commits carried a changelog file restating one task.
 
 ## How to start them
 
@@ -80,7 +76,7 @@ A worker is a fresh agent that knows nothing of this room. The file holds:
 2. **Scope** - the exact paths it may read and, for a write job, the only paths it may change.
    Two write workers never share a file.
 3. **Rules it inherits** - clean code only (no compatibility, fallback or legacy code), the entity/ORM
-   is the source of truth over tests, no `.env` reads, no commits or pushes, no CHANGELOG edits.
+   is the source of truth over tests, no `.env` reads, no commits or pushes.
 4. **Method** - the commands you expect it to run (tests, greps, builds).
 5. **Output contract** - at most 300 words: findings as `file:line - fact`, the commands it ran with
    their exit codes, and an `Unverified:` line.

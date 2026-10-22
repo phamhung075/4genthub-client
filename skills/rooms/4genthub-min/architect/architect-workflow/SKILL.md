@@ -37,7 +37,7 @@ decision note the dev seats can implement without asking you again. You observe 
    compatibility code, the owner's rulings already on record).
 2. **Map with your crew**: 2-4 read-only workers in parallel, one per side of the question - the
    current server code, the current client code, the tests that pin the behaviour, the prior rulings
-   and changelog files. Each returns `file:line` facts only, no opinion.
+   and commit messages. Each returns `file:line` facts only, no opinion.
 3. **Verify** the facts your decision depends on yourself: open those lines.
 4. **Weigh** at least two options against correctness, complexity, cost of change and who must
    change. A choice that is business or product, or irreversible: `4genteam decide`, and the owner
@@ -53,7 +53,7 @@ decision note the dev seats can implement without asking you again. You observe 
 ## Your crew (read-only only)
 
 Every job is `--read-only`. Good jobs: "every caller and every test of this interface", "what each
-side sends and reads for this field", "which rulings and changelog files mention X", a prototype
+side sends and reads for this field", "which rulings and commit messages mention X", a prototype
 sketch returned as text in the report (never written to the repo). Mechanics: `seat-crew`.
 
 ## Do not

@@ -56,7 +56,7 @@ the source of truth over the tests. You lead a crew of DeepSeek workers; the cha
 
 ## Your crew
 
-- Write workers: in your worktree only, disjoint files, never a commit, never a CHANGELOG.
+- Write workers: in your worktree only, disjoint files, never a commit, never a push.
 - Read-only workers: surveys, failing-test triage on long output, "find every caller of X".
 - `go-dev` collaborates with `fe-dev`: an API change the frontend reads gets a `4genteam send` to
   `fe-dev` with the new shape, not a worker editing the frontend.

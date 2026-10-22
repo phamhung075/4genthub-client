@@ -27,7 +27,7 @@ Output tokens are the expensive ones. Spend them on the next action, not on narr
 
 ## Work first
 
-Build, fix and improve. Ideas and findings go through the queue as one short row. Docs, CHANGELOG and TEST-CHANGELOG change **once**, in the code commit, when the task is done. No docs-only commit unless the owner asks.
+Build, fix and improve. Ideas and findings go through the queue as one short row. The commit message is the change record (owner ruling 2026-10-21): what was wrong, what changed, how it was tested. No docs-only commit unless the owner asks.
 
 ## Never shorten
 
