@@ -50,6 +50,8 @@ accepted: the checks alone are not a verdict. The server is not asked to judge.
   --base     REQUIRED. The commit the change is measured from.
   --summary  REQUIRED. The completion summary stored on the task.
   --test     The test command (split in-process, no shell). Without it the deterministic check D3 fails.
+             A criterion that names a test reaches the judge as <test>: name the command that runs it here, e.g.
+             --test "go test ./pkg/ -run '^TestName$' -count=1".
   --notes    Optional testing notes stored on the task.
   --url      Optional. Defaults to $AGENTHUB_URL.
 

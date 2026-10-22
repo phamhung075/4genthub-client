@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/phamhung075/4genthub-client/internal/clientevidence"
 	"github.com/phamhung075/4genthub-client/internal/clientjev"
@@ -258,7 +259,7 @@ func (r register) refusal(silent, blind, judgeable []int, criteria []string) str
 	for i, criterion := range criteria {
 		switch {
 		case isSilent[i]:
-			named = append(named, fmt.Sprintf("criterion_%d %q names no fact this bundle carries", i+1, criterion))
+			named = append(named, silentClaim(i, criterion))
 		case isBlind[i]:
 			named = append(named, fmt.Sprintf("criterion_%d %q names only a carried path, and the wire redacts a "+
 				"path to <path> before Jev sees it, so the criterion would be judged blind", i+1, criterion))
@@ -279,6 +280,38 @@ func (r register) refusal(silent, blind, judgeable []int, criteria []string) str
 		"<path>, so a path is not enough on its own", strings.Join(named, "; "), carries, r.command, r.exitCode,
 		strings.Join(r.shas, ", "), r.counts.Files(), r.counts.Total(), r.counts.Added, r.counts.Deleted,
 		strings.Join(r.pathList(), ", "))
+}
+
+// silentClaim words a criterion that names no register fact. A criterion naming a test is the one silent case
+// with a known replacement: the count-only wire sends the name as <test> (clientjev.RedactForWire), so the
+// criterion is corrected by quoting the narrow command that runs that test and passing it as --test, which the
+// register carries as the command and its exit code. The shape comes from clientjev.IsTestName, the same
+// predicate the redaction uses, so the advice and the wire cannot drift apart.
+func silentClaim(i int, criterion string) string {
+	if !clientjev.IsTestName(criterion) {
+		return fmt.Sprintf("criterion_%d %q names no fact this bundle carries", i+1, criterion)
+	}
+	name := testNameIn(criterion)
+	if name == "" {
+		name = "TestName"
+	}
+	return fmt.Sprintf("criterion_%d %q: a test name reaches the judge as <test>, so name the command that runs "+
+		"it and pass that same command as --test, e.g. `go test <pkg> -run '^%s$' -count=1` exits 0",
+		i+1, criterion, name)
+}
+
+// testNameIn returns the first test-name token a criterion spells, trimmed of the quoting and selector syntax
+// around it ("'^TestX$'" reads as TestX), so the advice can print the command that runs THAT test. It reports
+// "" when the token is not isolable as a word, which leaves silentClaim its generic placeholder.
+func testNameIn(criterion string) string {
+	fields := strings.FieldsFunc(criterion, func(r rune) bool { return unicode.IsSpace(r) || r == '|' })
+	for _, field := range fields {
+		name := strings.Trim(field, "\"'`()[]{}<>,.;:^$")
+		if clientjev.IsTestName(name) {
+			return name
+		}
+	}
+	return ""
 }
 
 // normaliseSpace folds every run of whitespace into one space, which is the form the ruling defines the

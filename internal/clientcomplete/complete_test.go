@@ -962,3 +962,38 @@ func TestAHexWordThatNamesNoCommitIsNotABase(t *testing.T) {
 		t.Errorf("a token that resolves to no commit is not warned: stderr %q", errs)
 	}
 }
+
+// A silent criterion that names a test is the case the wire cannot carry: the gate names the replacement -
+// the narrow command to pass as --test - instead of leaving the seat to invent it.
+func TestATestNameCriterionPrintsTheCommandThatReplacesIt(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, []string{"TestListenerStartsForEverySeat passes"}, passing())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" || *hits != 0 {
+		t.Fatalf("a test name is not a fact the bundle carries: got %+v, %d judge calls", got, *hits)
+	}
+	for _, want := range []string{
+		`criterion_1 "TestListenerStartsForEverySeat passes"`,
+		"a test name reaches the judge as <test>",
+		"pass that same command as --test",
+		`go test <pkg> -run '^TestListenerStartsForEverySeat$' -count=1`,
+	} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the refusal must print the form that replaces a test name (%q is missing):\n%s", want, got.Reasons)
+		}
+	}
+}
+
+// The command the advice teaches is itself a register fact: a criterion quoting the narrow command is judged,
+// and the advice it replaces is not printed.
+func TestACriterionQuotingTheNarrowCommandIsJudged(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.97}}}`)
+	body := passing()
+	body.Test.Command = "go test ./internal/clientllm/ -run '^TestListenerStartsForEverySeat$' -count=1"
+	got := evaluate(context.Background(), cfg, []string{"`" + body.Test.Command + "` exits 0"}, body)
+	if got.Verdict != clientjev.Accept || got.Evaluator != "jev" || *hits != 1 {
+		t.Fatalf("a criterion naming the submitted command is judged: got %+v, %d judge calls", got, *hits)
+	}
+	if strings.Contains(got.Reasons, "a test name reaches the judge as <test>") {
+		t.Errorf("a judged criterion must not carry the refusal's advice:\n%s", got.Reasons)
+	}
+}

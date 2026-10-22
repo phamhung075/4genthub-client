@@ -37,6 +37,11 @@ func RedactForWire(s string) string {
 	return s
 }
 
+// IsTestName reports whether s carries a test-name token - the Test*/Benchmark*/Example* shape RedactForWire
+// replaces with <test>. The shape is spelled here once: the redaction above and the completion gate's advice
+// about a criterion that names a test both read it, so the advice cannot teach a name the wire would drop.
+func IsTestName(s string) bool { return testToken.MatchString(s) }
+
 // redactPayload encodes the request with every string shaped by RedactForWire. The walk is over the
 // ENCODED payload decoded back to `any`, because the questions are structs and maps of strings by the
 // time they reach the transport and a type switch over the caller's values would miss them - measured:
