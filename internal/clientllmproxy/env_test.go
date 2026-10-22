@@ -7,6 +7,7 @@ package clientllmproxy
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -140,12 +141,12 @@ func TestEnsureEnvKeepsAFirstOriginAcrossASecondRedirect(t *testing.T) {
 	}
 }
 
-// TestListenersIsOnePerSurface: one listener per base-URL variable however many routes share it, plus
-// codex's own - the count the report and the row are measured against.
+// TestListenersIsOnePerSurface: the table's four routes are TWO listeners, because a base-URL VARIABLE holds
+// one address - claude-code and omp-anthropic are one port - while codex's file surface is its own.
 func TestListenersIsOnePerSurface(t *testing.T) {
-	listeners := Listeners()
+	listeners := ListenersFor(Routes())
 	if len(listeners) != 2 {
-		t.Fatalf("Listeners() = %v, want one ANTHROPIC listener and codex's", listeners)
+		t.Fatalf("ListenersFor(Routes()) = %v, want one ANTHROPIC listener and codex's", listeners)
 	}
 	if listeners[0].Surface != "ANTHROPIC_BASE_URL" || listeners[0].Port != 7391 {
 		t.Errorf("the first listener is %+v, want ANTHROPIC_BASE_URL on 7391", listeners[0])
@@ -158,7 +159,59 @@ func TestListenersIsOnePerSurface(t *testing.T) {
 	}
 }
 
-// TestUpstreamKeyNamesTheRoute: the key is the route in upper snake case, so the origin of claude-code and
+// TestListenersForTakesOnlyTheRoutesAsked: a room starts the listeners its seats use. A route sharing a surface
+// still answers the same listener, an unproxied route answers none, and no route answers none at all - which is
+// what makes a room that uses no proxied runtime start nothing.
+func TestListenersForTakesOnlyTheRoutesAsked(t *testing.T) {
+	for _, test := range []struct {
+		routes []string
+		ports  string
+	}{
+		{[]string{"claude-code"}, "7391"},
+		{[]string{"omp-anthropic"}, "7391"},
+		{[]string{"codex"}, "7392"},
+		{[]string{"codex", "claude-code"}, "7391,7392"},
+		{[]string{"agy", "omp-deepseek"}, ""},
+		{nil, ""},
+	} {
+		var ports []string
+		for _, listener := range ListenersFor(test.routes) {
+			ports = append(ports, strconv.Itoa(listener.Port))
+		}
+		if got := strings.Join(ports, ","); got != test.ports {
+			t.Errorf("ListenersFor(%v) = [%s], want [%s]", test.routes, got, test.ports)
+		}
+	}
+}
+
+// TestRoutesForNamesTheRoutesASeatUses: one runtime, one set of provider routes, and the spellings are the ones
+// the runtime itself accepts - `claude` is claude-code's alias, not a name the table may treat as unknown. `agy`
+// answers NONE rather than every route - its traffic is unproxied by the probe - while a runtime the runtime
+// itself does not know, `terminal` included, answers EVERY route, because a start that cannot rule a route out
+// must not leave it unserved.
+func TestRoutesForNamesTheRoutesASeatUses(t *testing.T) {
+	for _, test := range []struct {
+		runtime string
+		want    string
+	}{
+		{"claude-code", "claude-code"},
+		{"claude", "claude-code"},
+		{"CLAUDE", "claude-code"},
+		{"omp", "omp-anthropic"},
+		{"OMP", "omp-anthropic"},
+		{"codex", "codex"},
+		{"agy", ""},
+		{"terminal", strings.Join(Routes(), ",")},
+		{"", strings.Join(Routes(), ",")},
+		{"something-new", strings.Join(Routes(), ",")},
+	} {
+		if got := strings.Join(RoutesFor(test.runtime), ","); got != test.want {
+			t.Errorf("RoutesFor(%q) = [%s], want [%s]", test.runtime, got, test.want)
+		}
+	}
+}
+
+// TestUpstreamKeyNamesTheRoute: <redacted> key is the route in upper snake case, so the origin of claude-code and
 // the origin of omp-anthropic cannot collide.
 func TestUpstreamKeyNamesTheRoute(t *testing.T) {
 	for route, want := range map[string]string{

@@ -247,7 +247,7 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 	// requests pass through. It is the MACHINE's, like the runtime rows, and its verdict is a probe of the
 	// ports the redirect lines name, so a stopped listener turns this row red rather than letting a room
 	// report healthy while every model call is refused.
-	llmRows := llmRowsFor(root)
+	llmRows := llmRowsFor(room, root)
 	for _, llm := range llmRows {
 		rows = append(rows, llm.Row)
 	}

@@ -274,7 +274,7 @@ func (m *agentManager) pass() error {
 	// here. A failure is logged and the pass continues: a listener that cannot start turns doctor's row red
 	// and the seats' calls fail closed, which is a fact to report rather than a reason to stop supervising
 	// the rooms.
-	m.ensureLlm(now)
+	m.ensureLlm(now, m.llmRoutesOf(state.Rooms))
 	// THE TWO DETECTORS RIDE THIS LOOP (ruling 4.5 and plan item 5: every ten minutes), on their own timers
 	// rather than as more children, because 7.1's reason for keeping supervision in one process is that a
 	// second always-on process is a second thing to supervise. Two timers rather than one because the two
