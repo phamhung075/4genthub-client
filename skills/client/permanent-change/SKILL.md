@@ -30,7 +30,7 @@ read, a guard is enforced.
    seat, and the time. Without it nothing can later prove the change worked.
 2. **Pick the row of the table above** and send the owning seat an `assignment` whose definition of
    done is "committed in that file". Never a `guide` alone.
-3. **Commit by pathspec with a test or a guard** where the change is checkable; add the changelog file.
+3. **Commit by pathspec with a test or a guard** where the change is checkable; the commit body is the record (what was wrong, what changed, how it was tested). No changelog file (owner ruling 2026-10-21). A commit that changes `agenthub_client/skills/**` carries a `Skill-Evidence:` trailer citing `4genteam skills evidence` or `skills propose` output (owner ruling 2026-10-22).
 4. **Deliver:** push the client, bump the hub pin, push the hub (the lead pushes after the gate; client first),
    rebuild with `./scripts/build.sh --no-test` when code changed, then `4genteam room reseat <room> <seat>` for each affected seat.
 5. **Prove delivery:** read the installed copy under `~/.config/4genthub/rooms/<room>/seats/<seat>/skills`
