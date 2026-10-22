@@ -1,11 +1,11 @@
 ---
 name: token-economy
-description: Apply token optimization when writing docs, changelogs, MCP tasks, and messages between seats. Quality #1, Tokens #2.
+description: Apply token optimization when writing docs, MCP tasks, and messages between seats. Quality #1, Tokens #2.
 ---
 
 # Token Economy
 
-Optimize text for AI context: docs, changelogs, MCP tasks, subtasks.
+Optimize text for AI context: docs, MCP tasks, subtasks.
 
 **Principle**: Quality first. Never sacrifice essential info.
 

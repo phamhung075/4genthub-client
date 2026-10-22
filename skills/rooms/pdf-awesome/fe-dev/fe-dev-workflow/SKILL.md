@@ -50,7 +50,7 @@ ask the lead.
      path (parts, move pages, export) gets its own assertions in `check-parts.mjs` in the same commit.
      If you could not run it, say the browser check is pending. Never claim a result you did not see
      this session.
-5. **Record**: one `=== Progress N ===` on the task. If the project keeps a changelog, one line.
+5. **Record**: one `=== Progress N ===` on the task.
 6. **Commit by pathspec** (no `git add` first; a new file takes `git add -N -- <new>` first):
    `git commit -m "<type(scope): subject>" -- <paths>`, then `git show --numstat HEAD`.
 7. **Hand off**: a queue row to `reviewer` (branch, commit range, commands run and results, what
