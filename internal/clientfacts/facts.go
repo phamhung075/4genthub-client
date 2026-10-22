@@ -81,7 +81,8 @@ type Repo struct {
 	BehindBase  int      `json:"behind_base"`
 }
 
-// Pins is the pin-vs-worktree fact: the gitlink the pinning repo holds at Ref, against this repo's HEAD.
+// Pins is the pin-vs-worktree fact: the gitlink the pinning repo holds at Ref, against the HEAD of the repo
+// that checkout lives in (the submodule's own checkout when the caller is the repo that records the pin).
 // `state` is same, ahead (HEAD carries commits the pin does not), behind, diverged, or unavailable.
 type Pins struct {
 	State  string `json:"state"`
