@@ -261,7 +261,7 @@ Run from the project's directory. `ROOM` is the room's name on the server.
 `sync room` is GONE (2026-10-15): it read the cloud's `GET /api/v2/rooms/{room}/roomspec`, which the server
 deleted, and a verb kept only to fail would be a deprecation shim. What it did for a NEW room - link the
 provider's env file, write the room's seat files - now comes from the room's own definition and the
-launcher: `4genteam up ROOM --team DIR`. See the CHANGELOG entry for the operator's sentence.
+launcher: `4genteam up ROOM --team DIR`. The commit body of that change carries the operator's sentence.
 
 Seats run unattended with the bypass policy: only launch them in a project whose commit and deny rules
 you accept.

@@ -11,7 +11,7 @@ Nothing changes a *running* seat's runtime in place: the predecessor CLI's `laun
 
 `4genteam` is this client's own binary, not the predecessor's `rig` CLI: its `stop` is machine-wide, not a room teardown. **It cannot switch a runtime in place, and it prints no sequence that completes the switch** — `4genteam sync switch` says exactly that and names the two steps that do exist:
 
-- The room's definition and its seats' files are written by the launcher: `4genteam up <room> --team <dir>`. (The client's `sync room` verb rewrote them from the cloud's roomspec until 2026-10-15, when the route behind it was deleted - see the client CHANGELOG.)
+- The room's definition and its seats' files are written by the launcher: `4genteam up <room> --team <dir>`. (The client's `sync room` verb rewrote them from the cloud's roomspec until 2026-10-15, when the route behind it was deleted.)
 - `4genteam seat reseat <room> --seat <name>` stops and restarts a seat so it loads the configuration it now has.
 
 Neither runs inside `sync switch` (both write, and a restart is peak-gated for a DeepSeek seat), and **whether a restart carries a changed RUNTIME is not established**. The switch is the owner's call.

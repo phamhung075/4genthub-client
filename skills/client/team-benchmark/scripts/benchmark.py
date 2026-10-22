@@ -31,9 +31,6 @@ def category(r):
 
 
 def file_kind(p):
-    name = p.split('/')[-1]
-    if p.startswith('CHANGELOG/') or 'CHANGELOG' in name:
-        return 'changelog'
     if p.startswith('ai_docs/') or p.endswith('.md'):
         return 'docs'
     if re.search(r'_test\.(go|rs)$|\.test\.tsx?$|\.spec\.ts$|/tests?/', p):

@@ -17,7 +17,7 @@ every seat start. Telling a seat is at most a way to get the change adopted toda
 | Behaviour every seat shares (how to read the queue, report, batch, claim chores) | `agenthub_client/skills/share/seat-crew/SKILL.md` | next seat start |
 | One seat's workflow (reviewer gate, lead sequencing, go-dev commits) | `agenthub_client/skills/rooms/<room>/<seat>/<seat>-workflow/SKILL.md`; the runtime also writes it to `<seat dir>/AGENTS.md` | next seat start |
 | A seat's role or tool scope | `agenthub_client/skills/rooms/<room>/<seat>/<seat>-role/SKILL.md` | next seat start |
-| A rule for every agent in the repo (changelog, commit form, no-push) | `AGENTS.md` and `ai_docs/agent-system/repo-agent-rules.md` | next seat start |
+| A rule for every agent in the repo (change record, commit form, no-push) | `AGENTS.md` and `ai_docs/agent-system/repo-agent-rules.md` | next seat start |
 | A wrong tool behaviour (a verb needs an argument it could default) | client Go or Rust code, with a test | next rebuild + daemon restart |
 | A recurring check | a skill under `skills/client/` with a script | the principal session |
 

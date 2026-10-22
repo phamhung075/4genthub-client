@@ -32,7 +32,7 @@ func Commands() []clientcmd.Command {
 //
 // `status` AND `room` ARE NOT HERE, and their absence is the point: both compared or materialized a seat's
 // snapshot against `GET /api/v2/rooms/{room}/roomspec`, which the server deleted (cbc51bae). A verb kept to
-// print an error would be a deprecation shim, so they are gone - see the CHANGELOG entry that carries the
+// print an error would be a deprecation shim, so they are gone - see the commit body that carries the
 // same sentence for an operator.
 var syncVerbs = []string{
 	"pull", "messages", "connector",

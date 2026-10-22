@@ -5,8 +5,8 @@
 // with the hash the cloud serves, and the route that served that hash
 // (`GET /api/v2/rooms/{room}/roomspec`) was deleted server-side (cbc51bae). The client's fetch went with
 // it, so the three verbs are gone rather than kept to print an error - a verb that can only fail is a
-// deprecation shim, and this repo's rule is a clean break. The operator's sentence is in the CHANGELOG
-// entry this change carries.
+// deprecation shim, and this repo's rule is a clean break. The operator's sentence is in the commit
+// body of this change.
 package clientseat
 
 import (

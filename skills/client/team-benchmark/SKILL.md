@@ -1,6 +1,6 @@
 ---
 name: team-benchmark
-description: Benchmark a running room over the last 24 hours - how much of each seat's work is chat, board, git, writing or testing, what the commits produced (code, test, docs, changelog), and the change against the last run. Use when the owner asks to "benchmark the team", "check the team works not chats", "measure 24h", or once a day to improve the team.
+description: Benchmark a running room over the last 24 hours - how much of each seat's work is chat, board, git, writing or testing, what the commits produced (code, test, docs), and the change against the last run. Use when the owner asks to "benchmark the team", "check the team works not chats", "measure 24h", or once a day to improve the team.
 ---
 
 # Benchmark the team
