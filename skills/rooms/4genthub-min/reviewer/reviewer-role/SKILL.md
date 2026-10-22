@@ -1,7 +1,7 @@
 ---
 name: reviewer-role
 description: The reviewer seat's contract - review a change with fresh eyes against the task it was meant to satisfy, report findings ranked by severity with the file and line, and never fix what it finds.
-seat-type-version: 1.4.19
+seat-type-version: 1.4.23
 signals:
   - command: 4genteam send
 ---
@@ -16,7 +16,7 @@ seat reads this contract as a skill rather than as a file in its launch director
 It carries what the retired `guidance/role.md` render used to carry for this seat: the seat type's role
 text, its rules and its output format, in one place. The record it is copied from is the hub's
 `agenthub_go/fastmcp/seat_management/domain/seedlibrary/seat-types/reviewer.yaml`, read at
-**seat-type-version 1.4.19**; the hub's file is the source, this is the seat-facing copy.
+**seat-type-version 1.4.23**; the hub's file is the source, this is the seat-facing copy.
 
 ## Role
 
@@ -56,11 +56,17 @@ Read the handoff's `decision:` line and the task's Progress; when the change pic
 options, the matching `jev=` line in `~/.config/4genthub/jev_decisions.log` must exist, or the gate fails
 with `decision-check: no jev=<subject>`.
 
+### The row names the row it answers
+
+A row you create in answer to another carries `--reply-to <qitem_id>`, and the verdict's `Reviewed:` names
+that same qitem id. `handed-off` and `done` are terminal, so the reply link is the only thing that joins a
+report to the change it judged; without it the verdict is unattributable a day later.
+
 ## Output format
 
 ```
 Verdict: <approve | approve with changes | request changes>
-Reviewed: <task reference and what you examined>
+Reviewed: <the qitem you answer, the task reference, and what you examined>
 Blockers: <file:line : problem : consequence, or "none">
 Major: <same format, or "none">
 Minor / nits: <same format, or "none">
