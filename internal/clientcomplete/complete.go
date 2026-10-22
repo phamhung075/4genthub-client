@@ -157,8 +157,11 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 		return usageError(stderr, err.Error())
 	}
 
-	body, failure := clientevidence.Collect(ctx, opts.base, opts.test)
-	if failure != nil {
+	// The arguments are checked, then the task is READ, before the test command runs: the row's own id is
+	// what every later call names, and a caller may pass a prefix the read route resolves (an 8-hex id
+	// answered the task read, then the evidence route cast it as a uuid and answered HTTP 500 after the
+	// gate had already spent the whole test run).
+	if failure := clientevidence.CheckArgs(ctx, opts.base, opts.test); failure != nil {
 		if failure.Usage {
 			return usageError(stderr, failure.Message)
 		}
@@ -168,6 +171,14 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 	state, err := readTask(ctx, baseURL, token, opts.task)
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam complete: %v\n", err)
+		return clientcmd.ExitRemote
+	}
+	body, failure := clientevidence.Collect(ctx, opts.base, opts.test)
+	if failure != nil {
+		if failure.Usage {
+			return usageError(stderr, failure.Message)
+		}
+		fmt.Fprintf(stderr, "4genteam complete: %s\n", failure.Message)
 		return clientcmd.ExitRemote
 	}
 
@@ -180,7 +191,7 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 	verdict := evaluate(ctx, cfg, state.Criteria, body)
 	encoded, _ := json.Marshal(verdict)
 	enforced := strings.EqualFold(strings.TrimSpace(os.Getenv(enforcementEnv)), "true")
-	entry := clientjev.LogEntry{Timestamp: time.Now(), Kind: "gate", Summary: "task " + opts.task, Detail: verdict.Reasons, Outcome: string(verdict.Verdict)}
+	entry := clientjev.LogEntry{Timestamp: time.Now(), Kind: "gate", Summary: "task " + state.ID, Detail: verdict.Reasons, Outcome: string(verdict.Verdict)}
 	if err := cfg.Log(entry); err != nil {
 		fmt.Fprintf(stderr, "4genteam complete: cannot append to the Jev log %s: %v\n", cfg.LogPath, err)
 		return clientcmd.ExitRemote
@@ -196,41 +207,42 @@ func (completeCommand) Run(ctx context.Context, args []string, stdout, stderr io
 	}
 	fmt.Fprintf(stderr, "4genteam complete: gate (%s) %s: %s\n", mode, verdict.Verdict, verdict.Reasons)
 
-	stored := clientevidence.Post(ctx, baseURL, token, opts.task, body, io.Discard, stderr)
+	stored := clientevidence.Post(ctx, baseURL, token, state.ID, body, io.Discard, stderr)
 	// A 409 is NOT a retry path any more. The hub answers an identical replay with 200 and the stored
 	// entry, so a 409 means the task's latest evidence for this head_sha is a DIFFERENT account of it:
 	// completing on it would attach this run's verdict to evidence the judge will never see.
 	if stored.Exit != clientcmd.ExitOK && stored.Exit != 5 {
-		fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the evidence was not stored; task %s is unchanged\n", opts.task)
+		fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the evidence was not stored; task %s is unchanged\n", state.ID)
 		return stored.Exit
 	}
-	if code := postComplete(ctx, baseURL, token, opts, stdout, stderr); code != clientcmd.ExitOK {
+	if code := postComplete(ctx, baseURL, token, state.ID, opts, stdout, stderr); code != clientcmd.ExitOK {
 		// The completion POST's own failure (status and hub body) is printed by postComplete. What it
 		// cannot know is the task's state: the POST is not idempotent from here, so read it back once
 		// and name it - "the task was not completed" is the enforced gate's own vocabulary.
-		after, rerr := readTask(ctx, baseURL, token, opts.task)
+		after, rerr := readTask(ctx, baseURL, token, state.ID)
 		switch {
 		case rerr != nil:
 			fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the completion request failed and the state could not be read: %v\n", rerr)
 		case after.Status == "done":
-			fmt.Fprintf(stderr, "4genteam complete: the completion request failed, but task %s reads done: it completed\n", opts.task)
+			fmt.Fprintf(stderr, "4genteam complete: the completion request failed, but task %s reads done: it completed\n", state.ID)
 		default:
-			fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the completion request failed and task %s reads %s\n", opts.task, after.Status)
+			fmt.Fprintf(stderr, "4genteam complete: the task was not completed: the completion request failed and task %s reads %s\n", state.ID, after.Status)
 		}
 		return code
 	}
 	return stored.Exit
 }
 
-// taskState is what ONE read of the task answers, because the verb needs two facts from the same
-// row: the criteria the gate judges, and - only when the completion request failed - the status it
-// left behind. One reader, so the two cannot disagree about the envelope.
+// taskState is what ONE read of the task answers, because the verb needs three facts from the same
+// row: the id every later call must name, the criteria the gate judges, and - only when the completion
+// request failed - the status it left behind. One reader, so they cannot disagree about the envelope.
 type taskState struct {
+	ID       string
 	Status   string
 	Criteria []string
 }
 
-// readTask reads the task's status and acceptance criteria from the server.
+// readTask reads the task's canonical id, status and acceptance criteria from the server.
 func readTask(ctx context.Context, baseURL, token, taskID string) (taskState, error) {
 	route := strings.TrimRight(baseURL, "/") + fmt.Sprintf(taskPath, url.PathEscape(taskID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, route, nil)
@@ -249,6 +261,7 @@ func readTask(ctx context.Context, baseURL, token, taskID string) (taskState, er
 	}
 	var parsed struct {
 		Task struct {
+			ID                 string   `json:"id"`
 			Status             string   `json:"status"`
 			AcceptanceCriteria []string `json:"acceptance_criteria"`
 		} `json:"task"`
@@ -256,16 +269,20 @@ func readTask(ctx context.Context, baseURL, token, taskID string) (taskState, er
 	if err := json.Unmarshal(answer, &parsed); err != nil {
 		return taskState{}, fmt.Errorf("the task answer is not JSON: %v", err)
 	}
-	return taskState{Status: parsed.Task.Status, Criteria: parsed.Task.AcceptanceCriteria}, nil
+	if strings.TrimSpace(parsed.Task.ID) == "" {
+		return taskState{}, fmt.Errorf("the task answer carries no id, so the evidence and completion routes "+
+			"have no task to name (the id passed was %q)", taskID)
+	}
+	return taskState{ID: parsed.Task.ID, Status: parsed.Task.Status, Criteria: parsed.Task.AcceptanceCriteria}, nil
 }
 
 // postComplete asks the server to complete the task; its answer goes to stdout.
-func postComplete(ctx context.Context, baseURL, token string, opts options, stdout, stderr io.Writer) int {
+func postComplete(ctx context.Context, baseURL, token, taskID string, opts options, stdout, stderr io.Writer) int {
 	query := url.Values{"completion_summary": {opts.summary}}
 	if opts.notes != "" {
 		query.Set("testing_notes", opts.notes)
 	}
-	route := strings.TrimRight(baseURL, "/") + fmt.Sprintf(completePath, url.PathEscape(opts.task)) + "?" + query.Encode()
+	route := strings.TrimRight(baseURL, "/") + fmt.Sprintf(completePath, url.PathEscape(taskID)) + "?" + query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, route, bytes.NewReader(nil))
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam complete: the request failed: %v\n", err)

@@ -284,27 +284,46 @@ type CollectFailure struct {
 	Message string
 }
 
-// Collect gathers the evidence for the change from `base` to HEAD: it resolves both SHAs, reads the
-// numstat and runs the test line (split in-process, no shell; empty means no test run). Nothing is sent.
-func Collect(ctx context.Context, base, test string) (Body, *CollectFailure) {
+// CheckArgs validates the two arguments Collect would refuse anyway - the test line's shape and the base
+// ref - and collects nothing. A caller that must read the server before the test command runs (complete:
+// the task's own id decides where the evidence is written) fails a caller error here FIRST, so a typo costs
+// no request and no test run.
+func CheckArgs(ctx context.Context, base, test string) *CollectFailure {
+	_, _, failure := checkArgs(ctx, base, test)
+	return failure
+}
+
+// checkArgs is the shared head of Collect and CheckArgs: the test line's argv and the resolved base, or
+// the caller error that stops the collection.
+func checkArgs(ctx context.Context, base, test string) ([]string, string, *CollectFailure) {
 	var testArgv []string
 	if test != "" {
 		argv, err := splitCommand(test)
 		if err != nil {
-			return Body{}, &CollectFailure{Usage: true, Message: err.Error()}
+			return nil, "", &CollectFailure{Usage: true, Message: err.Error()}
 		}
 		if len(argv) == 0 {
-			return Body{}, &CollectFailure{Usage: true, Message: "--test names no command"}
+			return nil, "", &CollectFailure{Usage: true, Message: "--test names no command"}
 		}
 		testArgv = argv
 		// Refused before git runs: a command that cannot be a test is a caller error whatever the range holds.
 		if refusal := notTheCompiler(argv); refusal != "" {
-			return Body{}, &CollectFailure{Usage: true, Message: refusal}
+			return nil, "", &CollectFailure{Usage: true, Message: refusal}
 		}
 	}
 	baseSHA, err := resolveSHA(ctx, base)
 	if err != nil {
-		return Body{}, &CollectFailure{Usage: true, Message: fmt.Sprintf("--base %s does not name a commit: %v", base, err)}
+		return nil, "", &CollectFailure{Usage: true, Message: fmt.Sprintf("--base %s does not name a commit: %v", base, err)}
+	}
+	return testArgv, baseSHA, nil
+}
+
+// Collect gathers the evidence for the change from `base` to HEAD: it resolves both SHAs, reads the
+// numstat and runs the test line (split in-process, no shell; empty means no test run). Nothing is sent.
+func Collect(ctx context.Context, base, test string) (Body, *CollectFailure) {
+	testArgv, baseSHA, failure := checkArgs(ctx, base, test)
+	if failure != nil {
+		return Body{}, failure
 	}
 	headSHA, err := resolveSHA(ctx, "HEAD")
 	if err != nil {

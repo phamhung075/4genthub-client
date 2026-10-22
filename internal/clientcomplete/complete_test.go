@@ -461,6 +461,10 @@ func repo(t *testing.T) string {
 	return base
 }
 
+// canonicalTaskID is the id the fake hub answers for any task read, as the real one does: a caller may
+// name a prefix, and every route that WRITES takes the row's own uuid.
+const canonicalTaskID = "403d16ca-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
+
 type serverLog struct {
 	mu    sync.Mutex
 	calls []string
@@ -499,7 +503,7 @@ func taskServer(t *testing.T, criteria string) *serverLog {
 			if status == "" {
 				status = "in_progress"
 			}
-			_, _ = io.WriteString(w, `{"success":true,"task":{"status":"`+status+`","acceptance_criteria":`+criteria+`}}`)
+			_, _ = io.WriteString(w, `{"success":true,"task":{"id":"`+canonicalTaskID+`","status":"`+status+`","acceptance_criteria":`+criteria+`}}`)
 		case strings.HasSuffix(r.URL.Path, "/evidence"):
 			if rec.evidenceStatus != 0 {
 				w.WriteHeader(rec.evidenceStatus)
@@ -541,7 +545,8 @@ func TestAcceptedGateStoresEvidenceThenCompletes(t *testing.T) {
 	}
 	// FOUR calls, and the third is the done report's row read: a STORED submission prints the row it closes,
 	// so the evidence step reads it back before complete is asked.
-	want := []string{"GET /api/v2/tasks/t1", "POST /api/v2/tasks/t1/evidence", "GET /api/v2/tasks/t1", "POST /api/v2/tasks/t1/complete"}
+	want := []string{"GET /api/v2/tasks/t1", "POST /api/v2/tasks/" + canonicalTaskID + "/evidence",
+		"GET /api/v2/tasks/" + canonicalTaskID, "POST /api/v2/tasks/" + canonicalTaskID + "/complete"}
 	if strings.Join(rec.calls, "|") != strings.Join(want, "|") {
 		t.Errorf("calls = %v", rec.calls)
 	}
@@ -828,7 +833,7 @@ func TestEvidenceNotStoredNamesTheTaskUnchanged(t *testing.T) {
 	if code != clientcmd.ExitRemote {
 		t.Fatalf("exit %d, want %d; stderr %q", code, clientcmd.ExitRemote, errs)
 	}
-	if !strings.Contains(errs, "the task was not completed: the evidence was not stored; task t1 is unchanged") {
+	if !strings.Contains(errs, "the task was not completed: the evidence was not stored; task "+canonicalTaskID+" is unchanged") {
 		t.Fatalf("the seat is not told the consequence: %q", errs)
 	}
 	for _, call := range rec.calls {
@@ -840,6 +845,31 @@ func TestEvidenceNotStoredNamesTheTaskUnchanged(t *testing.T) {
 		t.Fatalf("the evidence status must stay on its own line: %q", errs)
 	}
 }
+
+// A prefix id is resolved by the READ route only: the row answers its own uuid, and every route that
+// WRITES must name that uuid, because the evidence route casts the id as a uuid and answered HTTP 500
+// for an 8-hex one - after the gate had already run the whole test command (measured 2026-10-22,
+// fe-dev's row qitem-20261022194113: GET /tasks/403d16ca/events and POST /tasks/403d16ca/evidence 500,
+// SQLSTATE 22P02).
+func TestAPrefixIdWritesUnderTheRowsOwnUuid(t *testing.T) {
+	base := repo(t)
+	rec := taskServer(t, "[\"the acceptance command `git --version` exits 0\"]")
+	jevConfig(t, 200, `{"answers":{"criterion_1":{"noul":0.95}}}`)
+	t.Setenv(enforcementEnv, "true")
+	code, out, errs := run("--task", "403d16ca", "--base", base, "--summary", "s", "--test", "git --version")
+	if code != clientcmd.ExitOK || !strings.Contains(out, `"completed":true`) {
+		t.Fatalf("exit %d out %q err %q", code, out, errs)
+	}
+	// The read names what the caller passed; every later call names the row's own id.
+	want := []string{"GET /api/v2/tasks/403d16ca", "POST /api/v2/tasks/" + canonicalTaskID + "/evidence",
+		"GET /api/v2/tasks/" + canonicalTaskID, "POST /api/v2/tasks/" + canonicalTaskID + "/complete"}
+	if strings.Join(rec.calls, "|") != strings.Join(want, "|") {
+		t.Fatalf("calls = %v\nwant  %v", rec.calls, want)
+	}
+}
+
+// The event a bad id must never produce: a write under the caller's prefix. It is the same assertion as
+// above seen from the other side, and it fails at 71ef6aab, where the evidence POST carried the prefix.
 
 // TestEvidenceConflictStopsTheCompletion is the 409's meaning after the hub made an identical replay a
 // 200: a 409 means the task's latest evidence for this head_sha is a DIFFERENT account of it, so the
@@ -854,7 +884,7 @@ func TestEvidenceConflictStopsTheCompletion(t *testing.T) {
 	if code != clientcmd.ExitRemote {
 		t.Fatalf("exit %d, want %d; stderr %q", code, clientcmd.ExitRemote, errs)
 	}
-	if !strings.Contains(errs, "the task was not completed: the evidence was not stored; task t1 is unchanged") {
+	if !strings.Contains(errs, "the task was not completed: the evidence was not stored; task "+canonicalTaskID+" is unchanged") {
 		t.Fatalf("the consequence is not named: %q", errs)
 	}
 	for _, call := range rec.calls {
@@ -871,8 +901,8 @@ func TestCompletionFailureReadsTheStateBack(t *testing.T) {
 		taskStatus string
 		want       string
 	}{
-		"still open":   {"in_progress", "the task was not completed: the completion request failed and task t1 reads in_progress"},
-		"already done": {"done", "the completion request failed, but task t1 reads done: it completed"},
+		"still open":   {"in_progress", "the task was not completed: the completion request failed and task " + canonicalTaskID + " reads in_progress"},
+		"already done": {"done", "the completion request failed, but task " + canonicalTaskID + " reads done: it completed"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -889,7 +919,7 @@ func TestCompletionFailureReadsTheStateBack(t *testing.T) {
 			if !strings.Contains(errs, c.want) {
 				t.Fatalf("stderr %q does not carry %q", errs, c.want)
 			}
-			if last := rec.calls[len(rec.calls)-1]; last != "GET /api/v2/tasks/t1" {
+			if last := rec.calls[len(rec.calls)-1]; last != "GET /api/v2/tasks/"+canonicalTaskID {
 				t.Fatalf("last call = %q, want the read-back GET after the failed completion: %v", last, rec.calls)
 			}
 		})
