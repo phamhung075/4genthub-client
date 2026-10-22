@@ -384,6 +384,15 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	if code := ensureWorktrees(stateDir, name, spec, stdout, stderr); code != clientcmd.ExitOK {
 		return code
 	}
+	// MODEL EGRESS COMES BEFORE THE SEATS (decision 4.5). The redirect lines go into the state root's
+	// `.env`, which the supervisor hands every seat at its start, so they must be there before the room
+	// starts - and each listener must already answer, because a seat pointed at a closed port fails
+	// closed. A listener that cannot start refuses `up` here, with the port and the log named, rather than
+	// letting a room come up with every model call refused.
+	if err := ensureLlmListeners(stateDir); err != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
+		return clientcmd.ExitUnavailable
+	}
 	if code := ensureRoom(name, spec, daemonLog, stdout, stderr); code != clientcmd.ExitOK {
 		return code
 	}

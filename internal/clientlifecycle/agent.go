@@ -217,6 +217,9 @@ type agentManager struct {
 	// pass scans and a room `up` adds while agent runs is looked at on the next pass, not ten minutes later.
 	lastOverlap time.Time
 	lastStuck   time.Time
+	// lastLlm is when the model-egress listeners were last probed: the same throttle as the detectors', so
+	// a pass a second does not spawn against a listener that is merely slow to answer.
+	lastLlm time.Time
 }
 
 func newAgentManager(root string, log func(string)) *agentManager {
@@ -266,6 +269,12 @@ func (m *agentManager) pass() error {
 	if err := m.reconcile(specs, now); err != nil {
 		return err
 	}
+	// The model-egress listeners ride this pass too (decision 4.5): they are not agent children, because a
+	// listener is one per base-URL VARIABLE rather than one per room, so they are probed and restarted
+	// here. A failure is logged and the pass continues: a listener that cannot start turns doctor's row red
+	// and the seats' calls fail closed, which is a fact to report rather than a reason to stop supervising
+	// the rooms.
+	m.ensureLlm(now)
 	// THE TWO DETECTORS RIDE THIS LOOP (ruling 4.5 and plan item 5: every ten minutes), on their own timers
 	// rather than as more children, because 7.1's reason for keeping supervision in one process is that a
 	// second always-on process is a second thing to supervise. Two timers rather than one because the two

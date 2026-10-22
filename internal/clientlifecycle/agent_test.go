@@ -176,7 +176,7 @@ func TestAChildThatDiesIsRestartedWithBackoffFromOneSecond(t *testing.T) {
 			t.Errorf("spawned %v without the resolved root", argv)
 			continue
 		}
-		if !strings.HasPrefix(joined, "bridge run ") && !strings.Contains(joined, "demo") {
+		if !strings.HasPrefix(joined, "bridge run ") && !strings.HasPrefix(joined, "llmproxy ") && !strings.Contains(joined, "demo") {
 			t.Errorf("spawned %v, which belongs to no listed room", argv)
 		}
 	}

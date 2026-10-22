@@ -56,6 +56,13 @@ const (
 	// Seats is `doctor`'s row about the skills the seats of a room actually loaded. Like OrphanHandoffs it
 	// is about WORK rather than about a child: there is no single process to pgrep and no heartbeat to age.
 	Seats = "seats"
+	// Llm is `doctor`'s row about MODEL EGRESS: the loopback listeners every redirected provider route's
+	// requests go through, so each body is redacted before it leaves this machine. It is about a set of
+	// listeners rather than about one child - one listener serves every route on the same base-URL
+	// variable - so it has no pid and no heartbeat of its own, and its verdict is read by asking the ports
+	// the redirect lines name. It is not a member of Obligatory for the same reason: Verify's precedence
+	// needs a beat file a listener does not write, and `agent` restarts a stopped listener by probing it.
+	Llm = "llm"
 )
 
 // The state the identity row adds to 7.2's. It is not a safeguard and never appears in Obligatory; it is the

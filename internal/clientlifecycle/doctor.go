@@ -139,12 +139,12 @@ type doctorJSONRow struct {
 // doctorJSONRows pairs every row with the lines the human report prints beside it, from the wrapper that
 // carries them: ONE rule for the JSON and the lines, so the two surfaces cannot disagree about a row.
 func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
-	runtimeRows []runtimeRow,
+	runtimeRows []runtimeRow, llmRows []llmRow,
 	seatRows []seatSkillsRow, censusRows []skillsRow, orphanRows []orphanRow, identityRows []identityRow) []doctorJSONRow {
 	out := make([]doctorJSONRow, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, doctorJSONRow{Health: row,
-			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, runtimeRows, seatRows, censusRows, orphanRows, identityRows)})
+			Reasons: rowReasons(row, worktreeRows, cloneRows, hooksRows, runtimeRows, llmRows, seatRows, censusRows, orphanRows, identityRows)})
 	}
 	return out
 }
@@ -152,7 +152,7 @@ func doctorJSONRows(rows []clientservices.Health, worktreeRows []worktreesRow, c
 // rowReasons finds one row's reasons: the wrapper is matched on (safeguard, room), the pair the report
 // itself matches a row by.
 func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRows []cloneRow, hooksRows []hooksRow,
-	runtimeRows []runtimeRow,
+	runtimeRows []runtimeRow, llmRows []llmRow,
 	seatRows []seatSkillsRow, censusRows []skillsRow, orphanRows []orphanRow, identityRows []identityRow) []string {
 	for _, worktree := range worktreeRows {
 		if worktree.Row.Safeguard == row.Safeguard && worktree.Row.Room == row.Room {
@@ -172,6 +172,11 @@ func rowReasons(row clientservices.Health, worktreeRows []worktreesRow, cloneRow
 	for _, runtime := range runtimeRows {
 		if runtime.Row.Safeguard == row.Safeguard && runtime.Row.Room == row.Room {
 			return runtimeLines(runtime)
+		}
+	}
+	for _, llm := range llmRows {
+		if llm.Row.Safeguard == row.Safeguard && llm.Row.Room == row.Room {
+			return llmLines(llm)
 		}
 	}
 	for _, seat := range seatRows {
@@ -238,6 +243,14 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 	for _, runtime := range runtimeRows {
 		rows = append(rows, runtime.Row)
 	}
+	// The model-egress row (decision 4.5): the loopback listeners every redirected provider route's
+	// requests pass through. It is the MACHINE's, like the runtime rows, and its verdict is a probe of the
+	// ports the redirect lines name, so a stopped listener turns this row red rather than letting a room
+	// report healthy while every model call is refused.
+	llmRows := llmRowsFor(root)
+	for _, llm := range llmRows {
+		rows = append(rows, llm.Row)
+	}
 	// The seats row (the ruling's one check): `running`, or `skills_stale` when a seat loaded something
 	// other than the set the runtime installed for it. It is the SAME function `up` runs, so the two cannot
 	// disagree about a seat.
@@ -266,7 +279,7 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 		rows = append(rows, identity.Row)
 	}
 	if asJSON {
-		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, runtimeRows, seatRows, censusRows, orphanRows, identityRows), "", "  ")
+		body, err := json.MarshalIndent(doctorJSONRows(rows, worktreeRows, cloneRows, hooksRows, runtimeRows, llmRows, seatRows, censusRows, orphanRows, identityRows), "", "  ")
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam doctor: cannot print the rows: %v\n", err)
 			return clientcmd.ExitUnavailable
@@ -301,6 +314,14 @@ func runDoctor(room, root string, asJSON bool, stdout, stderr io.Writer) int {
 		}
 		for _, runtime := range runtimeRows {
 			for _, line := range runtimeLines(runtime) {
+				fmt.Fprintln(stdout, line)
+			}
+		}
+		// The model-egress row's detail line is the decision's own: the route counts, then any port that
+		// answers nothing. A reader of a healthy report learns which routes are covered and which are the
+		// recorded gaps, without asking the table.
+		for _, llm := range llmRows {
+			for _, line := range llmLines(llm) {
 				fmt.Fprintln(stdout, line)
 			}
 		}
