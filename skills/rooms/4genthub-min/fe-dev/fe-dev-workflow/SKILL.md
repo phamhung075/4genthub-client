@@ -49,7 +49,9 @@ from your guess. You lead a crew of DeepSeek workers; the change is still yours.
    how it was verified and whether the browser check ran, naming the tests and their result. There is no
    changelog file of any kind. One `=== Progress N ===` on the task.
 7. **Commit by pathspec** through `python3 scripts/git-hooks/git_commit_capture.py -- -m "<type(scope): subject>" -- <paths>`,
-   then `git show --numstat HEAD`.
+   then `git show --numstat HEAD`. A commit that touches `agenthub_client/skills/**` also carries
+   `Skill-Evidence:` - a `qitem-...`, the `4genteam skills evidence ...` run with what it showed, or
+   `none - <reason>` (see `seat-crew`).
 8. **Hand off**: a queue row to `reviewer` (branch, range, the checks and results, what the browser
    check still needs). After approval, `4genteam complete --task <id> --base <sha> --summary "..." --test "npx tsc --noEmit -p ."`,
    and tell the lead the branch is ready.

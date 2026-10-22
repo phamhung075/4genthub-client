@@ -38,6 +38,31 @@ Rule of thumb: if the work makes more intermediate text than final text, a worke
   Name a room only when it is not your own. Measured 2026-10-18: 147 calls failed by typing the id where
   the room belonged, and the verb then answered `the ROOM comes first`.
 
+## The Skill-Evidence trailer (2026-10-22)
+
+A commit whose path set carries a skill file - `skills/**`, and `agenthub_client/skills/**` in the client -
+carries exactly one `Skill-Evidence:` trailer, and its value is one of three shapes:
+
+```
+Skill-Evidence: qitem-<14 digits>-<12 hex>                                # the row that ordered the edit
+Skill-Evidence: ... 4genteam skills evidence <args> ... <what it said>    # the census run you made
+Skill-Evidence: none - <reason>                                           # an edit no stream ordered
+```
+
+The check is the commit wrapper (`scripts/git-hooks/git_commit_capture.py`), beside the docs-only check, and
+it judges SHAPE ONLY: no daemon, no census re-run, no verdict. A skill path is not a document - a `SKILL.md`
+is executable instruction - so a skills-only commit is judged by this trailer instead of being refused as
+docs-only. The value names what the edit came from, never a coverage claim:
+
+- the **row** that ordered it, when a row did;
+- the **census run** and what it printed -
+  `4genteam skills evidence <room> --skills-root agenthub_client/skills` (add `--json` for a machine read),
+  with the row it moved;
+- `none - <reason>` for an owner ruling, a new skill, a rename or a typo.
+
+A ref you cannot produce is `none - <reason>`, never a guessed id: `4genteam skills propose --from <ref>`
+refuses a ref it cannot resolve, and the reviewer reads the value.
+
 ## How to start them
 
 **The tool paths.** Path A, `xd://mcp__deepseek_agent` with `{"prompt": "...", "cwd": "<worktree>"}`,

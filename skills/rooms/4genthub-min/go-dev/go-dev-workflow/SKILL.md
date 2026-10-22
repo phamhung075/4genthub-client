@@ -48,7 +48,9 @@ the source of truth over the tests. You lead a crew of DeepSeek workers; the cha
    how it was tested, naming the commands and their result. There is no changelog file of any kind.
    One `=== Progress N ===` on the task.
 7. **Commit by pathspec** through `python3 scripts/git-hooks/git_commit_capture.py -- -m "<type(scope): subject>" -- <paths>`
-   (`git add -N` for a new file first). Then `git show --numstat HEAD`.
+   (`git add -N` for a new file first). Then `git show --numstat HEAD`. A commit that touches
+   `agenthub_client/skills/**` also carries `Skill-Evidence:` - a `qitem-...`, the
+   `4genteam skills evidence ...` run with what it showed, or `none - <reason>` (see `seat-crew`).
 8. **Hand off**: a queue row to `reviewer` with the branch, the commit range, the test commands and
    their results (`go-dev-role` output format). After approval, `4genteam complete --task <id> --base <sha> --summary "..." --test "go test ./..."`,
    and tell the lead the branch is ready to merge.
