@@ -954,6 +954,10 @@ func runWatchViewImpl(name string, stderr io.Writer) {
 		fmt.Fprintf(stderr, "4genteam: cannot find this binary to start the watch view: %v\n", err)
 		return
 	}
+	if err := refuseSelfExecUnderTest(self); err != nil {
+		fmt.Fprintf(stderr, "4genteam: %v\n", err)
+		return
+	}
 	// This same binary, with the watch arguments - the Python called its own module here. The exit code
 	// is deliberately ignored: `up`'s job is the stack, and the watch view's failure was never `up`'s.
 	cmd := exec.Command(self, "watch", "--room", name)

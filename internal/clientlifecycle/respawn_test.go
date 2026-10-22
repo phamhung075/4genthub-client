@@ -290,11 +290,68 @@ func TestTheDetachedRespawnIsItsOwnSession(t *testing.T) {
 // be spawned with the daemon's own argv, and the pattern under test sees exactly that command line.
 const daemonStandInEnv = "CLIENTLIFECYCLE_DAEMON_STANDIN"
 
+// reexecProbeEnv marks the child TestAReexecutedTestBinaryExitsWithoutRunningTheSuite spawns. With the guard
+// in place the child never reaches the suite; if the guard is removed, the child runs it once, and this
+// marker keeps THAT run from spawning another probe - a red test instead of a recursion.
+const reexecProbeEnv = "CLIENTLIFECYCLE_REEXEC_PROBE"
+
+// TestRefuseSelfExecUnderTestRefusesOnlyTheTestBinary is the guard's own falsification: under `go test` this
+// binary's path is refused, and a path that is not it is not.
+func TestRefuseSelfExecUnderTestRefusesOnlyTheTestBinary(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := refuseSelfExecUnderTest(self); err == nil {
+		t.Errorf("refuseSelfExecUnderTest(%q) answered nil for the test binary's own path", self)
+	} else if !strings.Contains(err.Error(), "re-exec") {
+		t.Errorf("the refusal is %q, want it to name the re-exec", err)
+	}
+	if err := refuseSelfExecUnderTest(filepath.Join(t.TempDir(), "4genteam")); err != nil {
+		t.Errorf("refuseSelfExecUnderTest refused a different path: %v", err)
+	}
+}
+
+// TestAReExecutedTestBinaryExitsWithoutRunningTheSuite: TestMain's first-argument guard, observed from
+// outside. Without it the child parses no flags, runs the whole suite again, and every spawn repeats - the
+// 2026-10-22 fork bomb. Exit 97 is the guard's answer before m.Run.
+func TestAReExecutedTestBinaryExitsWithoutRunningTheSuite(t *testing.T) {
+	if os.Getenv(reexecProbeEnv) == "1" {
+		t.Skip("this run is the re-exec probe's child; the parent asserts the guard stopped it")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, self, "llmproxy", "--runtime", "codex")
+	cmd.Env = append(os.Environ(), reexecProbeEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("the test binary ran a subcommand and exited 0; output:\n%s", out)
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 {
+		t.Fatalf("exit = %v, want 97; output:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "refusing to run as a re-executed client") {
+		t.Errorf("the refusal does not say why it stopped:\n%s", out)
+	}
+}
+
 func TestMain(m *testing.M) {
 	if os.Getenv(daemonStandInEnv) == "1" {
 		for {
 			time.Sleep(time.Hour)
 		}
+	}
+	// `go test` always hands this binary -test.* flags first. A first argument that is not a flag means the
+	// binary was re-executed as if it were the client ("llmproxy ...", "agent ..."), and Go's flag parsing
+	// would ignore it and run the whole suite again - recursively, one detached copy per spawn.
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		_, _ = os.Stderr.WriteString("clientlifecycle.test: refusing to run as a re-executed client: " + strings.Join(os.Args[1:], " ") + "\n")
+		os.Exit(97)
 	}
 	os.Exit(m.Run())
 }
