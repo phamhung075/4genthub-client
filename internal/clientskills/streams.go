@@ -150,7 +150,8 @@ func (e Evidence) seatOf(destination string) string {
 const seatLevelPrefix = "seat:"
 
 // scopeSeat is a row's level as the seat it is judged on: `<seat>` for a seat-tier skill, "" for a skill the
-// whole room owns (`share`, `room`). A level that is not the seat spelling is the room's, never a seat name.
+// whole room owns (`share`, `room`, and the client tier, which belongs to no seat). A level that is not the
+// seat spelling is the room's, never a seat name.
 func scopeSeat(level string) string {
 	value := strings.TrimSpace(level)
 	if !strings.HasPrefix(value, seatLevelPrefix) {

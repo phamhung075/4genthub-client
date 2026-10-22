@@ -13,9 +13,14 @@
 // A seat's set is share + its room's room-level skills + its own seat-level skills, in that order. A name
 // two levels both deliver is REFUSED rather than resolved: each skill lives at exactly one level, so there
 // is no "more specific copy wins" rule left to apply, and a seat's set always equals the tree an operator
-// is looking at. Nothing else is ever read: not another room, not another seat of this room, and not
-// client/. That isolation is the point of the layout, and the test that names it is the reason this
-// package exists.
+// is looking at. Nothing else is ever resolved: not another room, not another seat of this room, and not
+// client/, which is the client LLM's own instructions rather than a seat's. That isolation is the point of
+// the layout, and the test that names it is the reason this package exists.
+//
+// The census asks a WIDER question than a seat's set, and it walks the fourth level for it: RoomSkills reads
+// client/ too, because those skills are edited by the same hands and a change to one must be able to cite a
+// record like any other tier's. Resolution stays seat-only (Tree.Resolve); only the evidence walk reaches the
+// principal's tier.
 package clientskills
 
 import (
@@ -36,8 +41,9 @@ const (
 	ShareDir = "share"
 	// RoomsDir holds the per-room trees: rooms/<room>/<skill> and rooms/<room>/<seat>/<skill>.
 	RoomsDir = "rooms"
-	// ClientDir holds the skills for the LLM running the client. They are not a seat's skill set and
-	// are never part of a resolution.
+	// ClientDir holds the skills for the LLM running the client. They are not a seat's skill set and are
+	// never part of a resolution; the census (RoomSkills) reads them as the tree's fourth level, so a change
+	// to one can cite a record.
 	ClientDir = "client"
 	// RootEnv names the tree. It is the RUNTIME's own name for it - `install_seat_skills` reads
 	// AGENTHUB_CLIENT_SKILLS out of the state root's .env or its own environment and installs THAT tree -

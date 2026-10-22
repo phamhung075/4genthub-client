@@ -32,7 +32,8 @@ type Resolution struct {
 type Resolver func(id string) Resolution
 
 // RoomSkill is one skill a room delivers: the skill itself plus the level that delivers it, which is
-// "share", "room", or "seat:<seat>".
+// "share", "room", "seat:<seat>", or ClientDir for the client tier - the level no seat receives but the census
+// reads, because its skills are the client LLM's own instructions and are edited like any other.
 type RoomSkill struct {
 	Skill
 	Level string
@@ -72,34 +73,55 @@ type Row struct {
 	Fault string `json:"fault,omitempty"`
 }
 
-// RoomSkills lists EVERY skill a room delivers: share/, the room's room-level skills, and the skills
-// inside each of that room's seat folders. It is the tree-wide reading the census needs, where
-// Tree.Resolve answers the narrower question - one seat's installed set.
+// RoomSkills lists EVERY skill the tree holds for a room's census: share/, the room's room-level skills, the
+// skills inside each of that room's seat folders, and the client tier (client/<skill>). It is the tree-wide
+// reading the census needs, where Tree.Resolve answers the narrower question - one seat's installed set.
+//
+// The client tier is the one level no seat receives: client/ is the LLM running the client's own
+// instructions, so Tree.Resolve never reads it and installing it per seat would deliver the wrong tree. The
+// census reads it anyway, because those skills are edited by the same hands and a change to one must be able
+// to cite a record like any other tier's - a tier no report walks is a tier whose change nobody can account
+// for. Its level is the directory name, ClientDir, so a caller names it `client/<skill>`.
 //
 // A name delivered by two levels is fine HERE and reported as two rows with their own levels: the refusal
 // Tree.Resolve makes is about one seat's installation, where two copies would collide on disk. Two seats
 // both holding a skill of the same name is normal (go-dev-role lives in the go-dev folder only, but two
 // seats could each carry a `review` skill) and is what Level exists to separate.
 func (t Tree) RoomSkills(room string) ([]RoomSkill, error) {
+	skills, err := t.collect(room)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(skills, func(i, j int) bool {
+		if rank := levelRank(skills[i].Level) - levelRank(skills[j].Level); rank != 0 {
+			return rank < 0
+		}
+		if skills[i].Level != skills[j].Level {
+			return skills[i].Level < skills[j].Level
+		}
+		return skills[i].Name < skills[j].Name
+	})
+	return skills, nil
+}
+
+// collect is the ONE walk over the tree's levels: share/, the room's own skills, each seat folder, and the
+// client tier, in that tree order. Every level the census reads is added here, so a tier is added in one place
+// and no second listing can drift from this one - the client tier joined the walk here, not in a parallel
+// reader.
+//
+// rooms/<room>/ is the one level holding two shapes: an entry carrying SKILL.md is a room-level skill and one
+// without it is a SEAT FOLDER, descended for that seat alone. Every other level's entries are skills.
+func (t Tree) collect(room string) ([]RoomSkill, error) {
 	if err := validateName("room", room); err != nil {
 		return nil, err
 	}
 	if err := t.Require(); err != nil {
 		return nil, err
 	}
-	var skills []RoomSkill
 
-	shareDir := filepath.Join(t.Root, ShareDir)
-	shareNames, err := subdirs(shareDir)
+	skills, err := levelSkills(filepath.Join(t.Root, ShareDir), ShareDir)
 	if err != nil {
 		return nil, err
-	}
-	for _, name := range shareNames {
-		dir := filepath.Join(shareDir, name)
-		if !isSkill(dir) {
-			return nil, notASkill(dir)
-		}
-		skills = append(skills, RoomSkill{Skill: Skill{Name: name, Dir: dir}, Level: ShareDir})
 	}
 
 	roomDir := filepath.Join(t.Root, RoomsDir, room)
@@ -117,40 +139,50 @@ func (t Tree) RoomSkills(room string) ([]RoomSkill, error) {
 		seats = append(seats, name)
 	}
 	for _, seat := range seats {
-		seatDir := filepath.Join(roomDir, seat)
-		names, err := subdirs(seatDir)
+		seatSkills, err := levelSkills(filepath.Join(roomDir, seat), seatLevelPrefix+seat)
 		if err != nil {
 			return nil, err
 		}
-		for _, name := range names {
-			dir := filepath.Join(seatDir, name)
-			if !isSkill(dir) {
-				return nil, notASkill(dir)
-			}
-			skills = append(skills, RoomSkill{Skill: Skill{Name: name, Dir: dir}, Level: "seat:" + seat})
-		}
+		skills = append(skills, seatSkills...)
 	}
 
-	sort.Slice(skills, func(i, j int) bool {
-		if rank := levelRank(skills[i].Level) - levelRank(skills[j].Level); rank != 0 {
-			return rank < 0
+	clientSkills, err := levelSkills(filepath.Join(t.Root, ClientDir), ClientDir)
+	if err != nil {
+		return nil, err
+	}
+	return append(skills, clientSkills...), nil
+}
+
+// levelSkills is one level read: dir's subdirectories, each of which must hold SKILL.md. An absent directory
+// answers no skills rather than an error - Require guarantees share/, a seat folder was listed a moment
+// earlier, and client/ is the normal state of a tree that keeps no client-level skill.
+func levelSkills(dir, level string) ([]RoomSkill, error) {
+	names, err := subdirsIfPresent(dir)
+	if err != nil {
+		return nil, err
+	}
+	skills := make([]RoomSkill, 0, len(names))
+	for _, name := range names {
+		skillDir := filepath.Join(dir, name)
+		if !isSkill(skillDir) {
+			return nil, notASkill(skillDir)
 		}
-		if skills[i].Level != skills[j].Level {
-			return skills[i].Level < skills[j].Level
-		}
-		return skills[i].Name < skills[j].Name
-	})
+		skills = append(skills, RoomSkill{Skill: Skill{Name: name, Dir: skillDir}, Level: level})
+	}
 	return skills, nil
 }
 
 // levelRank orders the report the way a reader expects the tree: every room's share/, then this room's own
-// skills, then its seat folders. Alphabetical order would put "room" between "seat:..." and "share".
+// skills, then its seat folders, then the client tier - which is not a room's set, so it never interrupts one.
+// Alphabetical order would put "room" between "seat:..." and "share".
 func levelRank(level string) int {
 	switch {
 	case level == ShareDir:
 		return 0
 	case level == "room":
 		return 1
+	case level == ClientDir:
+		return 3
 	default:
 		return 2
 	}

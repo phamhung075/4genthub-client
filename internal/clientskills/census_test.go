@@ -1,7 +1,9 @@
 package clientskills
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,9 +119,11 @@ func TestAnUnreadableRecordIsBrokenWithItsFault(t *testing.T) {
 	}
 }
 
-// The room-wide listing is what the verb prints: share, the room's own skills, and every seat folder's -
-// two levels delivering one name are two rows, because the collision refusal belongs to one seat's install.
-func TestRoomSkillsListsShareRoomAndEverySeat(t *testing.T) {
+// The tree-wide listing is what the verb prints: share, the room's own skills, every seat folder's, and the
+// client tier's - two levels delivering one name are two rows, because the collision refusal belongs to one
+// seat's install. The client tier is last because it is not part of a room's set: it is the tree's fourth
+// tier, read for evidence and handed to no seat.
+func TestRoomSkillsListsEveryTier(t *testing.T) {
 	tree := skillTree(t, map[string]string{
 		"share/a/SKILL.md":            skillHeader("a"),
 		"rooms/room/b/SKILL.md":       skillHeader("b"),
@@ -132,7 +136,7 @@ func TestRoomSkillsListsShareRoomAndEverySeat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("room skills: %v", err)
 	}
-	want := []string{"share/a", "room/b", "seat:seat1/c", "seat:seat2/a"}
+	want := []string{"share/a", "room/b", "seat:seat1/c", "seat:seat2/a", "client/c"}
 	if len(skills) != len(want) {
 		t.Fatalf("listed %d skills %v, want %v", len(skills), roomSkillKeys(skills), want)
 	}
@@ -143,6 +147,107 @@ func TestRoomSkillsListsShareRoomAndEverySeat(t *testing.T) {
 	}
 	if dir := skills[0].Dir; dir != filepath.Join(tree.Root, "share", "a") {
 		t.Fatalf("share skill dir is %s", dir)
+	}
+	if dir := skills[len(skills)-1].Dir; dir != filepath.Join(tree.Root, ClientDir, "c") {
+		t.Fatalf("client skill dir is %s", dir)
+	}
+}
+
+// TestTheClientTierHasEvidenceAndNoSeatReceivesIt: the tier the client LLM's own instructions live in is read
+// by the census - so a commit touching it can cite a record - while a seat's set still excludes it. The two
+// questions are asked by two functions, and this is the test that keeps them apart.
+func TestTheClientTierHasEvidenceAndNoSeatReceivesIt(t *testing.T) {
+	tree := skillTree(t, map[string]string{
+		"share/shared/SKILL.md":     skillHeader("shared"),
+		"client/principal/SKILL.md": skillHeader("principal", "guard: docs-only"),
+	})
+	rows, err := tree.Census("room", nil)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	if got, want := strings.Join(rowKeys(rows), ","), "share/shared,client/principal"; got != want {
+		t.Fatalf("census rows [%s], want [%s]", got, want)
+	}
+	for _, row := range rows {
+		if row.Name != "principal" {
+			continue
+		}
+		if row.Level != ClientDir {
+			t.Fatalf("the client skill's level is %q, want %q", row.Level, ClientDir)
+		}
+		if row.Path != filepath.Join(tree.Root, ClientDir, "principal") {
+			t.Fatalf("the client row's path is %s", row.Path)
+		}
+		if row.Verdict != VerdictHold {
+			t.Fatalf("a client skill with a signal and no record is %q, want %q", row.Verdict, VerdictHold)
+		}
+	}
+
+	resolved, err := tree.Resolve("room", "seat1")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	requireNames(t, resolved, "shared")
+	requireAbsent(t, resolved, "principal")
+}
+
+// TestAnAbsentOrEmptyClientTierIsNoFault: client/ is optional - a tree without the tier and a tier with no
+// skills both read as "no rows", not as an error and not as a silently dropped level - while an entry under it
+// that holds no SKILL.md is refused by name, exactly as share/ refuses one.
+func TestAnAbsentOrEmptyClientTierIsNoFault(t *testing.T) {
+	t.Run("absent", func(t *testing.T) {
+		tree := skillTree(t, map[string]string{"share/a/SKILL.md": skillHeader("a")})
+		skills, err := tree.RoomSkills("room")
+		if err != nil {
+			t.Fatalf("a tree without client/: %v", err)
+		}
+		if got, want := strings.Join(roomSkillKeys(skills), ","), "share/a"; got != want {
+			t.Fatalf("listed [%s], want [%s]", got, want)
+		}
+	})
+	t.Run("empty", func(t *testing.T) {
+		tree := skillTree(t, map[string]string{"share/a/SKILL.md": skillHeader("a")})
+		if err := os.MkdirAll(filepath.Join(tree.Root, ClientDir), 0o755); err != nil {
+			t.Fatalf("mkdir client/: %v", err)
+		}
+		skills, err := tree.RoomSkills("room")
+		if err != nil {
+			t.Fatalf("an empty client/: %v", err)
+		}
+		if got, want := strings.Join(roomSkillKeys(skills), ","), "share/a"; got != want {
+			t.Fatalf("listed [%s], want [%s]", got, want)
+		}
+	})
+	t.Run("not a skill", func(t *testing.T) {
+		tree := skillTree(t, map[string]string{
+			"share/a/SKILL.md":       skillHeader("a"),
+			"client/stray/notes.txt": "no marker",
+		})
+		_, err := tree.RoomSkills("room")
+		if err == nil || !strings.Contains(err.Error(), filepath.Join(ClientDir, "stray")) {
+			t.Fatalf("a client entry with no %s must be refused by name: %v", SkillFile, err)
+		}
+	})
+}
+
+// TestAClientSkillWithNoSignalsIsReportedNotDropped: the tier exists so a client skill's own account can be
+// asked for, and a skill that declares nothing is `no-signal` - the same verdict the seat tiers get - rather
+// than missing from the report.
+func TestAClientSkillWithNoSignalsIsReportedNotDropped(t *testing.T) {
+	tree := skillTree(t, map[string]string{
+		"share/keep/SKILL.md":       skillHeader("keep"),
+		"client/principal/SKILL.md": skillHeader("principal"),
+	})
+	rows, err := tree.Census("room", nil)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	if got, want := strings.Join(rowKeys(rows), ","), "share/keep,client/principal"; got != want {
+		t.Fatalf("census rows [%s], want [%s]", got, want)
+	}
+	client := rows[1]
+	if client.Level != ClientDir || client.Verdict != VerdictNoSignal {
+		t.Fatalf("client row is %s/%s, want %s/%s", client.Level, client.Verdict, ClientDir, VerdictNoSignal)
 	}
 }
 

@@ -349,6 +349,32 @@ func TestProposeNamesTheLevelWhenTwoLevelsDeliverTheName(t *testing.T) {
 	}
 }
 
+// TestProposeReachesTheClientTier: the client's own skills are candidates like any other tier's - the bare
+// name resolves to client/<name> when that is the only copy, and when two levels deliver the name the refusal
+// lists the client tier among the candidates. Without this the one tier whose skills ARE the client LLM's
+// instructions is the one tier a proposal cannot cite.
+func TestProposeReachesTheClientTier(t *testing.T) {
+	fixture := newProposeFixture(t, "")
+	clientSkill := filepath.Join(fixture.tree.Root, ClientDir, "principal")
+	writeFile(t, filepath.Join(clientSkill, SkillFile), proposeSkillBody)
+
+	if code, _, stderr := fixture.propose(t, "--skill", "principal", "--change", "fix", "--from", "qitem-1"); code != 0 {
+		t.Fatalf("a client-only name: exit %d, stderr %q", code, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(clientSkill, RecordFile)); err != nil {
+		t.Fatalf("the proposal did not land in the client skill: %v", err)
+	}
+
+	writeFile(t, filepath.Join(fixture.tree.Root, ShareDir, "principal", SkillFile), proposeSkillBody)
+	code, _, stderr := fixture.propose(t, "--skill", "principal", "--change", "fix", "--from", "qitem-1")
+	if code != 2 {
+		t.Fatalf("ambiguous name: exit = %d, want 2", code)
+	}
+	if !strings.Contains(stderr, "client/principal") || !strings.Contains(stderr, "share/principal") {
+		t.Fatalf("the candidate list must name the client tier: %q", stderr)
+	}
+}
+
 // TestProposeRefusesAValueThatIsNeitherARowNorACensusRef: --from takes a queue row or a ref `skills evidence`
 // prints, and a value that is neither is refused by name rather than handed to a stream reader that would
 // read it as "no such fact".

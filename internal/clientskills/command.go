@@ -28,9 +28,11 @@ const skillsUsage = `usage: 4genteam skills evidence [ROOM] [--skill NAME] [--sk
       4genteam skills propose [ROOM] --skill NAME --change fix|derived|captured --from QITEM[,QITEM]
                                [--draft FILE] [--skills-root DIR]  (writes into YOUR worktree)
 
-Read every skill a room delivers - share/, the room's own, and each seat folder's - and print its state
+Read every skill the tree holds for a room - share/, the room's own, each seat folder's, and the client
+tier (client/, the LLM running the client's own instructions) - and print its state
 (provisional|trusted), its declared signals, its evidence, and one verdict: hold, no-signal (no declared
-signals) or broken-record (a record that cannot be read, or an evidence id that does not resolve).
+signals) or broken-record (a record that cannot be read, or an evidence id that does not resolve). A client
+skill is a candidate like any other's, named client/NAME.
 
 The verb only READS: records, SKILL.md front matter, the room's queue rows and the tree's git history. It
 exits 0 whatever the verdicts are, because a report is the answer.
