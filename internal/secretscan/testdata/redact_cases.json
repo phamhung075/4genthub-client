@@ -1,5 +1,5 @@
 {
-  "comment": "Redaction parity cases. Generated from the reference implementation: scripts/scrub.py via the command in TEST-CHANGELOG; the Python emits expect_text/expect_redacted for each case's own text and known map.",
+  "comment": "Redaction parity cases. Generated from the reference implementation: scripts/scrub.py, whose command line is recorded in the commit that generated these cases; the Python emits expect_text/expect_redacted for each case's own text and known map.",
   "cases": [
     {
       "name": "jwt",

@@ -1,0 +1,16 @@
+# Paths a prune removed from THIS repo, kept as DATA because the prune's claim - "nothing live points at
+# a removed path and nothing puts it back" - has to be a check, not a sentence in a commit message.
+#
+# Measured 2026-10-22: 3c9c95a7 removed the whole changelog tree (269 files under CHANGELOG/, plus
+# CHANGELOG.md and TEST-CHANGELOG.md) under the owner ruling of 2026-10-21 that the commit body is the
+# change record. Nothing failed when it landed, and nothing would fail if the next seat re-created
+# CHANGELOG/<date>--<title>.md: this file is what makes that arrive as a red test.
+#
+# One entry per line: an exact repository-relative path, or a directory ENDING IN "/" for a whole tree.
+# No globs, no trailing comments - the scan is a fixed string grep. A prune that deletes paths edits this
+# list, and the guard then refuses both a live reference to one of them and a path coming back tracked.
+
+# The changelog tree the 2026-10-21 owner ruling retired.
+CHANGELOG/
+CHANGELOG.md
+TEST-CHANGELOG.md
