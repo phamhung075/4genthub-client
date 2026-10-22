@@ -46,6 +46,17 @@ SHAs, test run) is collected like 4genteam evidence, checked deterministically (
 D5 diff size), then the task's acceptance criteria are put to Jev. A task with no acceptance criteria is uncertain, never
 accepted: the checks alone are not a verdict. The server is not asked to judge.
 
+A CLIENT-REPO task is completed from the tree the change is in: cd into that repo and pass --base a sha of
+THAT repo. The numstat is measured <--base>..HEAD in the current tree, so a hub sha measures no client change.
+
+The criteria are judged against this bundle and nothing else, so each must name a fact it carries: the --test
+command as typed, its exit code, the base or head sha (7 characters or more), or a count with this change's
+own number - files_changed, lines_changed, lines_added, lines_deleted. A criterion naming none of them is
+refused as unjudgeable, and one whose only fact is a numstat path is refused too: the wire replaces a path
+with <path> before the judge sees it. A sha from another repository resolves to no commit here, so it is
+neither warned about nor carried: a criterion whose only fact is that sha is refused. Write client criteria
+as the facts the bundle holds - "go test ./... exits 0", "files_changed 5", "lines_added 88", "5f2a1c3".
+
   --task     REQUIRED. The task id.
   --base     REQUIRED. The commit the change is measured from.
   --summary  REQUIRED. The completion summary stored on the task.
