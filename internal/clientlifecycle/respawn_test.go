@@ -358,7 +358,7 @@ func TestMain(m *testing.M) {
 	// 7392 or read this machine's live listeners. The default is a machine where every listener is up, so a
 	// case about another row is not made red by model egress; a case about model egress replaces these three
 	// seams itself (llm_test.go).
-	llmMissing = func() []string { return nil }
+	llmMissing = func([]string) []string { return nil }
 	llmWait = func(clientllmproxy.Listener, time.Duration) bool { return true }
 	llmListening = func(clientllmproxy.Listener) bool { return true }
 	// And the redirect writer: `up`'s default state root in these cases is the machine's own, so a test

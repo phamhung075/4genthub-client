@@ -389,7 +389,7 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	// starts - and each listener must already answer, because a seat pointed at a closed port fails
 	// closed. A listener that cannot start refuses `up` here, with the port and the log named, rather than
 	// letting a room come up with every model call refused.
-	if err := ensureLlmListeners(stateDir); err != nil {
+	if err := ensureLlmListeners(stateDir, llmRoutes(spec)); err != nil {
 		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}

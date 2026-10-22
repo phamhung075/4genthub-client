@@ -46,14 +46,54 @@ func (l Listener) Name() string {
 	return l.Route
 }
 
-// Listeners is one entry per DISTINCT listener, in table order. Routes sharing a base-URL variable share
-// an entry, because one variable holds one address and therefore one port - that is what makes the line
-// written once and the reuse decision key on the variable rather than on the route key. codex gets its
-// own entry: distinct surface, distinct port.
-func Listeners() []Listener {
+// Routes names every route key this client proxies, in table order. It is what a caller asks for when it
+// cannot narrow the set - the start path's own fallback for a room whose record cannot be read.
+func Routes() []string {
+	names := make([]string, 0, len(routeTable))
+	for _, row := range routeTable {
+		names = append(names, row.Name)
+	}
+	return names
+}
+
+// RoutesFor names the routes a seat of one runtime sends its model requests through. It is the ONE place a
+// runtime name meets the route table, so a listener is started for a runtime a room actually seats rather
+// than for every route the table carries.
+//
+// `claude-code`, `omp` and `codex` are proxied; `agy` and `terminal` answer NO route, because the probe found
+// no surface for agy and a terminal seat makes no model request. A runtime this figure does not know answers
+// EVERY route: a start that cannot rule a route out must not leave it unserved, since a seat pointed at a
+// closed port fails closed.
+func RoutesFor(runtime string) []string {
+	switch strings.ToLower(strings.TrimSpace(runtime)) {
+	case "claude-code":
+		return []string{"claude-code"}
+	case "omp":
+		return []string{"omp-anthropic"}
+	case "codex":
+		return []string{"codex"}
+	case "agy", "terminal":
+		return nil
+	default:
+		return Routes()
+	}
+}
+
+// ListenersFor is one entry per DISTINCT listener among routes, in table order. Routes sharing a base-URL
+// variable share an entry, because one variable holds one address and therefore one port - that is what makes
+// the line written once and the reuse decision key on the variable rather than on the route key. codex gets
+// its own entry: distinct surface, distinct port. A route no seat uses is not in `routes` and starts nothing.
+func ListenersFor(routes []string) []Listener {
+	wanted := map[string]bool{}
+	for _, route := range routes {
+		wanted[route] = true
+	}
 	var listeners []Listener
 	seen := map[string]bool{}
 	for _, row := range routeTable {
+		if !wanted[row.Name] {
+			continue
+		}
 		key := row.EnvVar
 		if key == "" {
 			key = "file:" + row.Name
@@ -114,7 +154,7 @@ func EnsureEnv(stateRoot string) ([]string, error) {
 		current[key] = upstream
 		written = append(written, key)
 	}
-	for _, listener := range Listeners() {
+	for _, listener := range ListenersFor(Routes()) {
 		if listener.Surface == "" || current[listener.Surface] == listener.BaseURL() {
 			continue
 		}
@@ -145,11 +185,12 @@ func Listening(listener Listener) bool {
 	return envVarOf(found) == listener.Surface
 }
 
-// MissingListeners names, in table order, the listeners that do not answer. An empty answer is the row's
-// only passing verdict; every name here is a port the redirect lines point at with nothing serving it.
-func MissingListeners() []string {
+// MissingListenersFor names, in table order, the listeners of routes that do not answer. An empty answer is
+// the row's only passing verdict; every name here is a port the redirect lines point at with nothing serving
+// it. A route no seat uses is not asked about, so an unstarted listener nothing needs never turns the row red.
+func MissingListenersFor(routes []string) []string {
 	var missing []string
-	for _, listener := range Listeners() {
+	for _, listener := range ListenersFor(routes) {
 		if !Listening(listener) {
 			missing = append(missing, listener.Name())
 		}

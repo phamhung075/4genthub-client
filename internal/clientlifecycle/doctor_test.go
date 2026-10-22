@@ -85,7 +85,7 @@ func newHealthFixture(t *testing.T, listedRooms []string) *healthFixture {
 	// is not made red by model egress; the case that asserts the row replaces this.
 	previousLlmRows := llmRowsFor
 	t.Cleanup(func() { llmRowsFor = previousLlmRows })
-	llmRowsFor = func(string) []llmRow {
+	llmRowsFor = func(string, string) []llmRow {
 		return []llmRow{{Row: clientservices.Health{Safeguard: clientservices.Llm, State: clientservices.Running, AgeS: clientservices.UnknownAge},
 			Detail: "llm: 2 proxied routes, 3 unproxied (omp-deepseek, codex-unselected, agy), 0 withheld today"}}
 	}
