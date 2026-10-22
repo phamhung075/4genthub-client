@@ -1031,6 +1031,7 @@ func TestTheAdvicePrintsTheNameAndNotTheField(t *testing.T) {
 	}{
 		{"a.TestFoo passes", `-run '^TestFoo$'`, `-run '^a.TestFoo$'`},
 		{"TestFoo,TestBar pass", `-run '^TestFoo$'`, `'^TestFoo,TestBar$'`},
+		{"TestFoo-bar is covered", `-run '^TestFoo$'`, `'^TestFoo-bar$'`},
 	} {
 		cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
 		got := evaluate(context.Background(), cfg, []string{tc.criterion}, passing())
@@ -1044,6 +1045,24 @@ func TestTheAdvicePrintsTheNameAndNotTheField(t *testing.T) {
 			t.Errorf("%q must not advise a selector that matches nothing (%q printed):\n%s",
 				tc.criterion, tc.notWant, got.Reasons)
 		}
+	}
+}
+
+// A criterion naming a file whose stem looks like a test name is a <path> on the wire, not a <test>, and the
+// placeholder must not be a name that runs nothing: the advice keeps the token the redaction would drop.
+func TestTheAdviceNamesTheFilePlaceholderForAFileName(t *testing.T) {
+	cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, []string{"TestHelper.go is fixed"}, passing())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+		t.Fatalf("a file-name-only criterion is not judgeable: got %+v", got)
+	}
+	for _, want := range []string{"a file name reaches the judge as <path>", `-run '^TestHelper$'`} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the advice must keep the name and name the right placeholder (%q is missing):\n%s", want, got.Reasons)
+		}
+	}
+	if strings.Contains(got.Reasons, `'^TestName$'`) {
+		t.Errorf("the generic placeholder runs nothing and must not be advised here:\n%s", got.Reasons)
 	}
 }
 

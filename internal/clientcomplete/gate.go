@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/phamhung075/4genthub-client/internal/clientevidence"
 	"github.com/phamhung075/4genthub-client/internal/clientjev"
@@ -285,44 +284,26 @@ func (r register) refusal(silent, blind, judgeable []int, criteria []string) str
 // silentClaim words a criterion that names no register fact. A criterion naming a test is the one silent case
 // with a known replacement: the count-only wire sends the name as <test> (clientjev.RedactForWire), so the
 // criterion is corrected by quoting the narrow command that runs that test and passing it as --test, which the
-// register carries as the command and its exit code. The shape comes from clientjev.IsTestName, the same
-// predicate the redaction uses, so the advice and the wire cannot drift apart.
+// register carries as the command and its exit code. Both the name and the placeholder come from clientjev
+// (TestNameIn, IsFileName), the same predicates the redaction uses, so the advice cannot teach a name the wire
+// would drop or a selector that matches nothing: the advised pattern is the TOKEN the redaction matched, not
+// the word around it (a.TestFoo, TestFoo,TestBar and TestFoo-bar all advise '^TestFoo$'), and a benchmark takes
+// -bench because -run selects tests only.
 func silentClaim(i int, criterion string) string {
-	if !clientjev.IsTestName(criterion) {
+	name := clientjev.TestNameIn(criterion)
+	if name == "" {
 		return fmt.Sprintf("criterion_%d %q names no fact this bundle carries", i+1, criterion)
 	}
-	name, flag := testNameIn(criterion)
-	if name == "" {
-		name, flag = "TestName", "-run"
+	shaped := "a test name reaches the judge as <test>"
+	if clientjev.IsFileName(criterion) {
+		shaped = "a file name reaches the judge as <path>"
 	}
-	return fmt.Sprintf("criterion_%d %q: a test name reaches the judge as <test>, so name the command that runs "+
-		"it and pass that same command as --test, e.g. `go test <pkg> %s '^%s$' -count=1` exits 0",
-		i+1, criterion, flag, name)
-}
-
-// testNameIn returns the first test name a criterion spells, reduced to the NAME and the go test flag that runs
-// it, so the advice prints a command that actually runs something. A qualifier is dropped (a.TestFoo runs as
-// TestFoo: -run matches the name inside the package, not a package-qualified one), a comma-separated list keeps
-// its first name (TestFoo,TestBar is a field, not a selector), and a benchmark takes -bench, because -run
-// selects tests only and `-run '^BenchmarkX$'` matches nothing and exits 0 - a green proving nothing.
-// It reports "" when no token is isolable as a word, which leaves silentClaim its generic placeholder.
-func testNameIn(criterion string) (string, string) {
-	fields := strings.FieldsFunc(criterion, func(r rune) bool {
-		return unicode.IsSpace(r) || r == '|' || r == ','
-	})
-	for _, field := range fields {
-		name := strings.Trim(field, "\"'`()[]{}<>,.;:^$")
-		if q := strings.LastIndexByte(name, '.'); q >= 0 {
-			name = name[q+1:]
-		}
-		if clientjev.IsTestName(name) {
-			if strings.HasPrefix(name, "Benchmark") {
-				return name, "-bench"
-			}
-			return name, "-run"
-		}
+	flag := "-run"
+	if strings.HasPrefix(name, "Benchmark") {
+		flag = "-bench"
 	}
-	return "", ""
+	return fmt.Sprintf("criterion_%d %q: %s, so name the command that runs it and pass that same command as "+
+		"--test, e.g. `go test <pkg> %s '^%s$' -count=1` exits 0", i+1, criterion, shaped, flag, name)
 }
 
 // normaliseSpace folds every run of whitespace into one space, which is the form the ruling defines the

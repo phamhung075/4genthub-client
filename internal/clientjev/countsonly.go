@@ -40,7 +40,17 @@ func RedactForWire(s string) string {
 // IsTestName reports whether s carries a test-name token - the Test*/Benchmark*/Example* shape RedactForWire
 // replaces with <test>. The shape is spelled here once: the redaction above and the completion gate's advice
 // about a criterion that names a test both read it, so the advice cannot teach a name the wire would drop.
-func IsTestName(s string) bool { return testToken.MatchString(s) }
+func IsTestName(s string) bool { return TestNameIn(s) != "" }
+
+// TestNameIn returns the test-name token RedactForWire would replace in s, so a caller can print THAT token
+// rather than the word around it: a qualifier (a.TestFoo), a comma list (TestFoo,TestBar) and a hyphenated
+// suffix (TestFoo-bar) all carry TestFoo, and a command built from the whole word would match nothing.
+func TestNameIn(s string) string { return testToken.FindString(s) }
+
+// IsFileName reports whether s carries a file name - the shape RedactForWire replaces with <path> BEFORE the
+// test-name pass, so a criterion spelling a file whose stem looks like a test name ("TestHelper.go") reaches
+// the judge as <path> and not as <test>. The advice names the right placeholder from this predicate.
+func IsFileName(s string) bool { return pathToken.MatchString(s) || fileToken.MatchString(s) }
 
 // redactPayload encodes the request with every string shaped by RedactForWire. The walk is over the
 // ENCODED payload decoded back to `any`, because the questions are structs and maps of strings by the
