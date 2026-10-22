@@ -40,11 +40,12 @@ func TestEverySkillTextNamesTheTrailer(t *testing.T) {
 	}
 }
 
-// TestEveryCommitStepNamesTheGuardAClientCommitRuns: the check must name a hook a client commit actually
-// reaches. The hub's `git_commit_capture.py` never sees a client skill commit - skills live in the client repo
-// and the hub records only the submodule pin - so a text naming the wrapper as the skills check teaches a
-// refusal that cannot fire (the reviewer's finding on edbdc767). The client's `commit-msg` shim and the guard it
-// execs are that one mechanism, so both names are required in every text that teaches the step.
+// TestEveryCommitStepNamesTheGuardAClientCommitRuns: the check must name a hook a commit reaches, and must say
+// whether that check is LIVE. The reviewer's corrections (qitem-20261022181254, qitem-20261022181457) measured
+// both halves: the wrapper does run in the client (30 captures 10-18..10-21 in the client's git-dir), so naming
+// it is right, and its skills arm is NOT on main, so a text that calls it a refusal today names a gate that does
+// not run. The client's `commit-msg` shim and the guard it execs are the hook a plain `git commit` needs; both
+// names are required in every text, and the share text must carry the landing state.
 func TestEveryCommitStepNamesTheGuardAClientCommitRuns(t *testing.T) {
 	root := repoRoot(t)
 	for _, path := range skillEvidenceTexts {
@@ -56,6 +57,15 @@ func TestEveryCommitStepNamesTheGuardAClientCommitRuns(t *testing.T) {
 			if !strings.Contains(string(body), want) {
 				t.Errorf("%s does not name %q, so it points at a check a client commit never reaches", path, want)
 			}
+		}
+	}
+	share, err := os.ReadFile(filepath.Join(root, "skills", "share", "seat-crew", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read seat-crew: %v", err)
+	}
+	for _, want := range []string{"on main yet", "lands with the parked patch"} {
+		if !strings.Contains(string(share), want) {
+			t.Errorf("seat-crew does not carry %q, so it presents a parked arm as a live refusal", want)
 		}
 	}
 }

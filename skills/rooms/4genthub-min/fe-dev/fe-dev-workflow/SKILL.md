@@ -48,12 +48,14 @@ from your guess. You lead a crew of DeepSeek workers; the change is still yours.
 6. **Record**: the commit body is the record (owner ruling 2026-10-21) - what was wrong, what changed,
    how it was verified and whether the browser check ran, naming the tests and their result. There is no
    changelog file of any kind. One `=== Progress N ===` on the task.
-7. **Commit by pathspec**: in the hub, through `python3 scripts/git-hooks/git_commit_capture.py -- -m "<type(scope): subject>" -- <paths>`;
-   in the client repo, plain `git commit -m "<type(scope): subject>" -- <paths>`, because the client has no wrapper.
-   Then `git show --numstat HEAD`. A commit that touches `agenthub_client/skills/**` also carries
+7. **Commit by pathspec** through the wrapper - `python3 scripts/git-hooks/git_commit_capture.py -- -m "<type(scope): subject>" -- <paths>`
+   in the hub, and in the client the same file by absolute path
+   (`/home/daihu/__projects__/4genthub/scripts/git-hooks/git_commit_capture.py`), because the client keeps no copy;
+   then `git show --numstat HEAD`. A commit that touches `agenthub_client/skills/**` also carries
    `Skill-Evidence:` - a `qitem-...`, the `4genteam skills evidence ...` run with what it showed, or
-   `none - <reason>`; it is the client's own `scripts/git-hooks/commit-msg` (the hub's `task-trailer-guard`)
-   that refuses a skills commit without one (see `seat-crew`).
+   `none - <reason>`; the wrapper's skills arm is not on main yet (it lands with the parked patch), and the hook a
+   plain `git commit` would need is the client's `scripts/git-hooks/commit-msg` (the hub's `task-trailer-guard`),
+   unregistered today - so until then the trailer is your word (see `seat-crew`).
 8. **Hand off**: a queue row to `reviewer` (branch, range, the checks and results, what the browser
    check still needs). After approval, `4genteam complete --task <id> --base <sha> --summary "..." --test "npx tsc --noEmit -p ."`,
    and tell the lead the branch is ready.
