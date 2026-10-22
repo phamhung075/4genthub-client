@@ -112,7 +112,41 @@ func checkSeat(room string, seat clientruntime.SeatStatus, envKeys map[string]bo
 			func() error { return d.Reseat(room, seat.Seat) },
 			func() bool { _, err := os.Stat(mcp); return err == nil }))
 	}
+	if quiet, waiting, ok := stuckQuiet(seat); ok {
+		// A SEAT THAT IS UP AND STILL IS NOT WORKING IS A FINDING, and this verb used to drop the one signal the
+		// runtime produced and print `clean` (measured 2026-10-20T22:53 at an auth prompt and 23:09 on a seat with
+		// no process: `running ... quiet_seconds=1127`). Nothing is reseated for it: heal's repair is a stop and a
+		// restart, a relaunch of the same CLI in the same state answers the same prompt, and an agent between turns
+		// is quiet too while a reseat would destroy a turn in flight - so the evidence goes to the owner, whose
+		// fix is to look at the pane.
+		out = append(out, Finding{
+			Check:  "seat-quiet",
+			Target: target,
+			Detail: fmt.Sprintf("%s, quiet %ds with %s waiting", seat.Alert.Kind, quiet, strings.Join(waiting, ", ")),
+			Result: "left",
+		})
+	}
 	return out
+}
+
+// quietSeatSeconds is when a seat that is UP and owed work is reported rather than passed: the room's own bound,
+// the same 900 s the architect's ruling names for a seat to be called quiet (`quiet_seconds >= 900`) and
+// `4genteam lifecycle` uses as its stall default. Below it, a seat that has just picked its rows up reads as
+// working, which is what it is.
+const quietSeatSeconds = 900
+
+// stuckQuiet answers the runtime's own join of the two halves - the seat is up and the rail holds rows for it -
+// and only when its freshness stamp is older than the bound. The quiet time is the RUNTIME's reading of the
+// seat's disk evidence (state file `updated_at` and the newest tool-call line); a seat that published no stamp
+// has an unknown quiet time, and an unknown time is never evidence.
+func stuckQuiet(seat clientruntime.SeatStatus) (int64, []string, bool) {
+	if seat.Alert == nil || seat.Alert.Kind != "seat_up_with_queued_work" || seat.Alert.QuietSeconds == nil {
+		return 0, nil, false
+	}
+	if *seat.Alert.QuietSeconds < quietSeatSeconds || len(seat.Alert.WaitingQitemIDs) == 0 {
+		return 0, nil, false
+	}
+	return *seat.Alert.QuietSeconds, seat.Alert.WaitingQitemIDs, true
 }
 
 func checkSafeguards(room string, d Deps) ([]Finding, error) {

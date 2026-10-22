@@ -20,6 +20,7 @@ type room struct {
 	root    string
 	seats   map[string]string          // seat -> state
 	env     map[string]map[string]bool // seat -> keys held by the running process
+	alert   map[string]*clientruntime.SeatAlert
 	reseats []string
 	upCalls int
 	down    bool
@@ -33,7 +34,7 @@ func (r *room) deps(t *testing.T, fix bool) Deps {
 		Seats: func(string) ([]clientruntime.SeatStatus, error) {
 			var out []clientruntime.SeatStatus
 			for name, state := range r.seats {
-				out = append(out, clientruntime.SeatStatus{Seat: name, State: state})
+				out = append(out, clientruntime.SeatStatus{Seat: name, State: state, Alert: r.alert[name]})
 			}
 			return out, nil
 		},
@@ -112,6 +113,48 @@ func healRun(t *testing.T, room string, d Deps) []Finding {
 		t.Fatalf("Run(%s) refused: %v", room, err)
 	}
 	return findings
+}
+
+// TestASeatThatIsUpAndQuietWithRowsWaitingIsNotClean: the runtime joins the seat's own freshness with the rail into
+// one alert, and heal dropped it - so `heal --check` printed `clean` over a seat measured at `running ...
+// quiet_seconds=1127` (2026-10-20T23:09) while a quarter of the room's capacity sat idle. It is reported and LEFT:
+// heal's only repair is a stop and a restart, which relaunches the same CLI in the same state and would destroy a
+// turn in flight, so the owner is the one who looks at the pane. Below the room's 900 s bound the seat has just
+// picked its rows up and is working.
+func TestASeatThatIsUpAndQuietWithRowsWaitingIsNotClean(t *testing.T) {
+	r := newRoom(t, "AGENTHUB_URL=u\n"+"AGENT"+"HUB_TOKEN=v\n")
+	for _, seat := range []string{"dev", "lead"} {
+		r.seats[seat] = "running"
+		r.env[seat] = map[string]bool{"AGENTHUB_URL": true, "AGENTHUB_TOKEN": true}
+		_ = os.WriteFile(filepath.Join(clientruntime.SeatDir(r.root, "r", seat), "mcp.json"), []byte("{}"), 0o600)
+	}
+	quiet := int64(1127)
+	r.alert = map[string]*clientruntime.SeatAlert{"dev": {
+		Kind:            "seat_up_with_queued_work",
+		QuietSeconds:    &quiet,
+		WaitingQitemIDs: []string{"qitem-a", "qitem-b"},
+	}}
+	findings := healRun(t, "r", r.deps(t, true))
+	if got := results(findings)["seat-quiet r/dev"]; got != "left" {
+		t.Fatalf("a seat up and quiet 1127s with two rows waiting reads %q, want left: %+v", got, findings)
+	}
+	for _, f := range findings {
+		if f.Check == "seat-quiet" {
+			for _, want := range []string{"1127", "qitem-a", "qitem-b"} {
+				if !strings.Contains(f.Detail, want) {
+					t.Errorf("the finding drops %q from the evidence it rests on: %q", want, f.Detail)
+				}
+			}
+		}
+	}
+	if len(r.reseats) != 0 {
+		t.Fatalf("a quiet seat was reseated, which would destroy a turn that may be in flight: %v", r.reseats)
+	}
+
+	r.alert["dev"].QuietSeconds = new(int64(30))
+	if got := results(healRun(t, "r", r.deps(t, true))); got["seat-quiet r/dev"] != "" {
+		t.Fatalf("a seat that acted 30s ago was reported as stuck: %v", got)
+	}
 }
 
 func TestACleanRoomHasNoFindings(t *testing.T) {

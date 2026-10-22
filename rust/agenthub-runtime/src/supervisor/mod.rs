@@ -255,8 +255,12 @@ pub struct RoomSupervisor {
 /// The one read of a seat's own state file and the room's rail that both the status row and the nudge
 /// pass are built from (see `RoomSupervisor::seat_facts`).
 struct SeatFacts {
-    /// The seat's tmux session is up.
+    /// The seat's pane has a process behind it (`pane_is_live`: the session exists AND tmux does not report the
+    /// pane dead). The session alone is not this fact - a pane kept by `remain-on-exit` outlives its command.
     alive: bool,
+    /// The session is still there while `alive` is false: a pane kept by `remain-on-exit` after its command ended.
+    /// The status names it, because it is the observation behind a `stopped` seat that a reader may see as a pane.
+    pane_kept: bool,
     /// The runner's own word for what it is doing: `idle`, `retrying`, `needs_input`, `blocked`, or a
     /// death (`agent_exited`, …). `None` when the seat published nothing.
     published_state: Option<String>,
@@ -1690,6 +1694,15 @@ impl RoomSupervisor {
                         .or_else(|| facts.published_state.clone())
                         .unwrap_or_else(|| "agent_socket_closed".to_string()),
                 ),
+                // A STOPPED SEAT WHOSE PANE WAS KEPT SAYS WHAT IT OBSERVED: `remain-on-exit` outlives a command, so the
+                // session is up and nothing is behind it - the exact shape that read `running`. The rest of the
+                // stopped seats have no pane at all and fall through to the sentence below, which is what a seat that
+                // never ran already reads.
+                SeatLifecycleState::Stopped if facts.pane_kept => Some(
+                    "tmux kept the seat's pane after its process ended: a pane is up with no live process behind it, \
+                     and the seat published no death"
+                        .to_string(),
+                ),
                 _ if facts.alive => Some(format!(
                     "pane alive after {NON_OMP_READY_GRACE_MS}ms; this runtime publishes no readiness channel, so a \
                      live but unconfigured agent is indistinguishable from a working one"
@@ -1990,7 +2003,8 @@ impl RoomSupervisor {
         })
     }
 
-    /// Everything one seat's status row is built from, read once: whether its session is up, the runner's
+    /// Everything one seat's status row is built from, read once: whether its pane has a process behind it
+    /// (`pane_is_live`, not the session's existence), the runner's
     /// own last published word and freshness stamp, and the active rail rows addressed to it.
     ///
     /// It exists so the two readers that need this join - `get_room_status` (the human-facing alert) and
@@ -2006,7 +2020,18 @@ impl RoomSupervisor {
     /// (`get_room_status` can still fail on the one thing it cannot answer without: an unreadable spec.)
     fn seat_facts(&self, room: &str, seat: &str) -> SeatFacts {
         let session = Self::session_name(room, seat);
-        let alive = TerminalManager::is_session_alive(&session);
+        // THE SESSION IS NOT THE SEAT, and `has-session` was the wrong half of the pane to ask. A pane kept by
+        // `remain-on-exit` after its command exited still answers `has-session` 0 - measured 2026-10-17 in
+        // `pane_is_live`'s own comment - so a seat with NO PROCESS BEHIND IT read `running` (measured again
+        // 2026-10-20T23:09: `running ... quiet_seconds=1127`, and `heal --check` printed `clean` on it), while
+        // the client's nudge pass had to keep its own `pane_is_live` call to notice. The status row is the one
+        // answer every reader shares, so the death is observed HERE, once, and both readers inherit it. A probe
+        // that FAILS is still not a death: `pane_is_live` only excludes a pane tmux reports dead.
+        let alive = TerminalManager::pane_is_live(&session);
+        // THE OTHER HALF OF THE SAME READ: a session tmux still has while nothing is behind its pane. It is kept
+        // separately because a status names the evidence it rested on, and "the pane outlived its process" and "no
+        // pane at all" are two different observations (a seat that never ran is the second).
+        let pane_kept = !alive && TerminalManager::is_session_alive(&session);
         let state_path = self
             .room_dir(room)
             .join("run")
@@ -2063,6 +2088,7 @@ impl RoomSupervisor {
 
         SeatFacts {
             alive,
+            pane_kept,
             published_state,
             activity,
             last_active,
@@ -3832,6 +3858,7 @@ mod tests {
 
         let alert = alert_for(&SeatFacts {
             alive: true,
+            pane_kept: false,
             published_state: Some("idle".to_string()),
             activity: ActivityWord::Idle,
             last_active: Some(last_active),
@@ -3851,6 +3878,7 @@ mod tests {
         // that would read as "just active".
         let unknown = alert_for(&SeatFacts {
             alive: true,
+            pane_kept: false,
             published_state: None,
             activity: ActivityWord::Unknown,
             last_active: None,
@@ -3864,6 +3892,7 @@ mod tests {
         // Down with work waiting: not the seat the rail can reach, so nothing to report.
         assert!(alert_for(&SeatFacts {
             alive: false,
+            pane_kept: false,
             published_state: Some("agent_exited".to_string()),
             activity: ActivityWord::Unknown,
             last_active: Some(last_active),
@@ -3875,6 +3904,7 @@ mod tests {
         // Up with nothing waiting: nothing to be woken for.
         assert!(alert_for(&SeatFacts {
             alive: true,
+            pane_kept: false,
             published_state: Some("idle".to_string()),
             activity: ActivityWord::Idle,
             last_active: Some(last_active),
@@ -4287,6 +4317,59 @@ mod tests {
         assert!(
             supervisor.pending_nudges().is_empty(),
             "a pane with no process behind it is not a seat a nudge can reach"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// THE STATUS ROW ITSELF MUST NOT CALL A PANE WITH NO PROCESS BEHIND IT `running` - the half the nudge pass was
+    /// already right about while the row every reader shares was wrong. Measured 2026-10-20T23:09: a seat with no
+    /// process read `running ... quiet_seconds=1127` and `heal --check`, which reads this row, printed `clean`. The
+    /// evidence is the pane's own dead bit (`pane_dead`), and the detail names it instead of a stale published word.
+    #[tokio::test]
+    async fn a_pane_kept_after_its_process_exited_does_not_read_running() {
+        let _server = crate::pty::test_servers::own("status-deadpane");
+        let dir = scratch("status-deadpane");
+        let room = format!("status-deadpane-{}", std::process::id());
+        let key = seat_key("deadpane");
+        write_spec_with_runtime(&dir, &room, &key, "agy");
+        let supervisor = supervisor_at(&dir);
+        let session = RoomSupervisor::session_name(&room, &key);
+        TerminalManager::launch_session(
+            &session,
+            Path::new("."),
+            "sh -c 'stty -echo; sleep 0.4'",
+            &HashMap::new(),
+        )
+        .expect("scratch pane");
+        let kept = std::process::Command::new("tmux")
+            .args(["set-option", "-t", &session, "remain-on-exit", "on"])
+            .output()
+            .expect("this test needs tmux");
+        assert!(
+            kept.status.success(),
+            "the pane must be kept after its command exits"
+        );
+        std::thread::sleep(Duration::from_millis(1200));
+        assert!(
+            TerminalManager::is_session_alive(&session),
+            "the fixture rests on the session outliving its pane's process"
+        );
+        assert!(
+            !TerminalManager::pane_is_live(&session),
+            "its process is gone"
+        );
+
+        let statuses = supervisor.get_room_status(&room).expect("status");
+        assert_eq!(statuses.len(), 1, "the room lists one seat");
+        assert_eq!(
+            statuses[0].state,
+            SeatLifecycleState::Stopped,
+            "a pane with no process behind it is not a running seat"
+        );
+        let detail = statuses[0].detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("kept the seat's pane") && detail.contains("no live process behind it"),
+            "the status must name the evidence it holds, not a stale word: {detail:?}"
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -5525,6 +5608,7 @@ mod tests {
     ) -> SeatFacts {
         SeatFacts {
             alive: true,
+            pane_kept: false,
             published_state: word.map(str::to_string),
             activity: ActivityWord::from_state_document(None),
             last_active: None,

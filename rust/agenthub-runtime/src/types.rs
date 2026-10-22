@@ -217,7 +217,8 @@ pub struct SeatStatus {
     pub model: Option<String>,
     /// The pid tmux returned when it created the session - **a record, not proof of liveness**. A seat that
     /// dies keeps this number in whatever was recorded about it; what proves a seat is up is its state file
-    /// (`runner::state_file_path`) for an omp seat, or its session still existing for the other runtimes.
+    /// (`runner::state_file_path`) for an omp seat, or its pane still holding a live process
+    /// (`pty::TerminalManager::pane_is_live` - the session's existence outlives its command) for the others.
     pub pid: Option<u32>,
     pub state: SeatLifecycleState,
     /// THE WORD A DESTROYER READS, on its own axis from `state`: parsed from the seat's own published
