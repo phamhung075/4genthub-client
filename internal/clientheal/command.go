@@ -172,6 +172,28 @@ func machineDeps(root string, client *clientruntime.Client, fix, allowPeak bool,
 	}
 }
 
+// upRoom is the repair's start: this binary, as a child, in the root the findings were read against.
+//
+// THE ROOT IS PASSED ON: heal reads its findings against ITS root, so the repair must start the room in that
+// same root - a child up left to resolve its own default would repair a different machine state than the one
+// that was diagnosed. And the child is refused when this binary IS a test binary: `go test` hands the child
+// no `-test.*` flag, so it would run the whole suite again, which is the 2026-10-22 fork bomb one spawn site
+// short of the guard in clientlifecycle. Same predicate, one copy.
+func upRoom(room, root string) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err := clientlifecycle.RefuseSelfExecUnderTest(self); err != nil {
+		return err
+	}
+	out, err := exec.Command(self, "up", room, "--state-root", root).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, lastLine(string(out)))
+	}
+	return nil
+}
+
 // gateRestart is the peak gate heal asks before it stops and restarts a seat.
 //
 // It writes the refusal to the caller's stderr AND returns it as an error: the stderr line is what an
