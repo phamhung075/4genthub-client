@@ -3,7 +3,6 @@ package clientjev
 import (
 	"encoding/json"
 	"regexp"
-	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientevidence"
 )
@@ -48,17 +47,40 @@ func IsTestName(s string) bool { return TestNameIn(s) != "" }
 // suffix (TestFoo-bar) all carry TestFoo, and a command built from the whole word would match nothing.
 func TestNameIn(s string) string { return testToken.FindString(s) }
 
-// FileTokenIn returns the path or file token that CONTAINS span, or "" when span sits in no such token.
-// RedactForWire replaces a path first and a file name second, so a span inside either reaches the judge as
-// <path>: "TestHelper" inside "TestHelper.go" is a file name, while "TestFoo" beside "x.go" is not. A caller
-// deciding which placeholder a criterion carries reads this, not any file name elsewhere in the sentence.
-func FileTokenIn(s, span string) string {
-	if span == "" {
-		return ""
+// TestNameClaim answers which shape a criterion's test name reaches the judge as, from the SAME three token
+// rules RedactForWire applies and in its order: a path first, a file name second, a test name last.
+//
+// The question is POSITIONAL, not by substring. A token inside a path or file token is replaced before the
+// test-name pass, so "TestHelper" in "TestHelper.go" reaches the judge as <path> and its stem runs no test. A
+// test token that stands OUTSIDE them reaches it as <test>, whatever file the same sentence names elsewhere -
+// the reviewer's counterexample (2026-10-22), "TestFoo passes; TestFoo_test.go is created", where asking
+// whether any file token CONTAINS the name made the free-standing first TestFoo a file name and the advice
+// taught no selector at all.
+//
+// A criterion naming both shapes answers with the test token, because a selector can measure it and nothing can
+// measure a stem. Only a criterion whose every test token sits inside a file token answers with that file, and
+// then with the name of its first test token so the advice can say what it refused to build a selector from.
+func TestNameClaim(s string) (name, file string) {
+	for _, at := range testToken.FindAllStringIndex(s, -1) {
+		covered := fileTokenCovering(s, at)
+		if covered == "" {
+			return s[at[0]:at[1]], ""
+		}
+		if name == "" {
+			name, file = s[at[0]:at[1]], covered
+		}
 	}
-	for _, token := range append(pathToken.FindAllString(s, -1), fileToken.FindAllString(s, -1)...) {
-		if strings.Contains(token, span) {
-			return token
+	return name, file
+}
+
+// fileTokenCovering is the path or file token of s whose own occurrence CONTAINS the match at `at`, or "". A path
+// is asked first because `RedactForWire` replaces paths before file names.
+func fileTokenCovering(s string, at []int) string {
+	for _, pattern := range []*regexp.Regexp{pathToken, fileToken} {
+		for _, token := range pattern.FindAllStringIndex(s, -1) {
+			if token[0] <= at[0] && at[1] <= token[1] {
+				return s[token[0]:token[1]]
+			}
 		}
 	}
 	return ""

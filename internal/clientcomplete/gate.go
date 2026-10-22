@@ -285,23 +285,25 @@ func (r register) refusal(silent, blind, judgeable []int, criteria []string) str
 // with a known replacement: the count-only wire sends the name as <test> (clientjev.RedactForWire), so the
 // criterion is corrected by quoting the narrow command that runs that test and passing it as --test, which the
 // register carries as the command and its exit code. Both the name and the placeholder come from clientjev
-// (TestNameIn, FileTokenIn), the same shapes the redaction uses, so the advice cannot teach a name the wire
+// (TestNameIn, TestNameClaim), the same shapes the redaction uses, so the advice cannot teach a name the wire
 // would drop or a selector that matches nothing: the advised pattern is the TOKEN the redaction matched, not
 // the word around it (a.TestFoo, TestFoo,TestBar and TestFoo-bar all advise '^TestFoo$'), and a benchmark takes
 // -bench because -run selects tests only.
 //
-// The placeholder is decided by the token that CONTAINS the match, not by any file name elsewhere in the
-// criterion: a test name beside a path is still a <test> ("TestFoo passes; x.go is fixed" advises -run
-// '^TestFoo$'). When the match sits INSIDE a file token ("TestHelper" in "TestHelper.go") the criterion names
-// a file, and its stem runs no test: the advice keeps the <path> reason and the names-no-fact correction, and
-// teaches no selector built from that stem - `go test -run '^TestHelper$'` matches nothing and exits 0, which
-// is the green-having-run-nothing this advice exists to prevent.
+// The placeholder is decided POSITIONALLY, by whether the match itself sits inside a path or file token, and
+// not by any file name elsewhere in the criterion: a test name beside a path is still a <test> ("TestFoo
+// passes; x.go is fixed" advises -run '^TestFoo$'), and so is a test named beside a file whose path carries its
+// own name ("TestFoo passes; TestFoo_test.go is created" - reviewer's counterexample, 2026-10-22). When the
+// match sits INSIDE a file token ("TestHelper" in "TestHelper.go") the criterion names a file, and its stem runs
+// no test: the advice keeps the <path> reason and the names-no-fact correction, and teaches no selector built
+// from that stem - `go test -run '^TestHelper$'` matches nothing and exits 0, which is the green-having-run-
+// nothing this advice exists to prevent.
 func silentClaim(i int, criterion string) string {
-	name := clientjev.TestNameIn(criterion)
+	name, file := clientjev.TestNameClaim(criterion)
 	if name == "" {
 		return fmt.Sprintf("criterion_%d %q names no fact this bundle carries", i+1, criterion)
 	}
-	if file := clientjev.FileTokenIn(criterion, name); file != "" {
+	if file != "" {
 		return fmt.Sprintf("criterion_%d %q: %s is a file name, and a file name reaches the judge as <path>, so "+
 			"its stem runs no test and the criterion names no fact this bundle carries; name the command that "+
 			"measures that file and pass that same command as --test, e.g. `go test <pkg> -count=1` exits 0",

@@ -1111,10 +1111,16 @@ func TestTheAdviceNamesTheFileTokenAndTeachesNoSelectorFromIt(t *testing.T) {
 
 // The placeholder is decided by the token the advice quotes, not by any file name elsewhere in the criterion:
 // a test name beside a path is a <test>, and the selector built from it runs that test.
+//
+// THE THIRD CASE IS THE POSITIONAL ONE (reviewer's counterexample, 2026-10-22): the sentence names a test AND a
+// file that carries the same word in its own name. Asking whether any file token CONTAINS "TestFoo" answered with
+// TestFoo_test.go and taught no selector, although the first TestFoo stands free in the sentence and `go test
+// -run '^TestFoo$'` measures it - so containment is read off the match's own position.
 func TestAPathElsewhereDoesNotMakeATestNameAFile(t *testing.T) {
 	for _, criterion := range []string{
 		"TestFoo passes; internal/clientjev/jev.go is fixed",
 		"TestFoo passes; countsonly.go is fixed",
+		"TestFoo passes; TestFoo_test.go is created",
 	} {
 		cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
 		got := evaluate(context.Background(), cfg, []string{criterion}, passing())
