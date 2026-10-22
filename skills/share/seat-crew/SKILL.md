@@ -56,7 +56,7 @@ a commit made on a host that is not a seat are exempt; the lead is NOT exempt.
 
 The check is the commit wrapper `scripts/git-hooks/git_commit_capture.py` - the one place that sees the PATH SET
 and the MESSAGE together - and it runs in whichever repo you commit IN: in the hub by that path, in the client by
-the same file's absolute path (`/home/daihu/__projects__/4genthub/scripts/git-hooks/git_commit_capture.py`),
+the same file's absolute path (`$HOME/__projects__/4genthub/scripts/git-hooks/git_commit_capture.py`),
 because clients keep no copy. A hook cannot host this check: a `commit-msg` hook is blind to a pathspec commit's
 path set (the ruling measured it), so a plain `git commit -- <paths>` meets no check at all - commit through the
 wrapper. The skills arm is NOT on main yet: it lands with the parked patch

@@ -49,7 +49,7 @@ the source of truth over the tests. You lead a crew of DeepSeek workers; the cha
    One `=== Progress N ===` on the task.
 7. **Commit by pathspec** through the wrapper - `python3 scripts/git-hooks/git_commit_capture.py -- -m "<type(scope): subject>" -- <paths>`
    in the hub, and in the client the same file by absolute path
-   (`/home/daihu/__projects__/4genthub/scripts/git-hooks/git_commit_capture.py`), because the client keeps no copy
+   (`$HOME/__projects__/4genthub/scripts/git-hooks/git_commit_capture.py`), because the client keeps no copy
    (`git add -N` for a new file first). Then `git show --numstat HEAD`. A commit that touches
    `agenthub_client/skills/**` also carries `Skill-Evidence:` - a `qitem-...`, the
    `4genteam skills evidence ...` run with what it showed, or `none - <reason>`; the wrapper's skills arm is not on
