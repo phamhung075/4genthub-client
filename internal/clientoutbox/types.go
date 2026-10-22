@@ -2,12 +2,17 @@ package clientoutbox
 
 import "time"
 
-// FactKinds is the list of ledger kinds the outbox holds as append-only observations.
+// FactKinds and DecisionKinds are ORDERING groups, not a filter: OrderedForDrain returns facts first,
+// then decisions, then everything else, each group by CreatedAt. Enqueue appends whatever it is given
+// without consulting either list, and Drain removes every row the server answered - accepted or
+// rejected - after printing the refusal, so a queued kind the server refuses is refused and dropped,
+// not held.
 //
-// `evidence_submitted` is NOT here: the server refuses it as unsupported_kind, because evidence has one
-// writer - the evidence route, whose 409 keeps a head_sha's account fixed - and a fact intent owes no
-// comparison at all. The evidence verb posts that route (clientevidence), so an offline evidence
-// record still travels; what must not exist is a queued row the server would refuse.
+// `evidence_submitted` is in NEITHER list, although the server classifies it as a fact: the server
+// refuses it as unsupported_kind, because evidence has one writer - the evidence route, whose 409 keeps
+// a head_sha's account fixed - and a fact intent owes no comparison. The client therefore does not name
+// it as a kind it holds. The evidence verb POSTs that route directly (clientevidence, one request, no
+// queue), so a submission made offline fails there rather than waiting for a later drain.
 var FactKinds = map[string]bool{
 	"progress":       true,
 	"handover":       true,
