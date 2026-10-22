@@ -196,6 +196,11 @@ func (m *Manager) WakeSeatsFromEvents(ctx context.Context, events []LedgerEvent)
 }
 
 // extractWakeTarget determines if an event should wake a seat and formats the brief.
+//
+// The switch names LEDGER ENTRY kinds (agenthub_go TaskEventKindValues), which is a narrower vocabulary
+// than a client's imagination: there is no `assigned` entry, because assignment is the task's assignees
+// column, and a seat is woken for new work by WakeSeatsForWork reading the work items, not by an event.
+// A kind without its own case falls through to the generic brief.
 func extractWakeTarget(ev LedgerEvent) (room, seat, brief string) {
 	if ev.Payload == nil {
 		return "", "", ""
@@ -220,8 +225,6 @@ func extractWakeTarget(ev LedgerEvent) (room, seat, brief string) {
 	}
 
 	switch ev.Kind {
-	case "assigned":
-		brief = fmt.Sprintf("\n[agenthub:wake] Task %s assigned to you. Resume work with: manage_task action=resume task_id=%s\n", ev.TaskID, ev.TaskID)
 	case "status_changed":
 		newStatus, _ := ev.Payload["status"].(string)
 		brief = fmt.Sprintf("\n[agenthub:wake] Task %s moved to %s. Check details: manage_task action=resume task_id=%s\n", ev.TaskID, newStatus, ev.TaskID)

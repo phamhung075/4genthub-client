@@ -3,7 +3,8 @@
 **Status**: ruled by the architect seat, 2026-10-17, on task `31b72a0d` (Thinking system 1/8).
 **Unblocks**: 2/8 `bb5e5022` (the ledger accepts it; a fact without evidence is refused),
 4/8 `b578bd05` (a restarted seat gets the resume brief), 6/8 `363631f4` (dead ContextTracker).
-**Read at**: hub main `de399ced`, client `51f614b`.
+**Read at**: hub main `de399ced`, client `51f614b`. The intent-kind bullet below is re-measured at
+hub `342387a7` and client `8ed725a3`, the pair that landed this ruling's kind deletion.
 
 ## Context, measured
 
@@ -19,10 +20,15 @@
   **verbatim** as the brief's `last_handover`, so whatever key set this ruling fixes IS the resume
   contract; nothing has to translate.
 - The client-outbox surface `POST /api/v2/ledger/intents` (`ledger_mount.go`, `SubmitIntents`)
-  accepts nine `IntentKind`s (`agenthub_go/fastmcp/ledger/domain/entities/intent.go`) and
-  classifies them facts-vs-decisions; `handover` is a **fact** (arrival order, no `base_seq`). Its
-  kind check is one line (`ledger_service.go:170`, `IsIntentKind`). No client sends an intent yet
-  (no ledger kind strings in `agenthub_client`), so nothing shipped depends on the current nine.
+  accepts **four** `IntentKind`s (`agenthub_go/fastmcp/ledger/domain/entities/intent.go`, `IntentKinds`:
+  facts `progress` and `handover`, decisions `status_changed` and `gate_verdict`) and classifies them
+  facts-vs-decisions; `handover` is a **fact** (arrival order, no `base_seq`). Its kind check is one
+  line (`ledger_service.go:170`, `IsIntentKind`). `IntentKinds` is a **strict subset** of the two
+  classification lists: `evidence_submitted` keeps its fact classification for the staleness query and
+  is **not pushable**, because evidence has one writer - the controller, whose 409 keeps a head_sha's
+  account fixed - and a fact intent owes no comparison; `context_updated` is written by the context
+  path and pushed by nothing. The client's outbox names exactly those four
+  (`agenthub_client/internal/clientoutbox/types.go`), so a queued kind is never one the wire refuses.
 - `resume` exists and is **by `task_id` only**; the MCP controller refuses without it
   (`task_mcp_controller.go:286-290`). No seat calls it.
 - `manage_task update {details}` appends prose (AGENTS.md §5 measured 41k chars on one item). That
@@ -136,6 +142,12 @@ Keep (each has a writer today, or lands with this system):
 
 `status_changed`, `progress`, `gate_verdict`, `evidence_submitted`, `context_updated`, `handover`
 (the last gets its writer in 2/8, in the same change that deletes the others).
+
+Keeping a **ledger entry kind** and keeping a **pushable intent kind** are not the same list, and the
+two that differ are both server-written: `evidence_submitted` (the evidence controller) and
+`context_updated` (the context path). They stay in `TaskEventKindValues` and in the facts-vs-decisions
+classification, and they are NOT in `IntentKinds` - so a client never pushes them and the four a client
+may push are `progress`, `handover`, `status_changed`, `gate_verdict`.
 
 Delete from `TaskEventKindValues`, the table's `CHECK (kind IN …)`, and `IntentKinds`,
 `DecisionKinds`, `FactKinds`:
