@@ -204,7 +204,7 @@ mod tests {
                 "reviewer",
                 "You are the reviewer seat",
                 "Review against the task",
-                "1.4.19",
+                "1.4.23",
             ),
         ];
         let seats: Vec<&str> = cases.iter().map(|(seat, _, _, _)| *seat).collect();
