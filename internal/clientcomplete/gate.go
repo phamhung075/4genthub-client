@@ -258,7 +258,7 @@ func (r register) refusal(silent, blind, judgeable []int, criteria []string) str
 	for i, criterion := range criteria {
 		switch {
 		case isSilent[i]:
-			named = append(named, fmt.Sprintf("criterion_%d %q names no fact this bundle carries", i+1, criterion))
+			named = append(named, silentClaim(i, criterion))
 		case isBlind[i]:
 			named = append(named, fmt.Sprintf("criterion_%d %q names only a carried path, and the wire redacts a "+
 				"path to <path> before Jev sees it, so the criterion would be judged blind", i+1, criterion))
@@ -279,6 +279,31 @@ func (r register) refusal(silent, blind, judgeable []int, criteria []string) str
 		"<path>, so a path is not enough on its own", strings.Join(named, "; "), carries, r.command, r.exitCode,
 		strings.Join(r.shas, ", "), r.counts.Files(), r.counts.Total(), r.counts.Added, r.counts.Deleted,
 		strings.Join(r.pathList(), ", "))
+}
+
+// silentClaim words a criterion that names no register fact. A criterion naming a test is the one silent case
+// with a known replacement: the count-only wire sends the name as <test> (clientjev.RedactForWire), so the
+// criterion is corrected by quoting the narrow command that runs that test and passing it as --test, which the
+// register carries as the command and its exit code. Both the name and the placeholder come from clientjev
+// (TestNameIn, IsFileName), the same predicates the redaction uses, so the advice cannot teach a name the wire
+// would drop or a selector that matches nothing: the advised pattern is the TOKEN the redaction matched, not
+// the word around it (a.TestFoo, TestFoo,TestBar and TestFoo-bar all advise '^TestFoo$'), and a benchmark takes
+// -bench because -run selects tests only.
+func silentClaim(i int, criterion string) string {
+	name := clientjev.TestNameIn(criterion)
+	if name == "" {
+		return fmt.Sprintf("criterion_%d %q names no fact this bundle carries", i+1, criterion)
+	}
+	shaped := "a test name reaches the judge as <test>"
+	if clientjev.IsFileName(criterion) {
+		shaped = "a file name reaches the judge as <path>"
+	}
+	flag := "-run"
+	if strings.HasPrefix(name, "Benchmark") {
+		flag = "-bench"
+	}
+	return fmt.Sprintf("criterion_%d %q: %s, so name the command that runs it and pass that same command as "+
+		"--test, e.g. `go test <pkg> %s '^%s$' -count=1` exits 0", i+1, criterion, shaped, flag, name)
 }
 
 // normaliseSpace folds every run of whitespace into one space, which is the form the ruling defines the

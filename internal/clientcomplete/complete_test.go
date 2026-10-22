@@ -658,6 +658,43 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+// The parser used to keep the last of a repeated flag and drop the first silently: the dropped --test then made
+// every criterion quoting it unjudgeable with "names no fact this bundle carries" - a refusal about a command the
+// seat did pass. A second occurrence of any flag is a mistake the verb can see, so it is a usage error and no
+// request leaves.
+func TestARepeatedFlagIsRefusedBeforeAnyRequest(t *testing.T) {
+	base := repo(t)
+	rec := taskServer(t, `[]`)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--task", "t1", "--base", base, "--summary", "s", "--test", "go test ./a", "--test", "go test ./b"},
+			"--test given twice"},
+		{[]string{"--task", "t1", "--task", "t2", "--base", base, "--summary", "s"}, "--task given twice"},
+	} {
+		code, _, errs := run(tc.args...)
+		if code != clientcmd.ExitUsage || !strings.Contains(errs, tc.want) {
+			t.Errorf("%v: exit %d stderr %q, want a usage error naming %q", tc.args, code, errs, tc.want)
+		}
+	}
+	if len(rec.calls) != 0 {
+		t.Errorf("a repeated flag reached the server: %v", rec.calls)
+	}
+}
+
+// The rule is about the SECOND occurrence: one of each flag still parses as before.
+func TestEachFlagOnceStillParses(t *testing.T) {
+	opts, help, err := parse([]string{"--task", "t1", "--base", "b", "--summary", "s", "--test", "go test ./...",
+		"--notes", "n", "--url", "http://x"})
+	if err != nil || help {
+		t.Fatalf("one of each flag must parse: help %v, err %v", help, err)
+	}
+	if want := (options{task: "t1", base: "b", summary: "s", test: "go test ./...", notes: "n", url: "http://x"}); opts != want {
+		t.Errorf("got %+v, want %+v", opts, want)
+	}
+}
+
 // The register's exit-code fact is a whole number, not a substring, and the numbers a criterion is likely to
 // carry next to it are decimals: 0 must not be found inside 10 or inside 0.98, or a criterion could pass its
 // register check on a number that is not this run's exit code.
@@ -960,5 +997,102 @@ func TestAHexWordThatNamesNoCommitIsNotABase(t *testing.T) {
 	}
 	if strings.Contains(errs, "names ") {
 		t.Errorf("a token that resolves to no commit is not warned: stderr %q", errs)
+	}
+}
+
+// A silent criterion that names a test is the case the wire cannot carry: the gate names the replacement -
+// the narrow command to pass as --test - instead of leaving the seat to invent it.
+func TestATestNameCriterionPrintsTheCommandThatReplacesIt(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, []string{"TestListenerStartsForEverySeat passes"}, passing())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" || *hits != 0 {
+		t.Fatalf("a test name is not a fact the bundle carries: got %+v, %d judge calls", got, *hits)
+	}
+	for _, want := range []string{
+		`criterion_1 "TestListenerStartsForEverySeat passes"`,
+		"a test name reaches the judge as <test>",
+		"pass that same command as --test",
+		`go test <pkg> -run '^TestListenerStartsForEverySeat$' -count=1`,
+	} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the refusal must print the form that replaces a test name (%q is missing):\n%s", want, got.Reasons)
+		}
+	}
+}
+
+// The advice must print a selector that RUNS something. A package-qualified name and a comma-separated list
+// both fail as a -run pattern (nothing matches, go test exits 0), so the printed command must carry the bare
+// name: -run '^a.TestFoo$' and -run '^TestFoo,TestBar$' are the shapes this refuses to teach.
+func TestTheAdvicePrintsTheNameAndNotTheField(t *testing.T) {
+	for _, tc := range []struct {
+		criterion string
+		want      string
+		notWant   string
+	}{
+		{"a.TestFoo passes", `-run '^TestFoo$'`, `-run '^a.TestFoo$'`},
+		{"TestFoo,TestBar pass", `-run '^TestFoo$'`, `'^TestFoo,TestBar$'`},
+		{"TestFoo-bar is covered", `-run '^TestFoo$'`, `'^TestFoo-bar$'`},
+	} {
+		cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+		got := evaluate(context.Background(), cfg, []string{tc.criterion}, passing())
+		if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+			t.Fatalf("%q is a silent criterion: got %+v", tc.criterion, got)
+		}
+		if !strings.Contains(got.Reasons, tc.want) {
+			t.Errorf("%q must advise a command that runs (%q is missing):\n%s", tc.criterion, tc.want, got.Reasons)
+		}
+		if strings.Contains(got.Reasons, tc.notWant) {
+			t.Errorf("%q must not advise a selector that matches nothing (%q printed):\n%s",
+				tc.criterion, tc.notWant, got.Reasons)
+		}
+	}
+}
+
+// A criterion naming a file whose stem looks like a test name is a <path> on the wire, not a <test>, and the
+// placeholder must not be a name that runs nothing: the advice keeps the token the redaction would drop.
+func TestTheAdviceNamesTheFilePlaceholderForAFileName(t *testing.T) {
+	cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, []string{"TestHelper.go is fixed"}, passing())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+		t.Fatalf("a file-name-only criterion is not judgeable: got %+v", got)
+	}
+	for _, want := range []string{"a file name reaches the judge as <path>", `-run '^TestHelper$'`} {
+		if !strings.Contains(got.Reasons, want) {
+			t.Errorf("the advice must keep the name and name the right placeholder (%q is missing):\n%s", want, got.Reasons)
+		}
+	}
+	if strings.Contains(got.Reasons, `'^TestName$'`) {
+		t.Errorf("the generic placeholder runs nothing and must not be advised here:\n%s", got.Reasons)
+	}
+}
+
+// A benchmark does not run under -run: the advice must print -bench, because `-run '^BenchmarkX$'` matches
+// nothing and exits 0, which is the failure this advice exists to prevent.
+func TestTheAdviceRunsABenchmarkUnderBench(t *testing.T) {
+	cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, []string{"BenchmarkParseIsFaster passes"}, passing())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+		t.Fatalf("a benchmark name is a silent criterion: got %+v", got)
+	}
+	if want := `go test <pkg> -bench '^BenchmarkParseIsFaster$' -count=1`; !strings.Contains(got.Reasons, want) {
+		t.Errorf("a benchmark needs -bench (%q is missing):\n%s", want, got.Reasons)
+	}
+	if strings.Contains(got.Reasons, `-run '^BenchmarkParseIsFaster$'`) {
+		t.Errorf("a benchmark under -run matches nothing:\n%s", got.Reasons)
+	}
+}
+
+// The command the advice teaches is itself a register fact: a criterion quoting the narrow command is judged,
+// and the advice it replaces is not printed.
+func TestACriterionQuotingTheNarrowCommandIsJudged(t *testing.T) {
+	cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.97}}}`)
+	body := passing()
+	body.Test.Command = "go test ./internal/clientllm/ -run '^TestListenerStartsForEverySeat$' -count=1"
+	got := evaluate(context.Background(), cfg, []string{"`" + body.Test.Command + "` exits 0"}, body)
+	if got.Verdict != clientjev.Accept || got.Evaluator != "jev" || *hits != 1 {
+		t.Fatalf("a criterion naming the submitted command is judged: got %+v, %d judge calls", got, *hits)
+	}
+	if strings.Contains(got.Reasons, "a test name reaches the judge as <test>") {
+		t.Errorf("a judged criterion must not carry the refusal's advice:\n%s", got.Reasons)
 	}
 }
