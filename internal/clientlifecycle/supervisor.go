@@ -4,6 +4,7 @@ package clientlifecycle
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"io"
@@ -545,6 +546,25 @@ type supervisorChild interface {
 	Wait() error
 }
 
+// refuseSelfExecUnderTest stops a test from re-executing ITS OWN binary as a child. Under `go test`
+// os.Executable() is the test binary, and Go's flag parsing stops at the first argument that is not a flag, so
+// a re-exec with a subcommand ("llmproxy", "agent", "bridge run") silently runs the WHOLE suite again; every
+// copy that reaches the same spawn starts another, each detached in its own session - a fork bomb that
+// filled the machine's RAM and swap. A test that wants a real child points the executable at something else.
+//
+// The predicate is `flag.Lookup("test.v")`, not `testing.Testing()`: this is production code, and importing
+// `testing` into the shipped binary pulls the whole test framework in. The test binary registers its flags
+// when `testing.MainStart` runs - before `TestMain` - so the flag exists there and nowhere else.
+func refuseSelfExecUnderTest(exe string) error {
+	if flag.Lookup("test.v") == nil {
+		return nil
+	}
+	if self, err := os.Executable(); err == nil && self == exe {
+		return fmt.Errorf("refusing to re-exec the test binary %s as a child process", exe)
+	}
+	return nil
+}
+
 // spawnChild is a variable because the suite replaces it: a start that must be told apart from a child
 // that died is not testable against a real process without waiting for one.
 var spawnChild = spawnChildImpl
@@ -553,6 +573,9 @@ func spawnChildImpl(args []string, logPath string) (supervisorChild, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("this binary's own path: %w", err)
+	}
+	if err := refuseSelfExecUnderTest(self); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return nil, err
