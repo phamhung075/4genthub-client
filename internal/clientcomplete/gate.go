@@ -291,27 +291,38 @@ func silentClaim(i int, criterion string) string {
 	if !clientjev.IsTestName(criterion) {
 		return fmt.Sprintf("criterion_%d %q names no fact this bundle carries", i+1, criterion)
 	}
-	name := testNameIn(criterion)
+	name, flag := testNameIn(criterion)
 	if name == "" {
-		name = "TestName"
+		name, flag = "TestName", "-run"
 	}
 	return fmt.Sprintf("criterion_%d %q: a test name reaches the judge as <test>, so name the command that runs "+
-		"it and pass that same command as --test, e.g. `go test <pkg> -run '^%s$' -count=1` exits 0",
-		i+1, criterion, name)
+		"it and pass that same command as --test, e.g. `go test <pkg> %s '^%s$' -count=1` exits 0",
+		i+1, criterion, flag, name)
 }
 
-// testNameIn returns the first test-name token a criterion spells, trimmed of the quoting and selector syntax
-// around it ("'^TestX$'" reads as TestX), so the advice can print the command that runs THAT test. It reports
-// "" when the token is not isolable as a word, which leaves silentClaim its generic placeholder.
-func testNameIn(criterion string) string {
-	fields := strings.FieldsFunc(criterion, func(r rune) bool { return unicode.IsSpace(r) || r == '|' })
+// testNameIn returns the first test name a criterion spells, reduced to the NAME and the go test flag that runs
+// it, so the advice prints a command that actually runs something. A qualifier is dropped (a.TestFoo runs as
+// TestFoo: -run matches the name inside the package, not a package-qualified one), a comma-separated list keeps
+// its first name (TestFoo,TestBar is a field, not a selector), and a benchmark takes -bench, because -run
+// selects tests only and `-run '^BenchmarkX$'` matches nothing and exits 0 - a green proving nothing.
+// It reports "" when no token is isolable as a word, which leaves silentClaim its generic placeholder.
+func testNameIn(criterion string) (string, string) {
+	fields := strings.FieldsFunc(criterion, func(r rune) bool {
+		return unicode.IsSpace(r) || r == '|' || r == ','
+	})
 	for _, field := range fields {
 		name := strings.Trim(field, "\"'`()[]{}<>,.;:^$")
+		if q := strings.LastIndexByte(name, '.'); q >= 0 {
+			name = name[q+1:]
+		}
 		if clientjev.IsTestName(name) {
-			return name
+			if strings.HasPrefix(name, "Benchmark") {
+				return name, "-bench"
+			}
+			return name, "-run"
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // normaliseSpace folds every run of whitespace into one space, which is the form the ruling defines the

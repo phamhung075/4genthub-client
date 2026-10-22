@@ -1020,6 +1020,49 @@ func TestATestNameCriterionPrintsTheCommandThatReplacesIt(t *testing.T) {
 	}
 }
 
+// The advice must print a selector that RUNS something. A package-qualified name and a comma-separated list
+// both fail as a -run pattern (nothing matches, go test exits 0), so the printed command must carry the bare
+// name: -run '^a.TestFoo$' and -run '^TestFoo,TestBar$' are the shapes this refuses to teach.
+func TestTheAdvicePrintsTheNameAndNotTheField(t *testing.T) {
+	for _, tc := range []struct {
+		criterion string
+		want      string
+		notWant   string
+	}{
+		{"a.TestFoo passes", `-run '^TestFoo$'`, `-run '^a.TestFoo$'`},
+		{"TestFoo,TestBar pass", `-run '^TestFoo$'`, `'^TestFoo,TestBar$'`},
+	} {
+		cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+		got := evaluate(context.Background(), cfg, []string{tc.criterion}, passing())
+		if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+			t.Fatalf("%q is a silent criterion: got %+v", tc.criterion, got)
+		}
+		if !strings.Contains(got.Reasons, tc.want) {
+			t.Errorf("%q must advise a command that runs (%q is missing):\n%s", tc.criterion, tc.want, got.Reasons)
+		}
+		if strings.Contains(got.Reasons, tc.notWant) {
+			t.Errorf("%q must not advise a selector that matches nothing (%q printed):\n%s",
+				tc.criterion, tc.notWant, got.Reasons)
+		}
+	}
+}
+
+// A benchmark does not run under -run: the advice must print -bench, because `-run '^BenchmarkX$'` matches
+// nothing and exits 0, which is the failure this advice exists to prevent.
+func TestTheAdviceRunsABenchmarkUnderBench(t *testing.T) {
+	cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+	got := evaluate(context.Background(), cfg, []string{"BenchmarkParseIsFaster passes"}, passing())
+	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+		t.Fatalf("a benchmark name is a silent criterion: got %+v", got)
+	}
+	if want := `go test <pkg> -bench '^BenchmarkParseIsFaster$' -count=1`; !strings.Contains(got.Reasons, want) {
+		t.Errorf("a benchmark needs -bench (%q is missing):\n%s", want, got.Reasons)
+	}
+	if strings.Contains(got.Reasons, `-run '^BenchmarkParseIsFaster$'`) {
+		t.Errorf("a benchmark under -run matches nothing:\n%s", got.Reasons)
+	}
+}
+
 // The command the advice teaches is itself a register fact: a criterion quoting the narrow command is judged,
 // and the advice it replaces is not printed.
 func TestACriterionQuotingTheNarrowCommandIsJudged(t *testing.T) {
