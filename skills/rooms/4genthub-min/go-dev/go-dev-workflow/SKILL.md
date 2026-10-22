@@ -53,9 +53,8 @@ the source of truth over the tests. You lead a crew of DeepSeek workers; the cha
    (`git add -N` for a new file first). Then `git show --numstat HEAD`. A commit that touches
    `agenthub_client/skills/**` also carries `Skill-Evidence:` - a `qitem-...`, the
    `4genteam skills evidence ...` run with what it showed, or `none - <reason>`; the wrapper's skills arm is not on
-   main yet (it lands with the parked patch), and the hook a plain `git commit` would need is the client's
-   `scripts/git-hooks/commit-msg` (the hub's `task-trailer-guard`), unregistered today - so until then the
-   trailer is your word (see `seat-crew`).
+   main yet (it lands with the parked patch) - so until then the trailer is your word, and a plain `git commit`
+   meets no check at all (see `seat-crew`).
 8. **Hand off**: a queue row to `reviewer` with the branch, the commit range, the test commands and
    their results (`go-dev-role` output format). After approval, `4genteam complete --task <id> --base <sha> --summary "..." --test "go test ./..."`,
    and tell the lead the branch is ready to merge.

@@ -40,32 +40,30 @@ func TestEverySkillTextNamesTheTrailer(t *testing.T) {
 	}
 }
 
-// TestEveryCommitStepNamesTheGuardAClientCommitRuns: the check must name a hook a commit reaches, and must say
-// whether that check is LIVE. The reviewer's corrections (qitem-20261022181254, qitem-20261022181457) measured
-// both halves: the wrapper does run in the client (30 captures 10-18..10-21 in the client's git-dir), so naming
-// it is right, and its skills arm is NOT on main, so a text that calls it a refusal today names a gate that does
-// not run. The client's `commit-msg` shim and the guard it execs are the hook a plain `git commit` needs; both
-// names are required in every text, and the share text must carry the landing state.
-func TestEveryCommitStepNamesTheGuardAClientCommitRuns(t *testing.T) {
+// TestEveryCommitStepNamesTheCheckTheRulingChose: the check is the commit wrapper, and it must be named as such.
+// Two reviewer corrections shaped this (qitem-20261022181254, qitem-20261022181457 measured that the wrapper does
+// run in the client; qitem-20261022181928 held the arm to its ruling home): the ruling put the check where the
+// PATH SET and the MESSAGE are both visible, and a commit-msg hook is blind to a pathspec commit's path set, so a
+// text may not move the check to a hook. Every text names the wrapper; the share text also carries the two
+// measured facts a reader needs - the hook cannot host it, and the arm is not on main yet.
+func TestEveryCommitStepNamesTheCheckTheRulingChose(t *testing.T) {
 	root := repoRoot(t)
 	for _, path := range skillEvidenceTexts {
 		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
 		}
-		for _, want := range []string{"scripts/git-hooks/commit-msg", "task-trailer-guard"} {
-			if !strings.Contains(string(body), want) {
-				t.Errorf("%s does not name %q, so it points at a check a client commit never reaches", path, want)
-			}
+		if want := "git_commit_capture.py"; !strings.Contains(string(body), want) {
+			t.Errorf("%s does not name %q, so it points at a check the ruling did not choose", path, want)
 		}
 	}
 	share, err := os.ReadFile(filepath.Join(root, "skills", "share", "seat-crew", "SKILL.md"))
 	if err != nil {
 		t.Fatalf("read seat-crew: %v", err)
 	}
-	for _, want := range []string{"on main yet", "lands with the parked patch"} {
+	for _, want := range []string{"commit-msg", "blind to a pathspec commit's", "path set", "on main yet", "lands with the parked patch"} {
 		if !strings.Contains(string(share), want) {
-			t.Errorf("seat-crew does not carry %q, so it presents a parked arm as a live refusal", want)
+			t.Errorf("seat-crew does not carry %q, so it moves the check to a home the ruling measured blind, or presents a parked arm as live", want)
 		}
 	}
 }

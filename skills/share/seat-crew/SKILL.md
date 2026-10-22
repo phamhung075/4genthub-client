@@ -49,17 +49,15 @@ Skill-Evidence: ... 4genteam skills evidence <args> ... <what it said>    # the 
 Skill-Evidence: none - <reason>                                           # an edit no stream ordered
 ```
 
-The check is the commit wrapper `scripts/git-hooks/git_commit_capture.py`, the one place that sees the PATH SET a
-commit will carry - and it runs in whichever repo you commit IN, the client included: clients keep no copy, so a
-client commit names the hub's file by absolute path
-(`python3 /home/daihu/__projects__/4genthub/scripts/git-hooks/git_commit_capture.py -- ...`). The skills arm is
-NOT on main yet: it lands with the parked patch (`seats/go-dev/PATCH-2026-10-22-skill-evidence-trailer.{diff,md}`,
-at the owner's apply), so today the wrapper refuses a docs-only commit and does not yet refuse a missing
-`Skill-Evidence:` - until it does, the trailer is the seat's word and not a refusal. A commit made with plain
-`git commit` skips the wrapper, and the hook it needs is the client's `scripts/git-hooks/commit-msg`, which
-execs the hub's `scripts/git-hooks/task-trailer-guard` (the `Task:` guard) - present, but registered in no client
-checkout today (`core.hooksPath`), which is the owner's to set. The guard judges SHAPE ONLY: no daemon, no census
-re-run, no verdict. A skill path is not a document - a `SKILL.md`
+The check is the commit wrapper `scripts/git-hooks/git_commit_capture.py` - the one place that sees the PATH SET
+and the MESSAGE together - and it runs in whichever repo you commit IN: in the hub by that path, in the client by
+the same file's absolute path (`/home/daihu/__projects__/4genthub/scripts/git-hooks/git_commit_capture.py`),
+because clients keep no copy. A hook cannot host this check: a `commit-msg` hook is blind to a pathspec commit's
+path set (the ruling measured it), so a plain `git commit -- <paths>` meets no check at all - commit through the
+wrapper. The skills arm is NOT on main yet: it lands with the parked patch
+(`seats/go-dev/PATCH-2026-10-22-skill-evidence-trailer.{diff,md}`, at the owner's apply), so today the wrapper
+refuses a docs-only commit and does not yet refuse a missing `Skill-Evidence:` - until it does, the trailer is
+the seat's word, not a refusal. The guard judges SHAPE ONLY: no daemon, no census re-run, no verdict. A skill path is not a document - a `SKILL.md`
 is executable instruction - so a skills-only commit is judged by this trailer instead of being refused as
 docs-only. The value names what the edit came from, never a coverage claim:
 
