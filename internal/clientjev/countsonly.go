@@ -3,6 +3,7 @@ package clientjev
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientevidence"
 )
@@ -47,10 +48,21 @@ func IsTestName(s string) bool { return TestNameIn(s) != "" }
 // suffix (TestFoo-bar) all carry TestFoo, and a command built from the whole word would match nothing.
 func TestNameIn(s string) string { return testToken.FindString(s) }
 
-// IsFileName reports whether s carries a file name - the shape RedactForWire replaces with <path> BEFORE the
-// test-name pass, so a criterion spelling a file whose stem looks like a test name ("TestHelper.go") reaches
-// the judge as <path> and not as <test>. The advice names the right placeholder from this predicate.
-func IsFileName(s string) bool { return pathToken.MatchString(s) || fileToken.MatchString(s) }
+// FileTokenIn returns the path or file token that CONTAINS span, or "" when span sits in no such token.
+// RedactForWire replaces a path first and a file name second, so a span inside either reaches the judge as
+// <path>: "TestHelper" inside "TestHelper.go" is a file name, while "TestFoo" beside "x.go" is not. A caller
+// deciding which placeholder a criterion carries reads this, not any file name elsewhere in the sentence.
+func FileTokenIn(s, span string) string {
+	if span == "" {
+		return ""
+	}
+	for _, token := range append(pathToken.FindAllString(s, -1), fileToken.FindAllString(s, -1)...) {
+		if strings.Contains(token, span) {
+			return token
+		}
+	}
+	return ""
+}
 
 // redactPayload encodes the request with every string shaped by RedactForWire. The walk is over the
 // ENCODED payload decoded back to `any`, because the questions are structs and maps of strings by the

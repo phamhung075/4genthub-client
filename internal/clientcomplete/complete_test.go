@@ -1079,20 +1079,57 @@ func TestTheAdvicePrintsTheNameAndNotTheField(t *testing.T) {
 }
 
 // A criterion naming a file whose stem looks like a test name is a <path> on the wire, not a <test>, and the
-// placeholder must not be a name that runs nothing: the advice keeps the token the redaction would drop.
-func TestTheAdviceNamesTheFilePlaceholderForAFileName(t *testing.T) {
-	cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
-	got := evaluate(context.Background(), cfg, []string{"TestHelper.go is fixed"}, passing())
-	if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
-		t.Fatalf("a file-name-only criterion is not judgeable: got %+v", got)
-	}
-	for _, want := range []string{"a file name reaches the judge as <path>", `-run '^TestHelper$'`} {
-		if !strings.Contains(got.Reasons, want) {
-			t.Errorf("the advice must keep the name and name the right placeholder (%q is missing):\n%s", want, got.Reasons)
+// stem runs no test: the advice names the file token that CONTAINS the match and never teaches a selector
+// built from that stem, which would match nothing and exit 0 - the defect this advice exists to prevent.
+func TestTheAdviceNamesTheFileTokenAndTeachesNoSelectorFromIt(t *testing.T) {
+	for _, criterion := range []string{"TestHelper.go is fixed", "docs/BenchmarkHelper.go is deleted"} {
+		cfg, hits, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+		got := evaluate(context.Background(), cfg, []string{criterion}, passing())
+		if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" || *hits != 0 {
+			t.Fatalf("%q is a silent criterion: got %+v, %d judge calls", criterion, got, *hits)
+		}
+		file := strings.Fields(criterion)[0]
+		for _, want := range []string{
+			file + " is a file name",
+			"a file name reaches the judge as <path>",
+			"names no fact this bundle carries",
+			"`go test <pkg> -count=1` exits 0",
+		} {
+			if !strings.Contains(got.Reasons, want) {
+				t.Errorf("%q: the advice must name the file shape and a command that runs (%q is missing):\n%s",
+					criterion, want, got.Reasons)
+			}
+		}
+		for _, notWant := range []string{"-run '^", "-bench '^", "a test name reaches the judge as <test>"} {
+			if strings.Contains(got.Reasons, notWant) {
+				t.Errorf("%q must not advise a selector built from a file's stem (%q printed):\n%s",
+					criterion, notWant, got.Reasons)
+			}
 		}
 	}
-	if strings.Contains(got.Reasons, `'^TestName$'`) {
-		t.Errorf("the generic placeholder runs nothing and must not be advised here:\n%s", got.Reasons)
+}
+
+// The placeholder is decided by the token the advice quotes, not by any file name elsewhere in the criterion:
+// a test name beside a path is a <test>, and the selector built from it runs that test.
+func TestAPathElsewhereDoesNotMakeATestNameAFile(t *testing.T) {
+	for _, criterion := range []string{
+		"TestFoo passes; internal/clientjev/jev.go is fixed",
+		"TestFoo passes; countsonly.go is fixed",
+	} {
+		cfg, _, _ := jevServer(t, `{"answers":{"criterion_1":{"noul":0.99}}}`)
+		got := evaluate(context.Background(), cfg, []string{criterion}, passing())
+		if got.Verdict != clientjev.Unjudgeable || got.Evaluator != "deterministic" {
+			t.Fatalf("%q is a silent criterion: got %+v", criterion, got)
+		}
+		for _, want := range []string{"a test name reaches the judge as <test>", `-run '^TestFoo$'`} {
+			if !strings.Contains(got.Reasons, want) {
+				t.Errorf("%q quotes the test token, so the advice must say so (%q is missing):\n%s",
+					criterion, want, got.Reasons)
+			}
+		}
+		if strings.Contains(got.Reasons, "a file name reaches the judge as <path>") {
+			t.Errorf("%q names a path elsewhere, but the quoted token is a test name:\n%s", criterion, got.Reasons)
+		}
 	}
 }
 
