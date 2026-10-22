@@ -2,12 +2,16 @@ package clientoutbox
 
 import "time"
 
-// FactKinds is the list of append-only observations that can be recorded offline.
+// FactKinds is the list of ledger kinds the outbox holds as append-only observations.
+//
+// `evidence_submitted` is NOT here: the server refuses it as unsupported_kind, because evidence has one
+// writer - the evidence route, whose 409 keeps a head_sha's account fixed - and a fact intent owes no
+// comparison at all. The evidence verb posts that route (clientevidence), so an offline evidence
+// record still travels; what must not exist is a queued row the server would refuse.
 var FactKinds = map[string]bool{
-	"progress":           true,
-	"evidence_submitted": true,
-	"handover":           true,
-	"context_loaded":     true,
+	"progress":       true,
+	"handover":       true,
+	"context_loaded": true,
 }
 
 // DecisionKinds is the list of intents that claim, transition or judge work.
