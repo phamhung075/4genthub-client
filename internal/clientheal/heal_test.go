@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
@@ -59,6 +60,23 @@ func (r *room) deps(t *testing.T, fix bool) Deps {
 			return nil
 		},
 		Cause: func() string { return "the connector refused this credential" },
+	}
+}
+
+// TestUpRoomRefusesToReExecTheTestBinary: heal's repair starts `up` as a child of this binary, and under
+// `go test` this binary is the TEST binary - the child parses no -test.* flag and runs the whole suite again,
+// which is the 2026-10-22 fork bomb. The refusal names the re-exec and nothing is spawned.
+func TestUpRoomRefusesToReExecTheTestBinary(t *testing.T) {
+	root := t.TempDir()
+	err := upRoom("r", root)
+	if err == nil {
+		t.Fatal("upRoom spawned this binary as `up` under `go test`; the child would run the suite again")
+	}
+	if !strings.Contains(err.Error(), "re-exec") {
+		t.Errorf("the refusal is %q, want it to name the re-exec", err)
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Errorf("the refused repair still wrote into the root: %v", entries)
 	}
 }
 

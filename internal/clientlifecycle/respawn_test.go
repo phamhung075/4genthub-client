@@ -302,12 +302,12 @@ func TestRefuseSelfExecUnderTestRefusesOnlyTheTestBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := refuseSelfExecUnderTest(self); err == nil {
-		t.Errorf("refuseSelfExecUnderTest(%q) answered nil for the test binary's own path", self)
+	if err := RefuseSelfExecUnderTest(self); err == nil {
+		t.Errorf("RefuseSelfExecUnderTest(%q) answered nil for the test binary's own path", self)
 	} else if !strings.Contains(err.Error(), "re-exec") {
 		t.Errorf("the refusal is %q, want it to name the re-exec", err)
 	}
-	if err := refuseSelfExecUnderTest(filepath.Join(t.TempDir(), "4genteam")); err != nil {
+	if err := RefuseSelfExecUnderTest(filepath.Join(t.TempDir(), "4genteam")); err != nil {
 		t.Errorf("refuseSelfExecUnderTest refused a different path: %v", err)
 	}
 }

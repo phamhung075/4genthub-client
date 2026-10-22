@@ -142,7 +142,7 @@ func detachRespawnImpl(stateDir string, argv []string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("this executable cannot be named: %w", err)
 	}
-	if err := refuseSelfExecUnderTest(exe); err != nil {
+	if err := RefuseSelfExecUnderTest(exe); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {

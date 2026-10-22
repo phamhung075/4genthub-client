@@ -954,7 +954,7 @@ func runWatchViewImpl(name string, stderr io.Writer) {
 		fmt.Fprintf(stderr, "4genteam: cannot find this binary to start the watch view: %v\n", err)
 		return
 	}
-	if err := refuseSelfExecUnderTest(self); err != nil {
+	if err := RefuseSelfExecUnderTest(self); err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
 		return
 	}

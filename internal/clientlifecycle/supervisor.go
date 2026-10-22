@@ -546,7 +546,7 @@ type supervisorChild interface {
 	Wait() error
 }
 
-// refuseSelfExecUnderTest stops a test from re-executing ITS OWN binary as a child. Under `go test`
+// RefuseSelfExecUnderTest stops a test from re-executing ITS OWN binary as a child. Under `go test`
 // os.Executable() is the test binary, and Go's flag parsing stops at the first argument that is not a flag, so
 // a re-exec with a subcommand ("llmproxy", "agent", "bridge run") silently runs the WHOLE suite again; every
 // copy that reaches the same spawn starts another, each detached in its own session - a fork bomb that
@@ -555,7 +555,10 @@ type supervisorChild interface {
 // The predicate is `flag.Lookup("test.v")`, not `testing.Testing()`: this is production code, and importing
 // `testing` into the shipped binary pulls the whole test framework in. The test binary registers its flags
 // when `testing.MainStart` runs - before `TestMain` - so the flag exists there and nowhere else.
-func refuseSelfExecUnderTest(exe string) error {
+//
+// Exported because the spawn sites are not all in this package: `heal`'s repair starts `up` as a child of
+// this same binary, and a second copy of the predicate is a second thing to keep true.
+func RefuseSelfExecUnderTest(exe string) error {
 	if flag.Lookup("test.v") == nil {
 		return nil
 	}
@@ -574,7 +577,7 @@ func spawnChildImpl(args []string, logPath string) (supervisorChild, error) {
 	if err != nil {
 		return nil, fmt.Errorf("this binary's own path: %w", err)
 	}
-	if err := refuseSelfExecUnderTest(self); err != nil {
+	if err := RefuseSelfExecUnderTest(self); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
