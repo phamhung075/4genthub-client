@@ -49,8 +49,13 @@ Skill-Evidence: ... 4genteam skills evidence <args> ... <what it said>    # the 
 Skill-Evidence: none - <reason>                                           # an edit no stream ordered
 ```
 
-The check is the commit wrapper (`scripts/git-hooks/git_commit_capture.py`), beside the docs-only check, and
-it judges SHAPE ONLY: no daemon, no census re-run, no verdict. A skill path is not a document - a `SKILL.md`
+The check runs on the CLIENT commit, because skills live in the client repo: `scripts/git-hooks/commit-msg`
+execs the hub's `scripts/git-hooks/task-trailer-guard` - the same guard that refuses a seat's commit with no
+`Task:` trailer - and that guard refuses a skill commit whose message carries no valid `Skill-Evidence:` beside
+the `Task:` one. The hub's `scripts/git-hooks/git_commit_capture.py` is the HUB commit path and never sees a
+client skill commit: the hub records only the client's submodule pin. The guard judges SHAPE ONLY: no daemon,
+no census re-run, no verdict. It fires where a checkout registers that hook (`core.hooksPath`); a checkout
+without it meets the rule by the seat's own word rather than by a refusal. A skill path is not a document - a `SKILL.md`
 is executable instruction - so a skills-only commit is judged by this trailer instead of being refused as
 docs-only. The value names what the edit came from, never a coverage claim:
 

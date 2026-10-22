@@ -40,6 +40,26 @@ func TestEverySkillTextNamesTheTrailer(t *testing.T) {
 	}
 }
 
+// TestEveryCommitStepNamesTheGuardAClientCommitRuns: the check must name a hook a client commit actually
+// reaches. The hub's `git_commit_capture.py` never sees a client skill commit - skills live in the client repo
+// and the hub records only the submodule pin - so a text naming the wrapper as the skills check teaches a
+// refusal that cannot fire (the reviewer's finding on edbdc767). The client's `commit-msg` shim and the guard it
+// execs are that one mechanism, so both names are required in every text that teaches the step.
+func TestEveryCommitStepNamesTheGuardAClientCommitRuns(t *testing.T) {
+	root := repoRoot(t)
+	for _, path := range skillEvidenceTexts {
+		body, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, want := range []string{"scripts/git-hooks/commit-msg", "task-trailer-guard"} {
+			if !strings.Contains(string(body), want) {
+				t.Errorf("%s does not name %q, so it points at a check a client commit never reaches", path, want)
+			}
+		}
+	}
+}
+
 // TestTheTextBoxNamesBothCommands proves a reader is told how to PRODUCE a value rather than only that one is
 // due: the census verb and the propose verb are the two producers, and the share-level text names both.
 func TestTheTextBoxNamesBothCommands(t *testing.T) {
