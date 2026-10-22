@@ -215,6 +215,26 @@ func TestOnlyTheRoutesTheRoomUsesAreStarted(t *testing.T) {
 	}
 }
 
+// TestAClaudeSeatStartsWithTheClaudeListener: the runtime's own loose parse accepts `claude` for claude-code, so
+// a room whose spec says `claude` starts claude-code's listener and only that one. Before this the alias fell
+// through to the whole set and the room started codex's 7392 as well.
+func TestAClaudeSeatStartsWithTheClaudeListener(t *testing.T) {
+	root := t.TempDir()
+	spawned := stubLlmStart(t, map[int]bool{}, true)
+	err := ensureLlmListeners(root, llmRoutes(clientruntime.RoomSpec{Seats: []clientruntime.SeatSpec{
+		{SeatKey: "principal", Runtime: "claude"},
+	}}))
+	if err != nil {
+		t.Fatalf("a claude room refused its own start: %v", err)
+	}
+	if len(*spawned) != 1 {
+		t.Fatalf("spawned %d listeners for one claude seat, want 1: %v", len(*spawned), *spawned)
+	}
+	if got := strings.Join((*spawned)[0], " "); !strings.Contains(got, "--runtime claude-code") || !strings.Contains(got, "--listen 127.0.0.1:7391") {
+		t.Fatalf("the claude seat started %q, want claude-code on 127.0.0.1:7391", got)
+	}
+}
+
 // TestARouteNoSeatUsesNeverBlocksUp: with no proxied route among the seats, nothing is started and nothing is
 // waited on, so a route the table carries but no seat uses cannot hold the room down.
 func TestARouteNoSeatUsesNeverBlocksUp(t *testing.T) {

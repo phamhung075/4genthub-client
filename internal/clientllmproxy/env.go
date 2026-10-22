@@ -60,19 +60,21 @@ func Routes() []string {
 // runtime name meets the route table, so a listener is started for a runtime a room actually seats rather
 // than for every route the table carries.
 //
-// `claude-code`, `omp` and `codex` are proxied; `agy` and `terminal` answer NO route, because the probe found
-// no surface for agy and a terminal seat makes no model request. A runtime this figure does not know answers
-// EVERY route: a start that cannot rule a route out must not leave it unserved, since a seat pointed at a
-// closed port fails closed.
+// The spellings this figure narrows on are the ones the runtime itself accepts - `AgentRuntime::from_str_loose`
+// in the runtime's types.rs, which is why `claude` answers claude-code's route and not every route. A spelling
+// outside that set answers EVERY route, `terminal` included: a room whose spec carries a runtime the runtime
+// does not know keeps the whole set rather than being narrowed to nothing by a guess, because a start that
+// cannot rule a route out must not leave it unserved and a seat pointed at a closed port fails closed.
+// `claude-code`, `omp` and `codex` are proxied; `agy` alone answers NO route, the probe having found no surface.
 func RoutesFor(runtime string) []string {
 	switch strings.ToLower(strings.TrimSpace(runtime)) {
-	case "claude-code":
+	case "claude-code", "claude":
 		return []string{"claude-code"}
 	case "omp":
 		return []string{"omp-anthropic"}
 	case "codex":
 		return []string{"codex"}
-	case "agy", "terminal":
+	case "agy":
 		return nil
 	default:
 		return Routes()

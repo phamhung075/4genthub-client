@@ -184,9 +184,10 @@ func TestListenersForTakesOnlyTheRoutesAsked(t *testing.T) {
 	}
 }
 
-// TestRoutesForNamesTheRoutesASeatUses: one runtime, one set of provider routes. The two runtimes this client
-// knows carry no proxied route answer NONE rather than every route - their traffic is unproxied by the probe -
-// while a runtime the table does not know answers EVERY route, because a start that cannot rule a route out
+// TestRoutesForNamesTheRoutesASeatUses: one runtime, one set of provider routes, and the spellings are the ones
+// the runtime itself accepts - `claude` is claude-code's alias, not a name the table may treat as unknown. `agy`
+// answers NONE rather than every route - its traffic is unproxied by the probe - while a runtime the runtime
+// itself does not know, `terminal` included, answers EVERY route, because a start that cannot rule a route out
 // must not leave it unserved.
 func TestRoutesForNamesTheRoutesASeatUses(t *testing.T) {
 	for _, test := range []struct {
@@ -194,11 +195,13 @@ func TestRoutesForNamesTheRoutesASeatUses(t *testing.T) {
 		want    string
 	}{
 		{"claude-code", "claude-code"},
+		{"claude", "claude-code"},
+		{"CLAUDE", "claude-code"},
 		{"omp", "omp-anthropic"},
 		{"OMP", "omp-anthropic"},
 		{"codex", "codex"},
 		{"agy", ""},
-		{"terminal", ""},
+		{"terminal", strings.Join(Routes(), ",")},
 		{"", strings.Join(Routes(), ",")},
 		{"something-new", strings.Join(Routes(), ",")},
 	} {
