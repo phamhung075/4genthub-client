@@ -658,6 +658,43 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+// The parser used to keep the last of a repeated flag and drop the first silently: the dropped --test then made
+// every criterion quoting it unjudgeable with "names no fact this bundle carries" - a refusal about a command the
+// seat did pass. A second occurrence of any flag is a mistake the verb can see, so it is a usage error and no
+// request leaves.
+func TestARepeatedFlagIsRefusedBeforeAnyRequest(t *testing.T) {
+	base := repo(t)
+	rec := taskServer(t, `[]`)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--task", "t1", "--base", base, "--summary", "s", "--test", "go test ./a", "--test", "go test ./b"},
+			"--test given twice"},
+		{[]string{"--task", "t1", "--task", "t2", "--base", base, "--summary", "s"}, "--task given twice"},
+	} {
+		code, _, errs := run(tc.args...)
+		if code != clientcmd.ExitUsage || !strings.Contains(errs, tc.want) {
+			t.Errorf("%v: exit %d stderr %q, want a usage error naming %q", tc.args, code, errs, tc.want)
+		}
+	}
+	if len(rec.calls) != 0 {
+		t.Errorf("a repeated flag reached the server: %v", rec.calls)
+	}
+}
+
+// The rule is about the SECOND occurrence: one of each flag still parses as before.
+func TestEachFlagOnceStillParses(t *testing.T) {
+	opts, help, err := parse([]string{"--task", "t1", "--base", "b", "--summary", "s", "--test", "go test ./...",
+		"--notes", "n", "--url", "http://x"})
+	if err != nil || help {
+		t.Fatalf("one of each flag must parse: help %v, err %v", help, err)
+	}
+	if want := (options{task: "t1", base: "b", summary: "s", test: "go test ./...", notes: "n", url: "http://x"}); opts != want {
+		t.Errorf("got %+v, want %+v", opts, want)
+	}
+}
+
 // The register's exit-code fact is a whole number, not a substring, and the numbers a criterion is likely to
 // carry next to it are decimals: 0 must not be found inside 10 or inside 0.98, or a criterion could pass its
 // register check on a number that is not this run's exit code.

@@ -77,6 +77,7 @@ type options struct {
 
 func parse(args []string) (options, bool, error) {
 	var opts options
+	seen := map[string]bool{}
 	for i := 0; i < len(args); i++ {
 		flag := args[i]
 		if flag == "-h" || flag == "--help" {
@@ -99,6 +100,13 @@ func parse(args []string) (options, bool, error) {
 		default:
 			return opts, false, fmt.Errorf("unknown argument: %s", flag)
 		}
+		// A repeated flag is a mistake this parser can see, so it is an error rather than the silent last-wins
+		// it used to be: a second --test dropped the first, and every criterion quoting the dropped command was
+		// then refused as naming no fact - the seat did pass the command, only the parser threw it away.
+		if seen[flag] {
+			return opts, false, fmt.Errorf("%s given twice", flag)
+		}
+		seen[flag] = true
 		if i+1 >= len(args) {
 			return opts, false, fmt.Errorf("%s needs a value", flag)
 		}
