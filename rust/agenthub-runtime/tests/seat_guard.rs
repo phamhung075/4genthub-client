@@ -2328,6 +2328,136 @@ fn a_tool_result_loses_the_secret_values_and_keeps_its_shape() {
     );
 }
 
+/// The pair shapes: a dump's `NAME=value`, a JSON member, a yaml literal - and never code. The rule this pins was
+/// `NAME[TOKEN|KEY|SECRET|PASSWORD]\s*[=:]\s*\S+`, which also matched a constant named SECRET, a field comparison, a
+/// type annotation and an object opener, and replaced the brace that opens a type (measured 2026-10-23, row
+/// qitem-20261023003512). At client 50713b47, 98 of the client's 332 Go files and this asset itself stopped parsing
+/// after that redaction; under the three shapes zero do.
+#[test]
+fn the_pair_rule_reads_a_dump_and_never_a_type() {
+    for line in [
+        "const unquote = (token: string): string => {",
+        "const KNOWN_SECRETS: { name: string }[] = entries;",
+        "const SECRET = /\\b(NAME)\\S+/g;",
+        "if member.Key == key {",
+        "members = append(members, documentMember{Key: raw})",
+    ] {
+        let back = redacted(&[], line);
+        assert_eq!(back, line, "code keeps its braces and its operators: {line}");
+    }
+
+    // The dump forms still lose the value, and keep the delimiters around it.
+    let out = redacted(&[], "DB_PASSWORD=hunter2 keep me\n");
+    assert!(
+        out.contains("DB_PASSWORD=<redacted:pair>") && !out.contains("hunter2"),
+        "{out}"
+    );
+
+    let out = redacted(&[], "db_password: hunter2hunter2\n");
+    assert!(!out.contains("hunter2"), "{out}");
+
+    let out = redacted(&[], "{\"DB_PASSWORD\": \"hunter2secret\"}\n");
+    assert!(!out.contains("hunter2secret"), "{out}");
+    assert!(
+        out.contains("\"DB_PASSWORD\": \"<redacted:pair>\""),
+        "the member keeps its quotes: {out}"
+    );
+}
+
+/// The two shapes a first revision of the fix LOST, each of which the OLD rule caught: a quoted value after an
+/// unquoted name (`password: "x"`, `password='x'`), and a snake_case name whose literal is shorter than the eight
+/// characters the camelCase branch needs (`db_password: hunter2`). Giving up a dump shape to stop the code damage
+/// trades one defect for a leak, so both are pinned here - and so is the value that must stay: a bare number under
+/// a config key is a duration, not a secret.
+#[test]
+fn the_pair_rule_keeps_a_quoted_value_and_a_snake_case_key() {
+    let out = redacted(&[], "password: \"hunter2\"\n");
+    assert!(!out.contains("hunter2"), "{out}");
+    assert!(out.contains("\"<redacted:pair>\""), "the quotes are kept: {out}");
+
+    let out = redacted(&[], "password='hunter2'\n");
+    assert!(!out.contains("hunter2"), "{out}");
+
+    let out = redacted(&[], "db_password: hunter2\n");
+    assert!(!out.contains("hunter2"), "{out}");
+    assert!(out.contains("db_password: <redacted:pair>"), "{out}");
+
+    let out = redacted(&[], "DB_PASSWORD_TTL_MS: 5000\n");
+    assert_eq!(
+        out, "DB_PASSWORD_TTL_MS: 5000\n",
+        "a duration is not a secret: {out}"
+    );
+}
+
+/// The three shapes a RECORD needs, from RULING-2026-10-23-record-redaction: a quoted pair inside a sentence (the
+/// quotes and the `;` after it stay, because an eaten delimiter destroys the sentence a reader judges), an unquoted
+/// pair followed by the same delimiter, and code that must not move at all - a type annotation and a Go string
+/// concatenation, whose closing quote the pair rule used to consume. The marker names the cause: a bare
+/// `<redacted>` cannot be told from a corrupted file or a lost record.
+#[test]
+fn the_pair_rule_keeps_a_record_whole() {
+    let sentence = "facts: the password=\"hunter2\" shape and db_password=\"hunter2\" pair were lost; tail kept.";
+    assert_eq!(
+        redacted(&[], sentence),
+        "facts: the password=\"<redacted:pair>\" shape and db_password=\"<redacted:pair>\" pair were lost; tail kept.",
+        "both values go, the quotes and the semicolon stay, and the sentence still reads"
+    );
+
+    assert_eq!(
+        redacted(&[], "probe_password=hunter2; next"),
+        "probe_password=<redacted:pair>; next",
+        "the delimiter after the value survives the marker"
+    );
+
+    for line in [
+        "const KNOWN_SECRETS: { [key: string]: string }[] = entries;",
+        "\t\t\"Sec-WebSocket-Key: \" + key + \"\\r\\n\" +",
+        "\tcontents := \"SEAT_API_KEY=\" + secret + \"\\n\"",
+    ] {
+        assert_eq!(redacted(&[], line), line, "code is not a dumped pair: {line}");
+    }
+
+    let jwt = redacted(&[], "token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U");
+    assert_eq!(jwt, "token=<redacted:jwt>", "a labelled marker is not re-redacted into a bare one: {jwt}");
+}
+
+/// The three spellings the gate's blocker named, and the code shapes they must not touch. A dump that reaches a
+/// seat through a config file or through code that quotes it writes `NAME = value` with spaces around the equals,
+/// or `NAME: \"value\"` with the quotes escaped - neither was redacted, while `key: "SeatDetailPage"` (a map entry
+/// naming a page, 47 of them in the client tree) was. One row per shape: the marker names the cause, the value is
+/// gone, and every line that was valid source is byte-identical.
+#[test]
+fn the_pair_rule_reads_the_ini_and_the_quoted_spellings() {
+    for line in [
+        "DB_PASSWORD = hunter2",
+        "password = hunter2",
+        "db_password = s3cr3t!",
+    ] {
+        let out = redacted(&[], line);
+        assert!(!out.contains("hunter2") && !out.contains("s3cr3t"), "{line} -> {out}");
+        assert!(out.contains("<redacted:pair>"), "the marker names the cause: {out}");
+    }
+
+    let out = redacted(&[], "password = \"hunter2\"");
+    assert_eq!(out, "password = \"<redacted:pair>\"", "the quotes of a quoted INI value stay: {out}");
+
+    let out = redacted(&[], r#"password: \"hunter2\""#);
+    assert_eq!(
+        out, r#"password: \"<redacted:pair>\""#,
+        "a dump quoted inside code keeps BOTH escapes, so the enclosing literal still parses: {out}"
+    );
+
+    for line in [
+        "Key: \"SeatDetailPage\"",
+        "key: \"SeatDetailPage\"",
+        "password = hashedPassword",
+        "password = derive(raw)",
+        "if member.Key == key",
+    ] {
+        assert_eq!(redacted(&[], line), line, "code is not a dumped pair: {line}");
+    }
+}
+
 /// The handler the LEAK was in, exercised where omp runs it: the asset's default export is handed a fake `pi` that
 /// records the handlers it registers, a `tool_call` is fired to open a call, then a `tool_result` carrying a value in
 /// its text. A patch that deletes the `tool_result` handler and keeps `--redact` passes every row above, so this is
