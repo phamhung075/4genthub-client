@@ -2349,7 +2349,7 @@ fn the_pair_rule_reads_a_dump_and_never_a_type() {
     // The dump forms still lose the value, and keep the delimiters around it.
     let out = redacted(&[], "DB_PASSWORD=hunter2 keep me\n");
     assert!(
-        out.contains("DB_PASSWORD=<redacted>") && !out.contains("hunter2"),
+        out.contains("DB_PASSWORD=<redacted:pair>") && !out.contains("hunter2"),
         "{out}"
     );
 
@@ -2359,7 +2359,7 @@ fn the_pair_rule_reads_a_dump_and_never_a_type() {
     let out = redacted(&[], "{\"DB_PASSWORD\": \"hunter2secret\"}\n");
     assert!(!out.contains("hunter2secret"), "{out}");
     assert!(
-        out.contains("\"DB_PASSWORD\": \"<redacted>\""),
+        out.contains("\"DB_PASSWORD\": \"<redacted:pair>\""),
         "the member keeps its quotes: {out}"
     );
 }
@@ -2373,20 +2373,52 @@ fn the_pair_rule_reads_a_dump_and_never_a_type() {
 fn the_pair_rule_keeps_a_quoted_value_and_a_snake_case_key() {
     let out = redacted(&[], "password: \"hunter2\"\n");
     assert!(!out.contains("hunter2"), "{out}");
-    assert!(out.contains("\"<redacted>\""), "the quotes are kept: {out}");
+    assert!(out.contains("\"<redacted:pair>\""), "the quotes are kept: {out}");
 
     let out = redacted(&[], "password='hunter2'\n");
     assert!(!out.contains("hunter2"), "{out}");
 
     let out = redacted(&[], "db_password: hunter2\n");
     assert!(!out.contains("hunter2"), "{out}");
-    assert!(out.contains("db_password: <redacted>"), "{out}");
+    assert!(out.contains("db_password: <redacted:pair>"), "{out}");
 
     let out = redacted(&[], "DB_PASSWORD_TTL_MS: 5000\n");
     assert_eq!(
         out, "DB_PASSWORD_TTL_MS: 5000\n",
         "a duration is not a secret: {out}"
     );
+}
+
+/// The three shapes a RECORD needs, from RULING-2026-10-23-record-redaction: a quoted pair inside a sentence (the
+/// quotes and the `;` after it stay, because an eaten delimiter destroys the sentence a reader judges), an unquoted
+/// pair followed by the same delimiter, and code that must not move at all - a type annotation and a Go string
+/// concatenation, whose closing quote the pair rule used to consume. The marker names the cause: a bare
+/// `<redacted>` cannot be told from a corrupted file or a lost record.
+#[test]
+fn the_pair_rule_keeps_a_record_whole() {
+    let sentence = "facts: the password=\"hunter2\" shape and db_password=\"hunter2\" pair were lost; tail kept.";
+    assert_eq!(
+        redacted(&[], sentence),
+        "facts: the password=\"<redacted:pair>\" shape and db_password=\"<redacted:pair>\" pair were lost; tail kept.",
+        "both values go, the quotes and the semicolon stay, and the sentence still reads"
+    );
+
+    assert_eq!(
+        redacted(&[], "probe_password=hunter2; next"),
+        "probe_password=<redacted:pair>; next",
+        "the delimiter after the value survives the marker"
+    );
+
+    for line in [
+        "const KNOWN_SECRETS: { [key: string]: string }[] = entries;",
+        "\t\t\"Sec-WebSocket-Key: \" + key + \"\\r\\n\" +",
+        "\tcontents := \"SEAT_API_KEY=\" + secret + \"\\n\"",
+    ] {
+        assert_eq!(redacted(&[], line), line, "code is not a dumped pair: {line}");
+    }
+
+    let jwt = redacted(&[], "token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U");
+    assert_eq!(jwt, "token=<redacted:jwt>", "a labelled marker is not re-redacted into a bare one: {jwt}");
 }
 
 /// The handler the LEAK was in, exercised where omp runs it: the asset's default export is handed a fake `pi` that
