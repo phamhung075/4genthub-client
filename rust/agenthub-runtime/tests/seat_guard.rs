@@ -2364,6 +2364,31 @@ fn the_pair_rule_reads_a_dump_and_never_a_type() {
     );
 }
 
+/// The two shapes a first revision of the fix LOST, each of which the OLD rule caught: a quoted value after an
+/// unquoted name (`password: "x"`, `password='x'`), and a snake_case name whose literal is shorter than the eight
+/// characters the camelCase branch needs (`db_password: hunter2`). Giving up a dump shape to stop the code damage
+/// trades one defect for a leak, so both are pinned here - and so is the value that must stay: a bare number under
+/// a config key is a duration, not a secret.
+#[test]
+fn the_pair_rule_keeps_a_quoted_value_and_a_snake_case_key() {
+    let out = redacted(&[], "password: \"hunter2\"\n");
+    assert!(!out.contains("hunter2"), "{out}");
+    assert!(out.contains("\"<redacted>\""), "the quotes are kept: {out}");
+
+    let out = redacted(&[], "password='hunter2'\n");
+    assert!(!out.contains("hunter2"), "{out}");
+
+    let out = redacted(&[], "db_password: hunter2\n");
+    assert!(!out.contains("hunter2"), "{out}");
+    assert!(out.contains("db_password: <redacted>"), "{out}");
+
+    let out = redacted(&[], "DB_PASSWORD_TTL_MS: 5000\n");
+    assert_eq!(
+        out, "DB_PASSWORD_TTL_MS: 5000\n",
+        "a duration is not a secret: {out}"
+    );
+}
+
 /// The handler the LEAK was in, exercised where omp runs it: the asset's default export is handed a fake `pi` that
 /// records the handlers it registers, a `tool_call` is fired to open a call, then a `tool_result` carrying a value in
 /// its text. A patch that deletes the `tool_result` handler and keeps `--redact` passes every row above, so this is
