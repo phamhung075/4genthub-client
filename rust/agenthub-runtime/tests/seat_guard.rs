@@ -2421,6 +2421,43 @@ fn the_pair_rule_keeps_a_record_whole() {
     assert_eq!(jwt, "token=<redacted:jwt>", "a labelled marker is not re-redacted into a bare one: {jwt}");
 }
 
+/// The three spellings the gate's blocker named, and the code shapes they must not touch. A dump that reaches a
+/// seat through a config file or through code that quotes it writes `NAME = value` with spaces around the equals,
+/// or `NAME: \"value\"` with the quotes escaped - neither was redacted, while `key: "SeatDetailPage"` (a map entry
+/// naming a page, 47 of them in the client tree) was. One row per shape: the marker names the cause, the value is
+/// gone, and every line that was valid source is byte-identical.
+#[test]
+fn the_pair_rule_reads_the_ini_and_the_quoted_spellings() {
+    for line in [
+        "DB_PASSWORD = hunter2",
+        "password = hunter2",
+        "db_password = s3cr3t!",
+    ] {
+        let out = redacted(&[], line);
+        assert!(!out.contains("hunter2") && !out.contains("s3cr3t"), "{line} -> {out}");
+        assert!(out.contains("<redacted:pair>"), "the marker names the cause: {out}");
+    }
+
+    let out = redacted(&[], "password = \"hunter2\"");
+    assert_eq!(out, "password = \"<redacted:pair>\"", "the quotes of a quoted INI value stay: {out}");
+
+    let out = redacted(&[], r#"password: \"hunter2\""#);
+    assert_eq!(
+        out, r#"password: \"<redacted:pair>\""#,
+        "a dump quoted inside code keeps BOTH escapes, so the enclosing literal still parses: {out}"
+    );
+
+    for line in [
+        "Key: \"SeatDetailPage\"",
+        "key: \"SeatDetailPage\"",
+        "password = hashedPassword",
+        "password = derive(raw)",
+        "if member.Key == key",
+    ] {
+        assert_eq!(redacted(&[], line), line, "code is not a dumped pair: {line}");
+    }
+}
+
 /// The handler the LEAK was in, exercised where omp runs it: the asset's default export is handed a fake `pi` that
 /// records the handlers it registers, a `tool_call` is fired to open a call, then a `tool_result` carrying a value in
 /// its text. A patch that deletes the `tool_result` handler and keeps `--redact` passes every row above, so this is
