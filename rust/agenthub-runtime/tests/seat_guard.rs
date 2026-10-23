@@ -2328,6 +2328,42 @@ fn a_tool_result_loses_the_secret_values_and_keeps_its_shape() {
     );
 }
 
+/// The pair shapes: a dump's `NAME=value`, a JSON member, a yaml literal - and never code. The rule this pins was
+/// `NAME[TOKEN|KEY|SECRET|PASSWORD]\s*[=:]\s*\S+`, which also matched a constant named SECRET, a field comparison, a
+/// type annotation and an object opener, and replaced the brace that opens a type (measured 2026-10-23, row
+/// qitem-20261023003512). At client 50713b47, 98 of the client's 332 Go files and this asset itself stopped parsing
+/// after that redaction; under the three shapes zero do.
+#[test]
+fn the_pair_rule_reads_a_dump_and_never_a_type() {
+    for line in [
+        "const unquote = (token: string): string => {",
+        "const KNOWN_SECRETS: { name: string }[] = entries;",
+        "const SECRET = /\\b(NAME)\\S+/g;",
+        "if member.Key == key {",
+        "members = append(members, documentMember{Key: raw})",
+    ] {
+        let back = redacted(&[], line);
+        assert_eq!(back, line, "code keeps its braces and its operators: {line}");
+    }
+
+    // The dump forms still lose the value, and keep the delimiters around it.
+    let out = redacted(&[], "DB_PASSWORD=hunter2 keep me\n");
+    assert!(
+        out.contains("DB_PASSWORD=<redacted>") && !out.contains("hunter2"),
+        "{out}"
+    );
+
+    let out = redacted(&[], "db_password: hunter2hunter2\n");
+    assert!(!out.contains("hunter2"), "{out}");
+
+    let out = redacted(&[], "{\"DB_PASSWORD\": \"hunter2secret\"}\n");
+    assert!(!out.contains("hunter2secret"), "{out}");
+    assert!(
+        out.contains("\"DB_PASSWORD\": \"<redacted>\""),
+        "the member keeps its quotes: {out}"
+    );
+}
+
 /// The handler the LEAK was in, exercised where omp runs it: the asset's default export is handed a fake `pi` that
 /// records the handlers it registers, a `tool_call` is fired to open a call, then a `tool_result` carrying a value in
 /// its text. A patch that deletes the `tool_result` handler and keeps `--redact` passes every row above, so this is
