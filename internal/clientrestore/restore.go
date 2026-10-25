@@ -152,7 +152,10 @@ func (r *restorer) restore(roomName, brief string) bool {
 		for _, row := range down {
 			names = append(names, row.Safeguard)
 		}
-		r.log.printf("%s: seats live but supervision is down (%s) - not restored; run `4genteam up %s` (or `4genteam heal %s --fix`)",
+		// THE HINT NAMES ONLY FLAGS THE VERB HAS: heal applies its fixes by default (`--check` is its
+		// report-only switch), and the `--fix` this line once named is refused by heal's flag set
+		// ("flag provided but not defined: -fix"), measured 2026-10-25 on aa2-rs.
+		r.log.printf("%s: seats live but supervision is down (%s) - not restored; run `4genteam heal %s` (or `4genteam up %s`)",
 			roomName, strings.Join(names, ", "), roomName, roomName)
 		return false
 	}

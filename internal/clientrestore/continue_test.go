@@ -338,11 +338,16 @@ func TestALiveRoomWhoseSupervisionIsDownIsNotRestored(t *testing.T) {
 	for _, line := range []string{
 		"room-a: already live, skipping restore",
 		"room-a: seats live: 1",
-		"room-a: seats live but supervision is down (compact, agent) - not restored; run `4genteam up room-a`",
+		"room-a: seats live but supervision is down (compact, agent) - not restored; run `4genteam heal room-a` (or `4genteam up room-a`)",
 	} {
 		if !strings.Contains(w.log(), line) {
 			t.Errorf("the log is missing %q:\n%s", line, w.log())
 		}
+	}
+	// heal has no --fix (it fixes by default; --check reports only), so a hint naming it sends the owner
+	// into a flag error.
+	if strings.Contains(w.log(), "--fix") {
+		t.Errorf("the hint names a --fix flag heal does not have:\n%s", w.log())
 	}
 	if strings.Contains(w.log(), "done — verify") {
 		t.Errorf("the log reads as a restored room:\n%s", w.log())
