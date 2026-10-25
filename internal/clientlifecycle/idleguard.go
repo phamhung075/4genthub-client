@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +72,7 @@ type IdleGuard struct {
 	// room is not asked again until the rail does.
 	asked    string
 	hasAsked bool
+	reminded float64
 }
 
 // NewIdleGuard is a guard wired to the real world.
@@ -135,6 +137,17 @@ func (g *IdleGuard) Step(ctx context.Context) {
 	now := g.Now()
 	idleAll, newest, counted := true, 0.0, 0
 	silence := map[string]float64{}
+	rows, _ := g.Active(g.Room)
+	seatHasAssignedWork := map[string]bool{}
+	for _, row := range rows {
+		if row.State == "in-progress" {
+			dest := row.DestinationSession
+			if idx := strings.LastIndex(dest, "--"); idx != -1 {
+				dest = dest[idx+2:]
+			}
+			seatHasAssignedWork[dest] = true
+		}
+	}
 	for _, seat := range g.Seats(g.Room) {
 		path, _ := g.SeatLog(g.Room, seat)
 		if path == "" {
@@ -151,18 +164,21 @@ func (g *IdleGuard) Step(ctx context.Context) {
 			state = &stallState{}
 			g.State[seat] = state
 		}
-		if silence[seat] < g.Stall {
+		if silence[seat] < float64(g.Stall) {
 			state.count, state.told = 0, false
 		}
 		if g.Idle(g.Room, seat) {
+			if seatHasAssignedWork[seat] && silence[seat] >= float64(g.Stall) {
+				g.nudge(seat, silence[seat], now, state)
+			}
 			continue
 		}
 		idleAll = false
-		if silence[seat] >= g.Stall {
+		if silence[seat] >= float64(g.Stall) {
 			g.nudge(seat, silence[seat], now, state)
 		}
 	}
-	if idleAll && counted > 0 && now-newest >= g.Quiet && newest > g.decided {
+	if idleAll && counted > 0 && now-newest >= float64(g.Quiet) && (newest > g.decided || now-g.decided >= float64(g.Quiet*2)) {
 		g.decide(ctx, silence, newest)
 	}
 	if err := clientservices.WriteHeartbeat(g.Root, clientservices.RoomGuard, g.Room); err != nil {
@@ -204,11 +220,6 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 		return
 	}
 	signature := railSignature(rows)
-	if g.hasAsked && signature == g.asked {
-		g.Log("room still idle, the open rail is unchanged since the last verdict: Jev not asked again")
-		return
-	}
-	g.asked, g.hasAsked = signature, true
 	var detail strings.Builder
 	fmt.Fprintf(&detail, "Every seat of room %s is idle; the newest activity was %.0f minutes ago.\n", g.Room, (g.Now()-newest)/60)
 	fmt.Fprintf(&detail, "Open rail items (pending, in-progress, blocked): %d\n", len(rows))
@@ -222,6 +233,23 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 	for seat, quiet := range silence {
 		fmt.Fprintf(&detail, "seat %s idle %.0f minutes\n", seat, quiet/60)
 	}
+
+	if g.hasAsked && signature == g.asked {
+		if len(rows) > 0 && g.reminded > 0 && g.Now()-g.reminded >= float64(g.Quiet*2) {
+			g.reminded = g.Now()
+			if ok, why := g.Wake(g.Room); ok {
+				g.Log(fmt.Sprintf("room still idle with %d open rail item(s), re-signaling lead", len(rows)))
+				g.Say(g.Room, g.Lead, fmt.Sprintf("The room is still idle with %d open rail items. Lead: wake the assigned seats or assign the next pending item.\n%s", len(rows), detail.String()), false)
+			} else {
+				g.Log("room still idle, reminder to lead held: " + why)
+			}
+		} else {
+			g.Log("room still idle, the open rail is unchanged since the last verdict: Jev not asked again")
+		}
+		return
+	}
+	g.asked, g.hasAsked = signature, true
+	g.reminded = g.Now()
 	recommended := "stop"
 	if len(rows) > 0 {
 		recommended = "continue"
@@ -286,12 +314,24 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintf(stderr, "4genteam idle-run: %v\n", rootErr)
 		return clientcmd.ExitUsage
 	}
+	defaultQuiet := 60
+	if envQ := os.Getenv("AGENTHUB_IDLE_QUIET"); envQ != "" {
+		if v, err := strconv.Atoi(envQ); err == nil && v > 0 {
+			defaultQuiet = v
+		}
+	}
+	defaultStall := 120
+	if envS := os.Getenv("AGENTHUB_IDLE_STALL"); envS != "" {
+		if v, err := strconv.Atoi(envS); err == nil && v > 0 {
+			defaultStall = v
+		}
+	}
 	flags := flag.NewFlagSet("idle-run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	room := flags.String("room", "", "the room to guard (required)")
 	lead := flags.String("lead", "lead", "the seat told what Jev decided")
-	quiet := flags.Int("quiet", 300, "seconds every seat must be idle before Jev is asked")
-	stall := flags.Int("stall", 900, "seconds a working seat may log nothing before it is told to continue")
+	quiet := flags.Int("quiet", defaultQuiet, "seconds every seat must be idle before Jev is asked")
+	stall := flags.Int("stall", defaultStall, "seconds a working seat may log nothing before it is told to continue")
 	every := flags.Int("every", 30, "seconds between passes")
 	once := flags.Bool("once", false, "run one pass and exit")
 	if err := flags.Parse(args); err != nil {
