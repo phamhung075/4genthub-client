@@ -21,6 +21,14 @@ Owner decision, 2026-10-11. Every seat that writes files works in its own git wo
 
 **Where a seat starts** (2026-10-16): the seat's launch directory is the room spec's `cwd` for that seat, else its own worktree under `<roomDir>/wt/` - `<seat>` first, then `<seat>-<repo>` - and the guard is handed that whole list. A seat the room names no `cwd` for, in a room that holds no worktree for it, does not start at all: the room's `team.json`/`spec.json` has to name one (`spec.json` for a room that is already up). The lead's own directory is the main checkout, which the lead merges into; a writing seat's is its worktree.
 
+## Where to build and test
+
+Every seat builds and tests where it edits, **the lead included**: in a worktree under `<roomDir>/wt/`, never in the shared main checkout. A build there (`cargo build`, `go build`, `npm run build`, a test run) writes build output and lock files into the tree the owner works in, and it contends with the owner's own builds (observed 2026-10-25, room aa2-rs: the lead ran `cargo build` in the main checkout instead of `<roomDir>/wt/lead`).
+
+- A seat's own change: build and test in its own worktree.
+- A merge result: build and test the integration tip in `<roomDir>/wt/integration` (or a detached worktree at that sha). That is the tree the gate names.
+- The main checkout only receives `git merge --ff-only C`. After a fast-forward, main's tree IS `C`'s, so the re-check is `git rev-parse main` equals `C`, not another build. A room guide that says "re-run the checks on the merge result" means the integration tip, before the fast-forward.
+
 ## Branches, merges and push
 
 - The lead owns every branch and every merge. The lead creates each seat's branch and worktree, merges a seat's branch to `main` when the seat has finished and the reviewer gate has passed, and removes the branch afterwards.
