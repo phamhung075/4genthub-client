@@ -72,7 +72,22 @@ fi
 
 # the runtime daemon is a second binary of this client: a change under rust/ reaches the machine only when
 # it is built and installed here, or the daemon goes on running the last one that was
-(cd "$root/rust/agenthub-runtime" && cargo build --release --offline --quiet)
+#
+# CARGO DECIDES "UNCHANGED" BY MTIME, not content: a source whose mtime is older than the last build is
+# skipped even when its text changed (a file written with a preserved or skewed timestamp; aa2-rs
+# 2026-10-25, src/runner/mod.rs at 10:28 with content newer than the 10:33 binary, so a fix did not run).
+# So the build keys on CONTENT: a hash of everything the binary is built from is stamped beside the
+# release output, and when it differs from the stamp the crate's own artifacts are cleaned first (its
+# dependencies stay built), so the next build compiles the text that is on disk.
+runtime_dir=$root/rust/agenthub-runtime
+runtime_stamp=$runtime_dir/target/release/.agenthub-runtime.src-sha256
+runtime_hash=$(cd "$runtime_dir" && find src assets Cargo.toml Cargo.lock -type f -print0 | LC_ALL=C sort -z |
+  xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+if [ "$(cat "$runtime_stamp" 2>/dev/null || true)" != "$runtime_hash" ]; then
+  (cd "$runtime_dir" && cargo clean --release --offline --quiet -p agenthub-runtime)
+fi
+(cd "$runtime_dir" && cargo build --release --offline --quiet)
+printf '%s\n' "$runtime_hash" >"$runtime_stamp"
 
 # build beside the target and rename: a seat that is running the old binary keeps its inode
 mkdir -p "$bin_dir"
