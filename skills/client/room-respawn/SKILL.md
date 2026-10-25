@@ -25,8 +25,13 @@ Run it, read its last line, and report it. Do not repeat its steps by hand.
 6. Closes every `agenthub--ROOM--*` session on the room's own tmux server (`<state-root>/tmux`).
 7. `4genteam up ROOM --respawn`, with every credential-shaped variable unset from the shell, so
    `~/.config/4genthub/.env` is the only source of secrets. The detached `up` of THIS room is waited out.
-8. `4genteam room reseat ROOM SEAT` for every seat, then `4genteam watch --room ROOM`.
-9. Verifies that every seat session was created by this run and that as many came back as were closed.
+   `up --respawn` stops every daemon for this state root AND any daemon on the runtime socket (whatever
+   its argv), then fails if the daemon it reaches does not run the installed `agenthub-runtime`.
+8. `4genteam room reseat ROOM SEAT` only for a seat whose session predates this run; a seat `up` just
+   started already has its seat document and is skipped. A failed reseat is counted, not an abort. Then
+   `4genteam watch --room ROOM`.
+9. Verifies that every seat session was created by this run, that as many came back as were closed, and
+   that every runner of the room runs the installed `agenthub-runtime` (`OLD BINARY runner pid N` otherwise).
    The last line is `respawned ROOM: N fresh seat(s) in Ts`. Otherwise it exits 1 and names the stale seat or the log.
    A failed `up` still prints the log and runs this step before the script exits non-zero.
 
@@ -36,7 +41,7 @@ Run it, read its last line, and report it. Do not repeat its steps by hand.
 |---|---|
 | `--test` | run `go test` in the build (default skips it for speed) |
 | `--no-build` | respawn on the binaries already installed |
-| `--no-reseat` | skip the reseat step |
+| `--no-reseat` | skip the reseat step (it only touches seats this run did not start) |
 | `--allow-peak` | pass the peak override to `up` and `reseat` |
 | `--state-root DIR` | state root (default `~/.config/4genthub`) |
 

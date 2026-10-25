@@ -2,7 +2,8 @@
 # respawn.sh - rebuild the client, then bring a room back on FRESH seat processes, from the owner's shell.
 #
 #   scripts/respawn.sh ROOM              build (no go test), stop agent, close the room's seat sessions,
-#                                        `up ROOM --respawn`, reseat every seat, reopen the watch view, verify
+#                                        `up ROOM --respawn`, reseat any seat this run did not start fresh,
+#                                        reopen the watch view, verify
 #   scripts/respawn.sh ROOM --test       the same, with go test in the build
 #   scripts/respawn.sh ROOM --no-build   skip the build: respawn on the binaries already installed
 #   scripts/respawn.sh ROOM --no-reseat  skip the reseat (the seats are already new processes)
@@ -163,12 +164,30 @@ else
   echo "respawn.sh: no $log was written" >&2
 fi
 
+# RESEAT ONLY WHAT IS NOT NEW. A seat session created by this run was started by `up`, which hands it the
+# seat document at launch, so a reseat would only stop and restart a process seconds old - and right after
+# `up` the daemon is still settling, so the reseat's read timed out (aa2-rs, 2026-10-25: `read unix
+# ...agenthub.sock: i/o timeout`) and set -e then skipped the remaining seats and the verify. A seat that
+# predates the run (its session survived the close) is the one a reseat is for; a failed reseat is counted
+# and reported, never an abort.
+reseat_failed=0
 if [ "$reseat" -eq 1 ] && [ "$up_rc" -eq 0 ]; then
   step "reseat"
-  while read -r session _; do
+  while read -r session created; do
+    [ -n "$session" ] || continue
     seat=${session#"$prefix"}
+    if [ "$created" -ge "$started" ]; then
+      echo "$seat: fresh process from this run, no reseat"
+      continue
+    fi
     printf '%s: ' "$seat"
-    "${clean_env[@]}" "$bin" room reseat "$room" "$seat" --state-root "$state_root" "${peak[@]}" 2>&1 | tail -1
+    reseat_rc=0
+    reseat_out=$("${clean_env[@]}" "$bin" room reseat "$room" "$seat" --state-root "$state_root" "${peak[@]}" 2>&1) || reseat_rc=$?
+    printf '%s\n' "$reseat_out" | tail -1
+    if [ "$reseat_rc" -ne 0 ]; then
+      echo "respawn.sh: reseat $seat exited $reseat_rc" >&2
+      reseat_failed=$((reseat_failed + 1))
+    fi
   done < <(seat_sessions)
 fi
 
@@ -216,6 +235,10 @@ if [ "$stale" -gt 0 ]; then
 fi
 if [ "$old_exe" -gt 0 ]; then
   echo "respawn.sh: $old_exe runner(s) of $room run an old agenthub-runtime; a daemon from before the build still serves the socket - stop it by pid and rerun with --no-build" >&2
+  exit 1
+fi
+if [ "$reseat_failed" -gt 0 ]; then
+  echo "respawn.sh: $reseat_failed reseat(s) failed; see the lines above" >&2
   exit 1
 fi
 [ "$up_rc" -eq 0 ] || { echo "respawn.sh: up failed (exit $up_rc); see $log" >&2; exit 1; }
