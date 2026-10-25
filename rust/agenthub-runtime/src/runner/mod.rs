@@ -516,11 +516,7 @@ pub fn run(state_dir: &Path, target_spec: &str) -> Result<(), String> {
                                                     });
                                                     let _ = send(
                                                         &sender,
-                                                        &serde_json::json!({
-                                                            "id": id,
-                                                            "type": "prompt",
-                                                            "message": prompt.text
-                                                        }),
+                                                        &prompt_frame(&id, &prompt.text),
                                                     );
                                                 });
                                             }
@@ -974,10 +970,7 @@ fn relay_frame(
             if text.len() > MAX_PANE_INPUT_BYTES {
                 return Err(PANE_INPUT_REJECTED.to_string());
             }
-            send(
-                to_child,
-                &serde_json::json!({"id": id, "type": "prompt", "message": text}),
-            )?;
+            send(to_child, &prompt_frame(id, text))?;
             // Remember the prompt where the pane's own input remembers its own (see `spawn_pane_input`):
             // its response is the one this runner owns, and without the record a refusal of it answered
             // "nothing to resume" while the text was gone — the send that printed a delivery for text the
@@ -2063,10 +2056,7 @@ fn deliver_held(
         origin: entry.origin.clone(),
         held_attempts: entry.attempts,
     });
-    if let Err(e) = send(
-        to_child,
-        &serde_json::json!({"id": id, "type": "prompt", "message": entry.text}),
-    ) {
+    if let Err(e) = send(to_child, &prompt_frame(&id, &entry.text)) {
         *pending.lock() = None;
         mirror(&format!("ERROR held delivery: {e}"));
         held.lock().push_front(entry);
@@ -2125,13 +2115,34 @@ fn spawn_pane_input(
                         verb: Some("pane".to_string()),
                     },
                 ));
-                serde_json::json!({"id": id, "type": "prompt", "message": line})
+                prompt_frame(&id, &line)
             };
             if let Err(e) = send(&to_child, &frame) {
                 mirror(&format!("ERROR pane input: {e}"));
                 break;
             }
         }
+    })
+}
+
+/// How a prompt is queued when the agent is mid-run. omp refuses a `prompt` that names no
+/// `streamingBehavior` while it streams (`AgentBusyError`: "Agent is already processing. Use steer() or
+/// followUp() ..."), and the text was then lost: measured 2026-10-25 in room aa2-rs, four owner messages
+/// to the lead and one each to two workers, all answered `sent`, reached no session log, while the same
+/// text reached the idle reviewer in 20 s. The hold below re-offered the text at `turn_end`, which in omp
+/// is the end of one assistant turn INSIDE a run that is still streaming, so every offer was refused again
+/// until the text's bound handed it back. `steer` makes omp itself queue the text and deliver it after the
+/// current tool calls, which is the "next turn" this runner's hold always meant; an idle agent ignores the
+/// field and starts a run as before. The Claude Code bridge reads `message` only.
+const PROMPT_STREAMING_BEHAVIOR: &str = "steer";
+
+/// The one prompt frame this runner writes to the agent: relay, resume, held delivery and the pane.
+fn prompt_frame(id: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "type": "prompt",
+        "message": text,
+        "streamingBehavior": PROMPT_STREAMING_BEHAVIOR,
     })
 }
 

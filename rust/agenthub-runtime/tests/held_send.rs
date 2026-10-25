@@ -72,8 +72,13 @@ for line in sys.stdin:
     kind = frame.get("type")
     if kind == "prompt":
         with open(seen, "a") as fh:
-            fh.write(json.dumps({"id": frame.get("id"), "message": frame.get("message")}) + "\n")
-        if state["holding"]:
+            fh.write(json.dumps({"id": frame.get("id"), "message": frame.get("message"),
+                                 "streamingBehavior": frame.get("streamingBehavior")}) + "\n")
+        if state["holding"] and os.environ.get("FAKE_AGENT_QUEUES") == "1" and frame.get("streamingBehavior"):
+            # omp's own rule (agent-session.ts): while it streams, a prompt that names a streamingBehavior is
+            # queued (steer / followUp) and answered success; only one that names none is refused.
+            say({"type": "response", "id": frame.get("id"), "success": True})
+        elif state["holding"]:
             say({"type": "response", "id": frame.get("id"), "success": False,
                  "error": "Agent is already processing. Use steer() or followUp() or wait for the current turn to finish."})
         else:
@@ -381,6 +386,94 @@ fn a_text_sent_to_a_seat_that_is_mid_turn_is_delivered_when_the_turn_ends() {
         "a delivered text leaves a healthy seat, not a blocked one: {published}"
     );
 
+    stop(runner);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// THE DEFECT OF 2026-10-25 (room aa2-rs): texts sent to a busy omp seat were answered `sent` and reached no
+/// session log. omp refuses a mid-run `prompt` only when it names no `streamingBehavior`; with one it queues
+/// the text itself. This case runs a fake agent with omp's rule and proves the runner's prompt to a busy seat
+/// carries `streamingBehavior` and is taken on its FIRST offer - no refusal, no hold, no hand-back.
+#[test]
+fn a_text_sent_to_a_busy_seat_is_queued_by_the_agent_on_its_first_offer() {
+    let root = scratch("queued");
+    let state = root.join("state");
+    let seat_dir = root.join("seat");
+    let bin = root.join("bin");
+    fs::create_dir_all(&seat_dir).expect("seat dir");
+    fs::create_dir_all(&bin).expect("shim dir");
+    let seen = root.join("agent-seen.jsonl");
+    let marker = root.join("end-turn");
+    let shim = bin.join("omp");
+    fs::write(&shim, FAKE_AGENT).expect("fake agent");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755))
+        .expect("fake agent is executable");
+    write_room(&state, &seat_dir);
+    let run = state.join("rooms").join("demo").join("run");
+    let mailbox = run.join("dev.sock");
+    let state_file = run.join("dev.state.json");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let runner = Command::new(env!("CARGO_BIN_EXE_agenthub-runtime"))
+        .arg("-s")
+        .arg(&state)
+        .args(["runner", "demo/dev"])
+        .env("PATH", path)
+        .env("FAKE_AGENT_SEEN", &seen)
+        .env("FAKE_AGENT_END_MARKER", &marker)
+        .env("FAKE_AGENT_QUEUES", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("the runner starts");
+
+    assert!(
+        wait_for(&mailbox, "the runner's mailbox"),
+        "the runner never bound its mailbox"
+    );
+    assert!(
+        wait_for_state(&state_file, "idle", "", 20).is_some(),
+        "the runner finished its handshake"
+    );
+    send_text_frame(
+        &mailbox,
+        "send-q-1",
+        "agenthub--demo--lead",
+        "the prompt that opens the run",
+    );
+    assert!(wait_for_line(&seen, "the prompt that opens the run", 10).is_some());
+    assert!(
+        wait_for_state(&state_file, "working", "", 10).is_some(),
+        "the run is open"
+    );
+
+    let busy_text = "the text sent while the seat streams";
+    let answer = send_text_frame(&mailbox, "send-q-2", "agenthub--demo--lead", busy_text);
+    assert_eq!(answer["data"]["relayed"], "prompt", "{answer}");
+    let line = wait_for_line(&seen, busy_text, 10).expect("the agent received the busy-seat text");
+    let received: serde_json::Value =
+        serde_json::from_str(&line).expect("the agent's record is JSON");
+    assert_eq!(
+        received["id"], "send-q-2",
+        "taken on the first offer, not a held re-offer: {received}"
+    );
+    assert_eq!(
+        received["streamingBehavior"], "steer",
+        "a prompt that names no streamingBehavior is refused by a streaming omp: {received}"
+    );
+    // Nothing was held: the state never names a held text.
+    std::thread::sleep(Duration::from_millis(300));
+    let published = fs::read_to_string(&state_file).unwrap_or_default();
+    assert!(
+        !published.contains("held:"),
+        "a queued text is not held: {published}"
+    );
+
+    fs::write(&marker, b"end the run").ok();
     stop(runner);
     let _ = fs::remove_dir_all(&root);
 }
