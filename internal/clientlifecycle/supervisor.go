@@ -246,6 +246,12 @@ func (s *Supervisor) Step() {
 		}
 		if !hasUsed || used < seatlog.CompactLimit {
 			state.told, state.warned = false, false
+			state.sent = 0
+			continue
+		}
+		silent := now - modTime(path)
+		urgent, hard := used >= seatlog.WarnLimit, used >= seatlog.HardLimit
+		if !urgent && now-state.sent <= cooldown {
 			continue
 		}
 		if !state.told {
@@ -258,11 +264,6 @@ func (s *Supervisor) Step() {
 			s.Say(s.Room, seat, warningText(), false)
 			state.warned = true
 			s.Log(fmt.Sprintf("%s: warned, %s of %s", seat, seatlog.Kilo(used), seatlog.Kilo(seatlog.HardLimit)))
-		}
-		silent := now - modTime(path)
-		urgent, hard := used >= seatlog.WarnLimit, used >= seatlog.HardLimit
-		if now-state.sent <= cooldown {
-			continue
 		}
 		if runtime == "omp" && urgent {
 			if hard {

@@ -136,6 +136,38 @@ func TestASeatThatDroppedBelowTheLimitIsToldAgainNextTime(t *testing.T) {
 	if supervisor.State["lead"].told {
 		t.Error("a seat that dropped below the limit is still marked as told")
 	}
+	if supervisor.State["lead"].sent != 0 {
+		t.Errorf("state.sent = %v, want 0 after dropping below limit", supervisor.State["lead"].sent)
+	}
+}
+
+func TestASeatInCooldownIsNotToldAndLeftAlone(t *testing.T) {
+	withDocumentedLimits(t)
+	var sent, interrupted []string
+	path := seatLogFile(t, 200_000, 5)
+	supervisor := supervisorFor(path, "omp", false, &sent, &interrupted)
+	now := supervisor.Now()
+	supervisor.State["lead"] = &seatState{sent: now - 60}
+	supervisor.Step()
+	if len(sent) != 0 {
+		t.Errorf("a seat in cooldown was sent messages: %v, want left alone", sent)
+	}
+	if supervisor.State["lead"].told {
+		t.Error("a seat in cooldown was marked as told")
+	}
+}
+
+func TestAnUrgentSeatBypassesCooldown(t *testing.T) {
+	withDocumentedLimits(t)
+	var sent, interrupted []string
+	path := seatLogFile(t, 260_000, 5)
+	supervisor := supervisorFor(path, "omp", true, &sent, &interrupted)
+	now := supervisor.Now()
+	supervisor.State["lead"] = &seatState{sent: now - 60}
+	supervisor.Step()
+	if got := firstFive(sent); strings.Join(got, ",") != "Conte,VERY ,RPC" {
+		t.Errorf("urgent seat during cooldown: sent %v, want notice, warning then RPC", got)
+	}
 }
 
 func TestAnOmpSeatPastTheWarnLimitIsCompactedNowWithoutAnAbort(t *testing.T) {
