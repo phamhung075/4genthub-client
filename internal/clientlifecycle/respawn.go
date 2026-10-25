@@ -11,7 +11,11 @@
 // SO THE REPLACEMENT IS BY PATTERN, the same pgrep/pkill pair the safeguards use, matched on the argv the
 // daemon is spawned with (runtimeDaemonCommand): `<agenthub-runtime> --state-dir <root> --socket <path>
 // daemon`. The root is part of the match because one machine may serve several state trees, and a daemon
-// for another root is not this run's to stop.
+// for another root is not this run's to stop. A daemon ON THIS RUN'S SOCKET is matched too, whatever its
+// state dir or none: `up` reuses whatever answers on the socket, so a daemon left there is the one that
+// serves the room (aa2-rs, 2026-10-25: a daemon started as `--socket PATH daemon` read as "was not
+// running", and every new seat was exec'd from its old binary). After the restart the daemon's own
+// executable is checked against the installed binary, and a mismatch fails the run.
 //
 // WHAT IS KEPT: nothing here writes the room. The room's record (spec.json), its seats' directories, their
 // worktrees and their transcripts stay where they are; the calling run then reads the room and starts the
@@ -38,17 +42,18 @@ import (
 var respawnWindow = 10 * time.Second
 
 // daemonPattern matches the runtime daemon serving ONE state root, in the argv runtimeDaemonCommand
-// builds. It is anchored on the binary's name because pgrep -f matches the whole command line, which
-// contains every seat's argv too.
-func daemonPattern(stateDir string) string {
-	return "^[^ ]*agenthub-runtime --state-dir " + regexp.QuoteMeta(stateDir) + "( |$)"
+// builds, or any daemon on socketPath. It is anchored on the binary's name because pgrep -f matches the
+// whole command line, which contains every seat's argv too.
+func daemonPattern(stateDir, socketPath string) string {
+	return "^[^ ]*agenthub-runtime --state-dir " + regexp.QuoteMeta(stateDir) + "( |$)" +
+		"|^[^ ]*agenthub-runtime( --state-dir [^ ]+)? --socket " + regexp.QuoteMeta(socketPath) + " daemon$"
 }
 
 // respawnDaemon stops the daemon serving stateDir, if one is running, and waits until it is gone. It
 // answers whether the run may go on: false means the daemon could not be signalled or did not exit, and
 // the caller must not start a second one.
-func respawnDaemon(stateDir string, stdout, stderr io.Writer) bool {
-	pattern := daemonPattern(stateDir)
+func respawnDaemon(stateDir, socketPath string, stdout, stderr io.Writer) bool {
+	pattern := daemonPattern(stateDir, socketPath)
 	// A PROBE THAT COULD NOT RUN IS NOT "the daemon is not running" (7.12). The empty-pids branch below is
 	// what `up --respawn` used to walk on a missing pgrep, reaching `return true` and starting the second
 	// daemon this whole step exists to prevent; the refusal is on stderr and touches nothing.
@@ -92,6 +97,45 @@ func respawnDaemon(stateDir string, stdout, stderr io.Writer) bool {
 	fmt.Fprintf(stderr, "4genteam up: the runtime daemon %v is still running %s after the stop signal; "+
 		"refusing to start a second daemon for %s\n", live, respawnWindow, stateDir)
 	return false
+}
+
+// procExe reads a process's executable link. A variable so the suite can answer for pids it invented.
+var procExe = func(pid int) (string, error) { return os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)) }
+
+// daemonRunsInstalled checks that every daemon matched for stateDir/socketPath runs runtimeBin's current
+// file, not a replaced one. A daemon whose executable was renamed over reads `<path> (deleted)` on Linux,
+// and one started from another path names that path: either is a run that would serve the old code. The
+// answer is false with the reason on stderr; no daemon at all is also false, since `up` just started one.
+func daemonRunsInstalled(stateDir, socketPath, runtimeBin string, stderr io.Writer) bool {
+	want, err := filepath.EvalSymlinks(runtimeBin)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: the installed runtime %s cannot be resolved: %v\n", runtimeBin, err)
+		return false
+	}
+	pids, err := clientservices.Live(daemonPattern(stateDir, socketPath))
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: the new daemon's binary cannot be checked: %v\n", err)
+		return false
+	}
+	if len(pids) == 0 {
+		fmt.Fprintf(stderr, "4genteam up: no runtime daemon for %s on %s after the restart\n", stateDir, socketPath)
+		return false
+	}
+	ok := true
+	for _, pid := range pids {
+		exe, err := procExe(pid)
+		if err != nil {
+			fmt.Fprintf(stderr, "4genteam up: daemon %d: its executable cannot be read: %v\n", pid, err)
+			ok = false
+			continue
+		}
+		if exe != want {
+			fmt.Fprintf(stderr, "4genteam up: daemon %d runs %s, not the installed %s; its seats would run "+
+				"the old code - stop pid %d and rerun\n", pid, exe, want, pid)
+			ok = false
+		}
+	}
+	return ok
 }
 
 // A REPLACEMENT MUST OUTLIVE ITS CALLER. `up --respawn` stops agent, and a seat runs this verb from a

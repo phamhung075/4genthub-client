@@ -49,9 +49,9 @@ func stubDaemons(t *testing.T, live []int) *[]string {
 }
 
 // TestTheDaemonPatternNamesOnlyTheRootItServes: the match is the argv runtimeDaemonCommand builds, so the
-// daemon of ANOTHER state tree is not this run's to stop.
+// daemon of ANOTHER state tree on another socket is not this run's to stop; one on THIS socket is.
 func TestTheDaemonPatternNamesOnlyTheRootItServes(t *testing.T) {
-	pattern := daemonPattern("/home/u/.config/4genthub")
+	pattern := daemonPattern("/home/u/.config/4genthub", "/run/a.sock")
 	if _, err := regexp.Compile(pattern); err != nil {
 		t.Fatalf("the pattern is not valid for pgrep -f: %v", err)
 	}
@@ -61,9 +61,15 @@ func TestTheDaemonPatternNamesOnlyTheRootItServes(t *testing.T) {
 	}{
 		{"/usr/local/bin/agenthub-runtime --state-dir /home/u/.config/4genthub --socket /run/a.sock daemon", true},
 		{"agenthub-runtime --state-dir /home/u/.config/4genthub --socket /run/a.sock daemon", true},
-		{"/usr/local/bin/agenthub-runtime --state-dir /home/u/.config/4genthub-2 --socket /run/a.sock daemon", false},
-		{"/usr/local/bin/agenthub-runtime --state-dir /home/u/.config/4genthub2 --socket /run/a.sock daemon", false},
+		{"/usr/local/bin/agenthub-runtime --state-dir /home/u/.config/4genthub-2 --socket /run/b.sock daemon", false},
+		{"/usr/local/bin/agenthub-runtime --state-dir /home/u/.config/4genthub2 --socket /run/b.sock daemon", false},
 		{"/usr/local/bin/4genteam up 4genthub-min --state-root /home/u/.config/4genthub", false},
+		// A daemon on THIS socket is this run's to replace, whatever its state dir or none: `up` would reuse
+		// it, and the seats would run its binary (aa2-rs, 2026-10-25).
+		{"/home/u/.local/bin/agenthub-runtime --socket /run/a.sock daemon", true},
+		{"/home/u/.local/bin/agenthub-runtime --state-dir /elsewhere --socket /run/a.sock daemon", true},
+		{"/home/u/.local/bin/agenthub-runtime --socket /run/b.sock daemon", false},
+		{"/home/u/.local/bin/agenthub-runtime --socket /run/a.sock.old daemon", false},
 	} {
 		if got := regexp.MustCompile(pattern).MatchString(c.cmdline); got != c.want {
 			t.Errorf("pattern match for %q = %v, want %v", c.cmdline, got, c.want)
@@ -393,7 +399,7 @@ func TestRespawnDaemonReplacesARealProcessForTheRoot(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			if live, err := clientservices.Live(daemonPattern(stateDir)); err == nil && len(live) > 0 {
+			if live, err := clientservices.Live(daemonPattern(stateDir, filepath.Join(stateDir, "none.sock"))); err == nil && len(live) > 0 {
 				return
 			}
 			time.Sleep(20 * time.Millisecond)
@@ -409,13 +415,13 @@ func TestRespawnDaemonReplacesARealProcessForTheRoot(t *testing.T) {
 	waitLive(t, other)
 
 	var out, errOut bytes.Buffer
-	if !respawnDaemon(mine, &out, &errOut) {
+	if !respawnDaemon(mine, filepath.Join(t.TempDir(), "none.sock"), &out, &errOut) {
 		t.Fatalf("respawnDaemon refused: %s", errOut.String())
 	}
-	if live, err := clientservices.Live(daemonPattern(mine)); err != nil || len(live) != 0 {
+	if live, err := clientservices.Live(daemonPattern(mine, "/nonexistent.sock")); err != nil || len(live) != 0 {
 		t.Errorf("the daemon for this root is still running: %v", live)
 	}
-	if live, err := clientservices.Live(daemonPattern(other)); err != nil || len(live) == 0 {
+	if live, err := clientservices.Live(daemonPattern(other, "/nonexistent.sock")); err != nil || len(live) == 0 {
 		t.Error("the daemon for another state root was stopped as well")
 	}
 }
@@ -432,7 +438,7 @@ func TestRespawnRefusesWhenTheProbeCannotRun(t *testing.T) {
 	ensureDaemon = func(string, io.Writer) (string, error) { started = true; return "/tmp/daemon.log", nil }
 
 	var out, errOut bytes.Buffer
-	if respawnDaemon(t.TempDir(), &out, &errOut) {
+	if respawnDaemon(t.TempDir(), "/nonexistent.sock", &out, &errOut) {
 		t.Fatalf("respawnDaemon reported the daemon replaced from a probe that could not run")
 	}
 	if signalled || started {
@@ -440,5 +446,45 @@ func TestRespawnRefusesWhenTheProbeCannotRun(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "pgrep") || out.Len() != 0 {
 		t.Errorf("stdout = %q stderr = %q, want the refusal naming the probe and no daemon line", out.String(), errOut.String())
+	}
+}
+
+// TestDaemonRunsInstalledRefusesAReplacedExecutable: the seats are exec'd from the daemon's own executable,
+// so a daemon whose file was renamed over (`(deleted)`) or that runs another path is a respawn that changed
+// nothing, and the check says so by pid. The installed file itself passes.
+func TestDaemonRunsInstalledRefusesAReplacedExecutable(t *testing.T) {
+	restoreAll(t)
+	bin := filepath.Join(t.TempDir(), "agenthub-runtime")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousLive := clientservices.Live
+	t.Cleanup(func() { clientservices.Live = previousLive })
+	clientservices.Live = func(string) ([]int, error) { return []int{1364}, nil }
+	for _, c := range []struct {
+		exe  string
+		want bool
+	}{
+		{resolved, true},
+		{resolved + " (deleted)", false},
+		{"/opt/old/agenthub-runtime", false},
+	} {
+		procExe = func(int) (string, error) { return c.exe, nil }
+		var errOut bytes.Buffer
+		if got := daemonRunsInstalled("/state", "/run/a.sock", bin, &errOut); got != c.want {
+			t.Errorf("exe %q: daemonRunsInstalled = %v, want %v (%s)", c.exe, got, c.want, errOut.String())
+		}
+		if !c.want && !strings.Contains(errOut.String(), "1364") {
+			t.Errorf("exe %q: the refusal does not name the pid: %q", c.exe, errOut.String())
+		}
+	}
+	clientservices.Live = func(string) ([]int, error) { return nil, nil }
+	var errOut bytes.Buffer
+	if daemonRunsInstalled("/state", "/run/a.sock", bin, &errOut) {
+		t.Error("no daemon after a restart was read as the installed binary serving")
 	}
 }

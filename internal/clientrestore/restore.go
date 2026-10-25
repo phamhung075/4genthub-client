@@ -56,7 +56,7 @@ func newRestorer(log *teeLog, root string) *restorer {
 		log:          log,
 		root:         root,
 		briefs:       briefDir(root),
-		ensureDaemon: func(ctx context.Context) error { return clientruntime.NewClient("").EnsureDaemon(ctx) },
+		ensureDaemon: func(context.Context) error { return clientlifecycle.EnsureDaemon(root, io.Discard) },
 		revive:       reviveRoom,
 		// send is the brief's delivery through the runtime socket. DeliverToSession takes the session name
 		// as given, and a refusal in words is what a caller gets when the runtime does not answer. The frame

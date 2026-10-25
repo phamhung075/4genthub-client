@@ -190,6 +190,18 @@ while read -r session created; do
   fi
 done < <(seat_sessions)
 "$bin" ps "$room" --nodes 2>&1 | grep -E "^(ROOM|$room)" || true
+# Every seat runner is exec'd from the DAEMON's executable, so a daemon left on the socket from before the
+# build serves the old code under fresh sessions (aa2-rs, 2026-10-25). Each runner of this room must run
+# the installed file: a renamed-over binary reads "<path> (deleted)", another path names itself.
+installed=$(readlink -f "$HOME/.local/bin/agenthub-runtime" 2>/dev/null || true)
+old_exe=0
+for p in $(pgrep -f "^[^ ]*agenthub-runtime --state-dir [^ ]+ runner $room/" || true); do
+  exe=$(readlink "/proc/$p/exe" 2>/dev/null) || continue
+  if [ "$exe" != "$installed" ]; then
+    echo "OLD BINARY runner pid $p: runs $exe, not $installed"
+    old_exe=$((old_exe + 1))
+  fi
+done
 if [ "$count" -eq 0 ]; then
   echo "respawn.sh: no seat session of $room is running" >&2
   exit 1
@@ -200,6 +212,10 @@ if [ "$count" -lt "$closed" ]; then
 fi
 if [ "$stale" -gt 0 ]; then
   echo "respawn.sh: $stale of $count seat(s) still run a process from before this run" >&2
+  exit 1
+fi
+if [ "$old_exe" -gt 0 ]; then
+  echo "respawn.sh: $old_exe runner(s) of $room run an old agenthub-runtime; a daemon from before the build still serves the socket - stop it by pid and rerun with --no-build" >&2
   exit 1
 fi
 [ "$up_rc" -eq 0 ] || { echo "respawn.sh: up failed (exit $up_rc); see $log" >&2; exit 1; }

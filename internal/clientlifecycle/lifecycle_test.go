@@ -84,7 +84,10 @@ func restoreAll(t *testing.T) {
 	rows, authorityUp := rowsFor, agentRunning
 	clone, hooks := cloneRowFor, hooksRowFor
 	detach, executable := detachRespawn, respawnExecutable
+	binaryCheck, exeOf := checkRespawnBinary, procExe
+	checkRespawnBinary = func(string, string, io.Writer) bool { return true }
 	t.Cleanup(func() {
+		checkRespawnBinary, procExe = binaryCheck, exeOf
 		ensureDaemon, ensureWorktrees, ensureRoom = daemon, worktrees, roomStep
 		recordRoomFor = record
 		startAuthority, waitSafeguards = authority, wait

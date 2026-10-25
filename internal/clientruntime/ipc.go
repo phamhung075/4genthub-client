@@ -2,13 +2,11 @@ package clientruntime
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -57,9 +55,9 @@ func NewClient(socketPath string) *Client {
 	return &Client{SocketPath: socketPath}
 }
 
-// Reachable reports whether something answers on this client's socket. It is the reading EnsureDaemon
-// polls, named once because a caller that starts the daemon ITSELF - with a state dir and a log file of
-// its own - has to poll the same question, and three copies of one dial would be three definitions of "up".
+// Reachable reports whether something answers on this client's socket. The daemon is started in ONE place,
+// clientlifecycle.EnsureDaemon, which polls this same question: two copies of one dial would be two
+// definitions of "up".
 func (c *Client) Reachable() bool {
 	conn, err := net.DialTimeout("unix", c.SocketPath, 300*time.Millisecond)
 	if err != nil {
@@ -67,43 +65,6 @@ func (c *Client) Reachable() bool {
 	}
 	_ = conn.Close()
 	return true
-}
-
-// EnsureDaemon checks if the runtime daemon is reachable; if not, starts it.
-func (c *Client) EnsureDaemon(ctx context.Context) error {
-	if c.Reachable() {
-		return nil
-	}
-
-	// Not reachable: start agenthub-runtime daemon
-	runtimeBin, err := exec.LookPath("agenthub-runtime")
-	if err != nil {
-		home := os.Getenv("HOME")
-		localBin := filepath.Join(home, ".local", "bin", "agenthub-runtime")
-		if _, statErr := os.Stat(localBin); statErr == nil {
-			runtimeBin = localBin
-		} else {
-			return errors.New("agenthub-runtime binary not found on PATH or in ~/.local/bin")
-		}
-	}
-
-	cmd := exec.Command(runtimeBin, "--socket", c.SocketPath, "daemon")
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start agenthub-runtime daemon: %w", err)
-	}
-
-	// Poll until ready, up to 3 seconds
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if c.Reachable() {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	return errors.New("agenthub-runtime daemon started but socket was not ready within 3 seconds")
 }
 
 // CallDeadline is how long an ordinary request waits: a verb that reads or writes an answer settles in

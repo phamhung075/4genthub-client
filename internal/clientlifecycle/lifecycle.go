@@ -362,7 +362,7 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 		if code := stopAgent("up", name, stdout, stderr); code != clientcmd.ExitOK {
 			return code
 		}
-		if !respawnDaemon(stateDir, stdout, stderr) {
+		if !respawnDaemon(stateDir, clientruntime.DefaultSocketPath(), stdout, stderr) {
 			return clientcmd.ExitUnavailable
 		}
 	}
@@ -370,6 +370,11 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	if err != nil {
 		fmt.Fprintf(stderr, "4genteam: %v\n", err)
 		return clientcmd.ExitRemote
+	}
+	// A RESPAWN PROVES ITS BINARY: the seats are exec'd from the daemon's own executable, so a daemon that
+	// is not the installed file is a restart that changed nothing. Fail loudly before a seat starts.
+	if respawn && !checkRespawnBinary(stateDir, clientruntime.DefaultSocketPath(), stderr) {
+		return clientcmd.ExitUnavailable
 	}
 	// THE GATE RUNS BEFORE THE RESTORE, and after the daemon only because the room's models are read from
 	// the daemon. So a refusal starts the daemon and nothing else: no seat is resumed, which is the step
@@ -458,10 +463,11 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 // ensureDaemonImpl makes the runtime daemon reachable for a room whose state lives under stateDir, and
 // returns the log file the daemon's own output goes to.
 //
-// The client starts the daemon itself rather than calling clientruntime's EnsureDaemon: that helper spawns
-// `agenthub-runtime --socket PATH daemon` with NO --state-dir and both streams dropped, so the daemon would
-// land on this machine's default state tree and a start that failed would have nothing to read. `up` that
-// cannot name why a seat did not come up is the silence this client exists to remove.
+// THIS IS THE ONE DAEMON SPAWN. It names --state-dir and keeps a log. `continue`/restore used to start the
+// daemon through a second helper that spawned `agenthub-runtime --socket PATH daemon` with no --state-dir
+// and both streams dropped; `up --respawn` matched daemons by their --state-dir, so it read that daemon as
+// "was not running", left it on the socket, and every seat it then started ran the OLD binary (room aa2-rs,
+// 2026-10-25). Every caller now comes here: EnsureDaemon is the exported door.
 func ensureDaemonImpl(stateDir string, stderr io.Writer) (string, error) {
 	logPath := daemonLogPath(stateDir)
 	client := clientruntime.NewClient("")
@@ -497,6 +503,12 @@ func ensureDaemonImpl(stateDir string, stderr io.Writer) (string, error) {
 		client.SocketPath, DaemonReadyWindow, logPath)
 }
 
+// EnsureDaemon makes the runtime daemon for stateDir reachable, through the same spawn `up` uses.
+func EnsureDaemon(stateDir string, stderr io.Writer) error {
+	_, err := ensureDaemon(stateDir, stderr)
+	return err
+}
+
 // daemonLogPath is where the runtime daemon's own output goes: beside the state it serves, so a partial room
 // and the reason for it are read from one tree.
 func daemonLogPath(stateDir string) string { return filepath.Join(stateDir, "daemon.log") }
@@ -506,6 +518,17 @@ func daemonLogPath(stateDir string) string { return filepath.Join(stateDir, "dae
 // R2). A variable rather than an inline exec so the argv is assertable without spawning a daemon.
 var runtimeDaemonCommand = func(bin, stateDir, socketPath string) *exec.Cmd {
 	return exec.Command(bin, "--state-dir", stateDir, "--socket", socketPath, "daemon")
+}
+
+// checkRespawnBinary is the post-restart binary check `up --respawn` runs; a variable so the suite's
+// stand-in daemons are not held to a real install.
+var checkRespawnBinary = func(stateDir, socketPath string, stderr io.Writer) bool {
+	bin, err := runtimeBinary()
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam up: %v\n", err)
+		return false
+	}
+	return daemonRunsInstalled(stateDir, socketPath, bin, stderr)
 }
 
 // runtimeBinary is the runtime executable: PATH first, then the per-user install.
