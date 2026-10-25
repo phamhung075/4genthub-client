@@ -5,6 +5,7 @@
 //
 //	team apply           create modules, room, seats, links and overlays from <TEAM-DIR>/team.json
 //	team prune           delete the room's seats that <TEAM-DIR>/team.json does not define
+//	team project         list the cloud projects, or create one by name when it is missing
 //	team import-project  push a project's .mcp.json servers and .claude/skills as module versions
 //	team publish-skills  push a skill library inventory as kind=skill blocks with provenance
 //	team drift-check     report stored skill provenance that no longer matches the files on disk
@@ -49,7 +50,7 @@ var errHelpShown = errors.New("usage shown")
 // already printed ARE the message; the dispatcher must not add an "error:" line that says nothing.
 var errDriftFound = errors.New("drift found")
 
-const teamVerbs = "apply, prune, import-project, publish-skills, drift-check"
+const teamVerbs = "apply, prune, project, import-project, publish-skills, drift-check"
 
 func (teamCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -62,6 +63,8 @@ func (teamCommand) Run(_ context.Context, args []string, stdout, stderr io.Write
 		err = runApply(args[1:], stdout, stderr)
 	case "prune":
 		err = runPrune(args[1:], stdout, stderr)
+	case "project":
+		err = runProject(args[1:], stdout, stderr)
 	case "import-project":
 		err = runImportProject(args[1:], stdout, stderr)
 	case "publish-skills":
@@ -96,6 +99,7 @@ Create the cloud room a room runs: its modules, seats, links and overlays.
 verbs:
   apply           create modules, room, seats, links, overlays (--team DIR)
   prune           delete the room's seats that team.json does not define (--team DIR)
+  project         list the cloud projects, or ensure one by name (list | ensure --name NAME)
   import-project  push .mcp.json servers and .claude/skills as module versions
   publish-skills  push the skill library inventory as kind=skill blocks with provenance
   drift-check     report stored skill provenance that no longer matches the files on disk
