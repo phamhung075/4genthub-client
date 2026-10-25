@@ -106,3 +106,22 @@ func assertNothingReached(t *testing.T, requests <-chan string) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+// The usage names only flags the verb parses. It once printed `[--from NAME]`, which the parser refuses
+// ("unknown flag --from for this verb"), so an owner who followed it was refused; the owner's route is
+// `4genteam input`, and the help names it.
+func TestSendHelpNamesNoFromFlagAndPointsTheOwnerAtInput(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := (sendCommand{}).Run(context.Background(), []string{"--help"}, &out, &errOut); code != clientcmd.ExitOK {
+		t.Fatalf("--help exited %d", code)
+	}
+	if strings.Contains(out.String(), "--from") {
+		t.Errorf("the usage names --from, which the verb refuses:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "4genteam input --room ROOM --seat SEAT") {
+		t.Errorf("the usage does not point the owner at `4genteam input`:\n%s", out.String())
+	}
+	if _, _, err := clientruntime.SplitFlags([]string{"--from", "owner", "r", "s", "m"}, sendFlagSpecs); err == nil {
+		t.Errorf("--from now parses; the usage and this test must say what it does")
+	}
+}

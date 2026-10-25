@@ -280,7 +280,9 @@ var sendRefused = []struct{ Name, Why string }{
 func (sendCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if clientcmd.HelpRequested(args) {
 		fmt.Fprintln(stdout, "usage: 4genteam send SESSION MESSAGE [options]")
-		fmt.Fprintln(stdout, "       4genteam send [--from NAME] ROOM SEAT MESSAGE")
+		fmt.Fprintln(stdout, "       4genteam send ROOM SEAT MESSAGE [options]")
+		fmt.Fprintln(stdout, "\nThe sender is this shell's own seat; there is no flag that names another one. From the owner's shell,")
+		fmt.Fprintln(stdout, "which is no seat, send with `printf 'message\\n' | 4genteam input --room ROOM --seat SEAT` instead.")
 		fmt.Fprintln(stdout, "\nSESSION is a session name (`4genteam ps <ROOM> --nodes --json` names every seat's). It goes to")
 		fmt.Fprintln(stdout, "the runtime's own socket, wrapped in a From/To/Sent envelope attributed to this shell's")
 		fmt.Fprintln(stdout, "AGENTHUB_SESSION_NAME. A canonical name `ROOM-SEAT@ROOM` is TRANSLATED before it is sent, because the")

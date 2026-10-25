@@ -77,7 +77,8 @@ func senderSeat() (string, string, error) {
 		return "", "", &clientcmd.CodedError{
 			Code: clientcmd.ExitUnavailable,
 			Message: fmt.Sprintf("this shell's own seat could not be resolved, and a send is decided by the "+
-				"sender's own links: %v; nothing was sent", err),
+				"sender's own links: %v; nothing was sent (from the owner's shell, which is no seat, use "+
+				"`printf 'message\\n' | 4genteam input --room ROOM --seat SEAT`)", err),
 		}
 	}
 	room, seat := who.Identity.RoomName, who.Identity.MemberId
