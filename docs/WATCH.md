@@ -101,9 +101,23 @@ The grid panes are read-only. An input pane is the way to talk to a seat from th
 4genteam inputs hide --room <ROOM>                # close them again
 ```
 
-A line typed there is sent to the seat with `4genteam send <session> 'message'`, so it goes through the
-same route as any other message. `/hide` or Ctrl-D leaves the loop. Opening it twice adds nothing. The lead
+Each pane runs `4genteam input --room <ROOM> --seat <SEAT>`. A line typed there is delivered to the seat's
+runtime session through this client's own transport, attributed to the pane's `AGENTHUB_SESSION_NAME`
+(none in the owner's shell). `/hide` or Ctrl-D leaves the loop. Opening it twice adds nothing. The lead
 window's input pane exists already.
+
+### Send to a seat from a script
+
+The same verb reads standard input, so the owner's shell (or a script) sends one message with a pipe:
+
+```bash
+printf 'message\n' | 4genteam input --room <ROOM> --seat <SEAT>   # prints "<SEAT> > sent"
+```
+
+Each non-empty line is one message. This is the scripted owner-to-seat path: `4genteam send` decides a
+send by the **sender's own seat links**, so from the owner's shell, which is no seat, it is refused ("this
+shell's own seat could not be resolved"). A seat that is mid-turn reads the message when its turn ends,
+not at once: measured 2026-10-25, an idle seat had it within 20 s, a busy one later.
 
 ## Scrolling back
 
@@ -126,9 +140,12 @@ If nothing appears, check those two first: a stopped seat has no pane, and a mis
 
 ## Rules
 
-- **Never press Ctrl-C or type into a raw `tmux attach` pane of a seat.** The seat's runner reads
-  standard input: Ctrl-C aborts the work it is doing, and typed text becomes a chat message from
-  you to that agent. Use `4genteam inputs` or the lead window's input pane instead.
+- **Never press Ctrl-C or type into a raw `tmux attach` pane of a seat, and never use `tmux send-keys`
+  to message one.** The seat runs an RPC runner, and its pane is not a message route: text typed or sent
+  there does not reach the agent (measured 2026-10-25: `tmux send-keys -t agenthub--aa2-rs--lead -l
+  '...'` plus Enter left no trace in the seat's session log), while a stray key can still disturb the
+  process. Use `4genteam inputs`, the lead window's input pane, or `printf 'message\n' | 4genteam input
+  --room <ROOM> --seat <SEAT>` instead.
 - A seat's own screen is the **secondary** view: read it to see what that seat is doing,
   never as the default way to watch a room.
 - Every pane runs the client with `exec`, so when that client exits, the pane closes. That is why

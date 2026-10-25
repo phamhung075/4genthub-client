@@ -84,8 +84,17 @@ pane and header with no events, and a stopped seat has no pane at all.
 4genteam inputs hide --room <ROOM>
 ```
 
-A line typed there is sent with `4genteam send`, so it takes the same route as any other message.
-`/hide` or Ctrl-D leaves the loop.
+Each pane runs `4genteam input --room <ROOM> --seat <SEAT>`, which delivers every line to that seat's
+runtime session. `/hide` or Ctrl-D leaves the loop.
+
+From a script or the owner's shell, pipe the message into the same verb. This is the scripted
+owner-to-seat path; `4genteam send` is refused there, because it decides by the sender's own seat:
+
+```bash
+printf 'message\n' | 4genteam input --room <ROOM> --seat <SEAT>   # prints "<SEAT> > sent"
+```
+
+A seat that is mid-turn reads it when that turn ends.
 
 ## Context limits and the supervisor
 
@@ -134,8 +143,9 @@ back watched; skip that with `ROOM_CONTINUE_WATCH=0`.
 
 ## Rules
 
-- **Never press Ctrl-C or type into a raw `tmux attach` pane of a seat.** The runner reads standard
-  input: Ctrl-C aborts that seat's work, and typed text becomes a chat message to the agent.
+- **Never press Ctrl-C or type into a raw pane of a seat, and never use `tmux send-keys` to message
+  one.** The seat runs an RPC runner and its pane is not a message route: typed text never reaches
+  the agent (measured 2026-10-25, no trace in the seat's session log). Use `4genteam input` as above.
 - The secondary view is a seat's own screen, and the client has no verb that opens one raw
   `tmux attach` tile per seat: read that pane with `4genteam capture <session>`, or attach by
   hand. It is not the way to watch a room.
