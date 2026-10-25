@@ -69,7 +69,7 @@ Always watch an omp seat team with the grid script, not with bare tiles:
 
 ### Traps (any room, any runtime)
 
-- Owner to seat: `printf 'message\n' | 4genteam input --room <room> --seat <seat>` (prints `<seat> > sent`; a seat mid-turn reads it when the turn ends). From the owner's shell `4genteam send` is refused (it decides by the sender's own seat, and that shell is none), and keys typed or `tmux send-keys`'d into a seat's pane never reach the agent: the seat runs an RPC runner (measured 2026-10-25).
+- Owner to seat: `printf 'message\n' | 4genteam input --room <room> --seat <seat>` (prints `<seat> > sent`; a seat mid-run gets it queued as a steer, and a runner older than `e86fa45f` dropped it). From the owner's shell `4genteam send` is refused (it decides by the sender's own seat, and that shell is none). Keys typed or `tmux send-keys`'d into a seat's pane are an unattributed prompt to the runner, and Ctrl-C there aborts the turn: not a route.
 - Liveness: `4genteam ps <room> --nodes`. `4genteam capture <session>` can read blank; `tmux capture-pane -p -t <session>` does not lie.
 - `[omp-runner] ERROR rpc: RPC response exceeded the transport limit` printed after `READY` is cosmetic on resume — the seat still answers. Ping it before considering a re-prime.
 - Route: check the provider window before picking a runtime. The predecessor CLI's `rig usage series --lane provider_window` has no `4genteam` counterpart — for DeepSeek billing the native read is `4genteam offpeak`, and for the other providers the vendor's own dashboard is the source. When Claude weekly is capped (it was 100 percent on 2026-10-05, reset 2026-10-06 12:00Z), the seats belong on omp/DeepSeek.

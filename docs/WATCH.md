@@ -116,8 +116,10 @@ printf 'message\n' | 4genteam input --room <ROOM> --seat <SEAT>   # prints "<SEA
 
 Each non-empty line is one message. This is the scripted owner-to-seat path: `4genteam send` decides a
 send by the **sender's own seat links**, so from the owner's shell, which is no seat, it is refused ("this
-shell's own seat could not be resolved"). A seat that is mid-turn reads the message when its turn ends,
-not at once: measured 2026-10-25, an idle seat had it within 20 s, a busy one later.
+shell's own seat could not be resolved"). A seat that is mid-run gets the text queued as a steer, after its
+current tool calls. A runner older than `e86fa45f` dropped such a text after printing `sent`
+(measured 2026-10-25: an idle seat had it within 20 s, busy seats never). Restart the seats on a
+rebuilt `agenthub-runtime` to get the fix.
 
 ## Scrolling back
 
@@ -141,10 +143,11 @@ If nothing appears, check those two first: a stopped seat has no pane, and a mis
 ## Rules
 
 - **Never press Ctrl-C or type into a raw `tmux attach` pane of a seat, and never use `tmux send-keys`
-  to message one.** The seat runs an RPC runner, and its pane is not a message route: text typed or sent
-  there does not reach the agent (measured 2026-10-25: `tmux send-keys -t agenthub--aa2-rs--lead -l
-  '...'` plus Enter left no trace in the seat's session log), while a stray key can still disturb the
-  process. Use `4genteam inputs`, the lead window's input pane, or `printf 'message\n' | 4genteam input
+  to message one.** The seat's runner reads that pane as input: Ctrl-C aborts the agent's turn, and a
+  typed line becomes a prompt with no sender attached. It is not the documented route. On 2026-10-25,
+  `tmux send-keys -t agenthub--aa2-rs--lead -l '...'` plus Enter left no trace in the busy lead's
+  session log: a runner older than `e86fa45f` loses any prompt sent to a busy seat, whatever route it
+  takes. Use `4genteam inputs`, the lead window's input pane, or `printf 'message\n' | 4genteam input
   --room <ROOM> --seat <SEAT>` instead.
 - A seat's own screen is the **secondary** view: read it to see what that seat is doing,
   never as the default way to watch a room.

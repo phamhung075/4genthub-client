@@ -94,7 +94,8 @@ owner-to-seat path; `4genteam send` is refused there, because it decides by the 
 printf 'message\n' | 4genteam input --room <ROOM> --seat <SEAT>   # prints "<SEAT> > sent"
 ```
 
-A seat that is mid-turn reads it when that turn ends.
+A seat that is mid-run gets it queued as a steer. A runner older than `e86fa45f`
+dropped it after printing `sent`.
 
 ## Context limits and the supervisor
 
@@ -144,8 +145,8 @@ back watched; skip that with `ROOM_CONTINUE_WATCH=0`.
 ## Rules
 
 - **Never press Ctrl-C or type into a raw pane of a seat, and never use `tmux send-keys` to message
-  one.** The seat runs an RPC runner and its pane is not a message route: typed text never reaches
-  the agent (measured 2026-10-25, no trace in the seat's session log). Use `4genteam input` as above.
+  one.** The runner reads that pane: Ctrl-C aborts the agent's turn, and a typed line becomes a prompt
+  with no sender. Use `4genteam input` as above.
 - The secondary view is a seat's own screen, and the client has no verb that opens one raw
   `tmux attach` tile per seat: read that pane with `4genteam capture <session>`, or attach by
   hand. It is not the way to watch a room.
