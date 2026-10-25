@@ -772,3 +772,40 @@ func TestGridReadsAnAbsentServerAsNoSeats(t *testing.T) {
 		t.Errorf("stdout = %q, want the grid's zero-seat line", out)
 	}
 }
+
+// TestInputPipeSendsStdinAsOneMessage: a piped multi-line text is ONE message, sent once, with its inner
+// newlines kept; blank input sends nothing; a failed send is an error rather than a printed "failed".
+func TestInputPipeSendsStdinAsOneMessage(t *testing.T) {
+	var delivered []string
+	previousSend := sendLine
+	sendFails := false
+	sendLine = func(_ context.Context, room, seat, text string) error {
+		if sendFails {
+			return errors.New("the agent refused the turn")
+		}
+		delivered = append(delivered, room+"/"+seat+": "+text)
+		return nil
+	}
+	t.Cleanup(func() { sendLine = previousSend })
+
+	out := &strings.Builder{}
+	if err := runInputPipe(context.Background(), "r", "lead", strings.NewReader("l1\nl2\n\nl4\n"), out); err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	if len(delivered) != 1 || delivered[0] != "r/lead: l1\nl2\n\nl4" {
+		t.Errorf("delivered = %q, want one message carrying all four lines", delivered)
+	}
+	if out.String() != "lead > sent\n" {
+		t.Errorf("stdout = %q, want one sent line", out.String())
+	}
+
+	delivered, out = nil, &strings.Builder{}
+	if err := runInputPipe(context.Background(), "r", "lead", strings.NewReader("\n  \n"), out); err != nil || len(delivered) != 0 {
+		t.Errorf("blank input: err = %v, delivered = %q, want nothing sent", err, delivered)
+	}
+
+	sendFails = true
+	if err := runInputPipe(context.Background(), "r", "lead", strings.NewReader("x\n"), &strings.Builder{}); err == nil {
+		t.Error("a refused send was not an error")
+	}
+}

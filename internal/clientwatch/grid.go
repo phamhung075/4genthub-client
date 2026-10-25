@@ -504,6 +504,34 @@ func runInputLoop(ctx context.Context, room, seat string, in io.Reader, out io.W
 	}
 }
 
+// stdinIsTerminal tells the typed pane from a pipe. A var so a test can choose either without a pty.
+var stdinIsTerminal = func() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
+// runInputPipe is `input` with stdin NOT a terminal: everything piped in is ONE message, sent once. A
+// script that pipes a multi-line brief means one text; the line-per-message loop above is for a person
+// typing in the pane, and splitting a pipe into a message per line (aa2-rs, 2026-10-25: four "sent" for a
+// four-line paste) delivered a brief as four turns. Blank input sends nothing; a failed send is an error,
+// so the script's exit status says it.
+func runInputPipe(ctx context.Context, room, seat string, in io.Reader, out io.Writer) error {
+	body, err := io.ReadAll(in)
+	if err != nil {
+		return err
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		fmt.Fprintf(out, "%s > nothing to send\n", seat)
+		return nil
+	}
+	if err := sendLine(ctx, room, seat, text); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%s > sent\n", seat)
+	return nil
+}
+
 // runLeadWindow opens a workspace for the lead alone: its detailed feed on top, an input pane under it.
 func runLeadWindow(ctx context.Context, s shared) error {
 	if err := closeWorkspaces(ctx, s.room+" lead"); err != nil {

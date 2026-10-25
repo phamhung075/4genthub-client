@@ -94,6 +94,7 @@ owner-to-seat path; `4genteam send` is refused there, because it decides by the 
 printf 'message\n' | 4genteam input --room <ROOM> --seat <SEAT>   # prints "<SEAT> > sent"
 ```
 
+A piped text is one message, all its lines included; only the typed pane sends one per line.
 A seat that is mid-run gets it queued as a steer. A runner older than `e86fa45f`
 dropped it after printing `sent`.
 

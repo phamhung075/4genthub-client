@@ -114,7 +114,8 @@ The same verb reads standard input, so the owner's shell (or a script) sends one
 printf 'message\n' | 4genteam input --room <ROOM> --seat <SEAT>   # prints "<SEAT> > sent"
 ```
 
-Each non-empty line is one message. This is the scripted owner-to-seat path: `4genteam send` decides a
+Piped standard input is ONE message, however many lines it has, and prints one `sent`; a failed send exits
+non-zero. Only the typed pane (a terminal) sends one message per line. This is the scripted owner-to-seat path: `4genteam send` decides a
 send by the **sender's own seat links**, so from the owner's shell, which is no seat, it is refused ("this
 shell's own seat could not be resolved"). A seat that is mid-run gets the text queued as a steer, after its
 current tool calls. A runner older than `e86fa45f` dropped such a text after printing `sent`

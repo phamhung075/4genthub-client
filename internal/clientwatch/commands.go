@@ -264,7 +264,11 @@ func runVerb(ctx context.Context, verb string, args []string, stdout, stderr io.
 			fmt.Fprintln(stderr, "4genteam input: --seat SEAT is required")
 			return clientcmd.ExitUsage
 		}
-		if err := runInputLoop(ctx, state.room, state.seats[0], os.Stdin, stdout); err != nil {
+		run := runInputLoop
+		if !stdinIsTerminal() {
+			run = runInputPipe
+		}
+		if err := run(ctx, state.room, state.seats[0], os.Stdin, stdout); err != nil {
 			return reportError(err, stderr)
 		}
 		return clientcmd.ExitOK
