@@ -1588,6 +1588,15 @@ impl RoomSupervisor {
                 ));
             }
         }
+        // THE ROOM'S HUMAN, `human@<room>`, is the one destination that is not a seat: it is the owner's
+        // inbox, and the bridge posts every active row addressed to it to the dashboard. Refusing it left
+        // no way to put an ask in front of the owner at all - `stuck` escalations failed with this very
+        // refusal (agent.log, 2026-10-25), and leads addressed owner-decision rows to themselves instead
+        // (aa2-rs qitem-20261025143610, qitem-20261027084120). It is stored verbatim: no seat matches it,
+        // so no nudge wakes a seat for it, which is right for a row only the owner answers.
+        if key == "human" && named_room == Some(room) {
+            return Ok(format!("human@{room}"));
+        }
         for seat in &spec.seats {
             let session = Self::session_name(room, &seat.seat_key);
             let orchestrator = format!("{room}-{}@{room}", seat.seat_key);
@@ -4058,6 +4067,19 @@ mod tests {
             "{refused}"
         );
         assert!(refused.contains("Nothing was written"), "{refused}");
+
+        assert_eq!(
+            supervisor
+                .resolve_queue_destination("demo", "human@demo")
+                .expect("the room's human is the owner's inbox"),
+            "human@demo"
+        );
+        assert!(supervisor
+            .resolve_queue_destination("demo", "human@elsewhere")
+            .is_err());
+        assert!(supervisor
+            .resolve_queue_destination("demo", "human")
+            .is_err());
 
         let principal = supervisor
             .resolve_queue_destination("demo", "principal@demo")
