@@ -29,7 +29,7 @@ import (
 // tier, so it is neither a success nor a failure of the call.
 const ExitEscalated = 5
 
-const usage = `usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D | --detail-file <path>]
+const usage = `usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D | --detail-file <path>] [--distinct-from-owner-ask WHY]
 
 Ask one step of the decision ladder. Jev is asked from this machine; the JSON outcome goes to stdout.
 
@@ -40,6 +40,10 @@ Ask one step of the decision ladder. Jev is asked from this machine; the JSON ou
   --category        Optional. A free token; credentials, spend and $DECISION_OWNER_ONLY_CATEGORIES always go to the owner.
   --detail          Optional. Context for the evaluator.
   --detail-file     The same text read from a file: use it for anything with quotes, newlines or a $, which a shell breaks.
+  --distinct-from-owner-ask WHY
+                    Lead tier only. A lead ask whose summary rewords one escalated to the owner in the last 7 days
+                    is not sent to Jev: it answers escalate_to owner again (exit 5). Give WHY to state that this is
+                    a different question; WHY is written into the log entry.
 
 Configuration, from ~/.config/4genthub/.env or the environment: TYPESAFE_API_KEY (required), TYPESAFE_BASE_URL,
 JEV_DECISION_MODEL (jev-1.13.0), JEV_DECISION_THRESHOLD (the confidence a tier needs to decide; the value is the one set in the config), JEV_DECISION_LOG_PATH. Every outcome is appended
@@ -57,6 +61,9 @@ func (decideCommand) Summary() string { return "ask one step of the seat/lead/ow
 
 type options struct {
 	tier, category, summary, detail, detailFile, questions, questionsFile string
+	// distinct is --distinct-from-owner-ask: the lead's stated reason that this ask is NOT the one already
+	// with the owner. It is written into the log entry, so the override is on the record.
+	distinct string
 }
 
 // questionResult is what one question came to: Jev's pick and confidence, and the option the asker
@@ -127,7 +134,27 @@ func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 		return usageError(stderr, clientjev.ErrNoKey.Error())
 	}
 
-	result, picks, evalErr := ladder(ctx, cfg, opts.tier, category, summary, detail, questions)
+	var (
+		result  outcome
+		picks   map[string]clientjev.Selection
+		evalErr error
+	)
+	distinct := strings.TrimSpace(opts.distinct)
+	if open, found := openOwnerAsk(cfg.LogPath, time.Now(), summary); opts.tier == "lead" && found && distinct == "" {
+		// The owner already holds this question: Jev is not asked, and the answer is the owner's again.
+		result = outcome{Tier: opts.tier, EscalateTo: "owner", Questions: make([]questionResult, 0, len(questions)),
+			Reason: fmt.Sprintf("already escalated to the owner at %s as %q: only the owner's answer settles it. Keep the owner-decision row open and wait; if this is a different question, re-run with --distinct-from-owner-ask \"<why>\"",
+				open.Timestamp.UTC().Format(time.RFC3339), open.Summary)}
+		for _, q := range questions {
+			result.Questions = append(result.Questions, questionResult{QuestionID: q.ID, Recommended: q.Recommended()})
+		}
+		fmt.Fprintf(stderr, "4genteam decide: %s\n", result.Reason)
+	} else {
+		result, picks, evalErr = ladder(ctx, cfg, opts.tier, category, summary, detail, questions)
+	}
+	if distinct != "" {
+		detail = strings.TrimSpace(detail + "\n\n[distinct-from-owner-ask] " + distinct)
+	}
 	entry := clientjev.LogEntry{
 		Timestamp: time.Now(), Kind: "decision", Summary: summary, Detail: detail, Choices: picks, Questions: questions,
 		Tier: opts.tier, Category: category, Outcome: "decided",
@@ -214,6 +241,8 @@ func parse(args []string) (options, bool, error) {
 			target = &opts.questions
 		case "--questions-file":
 			target = &opts.questionsFile
+		case "--distinct-from-owner-ask":
+			target = &opts.distinct
 		default:
 			return opts, false, fmt.Errorf("unknown argument: %s", flag)
 		}

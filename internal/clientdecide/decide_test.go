@@ -267,3 +267,46 @@ func TestDetailFileCarriesTextAShellWouldBreak(t *testing.T) {
 		t.Errorf("both --detail and --detail-file: exit %d, want usage", code)
 	}
 }
+
+// TestALeadCannotRewordAnOwnerAskIntoItsOwnDecision: the aa2-rs sequence of 2026-10-27. The lead's ask went
+// to the owner; the same subject, narrowed, came back at lead tier and Jev decided it. Now the narrowed ask
+// is not sent to Jev at all - it escalates to the owner again and names the open escalation - unless the
+// lead states why it is a different question, and that reason is logged.
+func TestALeadCannotRewordAnOwnerAskIntoItsOwnDecision(t *testing.T) {
+	rec, logPath := jev(t, 200, `{"answers":{"q1":{"choice":"lite","confidence":0.5}}}`)
+	if code, _, _ := run("--tier", "lead", "--summary", "Phase 1 depth-gate exit rule: penetration alone, or penetration plus measured clearance", "--questions", questions); code != ExitEscalated {
+		t.Fatalf("the first ask did not escalate: %d", code)
+	}
+	hits := rec.hits
+
+	for _, reworded := range []string{"Phase 1 exit rule scope", "Phase 1 exit rule: does short gate"} {
+		code, out, errText := run("--tier", "lead", "--summary", reworded, "--questions", questions)
+		var got outcome
+		_ = json.Unmarshal([]byte(out), &got)
+		if code != ExitEscalated || got.EscalateTo != "owner" || !strings.Contains(got.Reason, "already escalated to the owner") || !strings.Contains(errText, "--distinct-from-owner-ask") {
+			t.Errorf("%q: exit %d out %q err %q", reworded, code, out, errText)
+		}
+	}
+	if rec.hits != hits {
+		t.Errorf("Jev was asked %d more times for a question the owner holds", rec.hits-hits)
+	}
+
+	// A different subject is untouched, and so is a seat-tier ask.
+	run("--tier", "lead", "--summary", "continue the p performance line", "--questions", questions)
+	run("--tier", "seat", "--summary", "Phase 1 exit rule scope", "--questions", questions)
+	if rec.hits != hits+2 {
+		t.Errorf("unrelated asks reached Jev %d times, want 2", rec.hits-hits)
+	}
+
+	// The override goes through to Jev, and its reason is on the record.
+	run("--tier", "lead", "--summary", "Phase 1 exit rule scope", "--questions", questions,
+		"--distinct-from-owner-ask", "asks which pairs the rule covers, not which rule")
+	if rec.hits != hits+3 {
+		t.Errorf("the override did not reach Jev")
+	}
+	entries := readLog(t, logPath)
+	last := entries[len(entries)-1]
+	if detail, _ := last["detail"].(string); !strings.Contains(detail, "[distinct-from-owner-ask] asks which pairs") {
+		t.Errorf("the override is not on the record: %v", last)
+	}
+}
