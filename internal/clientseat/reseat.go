@@ -131,17 +131,24 @@ func reseatSeats(room string, seats []string, allowPeak bool, deps *reseatDeps) 
 		return 0, &clientcmd.CodedError{Message: "seat reseat: " + message, Code: clientcmd.ExitUnavailable}
 	}
 	failed := 0
-	for _, seat := range seats {
-		// THE WAIT IS ANNOUNCED BEFORE IT BEGINS, and that is the half of this fix a caller feels: the quiet
-		// wait is up to quietWaitSeconds, it used to print NOTHING until it ended, and with nothing said a seat
-		// being waited for and a verb that has hung are the same thing on the terminal. Measured live
-		// 2026-10-15: `seat reseat` was killed at 300s inside this wait having printed nothing at all, and the
-		// reading was "the verb never returns".
-		deps.logf("%s: waiting for quiet (up to %s), then the seat is restarted", seat, quietBudget())
-		if !deps.waitQuiet(room, seat) {
-			deps.logf("%s: not quiet within %s, left running", seat, quietBudget())
-			failed++
-			continue
+	for i, seat := range seats {
+		status, _ := targets[i]["sessionStatus"].(string)
+		status = strings.TrimSpace(status)
+		seatIsRunning := status == "" || strings.EqualFold(status, "running")
+		if seatIsRunning {
+			// THE WAIT IS ANNOUNCED BEFORE IT BEGINS, and that is the half of this fix a caller feels: the quiet
+			// wait is up to quietWaitSeconds, it used to print NOTHING until it ended, and with nothing said a seat
+			// being waited for and a verb that has hung are the same thing on the terminal. Measured live
+			// 2026-10-15: `seat reseat` was killed at 300s inside this wait having printed nothing at all, and the
+			// reading was "the verb never returns".
+			deps.logf("%s: waiting for quiet (up to %s), then the seat is restarted", seat, quietBudget())
+			if !deps.waitQuiet(room, seat) {
+				deps.logf("%s: not quiet within %s, left running", seat, quietBudget())
+				failed++
+				continue
+			}
+		} else {
+			deps.logf("%s: not running (%s), restarting without waiting for quiet", seat, status)
 		}
 		// AND THE RESTART IS ANNOUNCED BEFORE THE CALL, because that call stops a session and starts another:
 		// the line after it is the answer, and with no line before it `restarting` is indistinguishable from the

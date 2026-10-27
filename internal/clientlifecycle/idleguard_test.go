@@ -111,3 +111,42 @@ func TestAStuckSeatIsToldToContinueThenTheLead(t *testing.T) {
 		t.Errorf("seat nudged %d times, lead told %d times; said %q", toSeat, toLead, r.said)
 	}
 }
+
+func TestAnIdleRoomWithActiveRailReSignalsLeadAfterQuietTimeout(t *testing.T) {
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.9})
+	r.guard.Step(context.Background())
+	if len(r.said) != 1 {
+		t.Fatalf("want 1 initial message, got %d (%v)", len(r.said), r.said)
+	}
+	// Before 2*Quiet elapses, no new reminder is sent
+	r.now += r.guard.Quiet
+	r.guard.Step(context.Background())
+	if len(r.said) != 1 {
+		t.Fatalf("expected no reminder before 2*Quiet, got %d (%v)", len(r.said), r.said)
+	}
+	// After 2*Quiet, the reminder is sent to the lead
+	r.now += r.guard.Quiet + 1
+	r.guard.Step(context.Background())
+	if len(r.said) != 2 || !strings.Contains(r.said[1], "still idle with 1 open rail items") {
+		t.Fatalf("expected reminder to lead after 2*Quiet, got %d (%v)", len(r.said), r.said)
+	}
+}
+
+func TestAnIdleSeatWithInProgressWorkIsNudged(t *testing.T) {
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{})
+	r.guard.Active = func(string) ([]clientruntime.QueueRow, error) {
+		return []clientruntime.QueueRow{{QitemID: "q1", State: "in-progress", DestinationSession: "go-dev", Summary: "ship it"}}, nil
+	}
+	r.modified["/log/go-dev"] = r.now - 2000
+	r.guard.Step(context.Background())
+	var nudged bool
+	for _, said := range r.said {
+		if strings.HasPrefix(said, "go-dev: ") && strings.Contains(said, "Continue where you stopped") {
+			nudged = true
+			break
+		}
+	}
+	if !nudged {
+		t.Errorf("idle seat with in-progress work was not nudged, said: %v", r.said)
+	}
+}

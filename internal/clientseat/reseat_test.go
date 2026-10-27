@@ -186,3 +186,20 @@ func TestReseatReadsTheStateRootFlagInsteadOfTheMachineDefault(t *testing.T) {
 		t.Fatalf("usage does not list --state-root: %q", out.String())
 	}
 }
+
+func TestReseatSkipsQuietWaitWhenSeatIsNotRunning(t *testing.T) {
+	deps, log := reseatFixture(false)
+	deps.nodes = func(room string) ([]map[string]any, error) {
+		return []map[string]any{
+			{"logicalId": room + ".lead", "sessionStatus": "stopped"},
+		}, nil
+	}
+	code, err := reseatSeats("r", []string{"lead"}, false, deps)
+	if err != nil || code != clientcmd.ExitOK {
+		t.Fatalf("code %d err %v", code, err)
+	}
+	want := []string{"relaunch lead", "check lead"}
+	if len(*log) != len(want) || (*log)[0] != want[0] || (*log)[1] != want[1] {
+		t.Fatalf("log %v, want %v", *log, want)
+	}
+}
