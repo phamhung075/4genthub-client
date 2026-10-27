@@ -457,3 +457,44 @@ func TestVerifyRefusesWhenTheProcessProbeCannotRun(t *testing.T) {
 		t.Errorf("error %q does not name the probe", err)
 	}
 }
+
+// TestARestartedChildIsRunningInsideItsStartGrace: right after agent restarts a child, the heartbeat file
+// still names the dead predecessor. That row used to read `silent` (age 0s) and gave every restart a second
+// alert; inside one threshold of agent's recorded start it is running, and past it the old rule holds.
+func TestARestartedChildIsRunningInsideItsStartGrace(t *testing.T) {
+	f := newReportFixture(t)
+	f.live[Pattern(Budget, "demo")] = []int{88}
+	f.beat(Budget, "demo", 2*time.Second, 77) // the dead predecessor's last beat
+	started := func(ago time.Duration) Env {
+		return Env{Rooms: []string{"demo"}, Supervised: []Health{{
+			Room: "demo", Safeguard: Budget, Restarts: 1, StartedAt: f.at.Add(-ago).UTC().Format(time.RFC3339),
+		}}}
+	}
+	if got := f.row(Budget, "demo", started(time.Second)); got.State != Running || got.PID != 88 || got.Restarts != 1 {
+		t.Errorf("row = %+v, want running pid 88 with the restart counted", got)
+	}
+	if got := f.row(Budget, "demo", started(SilentAfter(BudgetEvery)+time.Second)); got.State != Silent {
+		t.Errorf("row = %+v, want silent: the new child never beat within its threshold", got)
+	}
+	// doctor has no record and no resume, so it keeps judging without grace.
+	if got := f.row(Budget, "demo", Env{Rooms: []string{"demo"}}); got.State != Silent {
+		t.Errorf("row = %+v, want silent without agent's record", got)
+	}
+}
+
+// TestABeatThatWentStaleDuringAPauseIsNotSilence: after a host suspend every beat is old. Measured from the
+// observer's resume (NotBefore) the child is running until one threshold has passed since the resume.
+func TestABeatThatWentStaleDuringAPauseIsNotSilence(t *testing.T) {
+	f := newReportFixture(t)
+	f.live[Pattern(Compact, "demo")] = []int{77}
+	f.beat(Compact, "demo", 460*time.Second, 77)
+	paused := Env{Rooms: []string{"demo"}, NotBefore: f.at.Add(-time.Second)}
+	got := f.row(Compact, "demo", paused)
+	if got.State != Running || got.AgeS != 460 {
+		t.Errorf("row = %+v, want running with the true age 460", got)
+	}
+	paused.NotBefore = f.at.Add(-SilentAfter(CompactEvery) - time.Second)
+	if got := f.row(Compact, "demo", paused); got.State != Silent {
+		t.Errorf("row = %+v, want silent: a full threshold passed since the resume", got)
+	}
+}

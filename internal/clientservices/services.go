@@ -430,6 +430,13 @@ type Env struct {
 	// Thresholds overrides 7.4's per-safeguard defaults. agent fills it from the flags it launched each
 	// child with; `doctor`, which has no launch flags, leaves it empty and gets the defaults.
 	Thresholds map[string]time.Duration
+	// NotBefore is the moment the observer itself resumed after a pause - a host suspend, a frozen VM, a
+	// pass that blocked - and the zero value when it did not pause. A beat older than this was due while
+	// nothing on the machine ran, so silence is measured from here instead: a child gets its own threshold
+	// after the resume to beat again. Without it every row read `silent` on the first pass after a
+	// suspend and `running` one second later (alerts.log 2026-10-27 04:15, 04:31, 04:53), and each of
+	// those flaps became a dashboard alert. `doctor` leaves it zero.
+	NotBefore time.Time
 }
 
 func (e Env) threshold(safeguard string) time.Duration {
@@ -546,22 +553,45 @@ func verifyRow(env Env, safeguard, room string) (Health, error) {
 		if recorded, ok := env.recorded(safeguard, room); ok && recorded.State == Failing {
 			row.State = Failing
 		}
-	case !hasBeat:
-		// Live, and this child has never written a beat: there is no signal, so this is the hung case
+	case !hasBeat || !slices.Contains(live, beat.PID):
+		// Live, and this process has never written a beat: there is no signal, so this is the hung case
 		// rather than a healthy one. 7.7's rule is explicit - a missing signal is not evidence of work.
-		row.State = Silent
+		// EXCEPT inside its first threshold: a child agent has just (re)started has not reached its first
+		// beat yet, and the file still names the dead predecessor. Calling that `silent` was the second
+		// alert of every restart ("silent (last beat 0s ago)", alerts.log 2026-10-25T20:29:16Z), so the
+		// grace runs from agent's recorded start (or the observer's resume) for one threshold.
 		row.PID = live[0]
-	case !slices.Contains(live, beat.PID):
 		row.State = Silent
-		row.PID = live[0]
+		if since, ok := graceStart(env, safeguard, room); ok && Now().Sub(since) <= env.threshold(safeguard) {
+			row.State = Running
+		}
 	case age > env.threshold(safeguard):
 		row.State = Silent
 		row.PID = beat.PID
+		if !env.NotBefore.IsZero() && beat.At.Before(env.NotBefore) && Now().Sub(env.NotBefore) <= env.threshold(safeguard) {
+			// The beat went stale while the observer was paused too (NotBefore): not this child's silence.
+			row.State = Running
+		}
 	default:
 		row.State = Running
 		row.PID = beat.PID
 	}
 	return row, nil
+}
+
+// graceStart is when a live child's start grace began: the later of agent's recorded started_at and the
+// observer's resume. ok is false when neither is known, which is `doctor`'s case - it judges with no grace.
+func graceStart(env Env, safeguard, room string) (time.Time, bool) {
+	var since time.Time
+	if recorded, ok := env.recorded(safeguard, room); ok && recorded.StartedAt != "" {
+		if at, err := time.Parse(time.RFC3339, recorded.StartedAt); err == nil {
+			since = at
+		}
+	}
+	if env.NotBefore.After(since) {
+		since = env.NotBefore
+	}
+	return since, !since.IsZero()
 }
 
 // StateLine is one row as the operator reads it: `<room> <safeguard>: <state>, age <n>s`, which is the
