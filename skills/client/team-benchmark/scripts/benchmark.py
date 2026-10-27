@@ -11,7 +11,7 @@ can show the change against the previous one. Reads no .env and no token.
 import argparse, collections, datetime as d, json, os, re, subprocess
 
 CHAT = re.compile(r'4genteam (room queue|send|room send|input)|queue (create|update|close|claim)')
-TEST = re.compile(r'\bgo test|cargo test|npx (tsc|vitest|playwright)|pytest|go vet|go build')
+TEST = re.compile(r'\bgo test|cargo test|cargo-slot\.sh\s+test|npx (tsc|vitest|playwright)|pytest|go vet|go build')
 
 
 def category(r):
