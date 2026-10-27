@@ -161,8 +161,14 @@ func bridgeRun(ctx context.Context, args []string, stdout, stderr io.Writer, onc
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
 		return clientcmd.ExitUsage
 	}
+	hub, err := hubFromEnv()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge run: %v\n", err)
+		return clientcmd.ExitUsage
+	}
 	bridge := NewBridge(id, root, time.Duration(interval*float64(time.Second)), send, notify,
 		secretscan.KnownValuesFromEnv(os.Environ()), pins, state, noteTo(stderr))
+	bridge.Hub = hub
 	_, _ = fmt.Fprintf(stderr, "4genteam bridge: reporting as %s\n", id)
 	return bridge.Run(ctx, onceOnly || switches["once"])
 }
@@ -231,8 +237,14 @@ func bridgeOnce(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
 		return clientcmd.ExitUsage
 	}
+	hub, err := hubFromEnv()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "4genteam bridge once: %v\n", err)
+		return clientcmd.ExitUsage
+	}
 	bridge := NewBridge(id, root, time.Duration(DefaultInterval*float64(time.Second)), send, notify,
 		known, pins, state, noteTo(stderr))
+	bridge.Hub = hub
 	return bridge.Run(ctx, true)
 }
 
@@ -286,19 +298,37 @@ var statusClient = &http.Client{Timeout: SendTimeout}
 // bearerSender builds the POST transport for ONE cloud path. Both of this client's push paths take the
 // same credential and differ only in the endpoint, so they differ only in the argument here.
 func bearerSender(path string) (Sender, error) {
+	hub, err := hubFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return func(body []byte) (int, []byte, error) {
+		return hub(http.MethodPost, path, body)
+	}, nil
+}
+
+// hubFromEnv builds the one transport every cloud call of the bridge rides: the user credential, the
+// shared client, any method and path. A nil body is a request without one (a GET).
+func hubFromEnv() (Hub, error) {
 	baseURL, token := os.Getenv("AGENTHUB_URL"), os.Getenv("AGENTHUB_TOKEN")
 	if baseURL == "" || token == "" {
 		return nil, fmt.Errorf("AGENTHUB_URL and AGENTHUB_TOKEN must be set")
 	}
 	client := statusClient
-	endpoint := strings.TrimRight(baseURL, "/") + path
-	return func(body []byte) (int, []byte, error) {
-		request, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	base := strings.TrimRight(baseURL, "/")
+	return func(method, path string, body []byte) (int, []byte, error) {
+		var reader io.Reader
+		if body != nil {
+			reader = bytes.NewReader(body)
+		}
+		request, err := http.NewRequest(method, base+path, reader)
 		if err != nil {
 			return 0, nil, err
 		}
 		request.Header.Set("Authorization", "Bearer "+token)
-		request.Header.Set("Content-Type", "application/json")
+		if body != nil {
+			request.Header.Set("Content-Type", "application/json")
+		}
 		response, err := client.Do(request)
 		if err != nil {
 			// The reason travels out of here as an ERROR, never as a status: this transport never
