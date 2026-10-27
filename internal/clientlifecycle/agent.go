@@ -220,6 +220,27 @@ type agentManager struct {
 	// lastLlm is when the model-egress listeners were last probed: the same throttle as the detectors', so
 	// a pass a second does not spawn against a listener that is merely slow to answer.
 	lastLlm time.Time
+	// lastTick is when this loop last ran a checkpoint, and resumed is the last time it found a gap far
+	// longer than one pass between two of them: the host was suspended, the VM froze, or a pass blocked.
+	// Verify measures silence from resumed (Env.NotBefore), because a beat that went stale while this loop
+	// was not running either is a pause of the machine, not a silent child.
+	lastTick time.Time
+	resumed  time.Time
+}
+
+// agentPauseGap is how long a gap between two checkpoints of one-second passes must be before it counts as a
+// pause. It is well above a slow pass (pgrep per child, the detectors) and well below every threshold.
+const agentPauseGap = 20 * time.Second
+
+// checkpoint notes a pause since the previous checkpoint and returns the resume time to judge with.
+func (m *agentManager) checkpoint(now time.Time) time.Time {
+	if !m.lastTick.IsZero() && now.Sub(m.lastTick) > agentPauseGap {
+		m.resumed = now
+		m.log(fmt.Sprintf("this loop did not run for %s (host suspended or a pass blocked); silence is measured from now",
+			now.Sub(m.lastTick).Round(time.Second)))
+	}
+	m.lastTick = now
+	return m.resumed
 }
 
 func newAgentManager(root string, log func(string)) *agentManager {
@@ -266,6 +287,7 @@ func (m *agentManager) pass() error {
 	}
 	specs := agentSpecs(state.Rooms, m.root)
 	now := clientservices.Now()
+	m.checkpoint(now)
 	if err := m.reconcile(specs, now); err != nil {
 		return err
 	}
@@ -285,11 +307,20 @@ func (m *agentManager) pass() error {
 	if m.stuckDue(now) {
 		m.scanStuck(state.Rooms, now)
 	}
+	// AGENT BEATS AGAIN RIGHT BEFORE IT JUDGES ITSELF. The beat above is written at the pass's start, and a
+	// pass that blocked (or a host that slept inside it) made agent publish `agent: silent, age 548s` about
+	// itself - a row only a running agent can send, so it was false by construction (alerts.log 2026-10-27
+	// 04:15:26Z, 04:31:04Z, 04:53:33Z). A dead agent is the cloud's dead-man to call, not this row's.
+	if err := clientservices.WriteHeartbeat(m.root, clientservices.Agent, ""); err != nil {
+		m.log(fmt.Sprintf("cannot write agent's own heartbeat: %v", err))
+	}
+	notBefore := m.checkpoint(clientservices.Now())
 	rows, err := clientservices.Verify(context.Background(), clientservices.Env{
 		Root:       m.root,
 		Rooms:      state.Rooms,
 		Supervised: m.recorded(),
 		Thresholds: m.thresholds(),
+		NotBefore:  notBefore,
 	})
 	if err != nil {
 		return err
@@ -404,6 +435,12 @@ func (m *agentManager) ensure(spec agentSpec, now time.Time) error {
 		if child.pid != live[0] {
 			child.pid, child.startedAt = live[0], now
 			child.backoff, child.nextTry = 0, time.Time{}
+			// An ADOPTED child was started once already, by an earlier agent or by `up`. Counting it as a
+			// start is what makes its first restart raise `restarts`; without it the restart after a kill
+			// published restarts 0 and the hub, which alerts on restarts going up, saw no recovery at all.
+			if child.starts == 0 {
+				child.starts = 1
+			}
 		}
 		child.prune(now)
 		m.mu.Unlock()

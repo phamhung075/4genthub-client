@@ -92,7 +92,7 @@ var overlapDepsFor = defaultOverlapDeps
 
 func defaultOverlapDeps(stateRoot string) *overlapDeps {
 	return &overlapDeps{
-		teamDir:  func(room string) (string, error) { return clientservices.TeamDir("", room) },
+		teamDir:  func(room string) (string, error) { return overlapTeamDir(stateRoot, room) },
 		seats:    clientservices.TeamSeats,
 		baseName: overlapTeamBaseBranch,
 		// The scan reads the room directory under the SAME root it was wired with, through the ONE
@@ -185,6 +185,34 @@ type overlapReport struct {
 	Skipped []string       `json:"skipped"`
 	Notes   []string       `json:"notObserved"`
 	Sent    []string       `json:"sent"`
+}
+
+// overlapTeamDir is the directory holding the room's team.json. $OPENRIG_SKILLS_ROOT/scripts/team/<room> is
+// tried first, because a room defined in that checkout keeps its definition there; a room created from its own
+// copy (`<state root>/rooms/<room>/team`, which is where `team up --team` leaves it) has no entry under that
+// checkout, and reading only the checkout made the scan log "cannot load team definition" every ten minutes
+// for such a room (aa2-rs, 2026-10-27) without ever looking at its seats. A room with neither keeps the first
+// answer, so its note still names what was tried.
+func overlapTeamDir(stateRoot, room string) (string, error) {
+	dir, err := clientservices.TeamDir("", room)
+	if err == nil && hasTeamFile(dir) {
+		return dir, nil
+	}
+	if stateRoot != "" && room != "" {
+		own := filepath.Join(stateRoot, "rooms", room, "team")
+		if hasTeamFile(own) {
+			return own, nil
+		}
+	}
+	return dir, err
+}
+
+func hasTeamFile(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, "team.json"))
+	return err == nil && !info.IsDir()
 }
 
 // overlapScanFor is the scan as a seam: agent's timer, the `overlap` verb and every case go through it.
