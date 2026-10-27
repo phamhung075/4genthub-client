@@ -63,8 +63,14 @@ type Bridge struct {
 	Links func(room string) ([]roomEdge, error)
 	// Rooms lists the hosted rooms and Queue reads one room's active human-addressed rail rows, which the
 	// notification sweep walks; they default to the runtime too.
-	Rooms     func() ([]string, error)
-	Queue     func(room string) ([]any, error)
+	Rooms func() ([]string, error)
+	Queue func(room string) ([]any, error)
+	// Hub calls the hub's room decision routes (decisions.go). Nil disables the owner-decision crossing,
+	// as a nil Notify disables notifications. Show and Close read and close one rail row; they default
+	// to the runtime.
+	Hub       Hub
+	Show      func(room, qitem string) (*clientruntime.QueueRow, error)
+	Close     func(room string, in clientruntime.QueueCloseInput) error
 	Known     map[string]string
 	PinsDir   string
 	StatePath string
@@ -76,6 +82,7 @@ type Bridge struct {
 
 	state       map[string]string
 	notified    map[string]string
+	pulled      map[string]time.Time
 	notes       map[string]string
 	stripDetail bool
 	backoff     time.Duration
@@ -92,10 +99,10 @@ func NewBridge(machineID, root string, interval time.Duration, send Sender, noti
 	}
 	return &Bridge{
 		MachineID: machineID, Root: root, Interval: interval, Send: send, Notify: notify, Runner: execRunner, Nodes: runtimeNodes, Links: runtimeLinks,
-		Rooms: runtimeRooms, Queue: runtimeHumanQueue,
+		Rooms: runtimeRooms, Queue: runtimeHumanQueue, Show: runtimeShow, Close: runtimeClose,
 		Known: known, PinsDir: pinsDir, StatePath: statePath, Note: note,
 		clock: time.Now, state: ReadSyncState(statePath), notified: ReadNotifiedState(statePath),
-		notes: map[string]string{},
+		notes: map[string]string{}, pulled: map[string]time.Time{},
 	}
 }
 
@@ -337,6 +344,7 @@ func (b *Bridge) Cycle(ctx context.Context) time.Duration {
 	// return below skips the REPORT when nothing changed, and a row addressed to the human is news on
 	// its own, so this must not sit behind that decision.
 	b.notifyHumans()
+	b.syncDecisions()
 
 	body, err := json.Marshal(payload)
 	if err != nil {
