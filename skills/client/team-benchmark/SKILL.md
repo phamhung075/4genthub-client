@@ -17,9 +17,15 @@ python3 agenthub_client/skills/client/team-benchmark/scripts/benchmark.py <ROOM>
 ```
 
 It prints one line per seat (share of calls: `chat` = queue/send, `board` = `manage_task`, `git`,
-`write` = edit/write, `test`, `read`, `shell`) and one line per repo (commits and added lines by
-kind). Each run appends one JSON line to `<state-root>/benchmarks/<ROOM>.jsonl`; the next run prints
-the previous chat and write share beside the new one.
+`write` = edit/write, `test`, `read`, `shell`) and one line per repo (non-merge commits, merges,
+heads counted, and added lines by kind) for the hub, the client and each project repo the room works
+in. A project repo is any other repo with a git worktree under `<state-root>/rooms/<ROOM>/wt/`; name
+it with `--repo PATH` (repeatable) when the room keeps none there. Every repo's log covers its main
+checkout's HEAD plus the HEAD of each room worktree, so unmerged seat branches count too.
+
+Each run appends one JSON line to `<state-root>/benchmarks/<ROOM>.jsonl`; the next run prints the
+previous chat and write share and the previous commits per repo beside the new ones. The first run
+of a room says `(no previous run in ...)`.
 
 ## Read it
 
