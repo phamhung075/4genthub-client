@@ -191,6 +191,24 @@ pub struct CloseInput {
     pub transition_note: String,
 }
 
+/// The tag of a row that waits on the room's owner.
+pub const OWNER_DECISION_TAG: &str = "owner-decision";
+
+/// An `owner-decision` row is closed by the owner's answer and by nothing else: only an actor that is the
+/// room's human (`human@<room>`, the session the owner or the dashboard answer acts as) may move it to a
+/// terminal state. Measured on aa2-rs: the lead raised two owner asks addressed to itself and closed both
+/// within minutes (qitem-20261025143610-e2ba5788125d `superseded`, qitem-20261027084120-a14eb5d43248
+/// `no-follow-on`), then decided the question at its own tier - the owner was never asked.
+fn owner_decision_close_refused(current: &Row, actor: &str) -> Option<String> {
+    if !current.tags.iter().any(|t| t == OWNER_DECISION_TAG) || actor.trim().starts_with("human@") {
+        return None;
+    }
+    Some(format!(
+        "queue row '{}' is an owner-decision row: only the owner's answer closes it (actor human@<room>), and {actor:?} is a seat. Leave it open, stop the work that depends on it, and wait; add a --note to it if the ask changed. Nothing was written.",
+        current.qitem_id
+    ))
+}
+
 /// The states an owner still owes something on.
 const ACTIVE_STATES: [&str; 3] = ["pending", "in-progress", "blocked"];
 
@@ -796,6 +814,11 @@ impl QueueStore {
             .clone()
             .or_else(|| current.closure_target.clone());
 
+        if effective_state != current.state && TERMINAL_STATES.contains(&effective_state.as_str()) {
+            if let Some(refusal) = owner_decision_close_refused(&current, &input.actor_session) {
+                return Err(refusal);
+            }
+        }
         if effective_state == "done" && effective_reason.is_none() {
             return Err(format!(
                 "state 'done' requires a closure_reason; valid reasons: {}",
@@ -951,6 +974,9 @@ impl QueueStore {
                 "queue row '{}' is already in terminal state '{}'",
                 input.qitem_id, current.state
             ));
+        }
+        if let Some(refusal) = owner_decision_close_refused(&current, &input.actor_session) {
+            return Err(refusal);
         }
         let closure_target = target.or_else(|| current.closure_target.clone());
 
@@ -2119,6 +2145,59 @@ mod tests {
                 &schema_body(),
             ))
             .expect("allowed tags");
+    }
+
+    /// An owner-decision row is closed only by the owner (`human@<room>`): a seat's close and a seat's
+    /// `--state done` are refused by name, a seat's note is still appended, and the owner's close works.
+    #[test]
+    fn only_the_owner_closes_an_owner_decision_row() {
+        let (_dir, store) = temp_store();
+        let mut input = typed(
+            None,
+            &["owner-decision"],
+            "Phase 1 exit rule",
+            &schema_body(),
+        );
+        input.destination_session = "human@demo".into();
+        let row = store.create(input).expect("an owner ask is created");
+
+        let close = |actor: &str| {
+            store.close(CloseInput {
+                qitem_id: row.qitem_id.clone(),
+                actor_session: actor.into(),
+                closure_reason: "no-follow-on".into(),
+                closure_target: None,
+                transition_note: String::new(),
+            })
+        };
+        let refused = close("agenthub--demo--lead").unwrap_err();
+        assert!(
+            refused.contains("owner-decision") && refused.contains("Nothing was written"),
+            "{refused}"
+        );
+
+        let done = store
+            .update(UpdateInput {
+                qitem_id: row.qitem_id.clone(),
+                actor_session: "agenthub--demo--lead".into(),
+                state: Some("done".into()),
+                closure_reason: Some("superseded".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(done.contains("owner-decision"), "{done}");
+
+        store
+            .update(UpdateInput {
+                qitem_id: row.qitem_id.clone(),
+                actor_session: "agenthub--demo--lead".into(),
+                transition_note: Some("narrowed the ask".into()),
+                ..Default::default()
+            })
+            .expect("a seat may still annotate the ask");
+
+        let closed = close("human@demo").expect("the owner's answer closes it");
+        assert_eq!(closed.state, "done");
     }
 
     /// The four low-value tags are RETIRED: a create naming one is refused BY NAME, and the refusal carries
