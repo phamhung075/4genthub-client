@@ -11,3 +11,4 @@ logs/
 # Rust build scratch, kept beside the crate so a seat never touches a shared cache
 .target/
 .cargo-tmp/
+__pycache__/
