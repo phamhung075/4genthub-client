@@ -38,6 +38,7 @@ import (
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientdecisions"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
@@ -65,7 +66,7 @@ const queueGroupUsage = `usage: 4genteam room queue (list [ROOM] | show [ROOM] Q
 var queueSubUsages = map[string]string{
 	"list":   "usage: 4genteam room queue list [ROOM] [--destination SESSION] [--source SESSION] [--state S[,S]] [--active-only] [--limit N] [--state-root DIR] [--socket PATH]",
 	"show":   "usage: 4genteam room queue show [ROOM] QITEM_ID [--state-root DIR] [--socket PATH]",
-	"create": "usage: 4genteam room queue create [ROOM] --to SESSION --summary TEXT<=120 [--body TEXT<=600] [--priority low|normal|high] [--reply-to QITEM_ID] [--tag T] [--state-root DIR] [--socket PATH]",
+	"create": "usage: 4genteam room queue create [ROOM] --to SESSION --summary TEXT<=120 [--body TEXT<=600] [--priority low|normal|high] [--reply-to QITEM_ID] [--tag T] [--questions-file PATH] [--state-root DIR] [--socket PATH]",
 	"update": "usage: 4genteam room queue update [ROOM] QITEM_ID [--state S] [--note TEXT] [--summary TEXT] [--closure-reason R] [--closure-target SESSION] [--blocked-on QITEM_ID] [--wake-after SECONDS] [--state-root DIR] [--socket PATH]",
 	"claim":  "usage: 4genteam room queue claim [ROOM] QITEM_ID [--state-root DIR] [--socket PATH]",
 	"close":  "usage: 4genteam room queue close [ROOM] QITEM_ID --reason R [--target SESSION] [--note TEXT] [--state-root DIR] [--socket PATH]",
@@ -537,6 +538,7 @@ func runQueueCreate(args []string, stdout, stderr io.Writer) int {
 		{Name: "priority", Value: true},
 		{Name: "reply-to", Value: true},
 		{Name: "tag", Value: true},
+		{Name: "questions-file", Value: true},
 	}, []string{"ROOM"}, stdout, stderr)
 	if !ok {
 		return code
@@ -575,13 +577,60 @@ func runQueueCreate(args []string, stdout, stderr io.Writer) int {
 		}
 		input.Tags = tags
 	}
+	questions, ok := ownerAskQuestions(run, input, stderr)
+	if !ok {
+		return clientcmd.ExitRoomRefused
+	}
 	run.printPair(stdout)
 	row, err := run.client.QueueCreate(run.room, input)
 	if err != nil {
 		return queueDaemonRefusal(stderr, "create", err)
 	}
 	printQueueWritten(stdout, *row)
+	if questions != nil {
+		record := clientdecisions.Record{QitemID: row.QitemID, Room: run.room, Questions: questions}
+		if err := clientdecisions.Write(run.stateDir, record); err != nil {
+			fmt.Fprintf(stderr, "4genteam room queue create: row %s was created, but its questions were not recorded (%v), so the dashboard's Decision Requests panel cannot offer it: add a --note to the row and tell the owner\n", row.QitemID, err)
+			return clientcmd.ExitPartialStart
+		}
+		fmt.Fprintf(stdout, "questions recorded: the bridge mirrors %s to the dashboard's Decision Requests panel and applies the owner's answer\n", row.QitemID)
+	}
 	return clientcmd.ExitOK
+}
+
+// ownerAskQuestions enforces the owner ask's one shape before anything is asked of the daemon: a row tagged
+// owner-decision is addressed to human@<room> and carries --questions-file, and --questions-file belongs to
+// such a row only. The questions are validated with the hub's own limits (clientdecisions.ParseQuestions), so an
+// ask that passes here is one the Decision Requests panel accepts. It returns nil questions for any other row.
+func ownerAskQuestions(run queueArgs, input clientruntime.QueueCreateInput, stderr io.Writer) ([]clientdecisions.Question, bool) {
+	file, hasFile := run.option("questions-file")
+	ownerAsk := queueContains(input.Tags, clientdecisions.Tag)
+	if !ownerAsk {
+		if hasFile {
+			fmt.Fprintf(stderr, "4genteam room queue create: --questions-file belongs to an owner ask (--tag %s --to %s); this row is neither. Nothing was asked of the daemon.\n", clientdecisions.Tag, clientdecisions.Human(run.room))
+			return nil, false
+		}
+		return nil, true
+	}
+	if input.DestinationSession != clientdecisions.Human(run.room) {
+		fmt.Fprintf(stderr, "4genteam room queue create: an %s row is the owner's ask and goes to %s, not %q: a seat's row never reaches the owner. Nothing was asked of the daemon.\n", clientdecisions.Tag, clientdecisions.Human(run.room), input.DestinationSession)
+		return nil, false
+	}
+	if !hasFile || strings.TrimSpace(file) == "" {
+		fmt.Fprintf(stderr, "4genteam room queue create: an %s row needs --questions-file PATH, the 1-4 questions the owner answers on the dashboard (the room-decision-request skill shows the shape). Nothing was asked of the daemon.\n", clientdecisions.Tag)
+		return nil, false
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam room queue create: --questions-file: %v. Nothing was asked of the daemon.\n", err)
+		return nil, false
+	}
+	questions, err := clientdecisions.ParseQuestions(raw)
+	if err != nil {
+		fmt.Fprintf(stderr, "4genteam room queue create: --questions-file %s: %v. Nothing was asked of the daemon.\n", file, err)
+		return nil, false
+	}
+	return questions, true
 }
 
 // runQueueUpdate appends a transition to a row, and REFUSES a call that would append nothing.
