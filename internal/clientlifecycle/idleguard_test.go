@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/phamhung075/4genthub-client/internal/clientdecisions"
 	"github.com/phamhung075/4genthub-client/internal/clientjev"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
@@ -30,7 +31,7 @@ func newGuardRoom(t *testing.T, idle map[string]bool, pick clientjev.Selection) 
 	r.guard.Active = func(string) ([]clientruntime.QueueRow, error) {
 		return []clientruntime.QueueRow{{QitemID: "q1", State: "pending", DestinationSession: "go-dev", Summary: "ship it"}}, nil
 	}
-	r.guard.Ask = func(context.Context, string, string, clientjev.Question) (clientjev.Selection, float64, error) {
+	r.guard.Ask = func(context.Context, string, string, clientdecisions.Question) (clientjev.Selection, float64, error) {
 		r.asked++
 		return pick, 0.8, nil
 	}

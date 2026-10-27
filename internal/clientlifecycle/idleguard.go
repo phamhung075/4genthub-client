@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientdecisions"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientjev"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
@@ -59,7 +60,7 @@ type IdleGuard struct {
 	Say       func(room, seat, text string, raw bool)
 	Interrupt func(room, seat string)
 	Active    func(room string) ([]clientruntime.QueueRow, error)
-	Ask       func(ctx context.Context, summary, detail string, q clientjev.Question) (clientjev.Selection, float64, error)
+	Ask       func(ctx context.Context, summary, detail string, q clientdecisions.Question) (clientjev.Selection, float64, error)
 	// Wake is the off-peak gate every automatic message to a seat passes; false holds the message back.
 	Wake func(room string) (bool, string)
 	Log  func(text string)
@@ -111,15 +112,15 @@ func NewIdleGuard(room, lead string, quiet, stall int, stateRoot string, out io.
 }
 
 // askJev is the live question: one choice, logged to the Jev decision log like a `decide` is.
-func askJev(ctx context.Context, summary, detail string, q clientjev.Question) (clientjev.Selection, float64, error) {
+func askJev(ctx context.Context, summary, detail string, q clientdecisions.Question) (clientjev.Selection, float64, error) {
 	cfg, err := clientjev.FromEnv()
 	if err != nil {
 		return clientjev.Selection{}, 0, err
 	}
-	picks, askErr := cfg.SelectChoices(ctx, summary, detail, []clientjev.Question{q})
+	picks, askErr := cfg.SelectChoices(ctx, summary, detail, []clientdecisions.Question{q})
 	pick := picks[q.ID]
 	entry := clientjev.LogEntry{Timestamp: time.Now(), Kind: "decision", Summary: summary, Detail: detail,
-		Choices: picks, Questions: []clientjev.Question{q}, Tier: "room", Category: "idle-room", Outcome: "decided"}
+		Choices: picks, Questions: []clientdecisions.Question{q}, Tier: "room", Category: "idle-room", Outcome: "decided"}
 	if askErr != nil || pick.OptionID == "" || pick.Confidence < cfg.Threshold {
 		entry.Outcome = "escalated-to-lead"
 	}
@@ -226,8 +227,8 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 	if len(rows) > 0 {
 		recommended = "continue"
 	}
-	question := clientjev.Question{ID: verdictQuestion, Question: "Every seat of the room is idle. Should the room carry on working?",
-		Options: []clientjev.Option{
+	question := clientdecisions.Question{ID: verdictQuestion, Question: "Every seat of the room is idle. Should the room carry on working?",
+		Options: []clientdecisions.Option{
 			{ID: "continue", Label: "Continue: open work remains and the lead should assign the next item", Recommended: recommended == "continue"},
 			{ID: "stop", Label: "Stop: the work is finished or waits on the owner, so start nothing new", Recommended: recommended == "stop"},
 		}}

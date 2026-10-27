@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientdecisions"
 	"github.com/phamhung075/4genthub-client/internal/clientjev"
 	"github.com/phamhung075/4genthub-client/internal/secretscan"
 )
@@ -121,7 +122,7 @@ func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 	if err != nil {
 		return usageError(stderr, err.Error())
 	}
-	questions, err := clientjev.ParseQuestions(raw)
+	questions, err := clientdecisions.ParseQuestions(raw)
 	if err != nil {
 		return usageError(stderr, err.Error())
 	}
@@ -181,7 +182,7 @@ func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 // category skips to the owner from any tier. Any question Jev did not answer, or answered below the
 // threshold, or an evaluator error, escalates the whole ask: a silently shortened decision is one
 // nobody agreed to.
-func ladder(ctx context.Context, cfg clientjev.Config, tier, category, summary, detail string, qs []clientjev.Question) (outcome, map[string]clientjev.Selection, error) {
+func ladder(ctx context.Context, cfg clientjev.Config, tier, category, summary, detail string, qs []clientdecisions.Question) (outcome, map[string]clientjev.Selection, error) {
 	next := "owner"
 	if tier == "seat" {
 		next = "lead"

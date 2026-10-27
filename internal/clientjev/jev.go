@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/phamhung075/4genthub-client/internal/clientdecisions"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 )
 
@@ -187,7 +188,7 @@ func (c Config) call(ctx context.Context, questions map[string]any, state any) (
 }
 
 // SelectChoices asks one choice question per HumanQuestion and returns the pick for each answered one.
-func (c Config) SelectChoices(ctx context.Context, summary, detail string, qs []Question) (map[string]Selection, error) {
+func (c Config) SelectChoices(ctx context.Context, summary, detail string, qs []clientdecisions.Question) (map[string]Selection, error) {
 	questions := make(map[string]any, len(qs))
 	for _, q := range qs {
 		criteria := make(map[string]string, len(q.Options))
@@ -275,11 +276,11 @@ type LogEntry struct {
 	Detail              string               `json:"detail,omitempty"`
 	Choices             map[string]Selection `json:"choices,omitempty"`
 	// Questions keeps the options each pick was made from, so a logged decision can be audited later.
-	Questions []Question `json:"questions,omitempty"`
-	Tier      string     `json:"tier,omitempty"`
-	Category  string     `json:"category,omitempty"`
-	Outcome   string     `json:"outcome"`
-	Error     string     `json:"error,omitempty"`
+	Questions []clientdecisions.Question `json:"questions,omitempty"`
+	Tier      string                     `json:"tier,omitempty"`
+	Category  string                     `json:"category,omitempty"`
+	Outcome   string                     `json:"outcome"`
+	Error     string                     `json:"error,omitempty"`
 }
 
 // Log appends the entry as one JSON line, so the log is a benchmark of what Jev decided and how.

@@ -1,4 +1,4 @@
-package clientjev
+package clientdecisions
 
 import (
 	"encoding/json"
