@@ -35,8 +35,8 @@ sync respawn. With it ON (the default) those verbs refuse at peak, naming when o
 the env file.
 `
 
-// Commands is what the dispatcher registers from this package: one top-level verb.
-func Commands() []clientcmd.Command { return []clientcmd.Command{offpeakCommand{}} }
+// Commands is what the dispatcher registers from this package: offpeak, and clock, which reads the same schedule.
+func Commands() []clientcmd.Command { return []clientcmd.Command{offpeakCommand{}, clockCommand{}} }
 
 type offpeakCommand struct{}
 

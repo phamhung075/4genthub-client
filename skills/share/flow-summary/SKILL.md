@@ -40,6 +40,14 @@ rebuilt in 6,600+ commands and the rail in 5,316 - each a turn spent on a fact t
   it. A number a row or a Progress line states is cited, never measured again - and measuring it again is
   what bash-first turns cost: $8.40 over 8,193 turns on 2026-10-18, 24% of the room's spend.
 
+## Time comes from the clock
+
+Read the time with `4genteam clock` (owner's zone, UTC, the machine clock checked against internet time,
+and the DeepSeek price window with its next change), and stamp what you write - rows, notes, reports,
+handovers - with `4genteam clock --short` (e.g. `2026-10-28 06:25 CET`). Never guess or carry over a time:
+WSL clocks drift after the host sleeps, and `clock` says so (`WARNING ... off by Ns`, exit 1) or says
+`unverified` when internet time is unreachable.
+
 ## The other three lines
 
 - `rule`: name the rule, do not paraphrase it away - an owner order, a gate's checks, or a repo rule, so the
