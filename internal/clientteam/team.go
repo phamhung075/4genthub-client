@@ -137,6 +137,8 @@ func runApply(args []string, stdout, stderr io.Writer) error {
 	const usage = `usage: 4genteam team apply --team DIR [--dry-run]
 
 Create the modules, room, seats, links and overlays a team.json defines.
+A seat that already exists is NOT changed: its line reads "exists - NOT updated" and names the
+verb that changes a seat's model or runtime, 4genteam sync switch ROOM SEAT --model M --apply set-model.
 
 options:
   --team DIR   team definition directory (holds team.json); required

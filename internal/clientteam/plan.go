@@ -205,6 +205,9 @@ type step struct {
 	path           string
 	body           any
 	tolerateExists bool
+	// existsNote is printed after "exists" when the cloud already holds the thing: it says what apply did NOT
+	// change and which verb does. Without it "seat lead: exists" read as applied while the seat kept its old model.
+	existsNote string
 }
 
 // buildPlan returns the ordered steps apply sends. storedSeatTypes is nil when the plan is built
@@ -235,7 +238,7 @@ func buildPlan(loaded *team, storedSeatTypes map[string]bool) ([]step, error) {
 		key, _ := seat["seat_key"].(string)
 		plan = append(plan, step{
 			label: fmt.Sprintf("seat %s", key), method: "POST", path: seatsPath,
-			body: seat, tolerateExists: true,
+			body: seat, tolerateExists: true, existsNote: seatExistsNote(room, key, seat),
 		})
 	}
 	for _, link := range loaded.links {
@@ -372,9 +375,30 @@ func runSteps(cloud *cloudClient, steps []step, dryRun, collectFailures bool, st
 			fmt.Fprintf(stdout, "%s: FAILED %v\n", single.label, err)
 			continue
 		}
+		if result == "exists" && single.existsNote != "" {
+			result += " - " + single.existsNote
+		}
 		fmt.Fprintf(stdout, "%s: %s\n", single.label, result)
 	}
 	return failures, nil
+}
+
+// seatExistsNote is what a seat that already exists did NOT get: apply creates seats and never changes one, so a
+// changed model or runtime in team.json stays unapplied (aa2-rs, 2026-10-28: "seat lead: exists" and the lead kept
+// its model until the owner edited spec.json and ran sync switch). The line names the verb that does change it.
+func seatExistsNote(room, key string, seat map[string]any) string {
+	model, _ := seat["model"].(string)
+	runtime, _ := seat["runtime"].(string)
+	target := "--model <model>"
+	if model != "" {
+		target = "--model " + model
+	}
+	if runtime != "" {
+		target = "--runtime " + runtime + " " + target
+	}
+	return fmt.Sprintf("NOT updated (apply creates seats and never changes an existing one; its runtime and model "+
+		"stay as stored). To apply team.json's: 4genteam sync switch %s %s %s --apply set-model "+
+		"(next start; --apply restart restarts it now; a runtime change prints manual steps)", room, key, target)
 }
 
 type failedStep struct {
