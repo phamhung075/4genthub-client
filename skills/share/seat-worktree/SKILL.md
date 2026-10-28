@@ -38,6 +38,7 @@ Every seat builds and tests where it edits, **the lead included**: in a worktree
 - The lead still owns the seats' branches and `<room>/integration`: it creates branches and worktrees, merges ready tips into integration, and runs the reviewer gate.
 - The lead does NOT update `main`: no merge, pull, cherry-pick, rebase, commit or reset on `main`, and no `update-ref`, `branch -f` or fetch refspec that moves it.
 - The lead lists each gated branch in `<roomDir>/director/ready.md` as `<branch>=<sha>` with the gate's verdict (main tip, commands, results). The director merges from that list.
+- `ready.md` is the one file in `<roomDir>/director/` a seat may write, and only the lead, only by adding to it: append with `>>` or `tee -a`, or use your edit tool. The seat guard (`worktree-scope`) refuses a `>` or a whole-file write over it, every other office file (`plan.md`, `loop.md`, `status.md`, `crons.md`), and the list for every other seat. A `cd` earlier in the same shell call does not move a path out of the guard's view.
 - No seat pushes, the lead included. The founder or the director pushes.
 
 **Lead rule (room without a director):**

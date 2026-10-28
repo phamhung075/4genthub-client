@@ -20,7 +20,7 @@
 // "blocked"; a blocked call carries the `rule` that refused it. An MCP call is the tool mcp__<server>_<tool>
 // (a seat reaches it by writing to xd://mcp__...), and its `target` is mcp:<tool>.<action>, the form to grep for.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -71,13 +71,41 @@ const DIRECTOR_REFUSAL = (what: string): string =>
 // The branches a director room keeps for its director.
 const DIRECTOR_BRANCHES = new Set(["main", "master"]);
 
-function pushAuthority(): boolean {
-  if (hasDirector) return false;
+/// Whether this seat is the room's lead: its key, or the seat either session spelling names.
+function isLead(): boolean {
   if (seat === PUSH_AUTHORITY_SEAT) return true;
   return [process.env.AGENTHUB_SESSION_NAME ?? "", process.env.OPENRIG_SESSION_NAME ?? ""].some(
     (name) => sessionSeat(name) === PUSH_AUTHORITY_SEAT,
   );
 }
+
+function pushAuthority(): boolean {
+  if (hasDirector) return false;
+  return isLead();
+}
+
+// THE LEAD'S ONE FILE IN THE DIRECTOR'S OFFICE (aa2-rs, 2026-10-28). The director merges from
+// `<roomDir>/director/ready.md`, and the lead's job is to append its gated branches and questions there - but the
+// office is outside every seat's worktrees, so worktree-scope refused the lead's edit tool while `cd director && cat
+// >> ready.md` slipped past. In a director room the lead may add to that one file and nothing else in the office:
+// plan.md, loop.md, status.md and crons.md stay the director's. A path is compared by its real directory (a room
+// that links its director/ to another room's lands on the same file) and a ready.md that is itself a link is not
+// the list. "Add to" is what the guard can tell: an append (`>>`, `tee -a`), an in-place edit tool, or a write
+// tool that creates the file; a `>` or a write tool over the existing list would replace the director's record.
+const realFile = (abs: string): string => {
+  try {
+    if (lstatSync(abs).isSymbolicLink()) return "";
+  } catch {
+    // A file not there yet is judged by its directory.
+  }
+  try {
+    return join(realpathSync(dirname(abs)), basename(abs));
+  } catch {
+    return "";
+  }
+};
+const readyList = hasDirector ? realFile(join(directorDir, "ready.md")) : "";
+const isReadyList = (abs: string): boolean => readyList !== "" && realFile(abs) === readyList;
 const logPath = join(process.env.PI_CODING_AGENT_DIR ?? ".", "tool-calls.jsonl");
 const MAX_TARGET = 240;
 // A refused command is kept whole: the rule that blocked it is judged by reading what it blocked.
@@ -503,6 +531,62 @@ function statementTargets(part: string): string[] {
   const dd = part.match(DD_CALL);
   if (dd) for (const m of dd[1].matchAll(DD_OF)) raw.push(m[1]);
   return raw.filter((p) => p && !NOT_A_TARGET.test(p));
+}
+
+// A write as worktree-scope judges it: the path, and whether it only adds to what the file holds.
+type ScopedWrite = { raw: string; abs: string; adds: boolean };
+const APPEND_REDIRECT = /(?<![-=>])>>\s*([^\s|;&<>()]+)/g;
+const EDIT_TOOLS = new Set(["edit", "ast_edit", "replace_file_content", "multi_replace_file_content"]);
+const exists = (abs: string): boolean => {
+  try {
+    lstatSync(abs);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// One bash statement's targets that only append: a `>>` redirect and the operands of `tee -a`.
+function appendTargets(part: string): string[] {
+  const raw = [...part.matchAll(APPEND_REDIRECT)].map((m) => m[1]);
+  const tee = part.match(TEE_CALL);
+  if (tee) {
+    const args = tee[1].trim().split(/\s+/).filter(Boolean);
+    if (args.some((a) => a === "--append" || /^-[A-Za-z]*a/.test(a))) raw.push(...args.filter((a) => !a.startsWith("-")));
+  }
+  return raw.filter((p) => p && !NOT_A_TARGET.test(p));
+}
+
+// The targets worktree-scope judges. An edit tool's path resolves against the seat's start directory; a bash
+// statement's targets resolve against the directory the call's earlier `cd` moved to, quotes off - the same reading
+// protected-paths makes, so `cd <dir> && cat >> f` and `>> "<dir>/f"` are the paths they write, not names inside
+// the worktree.
+function scopedWrites(tool: string, input: Record<string, unknown>): ScopedWrite[] {
+  if (WRITE_TOOLS.has(tool)) {
+    const raw = String(input.path ?? "");
+    if (!raw || NOT_A_TARGET.test(raw)) return [];
+    const abs = absolute(raw);
+    return [{ raw, abs, adds: EDIT_TOOLS.has(tool) || !exists(abs) }];
+  }
+  if (tool !== "bash") return [];
+  const out: ScopedWrite[] = [];
+  let dir = worktrees[0] ?? resolve(process.env.PI_CODING_AGENT_DIR ?? ".");
+  const home = (p: string): string => p.replace(/^~(?=\/|$)/, homedir());
+  for (const part of statements(input)) {
+    const cd = part.trim().match(/^cd\s+(\S+)/);
+    if (cd) {
+      dir = resolve(dir, home(unquote(cd[1])));
+      continue;
+    }
+    const appends = appendTargets(part);
+    const all = statementTargets(part);
+    for (const raw of new Set(all)) {
+      const abs = resolve(dir, home(unquote(raw)));
+      const count = (list: string[]) => list.filter((p) => p === raw).length;
+      out.push({ raw, abs, adds: count(appends) === count(all) });
+    }
+  }
+  return out;
 }
 
 function writeTargets(tool: string, input: Record<string, unknown>): string[] {
@@ -1051,14 +1135,17 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     rule: "worktree-scope",
     check: (tool, input) => {
       const roots = [...worktrees, process.env.PI_CODING_AGENT_DIR ?? "", tmpdir()].filter(Boolean).map((r) => resolve(r));
-      const outside = writeTargets(tool, input).find((p) => {
-        const abs = absolute(p);
-        return !roots.some((r) => within(abs, r)) && !lane(abs);
+      const lead = isLead();
+      const outside = scopedWrites(tool, input).find(({ abs, adds }) => {
+        if (roots.some((r) => within(abs, r)) || lane(abs)) return false;
+        return !(lead && adds && isReadyList(abs));
       });
+      if (!outside) return "";
+      if (lead && isReadyList(outside.abs))
+        return `${outside.abs} is the director's ready list: add to it (\`>>\`, \`tee -a\`, an edit), do not replace it`;
       const lanes = lanesRoot ? ` (a lane of yours is ${lanesRoot}/${seat}-<name>)` : "";
-      return outside
-        ? `${outside} is outside your worktrees ${worktrees.join(", ") || "(none named for this seat)"}; edit inside them and report the commit to the lead${lanes}`
-        : "";
+      const office = readyList && within(outside.abs, directorDir) ? `; in ${directorDir} only the lead adds to ready.md` : "";
+      return `${outside.abs} is outside your worktrees ${worktrees.join(", ") || "(none named for this seat)"}; edit inside them and report the commit to the lead${lanes}${office}`;
     },
   },
   {

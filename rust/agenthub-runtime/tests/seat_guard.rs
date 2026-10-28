@@ -370,6 +370,96 @@ fn a_room_with_a_director_keeps_main_and_the_push_for_it() {
     }
 }
 
+/// THE LEAD ADDS TO THE DIRECTOR'S READY LIST, AND TO NOTHING ELSE IN THE OFFICE. aa2-rs, 2026-10-28: the lead's
+/// job is to append gated branches to `<roomDir>/director/ready.md`, but worktree-scope refused its edit tool while
+/// `cd director && cat >> ready.md` passed, because a bash target was resolved against the worktree and not against
+/// the `cd`. Now the lead may append to (or edit, or create) ready.md - also through another room's director/ that
+/// links to the same office - and every other office file, another room's list, and every other seat stay refused.
+/// The room lives under the cargo target dir, not the temp dir, because worktree-scope allows the temp dir.
+#[test]
+fn the_lead_adds_to_the_directors_ready_list_and_nothing_else() {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "seat-guard-ready-{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let room = root.join("rooms/demo");
+    let office = room.join("director");
+    std::fs::create_dir_all(room.join("wt/lead")).unwrap();
+    std::fs::create_dir_all(room.join("wt/dev")).unwrap();
+    std::fs::create_dir_all(&office).unwrap();
+    std::fs::write(office.join("ready.md"), "- a=1\n").unwrap();
+    std::fs::write(office.join("plan.md"), "plan\n").unwrap();
+    // Another director room, and a peak room whose director/ is a link to demo's office.
+    let other = root.join("rooms/other/director");
+    std::fs::create_dir_all(root.join("rooms/other/wt")).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("ready.md"), "").unwrap();
+    std::fs::create_dir_all(root.join("rooms/demo-peak")).unwrap();
+    std::os::unix::fs::symlink("../demo/director", root.join("rooms/demo-peak/director")).unwrap();
+
+    let lanes = room.join("wt");
+    let as_seat = |seat: &str, name: &str, args: serde_json::Value| {
+        let wt = lanes.join(seat);
+        refusal_full(
+            &fresh_dir("ready"),
+            wt.to_str().unwrap(),
+            &format!("agenthub--demo--{seat}"),
+            seat,
+            lanes.to_str().unwrap(),
+            name,
+            args,
+        )
+    };
+    let sh = |seat: &str, cmd: String| as_seat(seat, "run_command", serde_json::json!({ "CommandLine": cmd }));
+    let tool = |seat: &str, name: &str, path: &Path| {
+        as_seat(seat, name, serde_json::json!({ "TargetFile": path.to_str().unwrap() })).map(|r| rule_of(&r))
+    };
+    let ready = office.join("ready.md");
+    let o = office.display();
+
+    // Allowed: the lead adds to the list, by edit tool, by `>>`, by `tee -a`, through the linked office.
+    assert_eq!(tool("lead", "replace_file_content", &ready), None);
+    assert_eq!(sh("lead", format!("echo '- b=2' >> {}", ready.display())), None);
+    assert_eq!(sh("lead", format!("cd {o} && cat >> ready.md <<'EOF'\n- c=3\nEOF")), None);
+    assert_eq!(sh("lead", format!("echo x | tee -a {}", ready.display())), None);
+    let linked = root.join("rooms/demo-peak/director/ready.md");
+    assert_eq!(tool("lead", "replace_file_content", &linked), None, "the linked office is the same list");
+
+    // Refused: replacing the list, the rest of the office, another room's list, a link posing as the list.
+    assert_eq!(tool("lead", "write_to_file", &ready).as_deref(), Some("worktree-scope"), "a write replaces it");
+    let reason = sh("lead", format!("echo x > {}", ready.display())).expect("`>` replaces the list");
+    assert!(reason.contains("do not replace it"), "{reason}");
+    for file in ["plan.md", "loop.md", "status.md", "crons.md"] {
+        assert_eq!(tool("lead", "replace_file_content", &office.join(file)).as_deref(), Some("worktree-scope"), "{file}");
+        assert_eq!(
+            sh("lead", format!("cd {o} && echo x >> {file}")).map(|r| rule_of(&r)).as_deref(),
+            Some("worktree-scope"),
+            "the cd is followed for {file}"
+        );
+    }
+    assert_eq!(
+        tool("lead", "replace_file_content", &other.join("ready.md")).as_deref(),
+        Some("worktree-scope"),
+        "another room's list is not this lead's"
+    );
+    std::os::unix::fs::symlink("plan.md", office.join("ready-link.md")).unwrap();
+    std::fs::rename(office.join("ready.md"), office.join("ready.real")).unwrap();
+    std::fs::rename(office.join("ready-link.md"), office.join("ready.md")).unwrap();
+    assert_eq!(
+        tool("lead", "replace_file_content", &ready).as_deref(),
+        Some("worktree-scope"),
+        "a ready.md that links elsewhere is not the list"
+    );
+
+    // Every other seat: refused for the list too.
+    assert_eq!(tool("dev", "replace_file_content", &linked).as_deref(), Some("worktree-scope"));
+    assert_eq!(
+        sh("dev", format!("cd {o} && cat >> ready.md <<'EOF'\nx\nEOF")).map(|r| rule_of(&r)).as_deref(),
+        Some("worktree-scope")
+    );
+}
+
 /// The owner's 2026-10-18 ruling: the lead pushes after the reviewer gate and a green test run, and every
 /// other seat is still blocked. The exception is the seat KEY, read from either session spelling or from
 /// the key the launcher exported; a name that merely starts with it is another seat.
