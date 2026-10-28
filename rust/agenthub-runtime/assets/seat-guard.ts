@@ -139,7 +139,6 @@ const callOf = (name: string): RegExp =>
   );
 const TMUX_CALL = callOf("tmux");
 const DOCKER_CALL = callOf("docker(?:-compose)?");
-const GIT_PUSH_CALL = callOf("git\\s+(?:-C\\s+\\S+\\s+)?push");
 const GIT_CALL = callOf("git");
 const PKILL_CALL = callOf("(?:pkill|killall)");
 const PGREP_CALL = callOf("pgrep");
@@ -201,6 +200,65 @@ function gitOf(part: string): { verb: string; args: string[] } | null {
   }
   const [verb = "", ...args] = rest.trim().split(/\s+/);
   return { verb, args };
+}
+
+// THE PUSH IS JUDGED BY WHAT RUNS, NOT BY THE STATEMENT'S FIRST WORD. callOf eats env/sudo/command/exec/nohup and
+// assignments, and nothing else, so a wrapper it does not know hid the push: bevy-dev's
+// `GIT_TERMINAL_PROMPT=0 timeout 60 git push -u origin HEAD:refs/heads/ac2-circumferential-bend` was allowed on
+// 2026-10-27T23:59:42Z and the branch reached origin. pushesIn reads every command a line runs: the statements of
+// `statements`, split again at subshells and command substitutions, each one unwrapped of any launcher
+// (timeout, nice, xargs, ... with their options and operands) and of git's global options (`-C`, `-c`, `--git-dir`,
+// a path to the binary), and the body of `sh -c '...'`, `bash -c "..."` and `eval '...'`, read the same way.
+const WRAPPERS = new Set([
+  "env", "sudo", "command", "exec", "nohup", "time", "timeout", "nice", "ionice", "stdbuf", "setsid", "chronic",
+  "xargs", "unbuffer", "flock", "builtin", "doas", "caffeinate", "systemd-run", "watch", "retry", "parallel", "!",
+]);
+// Options of those launchers that may take the NEXT word as their value: `nice -n 10`, `timeout -k 5 -s KILL 60`,
+// `sudo -u x`, `env -u NAME`, `xargs -I {} -n 1`, `ionice -c 3`, `flock -w 5 FILE` (the lock file is read below).
+const VALUE_OPTIONS = new Set(["-n", "-k", "-s", "-u", "-g", "-C", "-c", "-p", "-t", "-I", "-L", "-P", "-d", "-a", "-w", "-E", "-i", "-o", "-e", "-S"]);
+const GIT_GLOBAL_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
+const SHELL_BODY = /(?:^|[\s;&|(`])(?:\S*\/)?(?:ba|z|da|k|mk)?sh\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*c[A-Za-z]*\s+(["'])((?:\\.|(?!\1)[\s\S])*)\1/g;
+const EVAL_BODY = /(?:^|[\s;&|(`])eval\s+(["'])((?:\\.|(?!\1)[\s\S])*)\1/g;
+const base = (word: string): string => word.slice(word.lastIndexOf("/") + 1);
+
+function gitVerb(words: string[]): string {
+  let i = 0;
+  // Launchers and assignments in front of the command, each with its own options and operands.
+  for (;;) {
+    const head = words[i] ?? "";
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(head)) { i++; continue; }
+    const name = base(head);
+    if (!WRAPPERS.has(name)) break;
+    i++;
+    while ((words[i] ?? "").startsWith("-")) {
+      const opt = words[i++];
+      const takesValue = VALUE_OPTIONS.has(opt) || /^--(?:signal|kill-after|user|group|unset|chdir|adjustment|class|classdata|replace|max-args|max-procs|delimiter|arg-file|timeout|wait)$/.test(opt);
+      // The same letter is a flag in one launcher and takes a value in another (`sudo -n` vs `nice -n 10`), so a
+      // value is skipped only when the next word is not git itself: a miss here is a push let through.
+      if (takesValue && words[i] !== undefined && base(words[i]) !== "git") i++;
+    }
+    // timeout's duration, nice's legacy number, flock's lock file, watch's interval: one operand before the command.
+    if (name === "timeout" && /^\d+(?:\.\d+)?[smhd]?$/.test(words[i] ?? "")) i++;
+    if (name === "flock" && words[i] !== undefined && base(words[i]) !== "git") i++;
+  }
+  if (base(words[i] ?? "") !== "git") return "";
+  i++;
+  while ((words[i] ?? "").startsWith("-")) {
+    const opt = words[i++];
+    if (GIT_GLOBAL_VALUE.has(opt)) i++;
+  }
+  return words[i] ?? "";
+}
+
+function pushesIn(command: string, depth = 0): boolean {
+  if (depth > 4) return false;
+  for (const re of [SHELL_BODY, EVAL_BODY]) {
+    for (const m of command.matchAll(re)) if (pushesIn(m[2].replace(/\\(.)/g, "$1"), depth + 1)) return true;
+  }
+  return command
+    .replace(/"(?:\\.|[^"\\])*"|'[^']*'/g, (q) => q[0] + q[0])
+    .split(/&&|\|\||;|\n|\||\$\(|`|\(|\)|\{|\}|&/)
+    .some((part) => gitVerb(part.trim().split(/\s+/).filter(Boolean)) === "push");
 }
 
 const hasShort = (args: string[], letter: string): boolean => args.some((a) => new RegExp(`^-[A-Za-z]*${letter}[A-Za-z]*$`).test(a));
@@ -986,7 +1044,7 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     // test run. Every other seat keeps the refusal below.
     rule: "push",
     check: (tool, input) =>
-      pushAuthority() || tool !== "bash" || !statements(input).some((part) => GIT_PUSH_CALL.test(part))
+      pushAuthority() || tool !== "bash" || !pushesIn(commandOf(input))
         ? ""
         : "a seat does not push: only the lead pushes, after the reviewer gate and a green test run. Report the commit to the lead",
   },

@@ -233,6 +233,58 @@ fn the_existing_rules_still_judge_commands_not_quoted_words() {
     ]);
 }
 
+/// A PUSH BEHIND A LAUNCHER IS STILL A PUSH. callOf ate only env/sudo/command/exec/nohup and assignments, so a
+/// wrapper it did not know hid the push from the rule: on 2026-10-27T23:59:42Z bevy-dev (room aa2-rs) ran
+/// `GIT_TERMINAL_PROMPT=0 timeout 60 git push -u origin HEAD:refs/heads/ac2-circumferential-bend`, the guard
+/// logged it `ok`, and the branch reached origin. Every bypass form is pinned, and the controls beside them keep
+/// the rule from refusing what only mentions a push.
+#[test]
+fn a_push_behind_a_launcher_or_a_subshell_is_still_a_push() {
+    refused(
+        "push",
+        &[
+            "cd /w/aa2-rs && GIT_TERMINAL_PROMPT=0 timeout 60 git push -u origin HEAD:refs/heads/ac2-circumferential-bend 2>&1 | tail -5; echo \"push rc=$?\"",
+            "timeout 60 git push origin main",
+            "timeout -k 5 -s KILL 60s git push origin main",
+            "nice -n 10 git push origin main",
+            "nice git push origin main",
+            "ionice -c 3 git push",
+            "stdbuf -oL git push",
+            "setsid git push",
+            "time git push",
+            "sudo -n git push",
+            "env -i git push",
+            "echo origin | xargs git push",
+            "xargs -n 1 git push < remotes",
+            "/usr/bin/git push origin main",
+            "timeout 60 /usr/bin/git push",
+            "git -c core.sshCommand=ssh push origin main",
+            "git --git-dir /w/.git push origin main",
+            "git -C /w --no-pager push",
+            "(git push origin main)",
+            "( cd /w && git push )",
+            "{ git push; }",
+            "out=$(git push origin main 2>&1)",
+            "echo `git push`",
+            "git push origin main &",
+            "! git push",
+            "sh -c 'git push origin main'",
+            "bash -lc \"cd /w && timeout 60 git push\"",
+            "eval 'git push origin main'",
+        ],
+    );
+    allowed(&[
+        "git stash push -m x -- a.txt",
+        "git -c push.default=current status",
+        "git log --oneline origin/main..HEAD",
+        "echo \"git push origin main\"",
+        "timeout 60 git fetch origin",
+        "git rev-parse --abbrev-ref --symbolic-full-name @{u}",
+        "4genteam room queue create --body \"this seat cannot push; timeout 60 git push was refused\"",
+        "grep -n 'git push' AGENTS.md",
+    ]);
+}
+
 /// The owner's 2026-10-18 ruling: the lead pushes after the reviewer gate and a green test run, and every
 /// other seat is still blocked. The exception is the seat KEY, read from either session spelling or from
 /// the key the launcher exported; a name that merely starts with it is another seat.
