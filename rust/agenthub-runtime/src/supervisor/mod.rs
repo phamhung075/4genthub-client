@@ -427,11 +427,24 @@ const SEAT_TOOL_HOOK: &str = include_str!("../../assets/seat-guard.ts");
 /// The command an agy seat runs. agy takes its model from `--model` and otherwise from the owner's default, which
 /// can be out of quota: an agy seat started as bare `agy` took each message and never answered (the reviewer,
 /// 2026-10-15). The model is single-quoted because the command is a shell line.
-fn agy_command(model: Option<&str>) -> String {
-    match model.map(str::trim).filter(|m| !m.is_empty()) {
-        Some(model) => format!("agy --model '{}'", model.replace('\'', r"'\''")),
-        None => "agy".to_string(),
+///
+/// THE LAUNCH POSTURE follows the seat's permission policy through the same `approval_mode` the omp and claude
+/// seats use, so one policy word means one posture on every runtime. `yolo`, `builtin:yolo` and an OMITTED policy
+/// launch with `--dangerously-skip-permissions`: without it agy stops at its own "Run this command?" dialog on the
+/// first tool call, and an agy seat has no runner to answer it (room aa2-rs-peak, 2026-10-28: `4genteam whoami
+/// --json` sat on the dialog). The seat guard still decides under that flag - agy runs the global `hooks.json`
+/// PreToolUse entry before the skip, measured 2026-10-28: `git push origin main` was refused "tool call denied by
+/// pre-tool hook: blocked by seat guard (push)" while `echo` ran. The restrictive words keep agy's dialogs, and a
+/// blank or unknown policy is refused by name, as it is for the other runtimes.
+fn agy_command(model: Option<&str>, policy: Option<&str>) -> Result<String, String> {
+    let mut cmd = "agy".to_string();
+    if crate::runner::approval_mode(policy)? == "yolo" {
+        cmd.push_str(" --dangerously-skip-permissions");
     }
+    if let Some(model) = model.map(str::trim).filter(|m| !m.is_empty()) {
+        cmd.push_str(&format!(" --model '{}'", model.replace('\'', r"'\''")));
+    }
+    Ok(cmd)
 }
 
 /// The name of the entry the runtime owns in agy's global `hooks.json`.
@@ -1200,7 +1213,9 @@ impl RoomSupervisor {
                     seat.seat_key
                 )
             }
-            AgentRuntime::Agy => agy_command(seat.model.as_deref()),
+            AgentRuntime::Agy => {
+                agy_command(seat.model.as_deref(), seat.permission_policy.as_deref())?
+            }
             AgentRuntime::Codex => "codex".to_string(),
             AgentRuntime::Custom(c) => c.clone(),
         };
@@ -5140,13 +5155,46 @@ mod tests {
     /// JSON object is refused rather than overwritten.
     #[test]
     fn an_agy_seat_is_launched_with_its_model() {
+        let locked = Some("locked");
         assert_eq!(
-            agy_command(Some("gemini-3.8-flash-low")),
+            agy_command(Some("gemini-3.8-flash-low"), locked).unwrap(),
             "agy --model 'gemini-3.8-flash-low'"
         );
-        assert_eq!(agy_command(Some("a'b")), r"agy --model 'a'\''b'");
-        assert_eq!(agy_command(Some(" ")), "agy");
-        assert_eq!(agy_command(None), "agy");
+        assert_eq!(
+            agy_command(Some("a'b"), locked).unwrap(),
+            r"agy --model 'a'\''b'"
+        );
+        assert_eq!(agy_command(Some(" "), locked).unwrap(), "agy");
+        assert_eq!(agy_command(None, locked).unwrap(), "agy");
+    }
+
+    /// Room aa2-rs-peak, 2026-10-28: an agy seat with no permission_policy (the documented unattended default)
+    /// was launched as `agy --model ...` and its first tool call parked on agy's "Run this command?" dialog. The
+    /// unattended words launch with agy's skip flag; the restrictive ones keep the dialog; a blank or unknown word
+    /// is refused rather than guessed, exactly as for omp and claude.
+    #[test]
+    fn an_agy_seat_runs_unattended_only_under_a_yolo_policy() {
+        let model = Some("gemini-3.8-flash-low");
+        for policy in [None, Some("yolo"), Some("builtin:yolo")] {
+            assert_eq!(
+                agy_command(model, policy).unwrap(),
+                "agy --dangerously-skip-permissions --model 'gemini-3.8-flash-low'",
+                "policy {policy:?}"
+            );
+        }
+        assert_eq!(
+            agy_command(None, None).unwrap(),
+            "agy --dangerously-skip-permissions"
+        );
+        for policy in ["locked", "standard", "open", "none"] {
+            let cmd = agy_command(model, Some(policy)).unwrap();
+            assert!(
+                !cmd.contains("--dangerously-skip-permissions"),
+                "policy {policy} must keep agy's dialogs: {cmd}"
+            );
+        }
+        assert!(agy_command(model, Some("")).is_err());
+        assert!(agy_command(model, Some("sometimes")).is_err());
     }
 
     #[test]
