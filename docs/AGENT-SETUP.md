@@ -173,6 +173,16 @@ this machine overrides it at launch and starts **every** seat as `builtin:yolo`.
 put on `standard` does not get approval prompts either; only the record keeps the choice. Do not
 present the per-seat answer as the posture the seat will run under until that override is fixed.
 
+**How each runtime starts under the posture.** `yolo`, `builtin:yolo` and an omitted policy start the
+seat unattended: omp with `--approval-mode yolo`, claude with `--permission-mode bypassPermissions`,
+agy with `--dangerously-skip-permissions`. `locked`, `standard`, `open` and `none` keep the runtime's
+own approval prompts. An empty string or another word is refused at launch. The seat guard still
+decides on every runtime under the unattended flag: agy runs the guard's `PreToolUse` entry in
+`~/.gemini/config/hooks.json` before it skips its own prompt, so `git push` and the other denied
+commands are still refused ("tool call denied by pre-tool hook: blocked by seat guard (push)").
+An agy seat started by a client older than this change runs without the flag and stops at agy's
+"Run this command?" prompt on its first tool call. Reseat it to pick up the flag.
+
 **(c) The links.** A link is one direction and one kind. **A seat with no link in a direction
 cannot send in that direction** — the default is deny, and nothing routes a message without an
 explicit link. Ask which seat may send to which, and with what kind:

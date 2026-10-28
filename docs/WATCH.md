@@ -150,6 +150,23 @@ If nothing appears, check those two first: a stopped seat has no pane, and a mis
   session log: a runner older than `e86fa45f` loses any prompt sent to a busy seat, whatever route it
   takes. Use `4genteam inputs`, the lead window's input pane, or `printf 'message\n' | 4genteam input
   --room <ROOM> --seat <SEAT>` instead.
+- **A key, never a message, when a seat's own dialog holds it.** An agy seat has no runner, so a
+  prompt agy draws itself (a "Run this command?" menu, a "... esc to dismiss" notice after launch)
+  waits for a key. The first `4genteam input` sent while such a notice is up can be swallowed
+  by it. Check with `4genteam capture <SESSION> --lines 25`, then send the one key to the room's own
+  tmux server. Seats do not run on the default socket, so a plain `tmux send-keys` reports
+  `error connecting to /tmp/tmux-1000/default`. The runtime's server lives under
+  `<state dir>/tmux` (`~/.config/4genthub/tmux` by default):
+
+  ```bash
+  TMUX_TMPDIR=~/.config/4genthub/tmux tmux send-keys -t agenthub--<ROOM>--<SEAT> Escape
+  TMUX_TMPDIR=~/.config/4genthub/tmux tmux send-keys -t agenthub--<ROOM>--<SEAT> 1   # a menu digit
+  ```
+
+  Send a single named key (`Escape`, `Enter`, a digit) and nothing else. Escape also cancels a
+  running turn, so capture the pane first. Text still goes through `4genteam input`. A seat whose
+  policy is `yolo` or omitted is started with `--dangerously-skip-permissions` and does not show
+  the "Run this command?" menu (see AGENT-SETUP.md, the permission policy).
 - A seat's own screen is the **secondary** view: read it to see what that seat is doing,
   never as the default way to watch a room.
 - Every pane runs the client with `exec`, so when that client exits, the pane closes. That is why
