@@ -285,6 +285,91 @@ fn a_push_behind_a_launcher_or_a_subshell_is_still_a_push() {
     ]);
 }
 
+/// A ROOM WITH A DIRECTOR KEEPS MAIN FOR IT. aa2-rs put a director above its lead and the lead, following the
+/// shared skill, merged four branches into main on 2026-10-28 06:16. A room that holds `<roomDir>/director/` refuses
+/// every seat - the lead included - a push and any statement that moves main; the same lead in a room without the
+/// directory keeps its push, and work on its own branch stays allowed in both.
+#[test]
+fn a_room_with_a_director_keeps_main_and_the_push_for_it() {
+    let root = fresh_dir("director-room");
+    let room = root.join("rooms/demo");
+    let repo = root.join("repo");
+    std::fs::create_dir_all(room.join("wt")).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"]);
+    let lanes = room.join("wt");
+    let lead = |cmd: &str| {
+        refusal_full(
+            &fresh_dir("director-lead"),
+            WORKTREES,
+            "agenthub--demo--lead",
+            "lead",
+            lanes.to_str().unwrap(),
+            "run_command",
+            serde_json::json!({ "CommandLine": cmd }),
+        )
+        .map(|r| rule_of(&r))
+    };
+    let r = repo.display();
+    // No director yet: today's ruling, the lead pushes and merges on main.
+    assert_eq!(lead("git push origin main"), None);
+    assert_eq!(lead(&format!("cd {r} && git merge --ff-only topic")), None);
+
+    std::fs::create_dir_all(room.join("director")).unwrap();
+    for cmd in [
+        "git push origin main".to_owned(),
+        "timeout 60 git push origin HEAD:refs/heads/topic".to_owned(),
+    ] {
+        assert_eq!(lead(&cmd).as_deref(), Some("push"), "{cmd}");
+    }
+    for cmd in [
+        format!("cd {r} && git merge --ff-only topic"),
+        format!("git -C {r} merge --no-ff topic"),
+        format!("cd {r} && git pull --ff-only"),
+        format!("cd {r} && git cherry-pick abc123"),
+        format!("cd {r} && git commit -m x -- a.txt"),
+        format!("cd {r} && git reset --soft topic"),
+        format!("git -C {r} update-ref refs/heads/main topic"),
+        format!("git -C {r} branch -f main topic"),
+        format!("git -C {r} fetch . topic:main"),
+    ] {
+        assert_eq!(lead(&cmd).as_deref(), Some("director-main"), "{cmd}");
+    }
+    let reason = refusal_full(
+        &fresh_dir("director-reason"),
+        WORKTREES,
+        "agenthub--demo--lead",
+        "lead",
+        lanes.to_str().unwrap(),
+        "run_command",
+        serde_json::json!({ "CommandLine": format!("cd {r} && git merge topic") }),
+    )
+    .unwrap();
+    assert!(reason.contains("ready.md") && reason.contains("only the director updates main"), "{reason}");
+
+    // The lead's own work is not main's: its branch, the integration branch, an aborted merge, a read.
+    git(&["switch", "-q", "-c", "demo/integration"]);
+    for cmd in [
+        format!("cd {r} && git merge --no-ff topic"),
+        format!("cd {r} && git commit -m x -- a.txt"),
+        format!("git -C {r} merge --abort"),
+        format!("git -C {r} log --oneline main..topic"),
+        format!("git -C {r} branch demo/lead-2 main"),
+    ] {
+        assert_eq!(lead(&cmd), None, "{cmd}");
+    }
+}
+
 /// The owner's 2026-10-18 ruling: the lead pushes after the reviewer gate and a green test run, and every
 /// other seat is still blocked. The exception is the seat KEY, read from either session spelling or from
 /// the key the launcher exported; a name that merely starts with it is another seat.

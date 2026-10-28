@@ -50,7 +50,29 @@ function sessionSeat(name: string): string {
   return left.startsWith(prefix) ? left.slice(prefix.length) : "";
 }
 
+// A ROOM WITH A DIRECTOR. A room may put a principal above its lead: a session outside the room (aa2-rs, 2026-10-28:
+// a Claude director) that alone updates `main`, while the founder pushes. The room declares it by holding
+// `<roomDir>/director/` - the directory the director already keeps its ready list in - and the room dir is the
+// parent of the lane root the launcher hands every seat. A room without it keeps the lead's ruling unchanged.
+const roomDir = process.env.AGENTHUB_LANES_ROOT ? dirname(resolve(process.env.AGENTHUB_LANES_ROOT)) : "";
+const directorDir = roomDir ? join(roomDir, "director") : "";
+const hasDirector = ((): boolean => {
+  if (!directorDir) return false;
+  try {
+    return lstatSync(directorDir).isDirectory();
+  } catch {
+    return false;
+  }
+})();
+const DIRECTOR_REFUSAL = (what: string): string =>
+  `this room has a director (${directorDir}): ${what}. The lead prepares and gates the branch and lists it as ` +
+  `\`<branch>=<sha>\` with the gate's verdict in ${join(directorDir, "ready.md")}; only the director updates main and ` +
+  "only the founder or the director pushes";
+// The branches a director room keeps for its director.
+const DIRECTOR_BRANCHES = new Set(["main", "master"]);
+
 function pushAuthority(): boolean {
+  if (hasDirector) return false;
   if (seat === PUSH_AUTHORITY_SEAT) return true;
   return [process.env.AGENTHUB_SESSION_NAME ?? "", process.env.OPENRIG_SESSION_NAME ?? ""].some(
     (name) => sessionSeat(name) === PUSH_AUTHORITY_SEAT,
@@ -1046,7 +1068,48 @@ const RULES: { rule: string; check: (tool: string, input: Record<string, unknown
     check: (tool, input) =>
       pushAuthority() || tool !== "bash" || !pushesIn(commandOf(input))
         ? ""
-        : "a seat does not push: only the lead pushes, after the reviewer gate and a green test run. Report the commit to the lead",
+        : hasDirector
+          ? DIRECTOR_REFUSAL("a seat does not push, the lead included")
+          : "a seat does not push: only the lead pushes, after the reviewer gate and a green test run. Report the commit to the lead",
+  },
+  {
+    // ONLY THE DIRECTOR UPDATES MAIN in a room that has one. In aa2-rs the lead followed the shared skill ("the lead
+    // owns every merge") and merged four branches into main on 2026-10-28 06:16 although the room's guide named the
+    // director. A statement that moves a director branch is refused: a merge, pull, cherry-pick, rebase, commit,
+    // am, revert or reset run while that branch is checked out, and update-ref, branch -f/-M/-C or a fetch refspec
+    // that names it. Rooms without a director are not judged by this rule.
+    rule: "director-main",
+    check: (tool, input) => {
+      if (!hasDirector || tool !== "bash") return "";
+      let dir = process.cwd();
+      const named = (word: string): boolean => {
+        const ref = unquote(word).replace(/^\+/, "");
+        const dst = ref.includes(":") ? ref.slice(ref.lastIndexOf(":") + 1) : ref;
+        return [...DIRECTOR_BRANCHES].some((b) => dst === b || dst === `refs/heads/${b}`);
+      };
+      for (const part of statements(input)) {
+        const cd = part.trim().match(/^cd\s+(\S+)/);
+        if (cd) {
+          dir = resolve(dir, unquote(cd[1]));
+          continue;
+        }
+        const git = gitOf(part);
+        if (!git) continue;
+        const here = resolve(dir, part.match(/(?:^|\s)-C\s+(\S+)/)?.[1] ?? ".");
+        const operands = git.args.filter((a) => !a.startsWith("-"));
+        if (git.verb === "update-ref" && operands.some((a) => named(a))) return DIRECTOR_REFUSAL("only the director moves main");
+        if (git.verb === "branch" && git.args.some((a) => /^-(?:[a-zA-Z]*[fMC][a-zA-Z]*)$|^--force$/.test(a)) && operands.some((a) => named(a)))
+          return DIRECTOR_REFUSAL("only the director moves main");
+        if (git.verb === "fetch" && operands.some((a) => a.includes(":") && named(a))) return DIRECTOR_REFUSAL("only the director moves main");
+        if (/^(merge|pull|cherry-pick|rebase|commit|am|revert|reset)$/.test(git.verb)) {
+          if (git.args.some((a) => /^--(?:abort|quit)$/.test(a))) continue;
+          const head = spawnSync("git", ["-C", here, "symbolic-ref", "--quiet", "--short", "HEAD"], { encoding: "utf8" });
+          const branch = head.status === 0 ? head.stdout.trim() : "";
+          if (DIRECTOR_BRANCHES.has(branch)) return DIRECTOR_REFUSAL(`\`git ${git.verb}\` on ${branch} in ${here} would update it, and only the director updates main`);
+        }
+      }
+      return "";
+    },
   },
   {
     // A ceiling a seat can raise is not a ceiling. READING the room's limits stays the seat's business - it should
