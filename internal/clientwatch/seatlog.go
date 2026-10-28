@@ -160,6 +160,33 @@ func seatModelOf(root, room, seat, logPath string) string {
 	return ""
 }
 
+// seatRuntimeOf is the runtime a seat runs: the one its newest log belongs to, else the one the room's spec.json
+// declares. An agy seat that has not written a transcript yet still reads as agy through the spec.
+func seatRuntimeOf(root, room, seat string) string {
+	if _, runtime := seatLog(root, room, seat); runtime == "agy" {
+		return runtime
+	}
+	raw, err := os.ReadFile(clientruntime.RoomSpecPath(root, room))
+	if err != nil {
+		return ""
+	}
+	var spec struct {
+		Seats []struct {
+			SeatKey string `json:"seat_key"`
+			Runtime string `json:"runtime"`
+		} `json:"seats"`
+	}
+	if json.Unmarshal(raw, &spec) != nil {
+		return ""
+	}
+	for _, entry := range spec.Seats {
+		if entry.SeatKey == seat {
+			return entry.Runtime
+		}
+	}
+	return ""
+}
+
 // readLines is the whole log as lines, for the initial replay.
 func readLines(path string) []string {
 	raw, err := os.ReadFile(path)

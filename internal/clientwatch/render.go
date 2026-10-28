@@ -799,6 +799,10 @@ type Header struct {
 	model  string
 	tokens *int
 
+	// usage, when set, is the provider's usage-limit text for the seat (an agy seat's 5h and weekly windows),
+	// shown after the token bar.
+	usage func() string
+
 	// lastEvent is when the seat last did anything, for the working / quiet status in the title.
 	lastEvent time.Time
 
@@ -865,6 +869,11 @@ func (h *Header) title() string {
 		who = h.name + " | " + h.model
 	}
 	title := bold + fg(h.colour) + "== " + who + " ==" + reset + "  " + tokenBar(h.tokens, h.limit)
+	if h.usage != nil {
+		if text := h.usage(); text != "" {
+			title += "  " + fg(stampColor) + text + reset
+		}
+	}
 	if status := h.status(); status != "" {
 		title += "  " + status
 	}

@@ -809,3 +809,31 @@ func TestInputPipeSendsStdinAsOneMessage(t *testing.T) {
 		t.Error("a refused send was not an error")
 	}
 }
+
+// An agy seat's pane title carries its usage windows; the runtime comes from the spec when the seat has no
+// transcript yet, and a seat on another runtime gets no usage text.
+func TestAnAgySeatsPaneTitleCarriesItsUsageWindows(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "rooms", "r"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	spec := `{"seats":[{"seat_key":"lead","runtime":"omp"},{"seat_key":"peak-dev","runtime":"agy","model":"gemini-3.8-flash-low"}]}`
+	if err := os.WriteFile(filepath.Join(root, "rooms", "r", "spec.json"), []byte(spec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := seatRuntimeOf(root, "r", "peak-dev"); got != "agy" {
+		t.Errorf("seatRuntimeOf(peak-dev) = %q, want agy", got)
+	}
+	if got := seatRuntimeOf(root, "r", "lead"); got != "omp" {
+		t.Errorf("seatRuntimeOf(lead) = %q, want omp", got)
+	}
+
+	titles := []string{}
+	header := newHeader("peak-dev", 120, 150000, "gemini-3.8-flash-low", func(string) {})
+	header.pane = func(title string) { titles = append(titles, title) }
+	header.usage = func() string { return "5h 91% left ↻1h33m · week 16% left ↻4d7h" }
+	header.draw()
+	if len(titles) != 1 || !strings.HasSuffix(titles[0], "ctx …  5h 91% left ↻1h33m · week 16% left ↻4d7h") {
+		t.Errorf("title = %v", titles)
+	}
+}

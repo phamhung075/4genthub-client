@@ -43,6 +43,9 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 		logPath, _ := seatLog(root, s.room, seats[0])
 		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModelOf(root, s.room, seats[0], logPath),
 			func(line string) { fmt.Fprintln(out, line) })
+		if seatRuntimeOf(root, s.room, seats[0]) == "agy" {
+			header.usage = agyUsage(root, header.model)
+		}
 		if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
 			header.pane = func(title string) { _, _ = herdr(ctx, "pane", "rename", paneID, title) }
 		}

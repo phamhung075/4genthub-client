@@ -43,6 +43,16 @@ limit (`== lead | deepseek-flash ==  ████████░░░░░░�
 5 seconds as the reading moves. The feed itself carries no header line there. A feed in a plain
 terminal (no `HERDR_PANE_ID`) prints the same line into the stream instead. The title ends with the
 seat's status: `● working` while an event is under 30 s old, then `○ idle` and `○ quiet Nm`.
+
+An **agy** seat's title also carries the usage limits of the agy sign-in for the seat's model group, after the
+bar: `5h 89% left ↻1h29m · week 15% left ↻4d7h` (percent remaining, time to reset). agy keeps its quota in memory
+and writes it to no file, so the only reader is `agy -p /usage --output-format json`, which runs no model turn and
+spends no tokens. The answer is shared by every agy seat on the machine: it is cached in
+`~/.config/4genthub/cache/agy-usage.json` and refreshed by at most one probe per `AGY_USAGE_REFRESH_SECONDS`
+(default 300, floor 60) across all panes, and a failed probe backs off for the same interval. A window agy does not
+report for the group (Argon has only a weekly one), a reading not taken yet, or a window whose reset has passed
+shows as `5h: unknown` / `week: unknown`. Other runtimes show no usage text: the grid has no reader for Claude's
+5h/weekly windows (those live in Claude Code's own status line JSON, which an RPC-runner seat does not render).
 An event line is prefixed with the time the seat logged it, shown only when the minute changes, and
 with the context percentage, shown only when it crosses a 10% step.
 
