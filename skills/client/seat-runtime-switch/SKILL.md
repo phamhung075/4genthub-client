@@ -65,9 +65,9 @@ A room-wide rebuild kills **every** seat in the room, not just the one switching
    If the ERROR column reads `runtime_error`, read the capture: a missing key is step 2; fix it and repeat step 4.
 6. **Brief the seats.** The rebuilt seats are fresh sessions with no memory. Send each busy or relevant seat a kickoff:
    ```bash
-   4genteam send --from owner <room-short> <seat> '<message>'
+   printf '%s\n' '<message>' | 4genteam input --room <room> --seat <seat>
    ```
-   Use **single quotes** and no backticks or `$`: your shell runs a backtick substitution before `4genteam` sees it. Say: the runtime changed and why; which files hold its state (`handover/_shared.md`, `state-<seat>.md`, `NEXT_GEN.md`); anything left half-done (check `git status` before continuing a rebase); the rules (commit locally only, stage by explicit path, owner approves every push).
+   This is the owner's path: `input` sends each stdin line to the seat through the client's own transport (`send` has no `--from` flag and refuses it). One line is one message, so keep the brief on one line. Use **single quotes** and no backticks or `$`: your shell runs a backtick substitution before `4genteam` sees it. Say: the runtime changed and why; which files hold its state (`handover/_shared.md`, `state-<seat>.md`, `NEXT_GEN.md`); anything left half-done (check `git status` before continuing a rebase); the rules (commit locally only, stage by explicit path, owner approves every push).
 7. **Reopen the watch grid**: `4genteam watch --room <room>` (idempotent; it rebuilds both workspaces).
 
 ## Switching back after the reset
