@@ -20,6 +20,11 @@ import (
 func ReadFacts(hook, dir string, getenv func(string) string) (Facts, error) {
 	session, hasSession := SessionFromEnv(getenv)
 	facts := Facts{Hook: hook, Session: session, HasSession: hasSession}
+	if hasSession {
+		if roomDir, ok := DirectorRoom(session, getenv); ok {
+			facts.DirectorRoom = roomDir
+		}
+	}
 
 	worktree, err := gitLine(dir, "rev-parse", "--show-toplevel")
 	if err != nil {

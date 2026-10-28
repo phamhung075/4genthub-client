@@ -283,7 +283,7 @@ func TestTheGuardChainsToTheHooksAlreadyThereAndUninstallPutsThemBack(t *testing
 	}
 	log := filepath.Join(t.TempDir(), "own-hooks.log")
 	own := map[string]string{}
-	for _, name := range []string{HookPreCommit, HookPrePush} {
+	for _, name := range guardHooks {
 		body := "#!/bin/sh\necho " + name + " ran >> " + log + "\nexit 0\n"
 		own[name] = body
 		if err := os.WriteFile(filepath.Join(hooks, name), []byte(body), 0o755); err != nil {
@@ -333,8 +333,8 @@ func TestTheGuardChainsToTheHooksAlreadyThereAndUninstallPutsThemBack(t *testing
 	if err != nil {
 		t.Fatalf("Uninstall: %v", err)
 	}
-	if len(removed) != 2 {
-		t.Fatalf("removed %d hook(s), want both", len(removed))
+	if len(removed) != len(guardHooks) {
+		t.Fatalf("removed %d hook(s), want every guard hook %v", len(removed), guardHooks)
 	}
 	for _, hook := range removed {
 		if hook.Restored == "" {
@@ -419,7 +419,7 @@ func TestAChainedHookThatFailsStillStopsTheCommit(t *testing.T) {
 func TestUninstallRemovesAGuardThatReplacedNothing(t *testing.T) {
 	r := newSeatRepo(t)
 	hooks := filepath.Join(r.checkout, ".git", "hooks")
-	for _, name := range []string{HookPreCommit, HookPrePush} {
+	for _, name := range guardHooks {
 		if _, err := os.Stat(filepath.Join(hooks, name)); err == nil {
 			t.Fatalf("%s exists before the install, so this case cannot prove the no-backup branch", name)
 		}
@@ -432,8 +432,8 @@ func TestUninstallRemovesAGuardThatReplacedNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Uninstall: %v", err)
 	}
-	if len(removed) != 2 {
-		t.Fatalf("removed %d hook(s), want both", len(removed))
+	if len(removed) != len(guardHooks) {
+		t.Fatalf("removed %d hook(s), want every guard hook %v", len(removed), guardHooks)
 	}
 	for _, hook := range removed {
 		if hook.Restored != "" {

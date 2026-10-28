@@ -79,6 +79,16 @@ func RoomBaseBranch(teamDir string) string {
 	return strings.TrimSpace(stringField(loaded.room, "base_branch"))
 }
 
+// RoomProtectedBranch is team.json's room.protected_branch: the branch a room with a director keeps for it. ""
+// when the file cannot be read or names none; the caller defaults to main.
+func RoomProtectedBranch(teamDir string) string {
+	loaded, err := loadTeam(teamDir)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stringField(loaded.room, "protected_branch"))
+}
+
 // definedField is the one field where a missing key and an empty value must NOT collapse: an omitted
 // permission_policy means the documented unattended default, and a present-but-empty one is refused by name.
 // optionalField folds "" into "absent", which is right for model and wrong here, so this field gets its own

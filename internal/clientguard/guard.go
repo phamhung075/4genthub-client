@@ -22,6 +22,7 @@ package clientguard
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/phamhung075/4genthub-client/internal/secretscan"
@@ -132,6 +133,9 @@ type Facts struct {
 	// means the caller could not read it, and the author rule is then a warning rather than a refusal.
 	SeatName  string
 	SeatEmail string
+	// DirectorRoom is the room directory when the seat's room declares a director (<roomDir>/director/): then
+	// no seat pushes, the lead included. Empty for every other room and for a shell that is not a seat's.
+	DirectorRoom string
 	// Change is the text the secret scan reads: the staged change for a commit, the outgoing refs for a
 	// push.
 	Change string
@@ -148,7 +152,9 @@ func (v Verdict) Refused() bool { return len(v.Refusals) > 0 }
 
 // pushes reports whether this session is the seat the owner's ruling lets push. A session is required: a
 // working tree with no session name is never assumed to be the lead.
-func (f Facts) pushes() bool { return f.HasSession && f.Session.Seat == PushAuthoritySeat }
+func (f Facts) pushes() bool {
+	return f.HasSession && f.Session.Seat == PushAuthoritySeat && f.DirectorRoom == ""
+}
 
 // Lines is everything the guard says, refusals first, so one writer can report it.
 func (v Verdict) Lines() []string {
@@ -210,6 +216,12 @@ func refusalPush(f Facts) string {
 	who := "this linked worktree"
 	if f.HasSession {
 		who = "session " + f.Session.Line()
+	}
+	if f.DirectorRoom != "" {
+		return "the git guard refuses a push: " + who + " is a seat of a room with a director (" +
+			filepath.Join(f.DirectorRoom, "director") + "), where no seat pushes, the lead included. List the " +
+			"gated branch in " + filepath.Join(f.DirectorRoom, "director", "ready.md") + "; only the founder or " +
+			"the director pushes. Nothing was pushed."
 	}
 	return "the git guard refuses a push: " + who + " is a seat, and only the lead pushes (after the " +
 		"reviewer gate and a green test run). Nothing was pushed and nothing was changed here. Hand the " +

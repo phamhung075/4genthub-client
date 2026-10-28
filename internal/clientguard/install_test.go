@@ -77,10 +77,10 @@ func TestInstallWritesBothHooksIntoGitsOwnFolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	if len(installed) != 2 {
-		t.Fatalf("installed = %+v, want both hooks", installed)
+	if len(installed) != len(guardHooks) {
+		t.Fatalf("installed = %+v, want every guard hook %v", installed, guardHooks)
 	}
-	for _, name := range []string{HookPreCommit, HookPrePush} {
+	for _, name := range guardHooks {
 		body := r.read(name)
 		if !strings.Contains(body, GuardMarker) {
 			t.Errorf("%s does not carry the guard's marker, so `doctor` would call the guard absent:\n%s", name, body)

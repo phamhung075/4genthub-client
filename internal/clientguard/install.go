@@ -18,8 +18,12 @@ import (
 	"strings"
 )
 
-//go:embed hooks/pre-commit hooks/pre-push
+//go:embed hooks/pre-commit hooks/pre-push hooks/reference-transaction
 var hookTemplates embed.FS
+
+// guardHooks are the hooks the guard installs and uninstalls, in order. reference-transaction is the director
+// rule's (director.go): it judges nothing in a room without a director.
+var guardHooks = []string{HookPreCommit, HookPrePush, HookReferenceTransaction}
 
 // BackupSuffix is what an existing hook is moved to before the guard takes its name.
 const BackupSuffix = ".pre-4genteam"
@@ -66,7 +70,7 @@ func Install(dir, clientBinary string, out io.Writer) ([]InstalledHook, error) {
 	}
 
 	var installed []InstalledHook
-	for _, name := range []string{HookPreCommit, HookPrePush} {
+	for _, name := range guardHooks {
 		body, err := hookTemplates.ReadFile("hooks/" + name)
 		if err != nil {
 			return installed, fmt.Errorf("the guard's %s template is missing from this client: %v", name, err)
@@ -110,7 +114,7 @@ func Uninstall(dir string, out io.Writer) ([]UninstalledHook, error) {
 		return nil, err
 	}
 	var removed []UninstalledHook
-	for _, name := range []string{HookPreCommit, HookPrePush} {
+	for _, name := range guardHooks {
 		path := filepath.Join(folder, name)
 		body, err := os.ReadFile(path)
 		switch {

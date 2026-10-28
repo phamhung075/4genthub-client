@@ -16,7 +16,7 @@ import (
 
 const guardUsage = `usage: 4genteam guard install [--checkout DIR] [--home DIR]
        4genteam guard uninstall [--checkout DIR] [--home DIR]
-       4genteam guard run pre-commit|pre-push [args...]`
+       4genteam guard run pre-commit|pre-push|reference-transaction [args...]`
 
 // ExitRefused is the git guard declining the command git called the hook for. Any non-zero exit from a hook
 // aborts the git command, and this is the number the client's other refusals use (clientcmd.ExitUnavailable
@@ -185,6 +185,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 // inherits git's own environment, which is where the daemon's session name and any per-commit author override
 // live.
 func runHook(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == HookReferenceTransaction {
+		return runReferenceTransaction(args[1:], os.Stdin, stderr, os.Getenv)
+	}
 	if len(args) == 0 || (args[0] != HookPreCommit && args[0] != HookPrePush) {
 		fmt.Fprintf(stderr, "4genteam guard run: name the hook git called: %s or %s\n%s\n", HookPreCommit, HookPrePush, guardUsage)
 		return clientcmd.ExitUsage
