@@ -15,8 +15,8 @@ import (
 )
 
 // ExitRestoreFailed is `continue`'s own failure - the restore left no seats up, a brief the caller asked
-// for does not exist, or the seats are up while a safeguard is down (a room `stop`ped and then
-// "continued": stop leaves the sessions standing). It coincides with clientcmd.ExitRemote's number while
+// for does not exist, or the seats are up while a safeguard is still down after continue started it (a room
+// `stop`ped and then "continued": stop leaves the sessions standing). It coincides with clientcmd.ExitRemote's number while
 // answering a different question, so it is named here rather than borrowed, the same rule ExitStartFailed
 // and ExitPeak follow.
 const ExitRestoreFailed = 1
@@ -41,9 +41,10 @@ func (continueCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 		printHelp(stdout, continueUsage,
 			"Restores a stopped room from its latest snapshot (every seat resumes its own session) and sends each\n"+
 				"seat its brief. The room is the parameter: its seats are discovered from tmux at run time.\n\n"+
-				"  The SEATS are what this verb restores. Supervision (agent and its children) is `up`'s: a room\n"+
-				"  whose seats are up while a safeguard is down is reported NOT restored and exits 1, with the\n"+
-				"  safeguards named - `stop` stops agent and its children and leaves the sessions standing.\n\n"+
+				"  `stop` stops agent and its children and leaves the sessions standing, so a stop/continue pair\n"+
+				"  (the peak pause) finds the seats live and the safeguards down: continue then starts them with\n"+
+				"  the same `4genteam up ROOM` heal runs (a live room is read, not restarted) and reads them again.\n"+
+				"  A safeguard still down after that is named, the room is reported NOT restored, and it exits 1.\n\n"+
 				"  BRIEF  a file whose text every seat gets; default <home>/.config/4genthub/briefs/<room>.txt\n"+
 				"         <home>/.config/4genthub/briefs/<room>/<seat>.txt replaces it for that seat\n"+
 				"  --all  every stopped room that has a brief; the run exits non-zero when a room it visited is\n"+
@@ -105,6 +106,7 @@ func runContinue(allowPeak bool, root string, args []string, stdout, stderr io.W
 		brief = defaultBrief(root, roomName)
 	}
 	restore := newRestorer(log, root)
+	restore.startsSupervision, restore.allowPeak = true, allowPeak
 	return continueOne(restore, roomName, brief, allowPeak, stderr)
 }
 
@@ -176,6 +178,7 @@ func continueAll(allowPeak bool, root string, log *teeLog, stderr io.Writer) int
 		return clientcmd.ExitOK
 	}
 	restore := newRestorer(log, root)
+	restore.startsSupervision, restore.allowPeak = true, allowPeak
 	restore.daemonUp()
 	var notUp []string
 	for _, brief := range briefs {

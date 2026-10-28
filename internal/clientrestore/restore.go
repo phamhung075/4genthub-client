@@ -3,6 +3,7 @@ package clientrestore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -41,6 +42,17 @@ type restorer struct {
 	// computation in clientlifecycle. It is what lets a restore say whether the room it reports is
 	// supervised: `stop` leaves the seat sessions up, so the seats alone cannot answer that.
 	safeguards func(room string) ([]clientservices.Health, error)
+	// superviseUp starts a room's safeguards: this binary's `up ROOM`, which reads a live room instead of
+	// restarting it and then starts agent and its children - the repair `heal` runs. It is a field so a test
+	// restores a room with no child process.
+	superviseUp func(room string, allowPeak bool) error
+	// startsSupervision is set by `continue`, which owns the stop/continue pair: a continued room whose seats
+	// are live but whose safeguards are down has them started here instead of being handed back with a hint.
+	// The watchdog leaves it false - it is itself one of those safeguards, and agent restarts its siblings.
+	startsSupervision bool
+	// allowPeak is the caller's --allow-peak, passed on to the `up` child so its own peak gate agrees with
+	// the gate this verb already ran.
+	allowPeak bool
 }
 
 // restoreSteps, when a test has set it, is handed the restorer newRestorer just wired, so the brief and
@@ -77,6 +89,7 @@ func newRestorer(log *teeLog, root string) *restorer {
 		safeguards: func(room string) ([]clientservices.Health, error) {
 			return clientlifecycle.SafeguardRows(room, root)
 		},
+		superviseUp: func(room string, allowPeak bool) error { return upSupervision(room, root, allowPeak) },
 	}
 	if restoreSteps != nil {
 		restoreSteps(r)
@@ -147,6 +160,23 @@ func (r *restorer) restore(roomName, brief string) bool {
 			roomName, probeErr, roomName)
 		return false
 	}
+	if down := clientservices.NotRunning(safeguardRows); len(down) > 0 && r.startsSupervision {
+		// A STOP/CONTINUE PAIR IS THE NORMAL PEAK PAUSE, so `continue` finishes the job `stop` undid: it
+		// starts the safeguards itself (the same `up` heal runs) and reads them again. Measured 2026-10-28 on
+		// aa2-rs: `room stop` at 01:35, `continue` at 05:37 left compact, watchdog, messages, roomguard and
+		// budget down until the owner ran heal by hand.
+		r.log.printf("%s: seats live but supervision is down (%s) - starting it with `4genteam up %s`",
+			roomName, joinSafeguards(down), roomName)
+		if err := r.superviseUp(roomName, r.allowPeak); err != nil {
+			r.log.printf("%s: starting supervision failed: %v", roomName, err)
+		}
+		safeguardRows, probeErr = r.safeguards(roomName)
+		if probeErr != nil {
+			r.log.printf("%s: supervision could not be read (%v) - not restored; run `4genteam up %s`",
+				roomName, probeErr, roomName)
+			return false
+		}
+	}
 	if down := clientservices.NotRunning(safeguardRows); len(down) > 0 {
 		names := make([]string, 0, len(down))
 		for _, row := range down {
@@ -165,6 +195,38 @@ func (r *restorer) restore(roomName, brief string) bool {
 	// which an operator following the old line would find missing (the gate's nit at bb4f412).
 	r.log.printf("%s: done — verify with: 4genteam ps %s --nodes", roomName, roomName)
 	return true
+}
+
+// joinSafeguards names the rows a report found down, in the report's order.
+func joinSafeguards(rows []clientservices.Health) string {
+	names := make([]string, 0, len(rows))
+	for _, row := range rows {
+		names = append(names, row.Safeguard)
+	}
+	return strings.Join(names, ", ")
+}
+
+// upSupervision is the safeguard repair `heal` runs: this binary as a child, `up ROOM` in the root the
+// restore read, which reads a live room instead of restarting its seats and then starts agent and its
+// children. A test binary refuses to exec itself (the 2026-10-22 fork bomb), through the one predicate.
+func upSupervision(room, root string, allowPeak bool) error {
+	self, err := execSelfPath()
+	if err != nil {
+		return err
+	}
+	if err := clientlifecycle.RefuseSelfExecUnderTest(self); err != nil {
+		return err
+	}
+	args := []string{"up", room, "--state-root", root}
+	if allowPeak {
+		args = append(args, "--allow-peak")
+	}
+	out, err := execCommand(self, args...).CombinedOutput()
+	if err != nil {
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		return fmt.Errorf("%w: %s", err, lines[len(lines)-1])
+	}
+	return nil
 }
 
 // brief sends each seat its text: `Your seat: <seat>. <brief>`, with the seat's OWN brief
