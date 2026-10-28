@@ -38,14 +38,18 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 	}
 
 	// One seat in view (a grid pane): its name and token bar are the top line, not a column.
+	// An agy seat's usage limits sit on the pane's bottom row (footLine), not in the title, which is long enough.
 	var header *Header
+	var foot *footLine
 	if len(seats) == 1 {
 		logPath, _ := seatLog(root, s.room, seats[0])
-		header = newHeader(seats[0], colours[seats[0]], compactLimit(), seatModelOf(root, s.room, seats[0], logPath),
-			func(line string) { fmt.Fprintln(out, line) })
+		model := seatModelOf(root, s.room, seats[0], logPath)
 		if seatRuntimeOf(root, s.room, seats[0]) == "agy" {
-			header.usage = agyUsage(root, header.model)
+			foot = &footLine{w: out, text: agyUsage(root, model)}
+			out = foot
 		}
+		header = newHeader(seats[0], colours[seats[0]], compactLimit(), model,
+			func(line string) { fmt.Fprintln(out, line) })
 		if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
 			header.pane = func(title string) { _, _ = herdr(ctx, "pane", "rename", paneID, title) }
 		}
@@ -141,6 +145,7 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 		}
 	}
 	replay()
+	foot.draw(opts.width)
 
 	// A width the terminal decides follows the terminal: a zoom (Ctrl + / Ctrl -) or a resized pane changes the
 	// column count, and lines wrapped at the old width would leave the new space empty. On a resize the view is
@@ -170,6 +175,7 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 		if header != nil {
 			header.draw()
 		}
+		foot.draw(opts.width)
 		select {
 		case <-ctx.Done():
 			return nil

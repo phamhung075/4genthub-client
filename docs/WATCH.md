@@ -44,8 +44,10 @@ limit (`== lead | deepseek-flash ==  ████████░░░░░░�
 terminal (no `HERDR_PANE_ID`) prints the same line into the stream instead. The title ends with the
 seat's status: `● working` while an event is under 30 s old, then `○ idle` and `○ quiet Nm`.
 
-An **agy** seat's title also carries the usage limits of the agy sign-in for the seat's model group, after the
-bar: `5h 89% left ↻1h29m · week 15% left ↻4d7h` (percent remaining, time to reset). agy keeps its quota in memory
+An **agy** seat's pane keeps the usage limits of the agy sign-in for the seat's model group on its bottom row,
+under the stream and out of the title: `agy limits · 5h 89% left ↻1h29m · week 15% left ↻4d7h` (percent
+remaining, time to reset). The row is written without a newline and erased before the next event, so it stays at
+the bottom without a scroll region and never enters the scrollback; it is cut to the pane width. agy keeps its quota in memory
 and writes it to no file, so the only reader is `agy -p /usage --output-format json`, which runs no model turn and
 spends no tokens. The answer is shared by every agy seat on the machine: it is cached in
 `~/.config/4genthub/cache/agy-usage.json` and refreshed by at most one probe per `AGY_USAGE_REFRESH_SECONDS`
@@ -55,6 +57,10 @@ shows as `5h: unknown` / `week: unknown`. Other runtimes show no usage text: the
 5h/weekly windows (those live in Claude Code's own status line JSON, which an RPC-runner seat does not render).
 An event line is prefixed with the time the seat logged it, shown only when the minute changes, and
 with the context percentage, shown only when it crosses a 10% step.
+
+With no `--width`, a pane follows its terminal: a zoom (`Ctrl -` / `Ctrl +`) or a resized pane changes the
+column count, and the feed clears the view and draws the backlog again at the new width, so the lines fill the
+pane. A `--width` the caller set is kept.
 
 In a one-seat pane (a single `--seat`, or `feed` in a plain terminal) the time and the percentage ride on the
 rule above the step instead of in a prefix, and step lines start at column 0. A wrapped row stays indented

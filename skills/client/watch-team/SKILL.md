@@ -29,8 +29,8 @@ That opens both workspaces:
   tall pane on the left, the next two stacked in the column to its right, every remaining seat side
   by side along the bottom, and no pane left empty at any seat count. Each pane runs
   `feed --back 40 --width 0 --lines 60 --detail`. Every pane header names the seat and its model and
-  carries a token bar, `used/<limit> to compact` (the limit is `COMPACT_LIMIT_TOKENS`). An agy seat's header
-  adds its sign-in's 5h and weekly windows, `5h 89% left ↻1h29m · week 15% left ↻4d7h`, from one cached
+  carries a token bar, `used/<limit> to compact` (the limit is `COMPACT_LIMIT_TOKENS`). An agy seat's pane
+  keeps its sign-in's 5h and weekly windows on its bottom row, `5h 89% left ↻1h29m · week 15% left ↻4d7h`, from one cached
   `agy -p /usage` per `AGY_USAGE_REFRESH_SECONDS` (default 300) machine-wide; a window agy does not report shows `unknown`.
 - `<ROOM> lead`: the lead's detailed feed on top, a `lead > input` pane below it (ratio 0.8) — a line
   typed there is sent to the lead.

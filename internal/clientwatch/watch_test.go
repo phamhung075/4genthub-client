@@ -3,6 +3,7 @@ package clientwatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -810,9 +811,9 @@ func TestInputPipeSendsStdinAsOneMessage(t *testing.T) {
 	}
 }
 
-// An agy seat's pane title carries its usage windows; the runtime comes from the spec when the seat has no
-// transcript yet, and a seat on another runtime gets no usage text.
-func TestAnAgySeatsPaneTitleCarriesItsUsageWindows(t *testing.T) {
+// An agy seat's usage windows sit on the pane's bottom row, not in the title; the runtime comes from the spec when
+// the seat has no transcript yet, and a seat on another runtime gets none.
+func TestAnAgySeatsUsageWindowsSitOnTheBottomRow(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "rooms", "r"), 0o755); err != nil {
 		t.Fatal(err)
@@ -828,12 +829,27 @@ func TestAnAgySeatsPaneTitleCarriesItsUsageWindows(t *testing.T) {
 		t.Errorf("seatRuntimeOf(lead) = %q, want omp", got)
 	}
 
-	titles := []string{}
-	header := newHeader("peak-dev", 120, 150000, "gemini-3.8-flash-low", func(string) {})
-	header.pane = func(title string) { titles = append(titles, title) }
-	header.usage = func() string { return "5h 91% left ↻1h33m · week 16% left ↻4d7h" }
-	header.draw()
-	if len(titles) != 1 || !strings.HasSuffix(titles[0], "ctx …  5h 91% left ↻1h33m · week 16% left ↻4d7h") {
-		t.Errorf("title = %v", titles)
+	var screen strings.Builder
+	text := "agy limits · 5h 91% left ↻1h33m · week 16% left ↻4d7h"
+	foot := &footLine{w: &screen, text: func() string { return text }}
+	foot.draw(80)
+	foot.draw(80) // unchanged and on screen: nothing written
+	fmt.Fprintln(foot, "event line")
+	foot.draw(80)
+	got := ansiSequence.ReplaceAllString(screen.String(), "")
+	want := text + "\r\033[2Kevent line\n" + text
+	if got != want {
+		t.Errorf("screen = %q, want %q", got, want)
 	}
+	if !strings.HasSuffix(screen.String(), reset) {
+		t.Error("the footer must end the output with no newline after it")
+	}
+
+	var narrow strings.Builder
+	(&footLine{w: &narrow, text: func() string { return text }}).draw(20)
+	if plain := ansiSequence.ReplaceAllString(narrow.String(), ""); len([]rune(plain)) != 19 || !strings.HasSuffix(plain, "…") {
+		t.Errorf("a footer wider than the pane = %q, want 19 columns ending in …", plain)
+	}
+	var none *footLine
+	none.draw(80) // a seat on another runtime has no footer
 }
