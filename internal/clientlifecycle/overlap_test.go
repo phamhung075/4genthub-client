@@ -530,3 +530,37 @@ func TestTheOverlapScanReadsTheRoomUnderTheResolvedRoot(t *testing.T) {
 		t.Fatalf("the scan reads %q, want %q", dir, want)
 	}
 }
+
+// A REPOSITORY NESTED IN EACH SEAT'S CHECKOUT IS NOT A SHARED FILE. On aa2-rs each seat's wt/<seat> is a hub
+// worktree with the project's own worktree inside it at aa2-rs/, which `git status` names as one untracked
+// directory in every seat; the scan alerted two seats "changing file aa2-rs/" on hub branches stamped
+// 2026-10-23 (the lead's false-positive report, 2026-10-28 04:53Z). A nested directory holding its own .git is
+// dropped; a real untracked file the two seats share is still a hit.
+func TestOverlapIgnoresARepositoryNestedInTheSeatCheckouts(t *testing.T) {
+	roomDir := filepath.Join(t.TempDir(), "demo")
+	answers := map[string]string{}
+	goDevWt, _ := overlapFixtureWorktree(roomDir, "go-dev", "developer")
+	feDevWt, _ := overlapFixtureWorktree(roomDir, "fe-dev", "writer")
+	for _, wt := range []string{goDevWt, feDevWt} {
+		if err := os.MkdirAll(filepath.Join(wt, "aa2-rs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wt, "aa2-rs", ".git"), []byte("gitdir: /elsewhere\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	moved := time.Date(2026, 10, 23, 1, 39, 0, 0, time.UTC)
+	overlapFactsFor(answers, goDevWt, "main", nil, nil, 0, moved)
+	overlapFactsFor(answers, feDevWt, "main", nil, nil, 0, moved)
+	answers[goDevWt+"|status --porcelain"] = "?? aa2-rs/\n?? notes.md\n"
+	answers[feDevWt+"|status --porcelain"] = "?? aa2-rs/\n?? notes.md\n"
+	fixture := overlapFixtureFor(t, []clientservices.SeatType{
+		{Key: "go-dev", Type: "developer"}, {Key: "fe-dev", Type: "writer"},
+	}, answers, clientworktree.CheckVerdict{})
+	fixture.roomDir = roomDir
+
+	report := overlapScanFor(fixture.deps, fixture.options())
+	if len(report.Hits) != 1 || report.Hits[0].File != "notes.md" {
+		t.Fatalf("hits = %+v, want only notes.md: a nested repository is not a file the seats share", report.Hits)
+	}
+}
