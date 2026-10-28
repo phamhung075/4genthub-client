@@ -107,38 +107,45 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 	if header == nil {
 		fmt.Fprintf(out, "-- following %d seats; Ctrl-C to stop\n", len(seats))
 	}
-	for _, seat := range seats {
-		logPath, _ := seatLog(root, s.room, seat)
-		if logPath == "" {
-			continue
-		}
-		lines := readLines(logPath)
-		shown := []string{}
-		for _, line := range lines {
-			if len(eventsWith(line, filterOpts)) > 0 {
-				shown = append(shown, line)
+	replay := func() {
+		for _, seat := range seats {
+			logPath, _ := seatLog(root, s.room, seat)
+			if logPath == "" {
+				continue
 			}
-		}
-		if limit := s.back * 2; len(shown) > limit {
-			shown = shown[len(shown)-limit:]
-		}
-		if header != nil {
-			for index := len(lines) - 1; index >= 0; index-- {
-				if tokens := contextTokens(lines[index]); tokens != nil {
-					header.setTokens(tokens)
-					break
+			lines := readLines(logPath)
+			shown := []string{}
+			for _, line := range lines {
+				if len(eventsWith(line, filterOpts)) > 0 {
+					shown = append(shown, line)
 				}
 			}
+			if limit := s.back * 2; len(shown) > limit {
+				shown = shown[len(shown)-limit:]
+			}
+			if header != nil {
+				for index := len(lines) - 1; index >= 0; index-- {
+					if tokens := contextTokens(lines[index]); tokens != nil {
+						header.setTokens(tokens)
+						break
+					}
+				}
+			}
+			for _, line := range shown {
+				show(seat, line)
+			}
+			if header != nil {
+				header.draw()
+			}
+			positions[seat] = position{path: logPath, offset: logSize(logPath)}
 		}
-		for _, line := range shown {
-			show(seat, line)
-		}
-		if header != nil {
-			header.draw()
-		}
-		positions[seat] = position{path: logPath, offset: logSize(logPath)}
 	}
+	replay()
 
+	// A width the terminal decides follows the terminal: a zoom (Ctrl + / Ctrl -) or a resized pane changes the
+	// column count, and lines wrapped at the old width would leave the new space empty. On a resize the view is
+	// cleared and the backlog drawn again at the new width. A --width the caller chose stays as it is.
+	resized := watchResize(ctx)
 	for {
 		if ctx.Err() != nil {
 			return nil
@@ -166,7 +173,41 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-resized:
+			settleResize(resized)
+			if s.width > 0 {
+				continue
+			}
+			if width := lineWidth(0, header != nil); width != opts.width {
+				opts.width = width
+				fmt.Fprint(out, clearView)
+				for _, seat := range seats {
+					views[seat] = &seatView{}
+				}
+				if header != nil {
+					header.lastText, header.lastAt = "", time.Time{}
+				}
+				replay()
+			}
 		case <-time.After(feedPollInterval):
+		}
+	}
+}
+
+// clearView homes the cursor and clears the screen and the scrollback, so a redraw at a new width does not sit
+// under the copy wrapped at the old one.
+const clearView = "\033[H\033[2J\033[3J"
+
+// resizeSettle is how long a burst of resize signals (a zoom sends several) is let finish before one redraw.
+const resizeSettle = 250 * time.Millisecond
+
+// settleResize drains the signals that arrive within resizeSettle of each other.
+func settleResize(resized <-chan struct{}) {
+	for {
+		select {
+		case <-resized:
+		case <-time.After(resizeSettle):
+			return
 		}
 	}
 }
