@@ -344,7 +344,7 @@ func overlapSeatFacts(deps *overlapDeps, seat, worktree, branch, base string) (o
 	if err != nil {
 		return facts, fmt.Sprintf("%s: cannot read the files it has not committed: %v", seat, err)
 	}
-	facts.Files = overlapUnique(append(splitLines(changed), porcelainPaths(status)...))
+	facts.Files = overlapUnique(append(splitLines(changed), ownPaths(worktree, porcelainPaths(status))...))
 	count, err := deps.git(worktree, "rev-list", "--count", base+"..HEAD")
 	if err != nil {
 		return facts, fmt.Sprintf("%s: cannot read how many of its commits are unmerged: %v", seat, err)
@@ -399,6 +399,24 @@ func porcelainPaths(out string) []string {
 		}
 	}
 	return paths
+}
+
+// ownPaths drops the paths that are ANOTHER REPOSITORY nested in the worktree: an untracked directory holding its
+// own `.git` (a clone, or a linked worktree of the room's project) is not a file this seat's branch changed, and
+// every seat whose checkout carries the same nested repository names it. Measured 2026-10-28 on aa2-rs: each
+// seat's wt/<seat> is a hub worktree on aa2-rs/<seat> (last commit 2026-10-23) with the project worktree inside it
+// at aa2-rs/, so the scan alerted "branches aa2-rs/bevy-dev and aa2-rs/rust-dev changing file aa2-rs/" - branches
+// that do not exist in the project and a path that is its root. The nested repository is the seat's own
+// worktree of the project, and its files are not read here.
+func ownPaths(worktree string, paths []string) []string {
+	kept := paths[:0:0]
+	for _, path := range paths {
+		if _, err := os.Stat(filepath.Join(worktree, strings.TrimSuffix(path, "/"), ".git")); err == nil {
+			continue
+		}
+		kept = append(kept, path)
+	}
+	return kept
 }
 
 // overlapUnique is a sorted list without duplicates: two reads can name the same file (committed and then
