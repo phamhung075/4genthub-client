@@ -233,6 +233,143 @@ fn the_existing_rules_still_judge_commands_not_quoted_words() {
     ]);
 }
 
+/// A PUSH BEHIND A LAUNCHER IS STILL A PUSH. callOf ate only env/sudo/command/exec/nohup and assignments, so a
+/// wrapper it did not know hid the push from the rule: on 2026-10-27T23:59:42Z bevy-dev (room aa2-rs) ran
+/// `GIT_TERMINAL_PROMPT=0 timeout 60 git push -u origin HEAD:refs/heads/ac2-circumferential-bend`, the guard
+/// logged it `ok`, and the branch reached origin. Every bypass form is pinned, and the controls beside them keep
+/// the rule from refusing what only mentions a push.
+#[test]
+fn a_push_behind_a_launcher_or_a_subshell_is_still_a_push() {
+    refused(
+        "push",
+        &[
+            "cd /w/aa2-rs && GIT_TERMINAL_PROMPT=0 timeout 60 git push -u origin HEAD:refs/heads/ac2-circumferential-bend 2>&1 | tail -5; echo \"push rc=$?\"",
+            "timeout 60 git push origin main",
+            "timeout -k 5 -s KILL 60s git push origin main",
+            "nice -n 10 git push origin main",
+            "nice git push origin main",
+            "ionice -c 3 git push",
+            "stdbuf -oL git push",
+            "setsid git push",
+            "time git push",
+            "sudo -n git push",
+            "env -i git push",
+            "echo origin | xargs git push",
+            "xargs -n 1 git push < remotes",
+            "/usr/bin/git push origin main",
+            "timeout 60 /usr/bin/git push",
+            "git -c core.sshCommand=ssh push origin main",
+            "git --git-dir /w/.git push origin main",
+            "git -C /w --no-pager push",
+            "(git push origin main)",
+            "( cd /w && git push )",
+            "{ git push; }",
+            "out=$(git push origin main 2>&1)",
+            "echo `git push`",
+            "git push origin main &",
+            "! git push",
+            "sh -c 'git push origin main'",
+            "bash -lc \"cd /w && timeout 60 git push\"",
+            "eval 'git push origin main'",
+        ],
+    );
+    allowed(&[
+        "git stash push -m x -- a.txt",
+        "git -c push.default=current status",
+        "git log --oneline origin/main..HEAD",
+        "echo \"git push origin main\"",
+        "timeout 60 git fetch origin",
+        "git rev-parse --abbrev-ref --symbolic-full-name @{u}",
+        "4genteam room queue create --body \"this seat cannot push; timeout 60 git push was refused\"",
+        "grep -n 'git push' AGENTS.md",
+    ]);
+}
+
+/// A ROOM WITH A DIRECTOR KEEPS MAIN FOR IT. aa2-rs put a director above its lead and the lead, following the
+/// shared skill, merged four branches into main on 2026-10-28 06:16. A room that holds `<roomDir>/director/` refuses
+/// every seat - the lead included - a push and any statement that moves main; the same lead in a room without the
+/// directory keeps its push, and work on its own branch stays allowed in both.
+#[test]
+fn a_room_with_a_director_keeps_main_and_the_push_for_it() {
+    let root = fresh_dir("director-room");
+    let room = root.join("rooms/demo");
+    let repo = root.join("repo");
+    std::fs::create_dir_all(room.join("wt")).unwrap();
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "root"]);
+    let lanes = room.join("wt");
+    let lead = |cmd: &str| {
+        refusal_full(
+            &fresh_dir("director-lead"),
+            WORKTREES,
+            "agenthub--demo--lead",
+            "lead",
+            lanes.to_str().unwrap(),
+            "run_command",
+            serde_json::json!({ "CommandLine": cmd }),
+        )
+        .map(|r| rule_of(&r))
+    };
+    let r = repo.display();
+    // No director yet: today's ruling, the lead pushes and merges on main.
+    assert_eq!(lead("git push origin main"), None);
+    assert_eq!(lead(&format!("cd {r} && git merge --ff-only topic")), None);
+
+    std::fs::create_dir_all(room.join("director")).unwrap();
+    for cmd in [
+        "git push origin main".to_owned(),
+        "timeout 60 git push origin HEAD:refs/heads/topic".to_owned(),
+    ] {
+        assert_eq!(lead(&cmd).as_deref(), Some("push"), "{cmd}");
+    }
+    for cmd in [
+        format!("cd {r} && git merge --ff-only topic"),
+        format!("git -C {r} merge --no-ff topic"),
+        format!("cd {r} && git pull --ff-only"),
+        format!("cd {r} && git cherry-pick abc123"),
+        format!("cd {r} && git commit -m x -- a.txt"),
+        format!("cd {r} && git reset --soft topic"),
+        format!("git -C {r} update-ref refs/heads/main topic"),
+        format!("git -C {r} branch -f main topic"),
+        format!("git -C {r} fetch . topic:main"),
+    ] {
+        assert_eq!(lead(&cmd).as_deref(), Some("director-main"), "{cmd}");
+    }
+    let reason = refusal_full(
+        &fresh_dir("director-reason"),
+        WORKTREES,
+        "agenthub--demo--lead",
+        "lead",
+        lanes.to_str().unwrap(),
+        "run_command",
+        serde_json::json!({ "CommandLine": format!("cd {r} && git merge topic") }),
+    )
+    .unwrap();
+    assert!(reason.contains("ready.md") && reason.contains("only the director updates main"), "{reason}");
+
+    // The lead's own work is not main's: its branch, the integration branch, an aborted merge, a read.
+    git(&["switch", "-q", "-c", "demo/integration"]);
+    for cmd in [
+        format!("cd {r} && git merge --no-ff topic"),
+        format!("cd {r} && git commit -m x -- a.txt"),
+        format!("git -C {r} merge --abort"),
+        format!("git -C {r} log --oneline main..topic"),
+        format!("git -C {r} branch demo/lead-2 main"),
+    ] {
+        assert_eq!(lead(&cmd), None, "{cmd}");
+    }
+}
+
 /// The owner's 2026-10-18 ruling: the lead pushes after the reviewer gate and a green test run, and every
 /// other seat is still blocked. The exception is the seat KEY, read from either session spelling or from
 /// the key the launcher exported; a name that merely starts with it is another seat.

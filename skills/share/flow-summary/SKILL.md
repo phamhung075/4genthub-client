@@ -51,7 +51,7 @@ rebuilt in 6,600+ commands and the rail in 5,316 - each a turn spent on a fact t
 
 ```
 facts: repo.head_short=8e706e18; repo.behind_base=0; queue.mine_pending=1; pins.state=same; offpeak.peak=false
-rule: a row addressed to this seat is the work; only the lead pushes
+rule: a row addressed to this seat is the work; only the lead pushes (the director and founder, in a room with `<roomDir>/director/`)
 decision: claim the rail row and write the enforcement tests before the parse
 next: go-dev writes the red tests, then the parse; the lead closes when green
 ```

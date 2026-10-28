@@ -31,6 +31,17 @@ Every seat builds and tests where it edits, **the lead included**: in a worktree
 
 ## Branches, merges and push
 
+**First, does your room have a director?** A room declares one by holding `<roomDir>/director/` (check: `test -d <roomDir>/director && echo director`). A director is a principal session outside the room that alone updates `main`; the founder pushes. When the directory exists, the director rule below replaces every "the lead merges to `main`" and "the lead pushes" line in this skill, in your room guide's older text and in any queue row or decision that says otherwise; the seat guard enforces it (rules `push` and `director-main`). A room without the directory follows the lead rules below unchanged.
+
+**Director rule (room has `<roomDir>/director/`):**
+
+- The lead still owns the seats' branches and `<room>/integration`: it creates branches and worktrees, merges ready tips into integration, and runs the reviewer gate.
+- The lead does NOT update `main`: no merge, pull, cherry-pick, rebase, commit or reset on `main`, and no `update-ref`, `branch -f` or fetch refspec that moves it.
+- The lead lists each gated branch in `<roomDir>/director/ready.md` as `<branch>=<sha>` with the gate's verdict (main tip, commands, results). The director merges from that list.
+- No seat pushes, the lead included. The founder or the director pushes.
+
+**Lead rule (room without a director):**
+
 - The lead owns every branch and every merge. The lead creates each seat's branch and worktree, merges a seat's branch to `main` when the seat has finished and the reviewer gate has passed, and removes the branch afterwards.
 - Only the lead works on `main`. No other seat edits, commits or merges there.
 - Only the lead pushes (`main`, `frontend`), after the reviewer gate and a green test run. No other seat pushes.
@@ -74,7 +85,7 @@ Stale worktrees (`/tmp/wt-*`, `/tmp/gate-*`, prunable entries in `git worktree l
 - **Your worktree and branch:** `<roomDir>/wt/<seat>` on `<room>/<seat>`, for example `4genthub-min/go-dev`. The reviewer's worktree is detached. Your client code lives in exactly one place, `<roomDir>/wt/<seat>/agenthub_client`, on the branch you commit to: `<room>/<seat>` for a seat that has none, and the lane branch a seat migrated off `<roomDir>/wt/<seat>-client` kept - a second copy at `<seat>-client` is the pre-derivation layout, and `up` removes it, clean only, so the branch survives. `.claude` is not a submodule here and is never linked. Never run `git submodule update` there.
 - **The commit form (owner, pathspec fleet-wide, 2026-10-17):** commit by pathspec and do not stage first - `git commit -m "..." -- <paths>`; a new file gets `git add -N -- <new>` first, then the same pathspec commit. `git add -A`, `git add .` and `commit -a` stay forbidden.
 - **Ready for a gate:** tell the lead your tip as `<room>/<seat>=<sha>`.
-- **The merge routine (the lead's):**
+- **The merge routine (the lead's; in a room with a director, steps 3 and 4 are the director's, and the lead stops after step 2 by listing `C` and its verdict in `<roomDir>/director/ready.md`):**
   1. The lead merges each ready tip `--no-ff` into `<room>/integration`.
   2. The reviewer gates its tip `C`. The verdict names `C`, the main tip `M`, every `branch=sha` it contains, the commands run, and each result.
   3. The lead checks that integration = `C` and main = `M`, then runs `git merge --ff-only C` in the main checkout.

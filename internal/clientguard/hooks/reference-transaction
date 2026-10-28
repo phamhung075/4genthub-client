@@ -1,0 +1,38 @@
+#!/bin/sh
+# 4genteam git guard - reference-transaction
+#
+# Installed by `4genteam guard install`. The template lives in the client
+# (internal/clientguard/hooks/reference-transaction), so edit that, not this copy.
+#
+# ONLY THE DIRECTOR MOVES MAIN in a room that declares a director (<roomDir>/director/). Every ref update
+# git makes - merge, commit, pull, update-ref, branch -f, fetch into a branch - passes through this hook, so
+# a seat's shell cannot move the room's protected branch whatever verb it uses. A room without a director,
+# and a shell that is not a seat's (no session variable), are never judged: the shell checks below keep the
+# hook to two string tests for every ref update that is not a seat's branch update.
+#
+# git hands the refs on standard input and the hook it replaced reads them too, so the input is read once
+# and given to each. The guard binary being gone is a WARNING here, not a refusal: refusing would stop every
+# git command in every worktree of the repository.
+
+GUARD_BIN="__GUARD_BIN__"
+PREV="__PREV__"
+
+input=$(cat)
+
+if [ -n "$PREV" ] && [ -x "$PREV" ]; then
+    printf '%s\n' "$input" | "$PREV" "$@" || exit $?
+fi
+
+[ "$1" = prepared ] || exit 0
+[ -n "$AGENTHUB_SESSION_NAME$OPENRIG_SESSION_NAME" ] || exit 0
+case "$input" in
+    *refs/heads/*) ;;
+    *) exit 0 ;;
+esac
+
+if [ ! -x "$GUARD_BIN" ]; then
+    echo "4genteam git guard: $GUARD_BIN is gone, so this ref update was not checked against the room's director rule" >&2
+    exit 0
+fi
+
+printf '%s\n' "$input" | exec "$GUARD_BIN" guard run reference-transaction "$@"

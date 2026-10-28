@@ -67,8 +67,8 @@ func TestTheHooksRowSeesTheGuardTheInstallerWrites(t *testing.T) {
 		t.Errorf("state = %q, want %q: the row did not see the guard the installer wrote (guards %v, note %q)",
 			row.Row.State, clientservices.Running, row.Guards, row.Note)
 	}
-	if strings.Join(row.Guards, ",") != "pre-commit,pre-push" {
-		t.Errorf("guards = %v, want the two hooks the installer writes", row.Guards)
+	if strings.Join(row.Guards, ",") != "pre-commit,pre-push,reference-transaction" {
+		t.Errorf("guards = %v, want the three hooks the installer writes", row.Guards)
 	}
 }
 
