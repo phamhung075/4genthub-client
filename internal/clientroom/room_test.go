@@ -698,3 +698,58 @@ func TestARoomVerbOutsideTheListIsRefusedByName(t *testing.T) {
 		t.Errorf("stderr = %q, want the whole verb list %q", stderr, roomVerbList())
 	}
 }
+
+// agyTranscriptFile points the verb at a transcript of the test's own, whose newest record either ends the
+// turn (a final answer) or leaves it running (a pending tool call).
+func agyTranscriptFile(t *testing.T, ended bool) {
+	t.Helper()
+	last := `{"type":"PLANNER_RESPONSE","status":"DONE","input_tokens":1,"cache_read_tokens":2,"output_tokens":3}`
+	if !ended {
+		last = `{"type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"run_command"}]}`
+	}
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	if err := os.WriteFile(path, []byte(`{"type":"USER_INPUT","status":"DONE"}`+"\n"+last+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previous := agyTranscript
+	t.Cleanup(func() { agyTranscript = previous })
+	agyTranscript = func(string, string, string) string { return path }
+}
+
+// An agy seat has no runner, so ForceCompact can only refuse it (room aa2-rs-peak, 2026-10-28). At its
+// prompt it is sent agy's own /compact through SendText, and no ForceCompact is asked for it.
+func TestRoomCompactTypesSlashCompactIntoAnAgySeatAtItsPrompt(t *testing.T) {
+	agyTranscriptFile(t, true)
+	daemon := newFakeDaemon(t, map[string]string{
+		"GetRoomStatus": okData("[" + seatJSON("peak-dev", "agy", "running") + "]"),
+		"SendText":      okData("null"),
+	})
+	code, stdout, stderr := runRoom(t, daemon.args("compact", testRoom)...)
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitOK, stderr)
+	}
+	requests := daemon.requests()
+	if len(requests) != 2 || !strings.Contains(requests[1], `"action":"SendText"`) ||
+		!strings.Contains(requests[1], `"agenthub--room-a--peak-dev"`) || !strings.Contains(requests[1], `"/compact"`) {
+		t.Fatalf("requests = %q, want GetRoomStatus then one SendText of /compact to the agy seat", requests)
+	}
+	if !strings.Contains(stdout, "peak-dev agenthub--room-a--peak-dev: /compact typed") {
+		t.Errorf("stdout = %q, want the agy seat's line", stdout)
+	}
+}
+
+// Mid-turn, agy queues a pasted /compact as a plain message, so nothing is typed and the seat is refused by name.
+func TestRoomCompactRefusesAnAgySeatMidTurnAndTypesNothing(t *testing.T) {
+	agyTranscriptFile(t, false)
+	daemon := newFakeDaemon(t, map[string]string{
+		"GetRoomStatus": okData("[" + seatJSON("peak-dev", "agy", "running") + "]"),
+	})
+	code, _, stderr := runRoom(t, daemon.args("compact", testRoom)...)
+	if code != clientcmd.ExitPartialStart {
+		t.Fatalf("exit %d, want %d (stderr %q)", code, clientcmd.ExitPartialStart, stderr)
+	}
+	assertRequests(t, daemon, `{"action":"GetRoomStatus","payload":{"room":"room-a"}}`)
+	if !strings.Contains(stderr, "peak-dev") || !strings.Contains(stderr, "mid-turn") {
+		t.Errorf("stderr = %q, want the agy seat refused as mid-turn", stderr)
+	}
+}

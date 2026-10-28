@@ -38,6 +38,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
+	"github.com/phamhung075/4genthub-client/internal/seatlog"
 )
 
 // closeWatch closes the room's herdr watch workspaces, whose panes run the feed and input helpers; a var so
@@ -473,6 +474,32 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 	return clientcmd.ExitOK
 }
 
+// agyTranscript is where an agy seat's transcript is found; a variable so the suite points it at a file of
+// its own instead of the operator's agy home.
+var agyTranscript = seatlog.AgyTranscript
+
+// compactAgySeat compacts an agy seat the one way agy offers: its own `/compact` slash command, typed into
+// its pane through the runtime's SendText (an agy seat has no runner, so the daemon's ForceCompact has no
+// mailbox to relay into and refuses it). It is typed ONLY when the seat's transcript says it is at its
+// prompt: a /compact pasted mid-turn is queued by agy as a plain message, not run as a command.
+func compactAgySeat(inv invocation, seat, session string, stdout, stderr io.Writer) bool {
+	path := agyTranscript(inv.stateDir, inv.room, seat)
+	if path == "" {
+		fmt.Fprintf(stderr, "4genteam room compact: %s (%s): no agy transcript found for this seat, so nothing can say it is at its prompt; nothing was typed\n", seat, session)
+		return false
+	}
+	if !seatlog.AgyTurnEnded(path) {
+		fmt.Fprintf(stderr, "4genteam room compact: %s (%s): agy seat is mid-turn; /compact was NOT typed (agy would queue it as a message). Retry when it is at its prompt; the compaction supervisor does this by itself\n", seat, session)
+		return false
+	}
+	if err := inv.client.SendText(session, "/compact", "compact"); err != nil {
+		fmt.Fprintf(stderr, "4genteam room compact: %s (%s): %v\n", seat, session, err)
+		return false
+	}
+	fmt.Fprintf(stdout, "%s %s: /compact typed into the agy pane (seat at its prompt)\n", seat, session)
+	return true
+}
+
 // runCompact asks the runtime to compact every RUNNING seat of the room, and refuses the rest by name.
 //
 // The room's seats are read FIRST because the running set is what this verb decides on: compact is
@@ -487,6 +514,9 @@ func runReseat(args []string, stdout, stderr io.Writer) int {
 //     is printed VERBATIM, because it names the capability that is missing;
 //   - exit 0 over either. ExitPartialStart (2) is the code for both, and it is the design's own "the daemon
 //     answered but a seat would not run" read from the operator's side: not everything asked for happened.
+//
+// AN AGY SEAT has no runner for ForceCompact to relay into, so it gets agy's own `/compact` typed into its
+// pane - and only at its prompt (compactAgySeat); a mid-turn agy seat is refused by name, exit 2.
 func runCompact(args []string, stdout, stderr io.Writer) int {
 	inv, code, ok := parseInvocation("compact", args, 1, stdout, stderr)
 	if !ok {
@@ -512,6 +542,12 @@ func runCompact(args []string, stdout, stderr io.Writer) int {
 			continue
 		}
 		session := SessionName(inv.room, seat.Seat)
+		if strings.EqualFold(strings.TrimSpace(seat.Runtime), "agy") {
+			if !compactAgySeat(inv, seat.Seat, session, stdout, stderr) {
+				verdict = clientcmd.ExitPartialStart
+			}
+			continue
+		}
 		answer, err := inv.client.ForceCompact(session)
 		if err != nil {
 			fmt.Fprintf(stderr, "4genteam room compact: %s (%s): %v\n", seat.Seat, session, err)
