@@ -111,8 +111,10 @@ func New(room string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 	// The same resolver the idle guard binds: an agy seat's context is read from its live transcript,
 	// not from the omp log it left behind (measured 2026-10-17: ps said 53k while the stale file said 14h).
 	supervisor.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
-	supervisor.Idle = roomIdle
-	supervisor.IdleWhy = func(room, seat string) string { _, why := roomIdleReason(room, seat); return why }
+	// AN AGY SEAT IS READ FROM ITS TRANSCRIPT, not from the daemon: it has no runner, so the daemon's word for
+	// it is `unknown` for its whole life and the daemon read alone never lets it be compacted.
+	supervisor.Idle = func(r, seat string) bool { idle, _ := seatIdleReason(stateRoot, r, seat); return idle }
+	supervisor.IdleWhy = func(r, seat string) string { _, why := seatIdleReason(stateRoot, r, seat); return why }
 	supervisor.Say = roomSay
 	supervisor.RPCCompact = func(r, seat string) string { return supervisor.rpcCompact(r, seat) }
 	supervisor.Abort = roomAbort
@@ -254,16 +256,27 @@ func (s *Supervisor) Step() {
 		if !urgent && now-state.sent <= cooldown {
 			continue
 		}
+		// AN IDLE AGY SEAT IS NOT TOLD, it is compacted: a message pasted into an agy pane at its prompt
+		// STARTS A TURN, so the notice ("find a safe point, stop") would spend a model turn - on the shared
+		// agy quota - to reach the state the seat is already in. A working agy seat is told as any other.
+		quietAgy := runtime == "agy" && s.Idle(s.Room, seat)
 		if !state.told {
-			s.Say(s.Room, seat, s.notice(), false)
 			state.told = true
-			s.Log(fmt.Sprintf("%s: told, %s of %s (%s)", seat, seatlog.Kilo(used),
-				seatlog.Kilo(seatlog.CompactLimit), runtime))
+			if quietAgy {
+				s.Log(fmt.Sprintf("%s: %s of %s (%s), at its prompt: compacted without the notice", seat,
+					seatlog.Kilo(used), seatlog.Kilo(seatlog.CompactLimit), runtime))
+			} else {
+				s.Say(s.Room, seat, s.notice(), false)
+				s.Log(fmt.Sprintf("%s: told, %s of %s (%s)", seat, seatlog.Kilo(used),
+					seatlog.Kilo(seatlog.CompactLimit), runtime))
+			}
 		}
 		if used >= seatlog.WarnLimit && !state.warned {
-			s.Say(s.Room, seat, warningText(), false)
 			state.warned = true
-			s.Log(fmt.Sprintf("%s: warned, %s of %s", seat, seatlog.Kilo(used), seatlog.Kilo(seatlog.HardLimit)))
+			if !quietAgy {
+				s.Say(s.Room, seat, warningText(), false)
+				s.Log(fmt.Sprintf("%s: warned, %s of %s", seat, seatlog.Kilo(used), seatlog.Kilo(seatlog.HardLimit)))
+			}
 		}
 		if runtime == "omp" && urgent {
 			if hard {
@@ -374,14 +387,9 @@ func lastContext(path string) (int, bool) {
 	return 0, false
 }
 
-// compactions counts the compaction records in a log. Unlike the token reading this is over the WHOLE
-// file: a compaction that has scrolled out of the tail still happened.
+// compactions counts the compaction records in a log, an agy CHECKPOINT among them (seatlog.Compactions).
 func compactions(path string) int {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	return strings.Count(string(raw), `"type":"compaction"`)
+	return seatlog.Compactions(path)
 }
 
 func modTime(path string) float64 {
@@ -392,16 +400,30 @@ func modTime(path string) float64 {
 	return float64(info.ModTime().UnixNano()) / 1e9
 }
 
-// roomIdle reads a seat's idleness through clientruntime.ReadSeatActivity, the runtime's own session list.
-// Every failure answers false, and false means "not idle" to both callers: a seat that cannot be proved
-// idle WAITS rather than racing a working turn, because a check that failed open would send /compact into a
-// running seat, which is the one outcome the gate exists to prevent.
+// roomIdle is roomIdleReason without the sentence: the daemon's word only, which the idle guard binds.
 func roomIdle(room, seat string) bool {
 	idle, _ := roomIdleReason(room, seat)
 	return idle
 }
 
-// roomIdleReason is roomIdle with the sentence that says WHY a false came back, and it exists because the two kinds of
+// seatIdleReason is roomIdleReason for any runtime: an agy seat answers from its own transcript
+// (seatlog.AgyTurnEnded), every other seat from the daemon's activity word. A working agy seat is an answer and
+// says nothing; a seat whose log cannot be found says so.
+func seatIdleReason(stateRoot, room, seat string) (bool, string) {
+	path, runtime := seatlog.SeatLog(stateRoot, room, seat)
+	if runtime != "agy" {
+		return roomIdleReason(room, seat)
+	}
+	if path == "" {
+		return false, "the agy transcript of this seat could not be found, so nothing can say whether it is at its prompt"
+	}
+	return seatlog.AgyTurnEnded(path), ""
+}
+
+// roomIdleReason reads a seat's idleness through clientruntime.ReadSeatActivity, the runtime's own session list.
+// Every failure answers false, and false means "not idle": a seat that cannot be proved idle WAITS rather than
+// racing a working turn, because a check that failed open would send /compact into a running seat, which is the
+// one outcome the gate exists to prevent. It returns the sentence that says WHY a false came back, and it exists because the two kinds of
 // false are not the same fact: "the seat is working" is a healthy answer, while "nothing ever answered" is this box's
 // actual state - on the compaction path the not-idle branch is taken EVERY pass (`:196`, rate-limited, interrupt and
 // continue), so the quiet-triggered compact below it never fires and a supervisor that never compacts looks exactly

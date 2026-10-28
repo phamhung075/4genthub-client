@@ -154,8 +154,15 @@ func newest(paths []string) string {
 }
 
 // ContextTokens is context_tokens: the tokens in the context after this record, or false when the
-// record carries no usage. A compaction record states its own tokensAfter; otherwise the reading is
-// message.usage.totalTokens when it has one, and the sum of the four per-field counts when it does not.
+// record carries no usage. A compaction record states its own tokensAfter; an agy transcript record
+// carries its counts at the top level (input_tokens + cache_read_tokens + output_tokens); otherwise the
+// reading is message.usage.totalTokens when it has one, and the sum of the four per-field counts when it
+// does not.
+//
+// THE AGY BRANCH IS WHAT LETS THE SUPERVISOR SEE AN AGY SEAT AT ALL: the watch view's own parser read these
+// top-level fields and this one did not, so `ps` showed an agy seat at 164k while the compaction supervisor
+// found no reading in the same transcript and never acted (room aa2-rs-peak, 2026-10-28: limit 75k, the
+// supervisor's log held only its start lines while both agy seats grew past 160k).
 func ContextTokens(line string) (int, bool) {
 	var record map[string]any
 	if err := json.Unmarshal([]byte(line), &record); err != nil {
@@ -165,6 +172,16 @@ func ContextTokens(line string) (int, bool) {
 		if after, ok := number(record["tokensAfter"]); ok {
 			return after, true
 		}
+	}
+	agySum, agyHas := 0, false
+	for _, key := range []string{"input_tokens", "cache_read_tokens", "output_tokens"} {
+		if value, ok := number(record[key]); ok {
+			agySum += value
+			agyHas = true
+		}
+	}
+	if agyHas && agySum > 0 {
+		return agySum, true
 	}
 	message, ok := record["message"].(map[string]any)
 	if !ok {
@@ -217,4 +234,72 @@ func RoomSeats(root, room string) []string {
 	}
 	sort.Strings(seats)
 	return seats
+}
+
+// compactionMarks are the records a compaction leaves in a seat's log: omp writes a `compaction` record, and
+// agy writes a SYSTEM `CHECKPOINT` record whose content opens "# Resuming from a compaction" (measured on
+// 23 agy checkpoints, 2026-10-26..28: the reading before each was 232k-297k and the one after it ~17k).
+var compactionMarks = []string{`"type":"compaction"`, `"type":"CHECKPOINT"`}
+
+// Compactions counts the compaction records in a log. Unlike the token reading this is over the WHOLE
+// file: a compaction that has scrolled out of the tail still happened.
+func Compactions(path string) int {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, mark := range compactionMarks {
+		count += strings.Count(string(raw), mark)
+	}
+	return count
+}
+
+// agyTailBytes is how much of an agy transcript the turn reading looks at: only its newest record counts.
+const agyTailBytes = 256 * 1024
+
+// AgyTurnEnded says whether an agy seat is at its prompt, from its own transcript: true only when the newest
+// record is the model's FINAL answer - a PLANNER_RESPONSE, status DONE, with no tool calls. Every other
+// newest record is a turn still running (a tool call waiting on its result, a tool result the model has
+// not answered, a user input or system message it has not answered yet).
+//
+// IT EXISTS BECAUSE THE DAEMON CANNOT SAY: an agy seat has no runner, so its activity word is `unknown`
+// for its whole life, and a supervisor that waits for `idle` never compacts it. Measured on the agy
+// transcripts of this machine: every final PLANNER_RESPONSE with no tool calls was followed by a
+// USER_INPUT (the next turn), never by more of the same turn.
+//
+// Anything it cannot read answers false: a seat that cannot be proved idle waits, because a /compact typed
+// into a working agy pane is queued as a message rather than run.
+func AgyTurnEnded(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	offset := info.Size() - agyTailBytes
+	if offset < 0 {
+		offset = 0
+	}
+	raw := make([]byte, info.Size()-offset)
+	if _, err := file.ReadAt(raw, offset); err != nil {
+		return false
+	}
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if offset > 0 && len(lines) == 1 {
+		return false // one record longer than the tail: its start was cut, so it cannot be read
+	}
+	var record struct {
+		Type      string            `json:"type"`
+		Status    string            `json:"status"`
+		ToolCalls []json.RawMessage `json:"tool_calls"`
+	}
+	if err := json.Unmarshal([]byte(last), &record); err != nil {
+		return false
+	}
+	return record.Type == "PLANNER_RESPONSE" && record.Status == "DONE" && len(record.ToolCalls) == 0
 }
