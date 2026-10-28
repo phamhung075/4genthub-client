@@ -134,7 +134,7 @@ An idle seat takes ONE chore - a board item labelled `chore` - and works it for 
 owner approved this standing list; no seat asks permission first.
 
 - **Claim** with `manage_task` `update`: `assignee=@<seat>`, `status=in_progress`, `details` =
-  `claim <date -u>`. The assignee IS the lock - re-read the item before starting, and if it already names
+  `claim <4genteam clock --short>`. The assignee IS the lock - re-read the item before starting, and if it already names
   another seat, take a different chore.
 - **Never create a chore and never start code under one.** The lead seeds and replenishes, at most six
   live. A chore that needs a fix or a decision returns to the lead as a `finding` rail row.
