@@ -131,6 +131,8 @@ type world struct {
 	// safeguards is the room's row report the restorer reads; every row is up unless a test says otherwise,
 	// because the report is not what most tests are about.
 	safeguards func(room string) ([]clientservices.Health, error)
+	// superviseUp is what the stubbed `up` child does for continue's supervision start; nil fails it.
+	superviseUp func(room string) error
 	// listFails makes the runtime refuse the room list: the read that failed.
 	listFails bool
 }
@@ -191,6 +193,17 @@ func newWorld(t *testing.T, tmux func() []string, nodes string) *world {
 			return true, ""
 		}
 		r.safeguards = func(room string) ([]clientservices.Health, error) { return w.safeguards(room) }
+		r.superviseUp = func(room string, allowPeak bool) error {
+			call := "supervise " + room
+			if allowPeak {
+				call += " --allow-peak"
+			}
+			w.record(call)
+			if w.superviseUp != nil {
+				return w.superviseUp(room)
+			}
+			return errors.New("no supervisor in this world")
+		}
 	}
 	t.Cleanup(func() { restoreSteps = previousSteps })
 	return w
@@ -354,6 +367,50 @@ func TestALiveRoomWhoseSupervisionIsDownIsNotRestored(t *testing.T) {
 	}
 	if len(w.sends) != 1 || !strings.Contains(w.sends[0], "alpha") {
 		t.Errorf("the live seat was not briefed: %q", w.sends)
+	}
+	if calls := strings.Join(w.calls(), "|"); !strings.Contains(calls, "supervise room-a") {
+		t.Errorf("continue did not try to start the supervision: %v", w.calls())
+	}
+}
+
+// TestContinueStartsTheSupervisionStopLeftDown: `room stop` before DeepSeek peak and `continue` after it is
+// the normal pause, and `stop` leaves the seats standing with every safeguard down. Measured 2026-10-28 on
+// aa2-rs: continue printed "supervision is down ... run heal" and the owner had to heal by hand. continue now
+// runs the same `up` heal runs, reads the rows again, and ends done when they are up - passing --allow-peak on.
+func TestContinueStartsTheSupervisionStopLeftDown(t *testing.T) {
+	w := newWorld(t, staticSessions("agenthub--room-a--alpha"), plainNodes())
+	supervised := false
+	w.safeguards = func(room string) ([]clientservices.Health, error) {
+		rows, err := allRunningRows(room)
+		if err != nil || supervised {
+			return rows, err
+		}
+		for i := range rows {
+			rows[i].State = clientservices.Stopped
+		}
+		return rows, nil
+	}
+	w.superviseUp = func(string) error { supervised = true; return nil }
+	brief := w.brief("room-a.txt", "Take the next board row.\n")
+
+	code, _, errOut := w.run("continue", "room-a", brief, "--allow-peak")
+	if code != clientcmd.ExitOK {
+		t.Fatalf("exit = %d, want 0 (stderr %q):\n%s", code, errOut, w.log())
+	}
+	if calls := strings.Join(w.calls(), "|"); !strings.Contains(calls, "supervise room-a --allow-peak") {
+		t.Errorf("the supervision start did not carry --allow-peak: %v", w.calls())
+	}
+	for _, line := range []string{
+		"room-a: seats live but supervision is down",
+		"starting it with `4genteam up room-a`",
+		"room-a: done — verify with: 4genteam ps room-a --nodes",
+	} {
+		if !strings.Contains(w.log(), line) {
+			t.Errorf("the log is missing %q:\n%s", line, w.log())
+		}
+	}
+	if strings.Contains(w.log(), "not restored") {
+		t.Errorf("a room whose supervision came up is reported as not restored:\n%s", w.log())
 	}
 }
 
