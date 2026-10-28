@@ -156,3 +156,23 @@ func TestTeamRejectsAnUnknownVerb(t *testing.T) {
 		t.Errorf("stderr did not list the verbs: %q", errOut)
 	}
 }
+
+// A seat the cloud already holds is not changed by apply, and the line says so and names the verb that does:
+// on 2026-10-28 aa2-rs's lead kept its model after `team apply` printed "seat lead: exists", until the owner
+// edited spec.json and ran sync switch by hand.
+func TestApplySaysAnExistingSeatWasNotUpdatedAndNamesSyncSwitch(t *testing.T) {
+	fake := installFake(t)
+	withCredentials(t, fake)
+	fake.override("GET", apiPathSeatTypes, 200, `{"seat_types": [{"slug": "developer"}]}`)
+	fake.override("POST", apiPrefix+"/rooms/demo/seats", 409, `{"detail": "seat already exists"}`)
+	teamDir := writeTeamDefinition(t, "demo-module", "1.0.0", "developer")
+
+	code, out, errOut := runTeam(t, "apply", "--team", teamDir)
+	if code != 0 {
+		t.Fatalf("exit %d, stderr %q\n%s", code, errOut, out)
+	}
+	want := "seat lead: exists - NOT updated"
+	if !strings.Contains(out, want) || !strings.Contains(out, "4genteam sync switch demo lead --runtime omp --model <model> --apply set-model") {
+		t.Errorf("the exists line does not say the seat was left unchanged and name sync switch:\n%s", out)
+	}
+}
