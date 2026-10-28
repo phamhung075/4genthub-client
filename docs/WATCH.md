@@ -191,5 +191,12 @@ If nothing appears, check those two first: a stopped seat has no pane, and a mis
 - A pane does not pick up a change while it runs: it started with the code and settings it read at
   launch. Reopen the view — and restart the compaction supervisor with `4genteam compact <ROOM>` —
   after changing the client or a `COMPACT_*` value.
+- An agy seat is compacted by the same supervisor and limits as an omp seat, through agy's own
+  `/compact` typed into its pane. agy has no runner, so its idle state is read from its transcript
+  (the newest record is a final answer with no tool call), and `/compact` is typed only then:
+  mid-turn agy would queue it as a plain message. An agy seat at its prompt gets `/compact` without
+  the soft-limit notice, because a pasted notice starts a model turn. `4genteam room compact ROOM`
+  does the same for agy seats, and refuses a mid-turn agy seat by name (exit 2). On its own,
+  agy 1.4.9 compacts only near 270k tokens (measured), and its `/config` has no compaction setting.
 - Keep backticks, apostrophes and `$` out of anything you type into an input pane: your own shell
   expands a backtick substitution before the client ever sees the text.
