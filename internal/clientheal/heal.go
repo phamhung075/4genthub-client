@@ -17,6 +17,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/seatwait"
 )
 
 // RequiredKeys are the variables every seat must hold for the agenthub_http MCP server to mount.
@@ -44,7 +45,9 @@ type Deps struct {
 	Rows  func(room string) ([]clientservices.Health, error)
 	Up    func(room string) error
 	Cause func() string
-	Fix   bool
+	// Wait answers the seat's declared wait (internal/seatwait) when one holds; nil reads none.
+	Wait func(room, seat string) (seatwait.Record, bool)
+	Fix  bool
 }
 
 // Run checks one room and returns every finding. An error is the safeguard report's: the process probe
@@ -112,7 +115,7 @@ func checkSeat(room string, seat clientruntime.SeatStatus, envKeys map[string]bo
 			func() error { return d.Reseat(room, seat.Seat) },
 			func() bool { _, err := os.Stat(mcp); return err == nil }))
 	}
-	if quiet, waiting, ok := stuckQuiet(seat); ok {
+	if quiet, waiting, ok := stuckQuiet(seat); ok && len(uncovered(room, seat.Seat, waiting, d)) > 0 {
 		// A SEAT THAT IS UP AND STILL IS NOT WORKING IS A FINDING, and this verb used to drop the one signal the
 		// runtime produced and print `clean` (measured 2026-10-20T22:53 at an auth prompt and 23:09 on a seat with
 		// no process: `running ... quiet_seconds=1127`). Nothing is reseated for it: heal's repair is a stop and a
@@ -147,6 +150,26 @@ func stuckQuiet(seat clientruntime.SeatStatus) (int64, []string, bool) {
 		return 0, nil, false
 	}
 	return *seat.Alert.QuietSeconds, seat.Alert.WaitingQitemIDs, true
+}
+
+// uncovered are the waiting rows a declared wait does not account for. A seat that waits on its own target, or
+// holds the rows it held when it began waiting, is blocked rather than quiet, so heal leaves it alone; a row
+// that arrived since is still reported (and the idle guard ends the wait over it).
+func uncovered(room, seat string, waiting []string, d Deps) []string {
+	if d.Wait == nil {
+		return waiting
+	}
+	wait, ok := d.Wait(room, seat)
+	if !ok {
+		return waiting
+	}
+	var out []string
+	for _, id := range waiting {
+		if !wait.Covers(id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func checkSafeguards(room string, d Deps) ([]Finding, error) {

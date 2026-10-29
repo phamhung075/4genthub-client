@@ -29,6 +29,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
@@ -39,6 +40,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
+	"github.com/phamhung075/4genthub-client/internal/seatwait"
 )
 
 // closeWatch closes the room's herdr watch workspaces, whose panes run the feed and input helpers; a var so
@@ -143,6 +145,8 @@ func printUsage(out io.Writer, verb string) {
 	fmt.Fprintln(out, "ALERT segment when the runtime flagged the seat - alert=<kind> quiet_seconds=<secs|unknown>")
 	fmt.Fprintln(out, "waiting_qitem_ids=<id,id|none>. A seat with no alert prints the four fields and nothing else, and")
 	fmt.Fprintln(out, "`unknown` is a seat that published no freshness stamp: unknown quiet time is NOT zero seconds.")
+	fmt.Fprintln(out, "A seat that declared `4genteam wait` adds waiting=<kind>:<target> <elapsed>/<max>, and a")
+	fmt.Fprintln(out, "seat_up_with_queued_work alert naming only the wait's own rows is dropped from its line.")
 	fmt.Fprintln(out, "stop sends StopRoom: exactly that room's own sessions. The room's directory (spec.json, seats/,")
 	fmt.Fprintln(out, "logs/) is LEFT IN PLACE so the room can be started again; nothing outside the room is touched.")
 	fmt.Fprintln(out, "reseat sends StopSeat then RestartSeat for one seat, in that order. A restart is a launch, so")
@@ -318,7 +322,29 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 // row is what makes a stopped seat's reason visible (see parkNote).
 func seatRow(seat clientruntime.SeatStatus, stateRoot string) string {
 	row := fmt.Sprintf("%s %s %s %s", seat.Seat, seat.Runtime, seat.State, seat.SessionName)
-	return row + alertNote(seat.Alert) + parkNote(stateRoot, seat)
+	wait := waitNote(stateRoot, seat, &seat.Alert)
+	return row + alertNote(seat.Alert) + wait + parkNote(stateRoot, seat)
+}
+
+// waitNote is the seat's declared wait (internal/seatwait), `waiting=<kind>:<target> <elapsed>/<max>`, or "".
+// A runtime seat_up_with_queued_work alert whose rows are all the wait's own is the wait, not a stuck seat, so
+// it is cleared from the row; a row the wait does not cover keeps the alert.
+func waitNote(stateRoot string, seat clientruntime.SeatStatus, alert **clientruntime.SeatAlert) string {
+	now := time.Now()
+	wait, ok := seatwait.Live(stateRoot, seat.Room, seat.Seat, now)
+	if !ok {
+		return ""
+	}
+	if a := *alert; a != nil && a.Kind == "seat_up_with_queued_work" {
+		covered := true
+		for _, id := range a.WaitingQitemIDs {
+			covered = covered && wait.Covers(id)
+		}
+		if covered {
+			*alert = nil
+		}
+	}
+	return " " + wait.Status(now)
 }
 
 // alertNote is the trailing segment of a seat's row for the runtime's alert, or the empty string when the

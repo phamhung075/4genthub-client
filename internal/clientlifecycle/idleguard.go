@@ -23,6 +23,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
+	"github.com/phamhung075/4genthub-client/internal/seatwait"
 )
 
 const (
@@ -71,6 +72,10 @@ type IdleGuard struct {
 	// Wake is the off-peak gate every automatic message to a seat passes; false holds the message back.
 	Wake func(room string) (bool, string)
 	Log  func(text string)
+	// WaitProbes see an awaited event cheaply (commit in main, free slot, off-peak); a zero value sees none.
+	WaitProbes seatwait.Probes
+	// Escalate raises the owner-level alert when every seat waits on the director or the owner.
+	Escalate func(room, summary, body string) error
 
 	State   map[string]*stallState
 	decided float64 // the newest log time of the quiet already decided, so one quiet is decided once
@@ -117,6 +122,8 @@ func NewIdleGuard(room, lead string, quiet, stall int, stateRoot string, out io.
 		return proceed, message
 	}
 	g.Log = func(text string) { fmt.Fprintf(out, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), text) }
+	g.WaitProbes = seatwait.LiveProbes()
+	g.Escalate = escalateToOwner
 	return g
 }
 
@@ -145,8 +152,10 @@ func (g *IdleGuard) Step(ctx context.Context) {
 	now := g.Now()
 	idleAll, newest, counted := true, 0.0, 0
 	silence := map[string]float64{}
-	rows, _ := g.Active(g.Room)
+	rows, rowsErr := g.Active(g.Room)
 	seatHasAssignedWork := map[string]bool{}
+	waits := map[string]seatwait.Record{}
+	idleSeats := map[string]bool{}
 	for _, row := range rows {
 		if row.State == "in-progress" {
 			dest := row.DestinationSession
@@ -162,7 +171,8 @@ func (g *IdleGuard) Step(ctx context.Context) {
 			continue
 		}
 		counted++
-		modified := g.Modified(path)
+		logged := g.Modified(path)
+		modified := logged
 		if g.Started != nil {
 			if started := g.Started(g.Room, seat); started > modified {
 				modified = started
@@ -180,7 +190,27 @@ func (g *IdleGuard) Step(ctx context.Context) {
 		if silence[seat] < float64(g.Stall) {
 			state.count, state.told = 0, false
 		}
-		if g.Idle(g.Room, seat) {
+		idle := g.Idle(g.Room, seat)
+		idleSeats[seat] = idle
+		// A SEAT THAT DECLARED A WAIT IS NOT STALLED: it is never nudged while the wait holds, and the wait's own
+		// end (a message, a new row, the event, the expiry) is what moves it again.
+		wait, live, ended := g.passWait(seat, idle, logged, now, rows, rowsErr == nil)
+		if live {
+			waits[seat] = wait
+			state.count, state.told = 0, false
+			if !idle {
+				idleAll = false
+			}
+			continue
+		}
+		if ended {
+			// The wait ended this pass, and the end was itself a wake (a message, a new row, or the guard's own
+			// line): the seat gets a full stall period from now before a nudge, and the room is not quiet.
+			state.count, state.told, state.nudged = 0, false, now
+			idleAll = false
+			continue
+		}
+		if idle {
 			if seatHasAssignedWork[seat] && silence[seat] >= float64(g.Stall) {
 				g.nudge(seat, silence[seat], now, state)
 			}
@@ -191,7 +221,10 @@ func (g *IdleGuard) Step(ctx context.Context) {
 			g.nudge(seat, silence[seat], now, state)
 		}
 	}
-	if idleAll && counted > 0 && now-newest >= float64(g.Quiet) && (newest > g.decided || now-g.decided >= float64(g.Quiet*2)) {
+	g.escalateWaits(counted, idleSeats, waits, now)
+	// THE ROOM IS QUIET only when every seat is idle AND none waits on a live target: a room whose seats all
+	// wait is blocked, not finished, and that is escalateWaits' case rather than a Jev verdict.
+	if idleAll && len(waits) == 0 && counted > 0 && now-newest >= float64(g.Quiet) && (newest > g.decided || now-g.decided >= float64(g.Quiet*2)) {
 		g.decide(ctx, silence, newest)
 	}
 	if err := clientservices.WriteHeartbeat(g.Root, clientservices.RoomGuard, g.Room); err != nil {

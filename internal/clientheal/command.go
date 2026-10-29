@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
@@ -18,6 +19,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/seatwait"
 )
 
 const usage = "usage: 4genteam heal ROOM [--check] [--json] " + clientoffpeak.ModeFlagUsage + " [--state-root DIR] [--socket PATH]"
@@ -124,7 +126,10 @@ func machineDeps(root string, client *clientruntime.Client, fix, allowPeak bool,
 	return Deps{
 		StateRoot: root,
 		Fix:       fix,
-		Seats:     client.GetRoomStatus,
+		Wait: func(room, seat string) (seatwait.Record, bool) {
+			return seatwait.Live(root, room, seat, time.Now())
+		},
+		Seats: client.GetRoomStatus,
 		Reseat: func(room, seat string) error {
 			// THE GATE BEFORE THE STOP: heal's repair is a stop and a restart, and a restart is a launch that
 			// bills at peak. A refusal returns before StopSeat, so the seat is left exactly as the run found it,

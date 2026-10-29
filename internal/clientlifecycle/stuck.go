@@ -48,6 +48,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
+	"github.com/phamhung075/4genthub-client/internal/seatwait"
 )
 
 const (
@@ -117,6 +118,8 @@ type stuckDeps struct {
 	escalate func(room string, finding stuckFinding, open time.Duration) (string, error)
 	now      func() time.Time
 	state    func(room string) (string, error)
+	// waiting answers the seat's declared wait (internal/seatwait) when one holds: such a seat is not idle.
+	waiting func(room, seat string) (string, bool)
 }
 
 // stuckDepsFor is the scan's production wiring, and a seam so a case drives agent's pass without a room.
@@ -133,6 +136,10 @@ func defaultStuckDeps(stateRoot string) *stuckDeps {
 		escalate: stuckEscalateRow,
 		now:      clientservices.Now,
 		state:    func(room string) (string, error) { return filepath.Join(stateRoot, "stuck-"+room+".json"), nil },
+		waiting: func(room, seat string) (string, bool) {
+			wait, ok := seatwait.Live(stateRoot, room, seat, time.Now())
+			return wait.On(), ok
+		},
 	}
 }
 
@@ -213,6 +220,7 @@ type stuckReport struct {
 	Findings      []stuckFinding    `json:"findings"`
 	Idle          []idleSeat        `json:"idle"`
 	Skipped       []string          `json:"skipped,omitempty"`
+	Waiting       []string          `json:"waiting,omitempty"`
 	Notes         []string          `json:"not_observed,omitempty"`
 	Sent          []string          `json:"sent"`
 	Escalated     []string          `json:"escalated,omitempty"`
@@ -301,6 +309,14 @@ func stuckScan(deps *stuckDeps, opts stuckOptions) stuckReport {
 		if seat == ownerNodeSeat {
 			continue
 		}
+		// A SEAT THAT DECLARED A WAIT IS BLOCKED, NOT IDLE: telling the lead and then the owner it is idle was
+		// the "rust-dev idle 11h13m" alert of a seat waiting on a merge (aa2-rs, 2026-10-29).
+		if deps.waiting != nil {
+			if on, waiting := deps.waiting(opts.Room, seat); waiting {
+				report.Waiting = append(report.Waiting, seat+" on "+on)
+				continue
+			}
+		}
 		path, runtime := deps.seatLog(opts.Room, seat)
 		if path == "" {
 			report.Skipped = append(report.Skipped, fmt.Sprintf("%s (no session log this machine can read: runtime %s)", seat, stuckRuntime(runtime)))
@@ -324,6 +340,7 @@ func stuckScan(deps *stuckDeps, opts stuckOptions) stuckReport {
 	})
 	sort.Slice(report.Idle, func(i, j int) bool { return report.Idle[i].Seat < report.Idle[j].Seat })
 	sort.Strings(report.Skipped)
+	sort.Strings(report.Waiting)
 	sort.Strings(report.Notes)
 	return report
 }
@@ -926,6 +943,9 @@ func printStuckReport(out io.Writer, report stuckReport) {
 	if len(report.Skipped) > 0 {
 		fmt.Fprintf(out, "  skipped: %s\n", strings.Join(report.Skipped, ", "))
 	}
+	if len(report.Waiting) > 0 {
+		fmt.Fprintf(out, "  waiting: %s\n", strings.Join(report.Waiting, ", "))
+	}
 	if len(report.Notes) > 0 {
 		fmt.Fprintf(out, "  not observed: %s\n", strings.Join(report.Notes, "; "))
 	}
@@ -949,6 +969,9 @@ func printStuckPlan(out io.Writer, report stuckReport) {
 	}
 	if len(report.Skipped) > 0 {
 		fmt.Fprintf(out, "  skipped: %s\n", strings.Join(report.Skipped, ", "))
+	}
+	if len(report.Waiting) > 0 {
+		fmt.Fprintf(out, "  waiting: %s\n", strings.Join(report.Waiting, ", "))
 	}
 	if len(report.Notes) > 0 {
 		fmt.Fprintf(out, "  not observed: %s\n", strings.Join(report.Notes, "; "))
