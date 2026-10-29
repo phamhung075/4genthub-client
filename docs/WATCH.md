@@ -198,5 +198,14 @@ If nothing appears, check those two first: a stopped seat has no pane, and a mis
   the soft-limit notice, because a pasted notice starts a model turn. `4genteam room compact ROOM`
   does the same for agy seats, and refuses a mid-turn agy seat by name (exit 2). On its own,
   agy 1.4.9 compacts only near 270k tokens (measured), and its `/config` has no compaction setting.
+- An agy seat whose pane shows `agent executor error: ... maxMessageTokens must be positive, got 0`
+  at its bottom for two supervisor passes (30 s apart) is restarted by the same supervisor, then
+  given its last instruction again in the fresh conversation. That error breaks the conversation:
+  every later input fails the same way, and `/compact` is one more such input. It is not the context
+  limit (measured at 16k tokens). One restart per seat per 30 minutes; a second break inside that
+  window is only logged.
+- A text sent to an agy seat that agy puts in its queue (`alt+m to send immediately` under the
+  prompt) is sent with alt+m by the client that sent it (`send`, `input`), so a brief typed just
+  after `up` runs instead of waiting under an empty prompt.
 - Keep backticks, apostrophes and `$` out of anything you type into an input pane: your own shell
   expands a backtick substitution before the client ever sees the text.

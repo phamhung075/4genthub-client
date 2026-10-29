@@ -55,6 +55,11 @@ type seatState struct {
 	// a compaction that lands while the resume is held is a second event, and an operator reading the log
 	// over the window cannot otherwise see it.
 	reported int
+	// brokenSeen is when the agy executor error was first seen at the bottom of the pane (0: not seen);
+	// recovered is when the seat was last restarted for it; brokenLogged keeps the cooldown line to one.
+	brokenSeen   float64
+	recovered    float64
+	brokenLogged bool
 }
 
 // Supervisor is one `compact-run`: what it watches, its limits, and the seams the suite replaces.
@@ -92,6 +97,11 @@ type Supervisor struct {
 	// clock from.
 	Nodes  func(room string) ([]map[string]any, bool, error)
 	Getenv func(string) string
+	// Pane reads the bottom of a seat's pane; Recover restarts a seat; Brief types the first message into a
+	// restarted seat. They serve the agy executor-error recovery (agybroken.go); nil turns it off.
+	Pane    func(room, seat string) (string, bool)
+	Recover func(room, seat string) error
+	Brief   func(room, seat, text string) error
 
 	State map[string]*seatState
 }
@@ -129,6 +139,9 @@ func New(room string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 		return roomNodes("", room)
 	}
 	supervisor.Getenv = os.Getenv
+	supervisor.Pane = agyPane
+	supervisor.Recover = agyRestart
+	supervisor.Brief = agyBrief
 	supervisor.Log = func(text string) {
 		fmt.Fprintf(out, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), text)
 	}
@@ -186,6 +199,11 @@ func (s *Supervisor) Step() {
 		if state == nil {
 			state = &seatState{}
 			s.State[seat] = state
+		}
+		// AN AGY SEAT STUCK ON THE EXECUTOR ERROR is restarted before anything else is read from it: its
+		// transcript is the broken conversation's, and it reads as mid-turn for as long as it stays broken.
+		if runtime == "agy" && s.recoverBrokenAgy(seat, path, state, now) {
+			continue
 		}
 		if state.hasBefore {
 			count := compactions(path)
