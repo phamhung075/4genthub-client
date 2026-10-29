@@ -150,3 +150,28 @@ func TestAnIdleSeatWithInProgressWorkIsNudged(t *testing.T) {
 		t.Errorf("idle seat with in-progress work was not nudged, said: %v", r.said)
 	}
 }
+
+// THE INCIDENT: room aa2-rs-peak, 2026-10-29 06:52:27, two seconds after `up`: "peak-dev: stuck 75927s, told
+// to continue". The log the stall clock read was the previous session's; the seat had just started.
+func TestAFreshSeatIsNotNudgedForTheSilenceOfItsPreviousSession(t *testing.T) {
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": false}, clientjev.Selection{})
+	r.modified["/log/go-dev"] = r.now - 80000 // yesterday's log
+	start := r.now - 5
+	r.guard.Started = func(_, seat string) float64 { return start }
+	r.guard.Step(context.Background())
+	for _, said := range r.said {
+		if strings.HasPrefix(said, "go-dev: ") {
+			t.Fatalf("a seat started 5s ago was nudged: %q", said)
+		}
+	}
+	// The same seat still silent a full stall after its start IS nudged.
+	r.now += r.guard.Stall + 1
+	r.guard.Step(context.Background())
+	nudged := false
+	for _, said := range r.said {
+		nudged = nudged || strings.HasPrefix(said, "go-dev: ")
+	}
+	if !nudged {
+		t.Fatalf("a seat silent for a whole stall since its start was not nudged; said %q", r.said)
+	}
+}

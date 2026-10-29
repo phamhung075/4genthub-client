@@ -53,10 +53,16 @@ type IdleGuard struct {
 	Quiet float64 // every seat idle this long: the room has stopped
 	Stall float64 // a seat that is not idle but logs nothing this long: it is stuck
 
-	Now       func() float64
-	Seats     func(room string) []string
-	SeatLog   func(room, seat string) (string, string)
-	Modified  func(path string) float64
+	Now      func() float64
+	Seats    func(room string) []string
+	SeatLog  func(room, seat string) (string, string)
+	Modified func(path string) float64
+	// Started is when the seat's current session began (unix seconds), 0 when it cannot be read. A seat's
+	// silence is never counted from before its start: a fresh seat's log is the PREVIOUS session's until
+	// it takes its first turn, and counting from that file nudged every seat of a room the second it came up
+	// (room aa2-rs-peak, 2026-10-29 06:52:27: "peak-dev: stuck 75927s, told to continue", two seconds after
+	// `up`, while agy was still starting - the nudge and then the brief sat in agy's queue).
+	Started   func(room, seat string) float64
 	Idle      func(room, seat string) bool
 	Say       func(room, seat, text string, raw bool)
 	Interrupt func(room, seat string)
@@ -86,6 +92,7 @@ func NewIdleGuard(room, lead string, quiet, stall int, stateRoot string, out io.
 	// raised three times on 2026-10-17).
 	g.SeatLog = func(r, seat string) (string, string) { return seatlog.SeatLog(stateRoot, r, seat) }
 	g.Modified = modTime
+	g.Started = func(room, seat string) float64 { return sessionCreated(stateRoot, room, seat) }
 	g.Idle = roomIdle
 	// The idle guard's nudges are latched and retried by its own clock, so a transport refusal is not this
 	// guard's signal: the supervisor's resume is the one send whose loss must keep its witness.
@@ -156,6 +163,11 @@ func (g *IdleGuard) Step(ctx context.Context) {
 		}
 		counted++
 		modified := g.Modified(path)
+		if g.Started != nil {
+			if started := g.Started(g.Room, seat); started > modified {
+				modified = started
+			}
+		}
 		silence[seat] = now - modified
 		if modified > newest {
 			newest = modified
@@ -367,4 +379,23 @@ func (idleRunCommand) Run(ctx context.Context, args []string, stdout, stderr io.
 // IdleLogPath is the guard's log for one room.
 func IdleLogPath(room, root string) string {
 	return filepath.Join(LogDir(root), "idle-guard-"+room+".log")
+}
+
+// sessionCreated is when the seat's tmux session was created, from the runtime's own tmux server, or 0 when
+// it cannot be read. The runtime makes a new session for every seat start (a reseat included).
+func sessionCreated(stateRoot, room, seat string) float64 {
+	cmd, err := clientenv.TmuxCommandAt(stateRoot, "display-message", "-p", "-t",
+		clientruntime.SeatSessionName(room, seat), "#{session_created}")
+	if err != nil {
+		return 0
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	created, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil {
+		return 0
+	}
+	return created
 }
