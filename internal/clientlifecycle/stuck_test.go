@@ -511,3 +511,18 @@ func TestStuckBoardURLCarriesItsLimitOnce(t *testing.T) {
 		t.Errorf("the board request path = %q, want /api/v2/tasks/", gotPath)
 	}
 }
+
+// A seat that declared a wait is blocked, not idle: the stuck scan neither tells the lead nor, an hour later,
+// the owner ("rust-dev idle 11h13m" was a seat waiting on a merge, aa2-rs 2026-10-29).
+func TestStuckDoesNotCallAWaitingSeatIdle(t *testing.T) {
+	fixture := stuckFixtureFor(t)
+	fixture.seat("rust-dev", fixture.now.Add(-11*time.Hour))
+	fixture.deps.waiting = func(_, seat string) (string, bool) { return "merge:step6@f85361d", seat == "rust-dev" }
+	report := fixture.scan()
+	if len(report.Idle) != 0 || len(fixture.sent) != 0 {
+		t.Fatalf("a waiting seat was called idle: idle %+v, sent %v", report.Idle, fixture.sent)
+	}
+	if len(report.Waiting) != 1 || report.Waiting[0] != "rust-dev on merge:step6@f85361d" {
+		t.Errorf("waiting = %v", report.Waiting)
+	}
+}

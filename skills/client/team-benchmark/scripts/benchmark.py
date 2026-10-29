@@ -232,6 +232,71 @@ def compare(history, result, now):
     return lines
 
 
+def _ts(value):
+    return d.datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
+def wait_stats(path, hours, now):
+    """Declared seat waits (`4genteam wait`) in the window, from <state-root>/rooms/<room>/waits.jsonl.
+
+    A start and its end make one interval; a start with no end yet runs to now (at most its max). Each interval is
+    clipped to the window. Answers per-seat waiting seconds and share, totals by kind and by kind:target, and how
+    the waits ended - so the director sees where the pipeline blocks."""
+    lo = now - d.timedelta(hours=hours)
+    open_, spans, ended = {}, [], collections.Counter()
+    try:
+        lines = open(path).read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        seat, ev = e.get('seat'), e.get('event')
+        if ev == 'start':
+            open_[seat] = e
+        elif ev == 'end':
+            start = open_.pop(seat, None)
+            t1 = _ts(e['ts'])
+            t0 = t1 - d.timedelta(seconds=e.get('duration_s', 0))
+            spans.append((seat, e.get('kind'), e.get('target'), t0, t1))
+            if t1 >= lo:
+                ended[e.get('how', '?')] += 1
+    for seat, e in open_.items():
+        t0 = _ts(e['ts'])
+        spans.append((seat, e.get('kind'), e.get('target'), t0, min(now, t0 + d.timedelta(seconds=e.get('max_s', 0)))))
+    seats, kinds, targets, counts = collections.Counter(), collections.Counter(), collections.Counter(), collections.Counter()
+    for seat, kind, target, t0, t1 in spans:
+        sec = (min(t1, now) - max(t0, lo)).total_seconds()
+        if sec <= 0:
+            continue
+        seats[seat] += sec
+        counts[seat] += 1
+        kinds[kind] += sec
+        targets[f'{kind}:{target}'] += sec
+    window = hours * 3600
+    return {'seats': {s: {'seconds': round(v), 'share': round(v / window, 4), 'waits': counts[s]} for s, v in seats.most_common()},
+            'kinds': {k: round(v) for k, v in kinds.most_common()},
+            'targets': {k: round(v) for k, v in targets.most_common(5)},
+            'ended': dict(ended)}
+
+
+def hm(seconds):
+    m = int(seconds // 60)
+    return f'{m // 60}h{m % 60:02d}m' if m >= 60 else f'{m}m'
+
+
+def wait_line(w):
+    if not w or not w['seats']:
+        return ['waits: none declared in the window']
+    seats = ', '.join(f"{s} {100 * v['share']:.0f}% ({v['waits']}x)" for s, v in w['seats'].items())
+    kinds = ', '.join(f'{k} {hm(v)}' for k, v in w['kinds'].items())
+    tops = ', '.join(f'{k} {hm(v)}' for k, v in list(w['targets'].items())[:3])
+    ended = ', '.join(f'{k} {v}' for k, v in sorted(w['ended'].items()))
+    return [f'waits: {seats}; by kind {kinds}; top {tops}' + (f'; ended {ended}' if ended else '')]
+
+
 def brief(room, hours, c, prod, waste):
     out = []
     if c:
@@ -344,10 +409,12 @@ def main():
             'usd_merge': round(c['usd'] / merges, 4) if c and merges else None,
             'scratch': sum(w['scratch'] for w in waste)}
 
+    waits = wait_stats(f'{a.state_root}/rooms/{a.room}/waits.jsonl', a.hours, now)
     history = read_history(hist)
     prev = next((r for r in reversed(history) if r.get('kind', 'run') == 'run'), None)
     result = {'kind': 'run', 'at': now.isoformat(timespec='seconds'), 'hours': a.hours, 'seats': seats,
-              **repos, 'repos': list(repos), 'cost': c, 'productivity': prod, 'waste': waste}
+              **repos, 'repos': list(repos), 'cost': c, 'productivity': prod, 'waste': waste,
+              'waits': waits}
     with open(hist, 'a') as f:
         f.write(json.dumps(result) + '\n')
 
@@ -355,6 +422,7 @@ def main():
         print(json.dumps(result, separators=(',', ':')))
         return
     lines = brief(a.room, a.hours, c, prod, waste)
+    lines += wait_line(waits)
     if a.full:
         lines += full(a.room, a.hours, c, prod, waste, seats, repos, prev)
     lines += compare(history, result, now)

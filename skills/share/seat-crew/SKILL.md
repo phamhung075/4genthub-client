@@ -126,6 +126,25 @@ A worker is a fresh agent that knows nothing of this room. The file holds:
   `--defer-to-off-peak` to batch work.
 - A failed worker is retried once with a sharper order; after that, do the part yourself or report it.
 
+## Blocked: take a backup item, then declare the wait
+
+When your item cannot move (a reviewer verdict, a director merge, an answer to a QUESTION, a build
+slot, the peak window), first take a backup item: another rail row for you, then a chore (below).
+Only when there is none, declare what you wait on and end your turn:
+
+```sh
+4genteam wait --on merge:<branch>@<sha> [--max 60m] [--note "<why>"]
+```
+
+Kinds: `review:<qitem|branch@sha>`, `merge:<branch@sha>`, `answer:<qitem|QUESTION ref>`,
+`slot:cargo` (add `--slot-dir <dir of slot* lock files>`, e.g. `/tmp/aa2-build-slots`, so a free
+slot is seen), `peak:offpeak`, `seat:<seat>`. Room and seat come from `AGENTHUB_ROOM`/`AGENTHUB_SEAT`.
+The verb returns at once; never sleep or poll after it. While it holds you are not nudged as idle.
+It ends at the first of: a message to you, a new rail row for you, the event itself (row closed,
+commit in main, slot free, off-peak), or `--max` (default 60m, cap 4h); the last two wake you with
+one line - then take a backup item or ask. A wait with no target, or while a pending row other than
+its target is yours, is refused. `4genteam wait --show` / `--clear` read or end it.
+
 ## No work for your seat: claim one chore
 
 Idle is a fact you read, not a feeling: no pending or in-progress rail row addressed to you, no board

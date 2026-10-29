@@ -43,6 +43,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientteam"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 	"github.com/phamhung075/4genthub-client/internal/clientworktree"
+	"github.com/phamhung075/4genthub-client/internal/seatwait"
 )
 
 // pending registers a verb whose implementation package does not exist yet. It REFUSES rather than
@@ -136,6 +137,8 @@ func commands() []clientcmd.Command {
 	// The skill tree's own verbs: `skills evidence` reads each record and prints a verdict. Read-only, and
 	// the tree is the source - nothing here writes it.
 	registry = append(registry, clientskills.Commands()...)
+	// A blocked seat's declared wait: the idle guard, the stuck scan, heal and room status honour it.
+	registry = append(registry, seatwait.Commands()...)
 	return append(registry,
 		pending("seatcheck", "the seat-side checker (also reachable as `seatcheck` via argv[0])"),
 	)

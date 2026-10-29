@@ -13,6 +13,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientservices"
+	"github.com/phamhung075/4genthub-client/internal/seatwait"
 )
 
 // room is a fake machine: the seats and what each holds, and the repairs recorded.
@@ -347,5 +348,31 @@ func TestARefusedRestartIsAnUnfixedFindingNamingTheSeat(t *testing.T) {
 	}
 	if !contains(got.Detail, "reseat failed:") || !contains(got.Detail, "PEAK right now") {
 		t.Errorf("detail = %q, want the fix named and the gate's refusal carried", got.Detail)
+	}
+}
+
+// TestASeatThatDeclaredAWaitOnItsRowsIsNotQuiet: a seat waiting on a merge or a review holds the rows it was
+// working on, and the runtime still flags it seat_up_with_queued_work. Its declared wait covers those rows, so
+// heal leaves it alone; a row that arrived after the wait began is still reported.
+func TestASeatThatDeclaredAWaitOnItsRowsIsNotQuiet(t *testing.T) {
+	r := newRoom(t, "AGENTHUB_URL=u\n"+"AGENT"+"HUB_TOKEN=v\n")
+	for _, seat := range []string{"dev", "lead"} {
+		r.seats[seat] = "running"
+		r.env[seat] = map[string]bool{"AGENTHUB_URL": true, "AGENTHUB_TOKEN": true}
+		_ = os.WriteFile(filepath.Join(clientruntime.SeatDir(r.root, "r", seat), "mcp.json"), []byte("{}"), 0o600)
+	}
+	quiet := int64(40000)
+	r.alert = map[string]*clientruntime.SeatAlert{"dev": {
+		Kind: "seat_up_with_queued_work", QuietSeconds: &quiet, WaitingQitemIDs: []string{"qitem-a"},
+	}}
+	d := r.deps(t, true)
+	wait := seatwait.Record{Kind: "merge", Target: "step6@f85361d", Covered: []string{"qitem-a:in-progress"}}
+	d.Wait = func(room, seat string) (seatwait.Record, bool) { return wait, seat == "dev" }
+	if got := results(healRun(t, "r", d))["seat-quiet r/dev"]; got != "" {
+		t.Fatalf("a seat waiting on its own rows was reported quiet: %q", got)
+	}
+	r.alert["dev"].WaitingQitemIDs = []string{"qitem-a", "qitem-new"}
+	if got := results(healRun(t, "r", d))["seat-quiet r/dev"]; got != "left" {
+		t.Fatalf("a row the wait does not cover must still be reported, got %q", got)
 	}
 }
