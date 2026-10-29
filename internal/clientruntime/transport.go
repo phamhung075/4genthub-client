@@ -120,6 +120,9 @@ func RuntimeSendTextOn(socket, session, text string, opts SendOptions) ([]byte, 
 	if err != nil {
 		return nil, fmt.Errorf("the runtime's answer could not be re-encoded: %w", err)
 	}
+	// A PASTED TEXT CAN SIT IN AGY'S QUEUE while the runtime calls it submitted (agyqueue.go): settle it here,
+	// so every send and input to an agy seat is a submission and not a queued line nobody runs.
+	submitIfQueued(socket, session, raw)
 	return raw, nil
 }
 
