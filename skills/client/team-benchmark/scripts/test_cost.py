@@ -111,5 +111,30 @@ class BeforeAfter(unittest.TestCase):
         self.assertIn('-25%', out)
 
 
+
+class Waits(unittest.TestCase):
+    def test_wait_share_kinds_and_targets(self):
+        import json, tempfile
+        now = d.datetime(2026, 10, 29, 12, 0, tzinfo=d.timezone.utc)
+        lines = [
+            {'ts': '2026-10-29T08:00:00Z', 'event': 'start', 'room': 'r', 'seat': 'rust-dev', 'kind': 'merge', 'target': 'a@1', 'max_s': 3600},
+            {'ts': '2026-10-29T09:00:00Z', 'event': 'end', 'room': 'r', 'seat': 'rust-dev', 'kind': 'merge', 'target': 'a@1', 'how': 'expired', 'duration_s': 3600},
+            {'ts': '2026-10-29T11:30:00Z', 'event': 'start', 'room': 'r', 'seat': 'bevy-dev', 'kind': 'review', 'target': 'q1', 'max_s': 3600},
+            {'ts': '2026-10-28T00:00:00Z', 'event': 'start', 'room': 'r', 'seat': 'old', 'kind': 'slot', 'target': 'cargo', 'max_s': 600},
+            {'ts': '2026-10-28T00:10:00Z', 'event': 'end', 'room': 'r', 'seat': 'old', 'kind': 'slot', 'target': 'cargo', 'how': 'event', 'duration_s': 600},
+        ]
+        with tempfile.NamedTemporaryFile('w', suffix='.jsonl', delete=False) as f:
+            f.write('\n'.join(json.dumps(x) for x in lines) + '\n')
+        w = benchmark.wait_stats(f.name, 24, now)
+        os.unlink(f.name)
+        self.assertEqual(w['seats']['rust-dev']['seconds'], 3600)
+        self.assertEqual(w['seats']['bevy-dev']['seconds'], 1800)  # still open: runs to now
+        self.assertNotIn('old', w['seats'])  # outside the window
+        self.assertEqual(w['kinds'], {'merge': 3600, 'review': 1800})
+        self.assertEqual(list(w['targets'])[0], 'merge:a@1')
+        self.assertEqual(w['ended'], {'expired': 1})
+        self.assertIn('rust-dev 4% (1x)', benchmark.wait_line(w)[0])
+        self.assertIsNone(benchmark.wait_stats('/nonexistent/waits.jsonl', 24, now))
+
 if __name__ == '__main__':
     unittest.main()

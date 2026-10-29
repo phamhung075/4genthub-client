@@ -56,6 +56,12 @@ Brief output, line by line:
    whose patch is not in main); or duplicates (their patch-ids are carried by another branch).
 5. **Before/after**: the last run before the latest change marker against this run, with deltas,
    plus `WARN` lines when less than 24h have passed or two or more changes fall in between.
+6. **Waits line**: the seats' declared waits (`4genteam wait`, logged in
+   `<state-root>/rooms/<ROOM>/waits.jsonl`): each seat's share of the window spent waiting and its
+   wait count, waiting time by kind (`merge`, `review`, `answer`, `slot`, `peak`, `seat`), the top
+   three `kind:target`s, and how the waits ended (`event`, `message`, `new-item`, `expired`, ...).
+   Most time on `merge:` or `answer:` means the pipeline blocks on the director; many `expired`
+   ends mean seats wait on things nobody releases.
 
 What good looks like:
 
@@ -66,6 +72,8 @@ What good looks like:
 - Coord share under ~20% per seat; a lead above that relays instead of deciding in batches.
 - Compaction cost x1.0-1.1 at the current peak; a trigger far above `T_opt` costs more per turn.
 - Waste near 0. A branch already in main or a duplicate is paid work that produced nothing new.
+- Wait share low and ended by `event` or `message`, not `expired`; a seat that waits most of the day
+  needs a backup queue, and a target that tops the waits line is the bottleneck to clear first.
 - **`notok`** (in `--full`) mixes real errors with hook blocks, which are the guard working. Classify
   `outcome` and `error` in `tool-calls.jsonl` before sending a seat a correction.
 - A seat that never writes (lead, reviewer) is judged on coord share and on whether its gate or
