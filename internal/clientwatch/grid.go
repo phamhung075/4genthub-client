@@ -472,8 +472,20 @@ var sendLine = func(ctx context.Context, room, seat, text string) error {
 	if err != nil {
 		return err
 	}
-	_, err = clientruntime.RuntimeSendText(address.SessionName, text, clientruntime.SendOptions{Sender: os.Getenv("AGENTHUB_SESSION_NAME")})
+	_, err = clientruntime.RuntimeSendText(address.SessionName, text, clientruntime.SendOptions{Sender: inputSender(os.Getenv)})
 	return err
+}
+
+// inputSender is the name an `input` line is signed with. A seat's shell signs as its own session. A shell
+// with no seat session is the operator's - the lead window's input pane, or a script the owner (or the
+// director acting for the owner) runs - and it signs as the human (clientruntime.HumanSender), whose reply
+// hint routes through the rail to the lead. Left blank, the envelope fell back to "<unknown sender>" with
+// the hint "no reply can be addressed" (room aa2-rs-peak, 2026-10-29: every brief arrived that way).
+func inputSender(getenv func(string) string) string {
+	if session := strings.TrimSpace(getenv("AGENTHUB_SESSION_NAME")); session != "" {
+		return session
+	}
+	return clientruntime.HumanSender
 }
 
 // runInputLoop reads lines and sends each to its seat, the same route any other message takes. An empty

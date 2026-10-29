@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"os"
 	"slices"
 	"strings"
@@ -82,8 +84,9 @@ var verbUsages = map[string]verbUsage{
 		notes: "an input pane under each seat pane; a line typed there is sent to that seat through this client's own transport.",
 	},
 	"input": {
-		line:  "usage: 4genteam input --room ROOM --seat SEAT",
-		notes: "one seat's input pane: read lines and send each to that seat through this client's own transport. /hide or Ctrl-D leaves.",
+		line: "usage: 4genteam input --room ROOM --seat SEAT",
+		notes: "one seat's input pane: read lines and send each to that seat through this client's own transport. /hide or Ctrl-D leaves.\n" +
+			"A message is signed as this shell's seat session, or as " + clientruntime.HumanSender + " from a shell that is no seat's.",
 	},
 }
 

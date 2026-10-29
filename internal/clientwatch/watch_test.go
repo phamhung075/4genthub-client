@@ -13,6 +13,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 // The verb behaviour: the grid, the input panes, the lead window, and the refusals - all with the exec
@@ -852,4 +853,22 @@ func TestAnAgySeatsUsageWindowsSitOnTheBottomRow(t *testing.T) {
 	}
 	var none *footLine
 	none.draw(80) // a seat on another runtime has no footer
+}
+
+// TestInputSenderIsNeverUnknown: room aa2-rs-peak, 2026-10-29, briefs piped through `input` from the
+// owner's shell arrived as `From: <unknown sender>` with no reply route. A seat signs as its session, any
+// other shell as the human.
+func TestInputSenderIsNeverUnknown(t *testing.T) {
+	seat := func(key string) string {
+		if key == "AGENTHUB_SESSION_NAME" {
+			return "agenthub--r--lead"
+		}
+		return ""
+	}
+	if got := inputSender(seat); got != "agenthub--r--lead" {
+		t.Errorf("seat shell signs as %q, want its own session", got)
+	}
+	if got := inputSender(func(string) string { return "" }); got != clientruntime.HumanSender {
+		t.Errorf("operator shell signs as %q, want %q", got, clientruntime.HumanSender)
+	}
 }
