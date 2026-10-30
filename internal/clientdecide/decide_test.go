@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
+	"github.com/phamhung075/4genthub-client/internal/clientdecisions"
+	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 )
 
 const questions = `[{"id":"q1","question":"Which db?","options":[{"id":"pg","label":"PostgreSQL","recommended":true},{"id":"lite","label":"SQLite"}]}]`
@@ -43,7 +46,33 @@ func jev(t *testing.T, status int, reply string) (*recorded, string) {
 	t.Setenv("JEV_DECISION_LOG_PATH", logPath)
 	t.Setenv("JEV_DECISION_THRESHOLD", "")
 	t.Setenv("DECISION_OWNER_ONLY_CATEGORIES", "")
+	isolateRoute(t)
 	return rec, logPath
+}
+
+// asks records the owner asks raised; isolateRoute points routing at a temp state root with no room, no seat
+// session and no daemon, so a test run from inside a seat never writes to a live rail.
+type asks struct {
+	rows []clientruntime.QueueCreateInput
+	room []string
+}
+
+func isolateRoute(t *testing.T) (*asks, string) {
+	t.Helper()
+	for _, name := range []string{"AGENTHUB_SESSION_NAME", "OPENRIG_SESSION_NAME", "AGENTHUB_ROOM", "AGENTHUB_LANES_ROOT"} {
+		t.Setenv(name, "")
+	}
+	root := t.TempDir()
+	got := &asks{}
+	oldRoot, oldStamp, oldCreate := stateRoot, stamp, createAsk
+	stateRoot = func() string { return root }
+	stamp = func() string { return "2026-10-30 07:00 CET" }
+	createAsk = func(room string, in clientruntime.QueueCreateInput) (string, error) {
+		got.rows, got.room = append(got.rows, in), append(got.room, room)
+		return fmt.Sprintf("qitem-test-%d", len(got.rows)), nil
+	}
+	t.Cleanup(func() { stateRoot, stamp, createAsk = oldRoot, oldStamp, oldCreate })
+	return got, root
 }
 
 func run(args ...string) (int, string, string) {
@@ -308,5 +337,88 @@ func TestALeadCannotRewordAnOwnerAskIntoItsOwnDecision(t *testing.T) {
 	last := entries[len(entries)-1]
 	if detail, _ := last["detail"].(string); !strings.Contains(detail, "[distinct-from-owner-ask] asks which pairs") {
 		t.Errorf("the override is not on the record: %v", last)
+	}
+}
+
+// Regression, 2026-10-30: 52 escalated-to-owner log entries, one owner-decision row on any rail. A fresh lead
+// escalation now raises the owner ask itself, with its questions recorded for the dashboard, and names the room.
+func TestALeadEscalationRaisesTheOwnerAskForTheDashboard(t *testing.T) {
+	_, logPath := jev(t, 200, `{"answers":{"q1":{"choice":"lite","confidence":0.5}}}`)
+	got, root := isolateRoute(t)
+	t.Setenv("AGENTHUB_SESSION_NAME", "agenthub--plain--lead")
+	code, out, errText := run("--tier", "lead", "--summary", "landing channel for two gated commits", "--questions", questions)
+	var result outcome
+	_ = json.Unmarshal([]byte(out), &result)
+	if code != ExitEscalated || result.EscalateTo != "owner" || result.OwnerAsk != "qitem-test-1" || result.Room != "plain" {
+		t.Fatalf("exit %d out %q err %q", code, out, errText)
+	}
+	if len(got.rows) != 1 || got.room[0] != "plain" {
+		t.Fatalf("asks = %+v", got)
+	}
+	row := got.rows[0]
+	if row.DestinationSession != "human@plain" || row.SourceSession != "agenthub--plain--lead" || len(row.Tags) != 1 || row.Tags[0] != "owner-decision" {
+		t.Errorf("row = %+v", row)
+	}
+	caps := map[string]int{"facts": 280, "rule": 110, "decision": 100, "next": 78}
+	for _, line := range strings.Split(row.Body, "\n") {
+		key, value, _ := strings.Cut(line, ": ")
+		if limit, ok := caps[key]; !ok || len([]rune(value)) > limit {
+			t.Errorf("body line %q breaks the rail's shape", line)
+		}
+	}
+	if records, err := clientdecisions.List(root, "plain"); err != nil || len(records) != 1 || records[0].QitemID != "qitem-test-1" {
+		t.Errorf("record = %v %v", records, err)
+	}
+	if entries := readLog(t, logPath); entries[0]["room"] != "plain" || entries[0]["outcome"] != "escalated-to-owner" {
+		t.Errorf("log = %v", entries)
+	}
+
+	// The re-ask the guard answers is not a second ask; a seat's escalation to the lead raises nothing.
+	run("--tier", "lead", "--summary", "landing channel for the two gated commits", "--questions", questions)
+	run("--tier", "seat", "--summary", "unrelated seat question here", "--questions", questions)
+	if len(got.rows) != 1 {
+		t.Errorf("%d asks raised, want 1", len(got.rows))
+	}
+}
+
+// Owner, 2026-10-30: in a room with a director office the owner tier is the director's ready.md, not the dashboard.
+func TestADirectorRoomSendsTheOwnerTierToReadyMd(t *testing.T) {
+	_, logPath := jev(t, 200, `{"answers":{"q1":{"choice":"lite","confidence":0.5}}}`)
+	got, root := isolateRoute(t)
+	office := filepath.Join(root, "rooms", "dir", "director")
+	if err := os.MkdirAll(office, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ready := filepath.Join(office, "ready.md")
+	_ = os.WriteFile(ready, []byte("- earlier line"), 0o600)
+	t.Setenv("AGENTHUB_SESSION_NAME", "agenthub--dir--rust-dev")
+	code, out, errText := run("--tier", "seat", "--category", "spend", "--summary", "buy | more\nslots", "--questions", questions)
+	var result outcome
+	_ = json.Unmarshal([]byte(out), &result)
+	if code != ExitEscalated || result.EscalateTo != "director" || result.Ready != ready || result.OwnerAsk != "" {
+		t.Fatalf("exit %d out %q err %q", code, out, errText)
+	}
+	if len(got.rows) != 0 {
+		t.Errorf("a director room raised %d dashboard asks", len(got.rows))
+	}
+	if !strings.Contains(errText, "the director answers there") {
+		t.Errorf("stderr = %q", errText)
+	}
+	data, _ := os.ReadFile(ready)
+	want := "- earlier line\n- 2026-10-30 07:00 CET | QUESTION | rust-dev (Jev escalation) | buy / more slots; options: pg: PostgreSQL, lite: SQLite; asker's pick: pg\n"
+	if string(data) != want {
+		t.Errorf("ready.md =\n%q\nwant\n%q", data, want)
+	}
+	// The lead's own escalation is appended once; its re-wording is told the director holds it.
+	run("--tier", "lead", "--summary", "buy more slots now", "--questions", questions)
+	_, out, _ = run("--tier", "lead", "--summary", "buy more slots", "--questions", questions)
+	if !strings.Contains(out, "already escalated to the director") {
+		t.Errorf("re-ask out = %q", out)
+	}
+	if entries := readLog(t, logPath); entries[0]["outcome"] != "escalated-to-director" || entries[0]["room"] != "dir" {
+		t.Errorf("log = %v", entries)
+	}
+	if after, _ := os.ReadFile(ready); strings.Count(string(after), "QUESTION") != 2 {
+		t.Errorf("ready.md =\n%s", after)
 	}
 }

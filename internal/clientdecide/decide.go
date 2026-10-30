@@ -7,8 +7,9 @@
 // the caller re-asks one tier up (`--tier lead`) or raises it to the owner. A category listed as
 // owner-only always answers "escalate to owner" by code, without a Jev call, whatever the confidence.
 //
-// The owner tier is not this verb: a question that reaches the owner becomes a row the owner answers
-// on the dashboard, raised through the room's own ask path.
+// The owner tier is not this verb, but an escalation to it is raised here (route.go): in a room with a
+// director office the question goes to the director's ready.md, otherwise it becomes an owner ask (a rail
+// row tagged owner-decision with its questions recorded) that the bridge mirrors to the dashboard.
 package clientdecide
 
 import (
@@ -30,17 +31,18 @@ import (
 // tier, so it is neither a success nor a failure of the call.
 const ExitEscalated = 5
 
-const usage = `usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D | --detail-file <path>] [--distinct-from-owner-ask WHY]
+const usage = `usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D | --detail-file <path>] [--room R] [--distinct-from-owner-ask WHY]
 
 Ask one step of the decision ladder. Jev is asked from this machine; the JSON outcome goes to stdout.
 
-  --tier            REQUIRED. seat or lead: the tier asking. The owner answers on the dashboard.
+  --tier            REQUIRED. seat or lead: the tier asking.
   --summary         REQUIRED. One line naming the decision.
   --questions       The questions as a JSON array (id, question, options[id,label,recommended]).
   --questions-file  The same array read from a file, or "-" for stdin. One of the two is REQUIRED.
   --category        Optional. A free token; credentials, spend and $DECISION_OWNER_ONLY_CATEGORIES always go to the owner.
   --detail          Optional. Context for the evaluator.
   --detail-file     The same text read from a file: use it for anything with quotes, newlines or a $, which a shell breaks.
+  --room            The room asking. Default: the room of this seat's session ($AGENTHUB_SESSION_NAME), else $AGENTHUB_ROOM.
   --distinct-from-owner-ask WHY
                     Lead tier only. A lead ask whose summary rewords one escalated to the owner in the last 7 days
                     is not sent to Jev: it answers escalate_to owner again (exit 5). Give WHY to state that this is
@@ -48,7 +50,14 @@ Ask one step of the decision ladder. Jev is asked from this machine; the JSON ou
 
 Configuration, from ~/.config/4genthub/.env or the environment: TYPESAFE_API_KEY (required), TYPESAFE_BASE_URL,
 JEV_DECISION_MODEL (jev-1.13.0), JEV_DECISION_THRESHOLD (the confidence a tier needs to decide; the value is the one set in the config), JEV_DECISION_LOG_PATH. Every outcome is appended
-to the Jev decision log (~/.config/4genthub/jev_decisions.log). No server call is made.
+to the Jev decision log (~/.config/4genthub/jev_decisions.log), with the room.
+
+An escalation whose next tier is the owner is raised by this verb, once:
+  - room with a director office (<room dir>/director/): one QUESTION line is appended to director/ready.md and
+    escalate_to is "director"; the director answers there and alone raises an owner ask for what it cannot decide.
+  - any other room: an owner ask is created on the rail (to human@<room>, tag owner-decision, with the questions),
+    which the bridge mirrors to the dashboard's Decision Requests panel; owner_ask names its qitem id.
+  - no room can be named: nothing is raised, and stderr says so (raise it with room queue create).
 Exit: 0 this tier decided, 5 escalated to the next tier (see escalate_to), 1 the evaluation could not be recorded, 2 usage.
 `
 
@@ -62,6 +71,7 @@ func (decideCommand) Summary() string { return "ask one step of the seat/lead/ow
 
 type options struct {
 	tier, category, summary, detail, detailFile, questions, questionsFile string
+	room                                                                  string
 	// distinct is --distinct-from-owner-ask: the lead's stated reason that this ask is NOT the one already
 	// with the owner. It is written into the log entry, so the override is on the record.
 	distinct string
@@ -85,6 +95,12 @@ type outcome struct {
 	EscalateTo string            `json:"escalate_to,omitempty"`
 	Reason     string            `json:"reason,omitempty"`
 	Questions  []questionResult  `json:"questions"`
+	// Room is the room the ask was made for, when one could be named.
+	Room string `json:"room,omitempty"`
+	// OwnerAsk is the qitem id of the owner ask this escalation raised (rooms without a director).
+	OwnerAsk string `json:"owner_ask,omitempty"`
+	// Ready is the director's ready.md the QUESTION line was appended to (rooms with a director).
+	Ready string `json:"ready,omitempty"`
 }
 
 func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -141,11 +157,15 @@ func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 		evalErr error
 	)
 	distinct := strings.TrimSpace(opts.distinct)
+	route := resolveRoute(opts.room, os.Getenv)
+	reasked := false
 	if open, found := openOwnerAsk(cfg.LogPath, time.Now(), summary); opts.tier == "lead" && found && distinct == "" {
-		// The owner already holds this question: Jev is not asked, and the answer is the owner's again.
-		result = outcome{Tier: opts.tier, EscalateTo: "owner", Questions: make([]questionResult, 0, len(questions)),
-			Reason: fmt.Sprintf("already escalated to the owner at %s as %q: only the owner's answer settles it. Keep the owner-decision row open and wait; if this is a different question, re-run with --distinct-from-owner-ask \"<why>\"",
-				open.Timestamp.UTC().Format(time.RFC3339), open.Summary)}
+		// The owner (or the director) already holds this question: Jev is not asked, and the answer is theirs again.
+		holder := strings.TrimPrefix(open.Outcome, "escalated-to-")
+		reasked = true
+		result = outcome{Tier: opts.tier, EscalateTo: holder, Questions: make([]questionResult, 0, len(questions)),
+			Reason: fmt.Sprintf("already escalated to the %s at %s as %q: only the %s's answer settles it. Wait for that answer; if this is a different question, re-run with --distinct-from-owner-ask \"<why>\"",
+				holder, open.Timestamp.UTC().Format(time.RFC3339), open.Summary, holder)}
 		for _, q := range questions {
 			result.Questions = append(result.Questions, questionResult{QuestionID: q.ID, Recommended: q.Recommended()})
 		}
@@ -153,12 +173,17 @@ func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 	} else {
 		result, picks, evalErr = ladder(ctx, cfg, opts.tier, category, summary, detail, questions)
 	}
+	if !result.Decided && result.EscalateTo == "owner" && !reasked && route.director {
+		// A director room: the founder is not asked by a seat; the director is.
+		result.EscalateTo = "director"
+	}
+	result.Room = route.room
 	if distinct != "" {
 		detail = strings.TrimSpace(detail + "\n\n[distinct-from-owner-ask] " + distinct)
 	}
 	entry := clientjev.LogEntry{
 		Timestamp: time.Now(), Kind: "decision", Summary: summary, Detail: detail, Choices: picks, Questions: questions,
-		Tier: opts.tier, Category: category, Outcome: "decided",
+		Tier: opts.tier, Category: category, Outcome: "decided", Room: route.room,
 	}
 	if !result.Decided {
 		entry.Outcome = "escalated-to-" + result.EscalateTo
@@ -169,6 +194,9 @@ func (decideCommand) Run(ctx context.Context, args []string, stdout, stderr io.W
 	if err := cfg.Log(entry); err != nil {
 		fmt.Fprintf(stderr, "4genteam decide: cannot append to the Jev log %s: %v\n", cfg.LogPath, err)
 		return clientcmd.ExitRemote
+	}
+	if !result.Decided && !reasked && (result.EscalateTo == "owner" || result.EscalateTo == "director") {
+		raise(route, opts.tier, summary, detail, questions, &result, stderr)
 	}
 	encoded, _ := json.Marshal(result)
 	_, _ = stdout.Write(append(encoded, '\n'))
@@ -242,6 +270,8 @@ func parse(args []string) (options, bool, error) {
 			target = &opts.questions
 		case "--questions-file":
 			target = &opts.questionsFile
+		case "--room":
+			target = &opts.room
 		case "--distinct-from-owner-ask":
 			target = &opts.distinct
 		default:
@@ -283,6 +313,6 @@ func readQuestions(opts options) (json.RawMessage, error) {
 
 func usageError(stderr io.Writer, message string) int {
 	fmt.Fprintf(stderr, "4genteam decide: %s\n", message)
-	_, _ = io.WriteString(stderr, "usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D | --detail-file <path>]\n")
+	_, _ = io.WriteString(stderr, "usage: 4genteam decide --tier seat|lead --summary <text> (--questions <json> | --questions-file <path|->) [--category C] [--detail D | --detail-file <path>] [--room R]\n")
 	return clientcmd.ExitUsage
 }

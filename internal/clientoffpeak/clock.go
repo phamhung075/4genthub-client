@@ -143,6 +143,16 @@ func ownerZone(getenv func(string) string) (*time.Location, error) {
 	return loc, nil
 }
 
+// ShortNow is `4genteam clock --short` for code: the machine clock in the owner's zone, the stamp every line
+// an agent writes carries. A zone the database does not know falls back to the machine's own zone.
+func ShortNow(getenv func(string) string) string {
+	zone, err := ownerZone(getenv)
+	if err != nil {
+		zone = time.Local
+	}
+	return shortStamp(clockNow(), zone)
+}
+
 // shortStamp is the one-line stamp seats put on what they write.
 func shortStamp(now time.Time, zone *time.Location) string {
 	return now.In(zone).Format("2006-01-02 15:04 MST")

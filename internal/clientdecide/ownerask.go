@@ -30,7 +30,7 @@ const (
 	ownerAskMinWords = 3
 )
 
-// openOwnerAsk returns the newest lead-tier escalation to the owner, inside the window, that the new ask
+// openOwnerAsk returns the newest lead-tier escalation to the owner (or, in a director room, to the director), inside the window, that the new ask
 // rewords. It reads the Jev log the verb itself appends to; an unreadable log answers none, because the
 // guard must not stop a decision on a file it could not read - the log write that follows reports that.
 func openOwnerAsk(path string, now time.Time, summary string) (clientjev.LogEntry, bool) {
@@ -49,7 +49,7 @@ func openOwnerAsk(path string, now time.Time, summary string) (clientjev.LogEntr
 		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
 			continue
 		}
-		if entry.Tier != "lead" || entry.Outcome != "escalated-to-owner" || now.Sub(entry.Timestamp) > ownerAskWindow {
+		if entry.Tier != "lead" || (entry.Outcome != "escalated-to-owner" && entry.Outcome != "escalated-to-director") || now.Sub(entry.Timestamp) > ownerAskWindow {
 			continue
 		}
 		if sameAsk(asked, askWords(entry.Summary)) {

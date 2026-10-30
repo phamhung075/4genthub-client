@@ -278,9 +278,11 @@ type LogEntry struct {
 	// Questions keeps the options each pick was made from, so a logged decision can be audited later.
 	Questions []clientdecisions.Question `json:"questions,omitempty"`
 	Tier      string                     `json:"tier,omitempty"`
-	Category  string                     `json:"category,omitempty"`
-	Outcome   string                     `json:"outcome"`
-	Error     string                     `json:"error,omitempty"`
+	// Room is the room the decision was asked for, when the caller could name one.
+	Room     string `json:"room,omitempty"`
+	Category string `json:"category,omitempty"`
+	Outcome  string `json:"outcome"`
+	Error    string `json:"error,omitempty"`
 }
 
 // Log appends the entry as one JSON line, so the log is a benchmark of what Jev decided and how.
