@@ -17,6 +17,7 @@ import (
 
 	"github.com/phamhung075/4genthub-client/internal/clientcmd"
 	"github.com/phamhung075/4genthub-client/internal/clientdecisions"
+	"github.com/phamhung075/4genthub-client/internal/clientdirector"
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientjev"
 	"github.com/phamhung075/4genthub-client/internal/clientoffpeak"
@@ -76,6 +77,11 @@ type IdleGuard struct {
 	WaitProbes seatwait.Probes
 	// Escalate raises the owner-level alert when every seat waits on the director or the owner.
 	Escalate func(room, summary, body string) error
+	// Director is the room's directory when it holds a director office, "" otherwise. In a director room an
+	// idle verdict Jev could not make goes to the director's ready.md, not to the owner (owner, 2026-10-30).
+	Director func(room string) string
+	// Stamp is `4genteam clock --short`; nil reads the clock.
+	Stamp func() string
 
 	State   map[string]*stallState
 	decided float64 // the newest log time of the quiet already decided, so one quiet is decided once
@@ -106,7 +112,10 @@ func NewIdleGuard(room, lead string, quiet, stall int, stateRoot string, out io.
 	g.Active = func(room string) ([]clientruntime.QueueRow, error) {
 		return clientruntime.NewClient("").QueueList(room, clientruntime.QueueListFilter{ActiveOnly: true})
 	}
-	g.Ask = askJev
+	g.Director = func(room string) string { return directorRoomDir(stateRoot, room) }
+	g.Ask = func(ctx context.Context, summary, detail string, q clientdecisions.Question) (clientjev.Selection, float64, error) {
+		return askJev(ctx, room, directorRoomDir(stateRoot, room) != "", summary, detail, q)
+	}
 	g.Wake = func(room string) (bool, string) {
 		nodes, ok, err := roomNodes("", room)
 		if err != nil {
@@ -127,8 +136,18 @@ func NewIdleGuard(room, lead string, quiet, stall int, stateRoot string, out io.
 	return g
 }
 
-// askJev is the live question: one choice, logged to the Jev decision log like a `decide` is.
-func askJev(ctx context.Context, summary, detail string, q clientdecisions.Question) (clientjev.Selection, float64, error) {
+// directorRoomDir is the room's directory when it declares a director (clientdirector), else "".
+func directorRoomDir(stateRoot, room string) string {
+	dir := clientdirector.RoomDir(stateRoot, room, os.Getenv)
+	if !clientdirector.Has(dir) {
+		return ""
+	}
+	return dir
+}
+
+// askJev is the live question: one choice, logged to the Jev decision log like a `decide` is, with the room.
+// An answer below the threshold escalates to the lead, or in a director room to the director.
+func askJev(ctx context.Context, room string, director bool, summary, detail string, q clientdecisions.Question) (clientjev.Selection, float64, error) {
 	cfg, err := clientjev.FromEnv()
 	if err != nil {
 		return clientjev.Selection{}, 0, err
@@ -136,9 +155,12 @@ func askJev(ctx context.Context, summary, detail string, q clientdecisions.Quest
 	picks, askErr := cfg.SelectChoices(ctx, summary, detail, []clientdecisions.Question{q})
 	pick := picks[q.ID]
 	entry := clientjev.LogEntry{Timestamp: time.Now(), Kind: "decision", Summary: summary, Detail: detail,
-		Choices: picks, Questions: []clientdecisions.Question{q}, Tier: "room", Category: "idle-room", Outcome: "decided"}
+		Choices: picks, Questions: []clientdecisions.Question{q}, Tier: "room", Room: room, Category: "idle-room", Outcome: "decided"}
 	if askErr != nil || pick.OptionID == "" || pick.Confidence < cfg.Threshold {
 		entry.Outcome = "escalated-to-lead"
+		if director {
+			entry.Outcome = "escalated-to-director"
+		}
 	}
 	if askErr != nil {
 		entry.Error = askErr.Error()
@@ -309,10 +331,10 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 	var message string
 	switch {
 	case askErr != nil:
-		message = fmt.Sprintf("The room went idle and Jev could not be asked (%v). Do not start new work: ask the owner whether to continue.", askErr)
+		message = fmt.Sprintf("The room went idle and Jev could not be asked (%v). Do not start new work: %s.", askErr, g.escalate(question))
 	case pick.OptionID == "" || pick.Confidence < threshold:
-		message = fmt.Sprintf("The room went idle and Jev is not sure (%s at %.2f, below %.2f). Do not start new work: ask the owner whether to continue.\n%s",
-			pick.OptionID, pick.Confidence, threshold, detail.String())
+		message = fmt.Sprintf("The room went idle and Jev is not sure (%s at %.2f, below %.2f). Do not start new work: %s.\n%s",
+			pick.OptionID, pick.Confidence, threshold, g.escalate(question), detail.String())
 	case pick.OptionID == "continue":
 		message = fmt.Sprintf("The room went idle. Jev decided to CONTINUE (confidence %.2f). Take the next open item, assign it to an idle seat and brief that seat.\n%s",
 			pick.Confidence, detail.String())
@@ -326,6 +348,33 @@ func (g *IdleGuard) decide(ctx context.Context, silence map[string]float64, newe
 	}
 	g.Say(g.Room, g.Lead, message, false)
 	g.Log(fmt.Sprintf("room idle: lead told (%s, %.2f)", pick.OptionID, pick.Confidence))
+}
+
+// escalate routes an idle verdict Jev could not make and returns what the lead is told to do. A room with a
+// director office gets one QUESTION line in director/ready.md (written here, once per verdict) and the lead
+// waits for the director's ANSWER; any other room keeps the lead asking the owner.
+func (g *IdleGuard) escalate(question clientdecisions.Question) string {
+	const owner = "ask the owner whether to continue"
+	if g.Director == nil {
+		return owner
+	}
+	dir := g.Director(g.Room)
+	if dir == "" {
+		return owner
+	}
+	stamp := g.Stamp
+	if stamp == nil {
+		stamp = func() string { return clientoffpeak.ShortNow(os.Getenv) }
+	}
+	line := clientdirector.QuestionLine(stamp(), "room tier (idle guard)", "room "+g.Room+" has gone idle: should it carry on?",
+		[]clientdecisions.Question{question})
+	path, err := clientdirector.AppendQuestion(dir, line)
+	if err != nil {
+		g.Log("room idle, the director QUESTION could not be appended: " + err.Error())
+		return "this room has a director: add this QUESTION to " + clientdirector.ReadyPath(dir) + " (the guard could not) and wait for the director's ANSWER, do not ask the owner: " + line
+	}
+	g.Log("room idle, Jev unsure: QUESTION appended to " + path)
+	return "this room has a director, and the question is in " + path + "; the director answers there. Wait for its ANSWER line; do not ask the owner"
 }
 
 // railSignature identifies a set of open rail items by their ids, whatever order the rail lists them in.

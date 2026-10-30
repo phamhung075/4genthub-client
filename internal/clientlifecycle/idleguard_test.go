@@ -2,6 +2,8 @@ package clientlifecycle
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -59,6 +61,36 @@ func TestALowConfidenceAnswerSendsTheLeadToTheOwner(t *testing.T) {
 	r.guard.Step(context.Background())
 	if len(r.said) != 1 || !strings.Contains(r.said[0], "ask the owner") {
 		t.Errorf("said = %q", r.said)
+	}
+}
+
+// Owner, 2026-10-30: in a director room the room tier's escalation goes to director/ready.md, once per
+// verdict, and the lead is told the director answers there instead of the owner.
+func TestALowConfidenceAnswerInADirectorRoomGoesToReadyMd(t *testing.T) {
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.5})
+	room := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(room, "director"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r.guard.Director = func(string) string { return room }
+	r.guard.Stamp = func() string { return "2026-10-30 07:00 CET" }
+	r.guard.Step(context.Background())
+	r.guard.Step(context.Background())
+	if len(r.said) != 1 || strings.Contains(r.said[0], "work: ask the owner") || !strings.Contains(r.said[0], "the director answers there") {
+		t.Errorf("said = %q", r.said)
+	}
+	data, _ := os.ReadFile(filepath.Join(room, "director", "ready.md"))
+	want := "- 2026-10-30 07:00 CET | QUESTION | room tier (idle guard) (Jev escalation) | room demo has gone idle: should it carry on?; options: continue: "
+	if strings.Count(string(data), "\n") != 1 || !strings.HasPrefix(string(data), want) || !strings.HasSuffix(string(data), "asker's pick: continue\n") {
+		t.Errorf("ready.md = %q", data)
+	}
+
+	// A room without an office keeps the owner path.
+	r = newGuardRoom(t, map[string]bool{"lead": true, "go-dev": true}, clientjev.Selection{OptionID: "continue", Confidence: 0.5})
+	r.guard.Director = func(string) string { return "" }
+	r.guard.Step(context.Background())
+	if len(r.said) != 1 || !strings.Contains(r.said[0], "ask the owner") {
+		t.Errorf("no director: said = %q", r.said)
 	}
 }
 
