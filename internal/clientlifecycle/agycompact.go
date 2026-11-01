@@ -12,9 +12,15 @@
 //   - Stop runs when the execution loop ends, so it is the one signal that says the seat is at its prompt: a quiet log
 //     cannot say that during a long run_command. It starts the detached sender, which types /compact once, witnesses
 //     the CHECKPOINT and sends the resume, so a room with no supervisor (`up --room-only`) is served the same way.
+//     Background work does not hold it back: agy 1.4.12 fires Stop once with fullyIdle false and no second time until
+//     that work ends, which can be never, and a /compact typed at that prompt runs at once (measured on a scratch seat
+//     with a `sleep` in the background, 2026-11-01; aa2-gemini's seat sat 14 minutes on such a claim).
 //
 // THE CLAIM IS WHAT KEEPS THIS AND THE SUPERVISOR FROM BOTH COMPACTING: one file per seat, taken under a lock, fresh for
-// the supervisor's own witness window. Whoever holds a fresh claim is the one who types /compact.
+// the supervisor's own witness window. Whoever holds a fresh claim is the one who types /compact. A claim always ends:
+// the sender releases it on a witness and on a failure, and the supervisor takes over a claim whose seat is at its
+// prompt with no sender, and drops one past its window. A claim names its conversation, so a seat's restart voids it: a
+// new conversation honouring the old one's claim had its first message terminated and a /compact typed over it.
 package clientlifecycle
 
 import (
@@ -41,6 +47,8 @@ const (
 	compactClaimFile    = "compact-claim.json"
 	compactHookMarkFile = "compact-hook-conversation"
 	compactTriggerLog   = "compact-trigger.log"
+	// compactAtPromptFile holds the conversation whose loop has ended: Stop writes it and PreInvocation removes it.
+	compactAtPromptFile = "compact-at-prompt"
 	// claimLockStale is the age past which a lock file is a dead process's and is taken over.
 	claimLockStale = 5 * time.Second
 	// claimLockWait bounds the wait for a lock: a hook blocks the agent loop, so it gives up rather than queue.
@@ -53,6 +61,9 @@ const (
 	compactSettle = 1500 * time.Millisecond
 	// compactPoll is how often the sender looks for the CHECKPOINT.
 	compactPoll = 2 * time.Second
+	// claimTakeoverGrace is how long a seat at its prompt holds an unsent claim before the supervisor types the /compact:
+	// long enough for the Stop hook, which runs after the final answer is in the transcript, to have started the sender.
+	claimTakeoverGrace = 10.0
 	// resumeGatePoll and resumeGateLimit bound the wait for an off-peak gate that refuses the resume.
 	resumeGatePoll  = time.Minute
 	resumeGateLimit = 12 * time.Hour
@@ -67,6 +78,25 @@ type compactClaim struct {
 	Told   int     `json:"told"`
 	SentAt float64 `json:"sentAt,omitempty"`
 	Path   string  `json:"path,omitempty"`
+	// Conversation is the agy conversation the claim was taken for; empty is a claim that cannot say.
+	Conversation string `json:"conversation,omitempty"`
+}
+
+// belongsTo says the claim is this conversation's. Either side not knowing is not a mismatch.
+func (c compactClaim) belongsTo(conversation string) bool {
+	return c.Conversation == "" || conversation == "" || c.Conversation == conversation
+}
+
+// conversationOf reads the conversation out of a transcript path, .../brain/<id>/.system_generated/logs/..., "" when
+// the path has no such part.
+func conversationOf(path string) string {
+	parts := strings.Split(filepath.ToSlash(path), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "brain" {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 func (c compactClaim) fresh(now float64) bool {
@@ -141,6 +171,41 @@ func supervisorClaim(seatDir string, used, count int, now float64) bool {
 	return taken && err == nil
 }
 
+// supervisorTakeover takes a claim the hook holds and has not sent, which supervisorClaim refuses while it is fresh. The
+// lock is what keeps a Stop arriving now from typing a second /compact: it reads the supervisor's claim and sends nothing.
+func supervisorTakeover(seatDir string, used, count int, now float64) bool {
+	taken := false
+	err := withClaimLock(seatDir, func() error {
+		if held, ok := readClaim(seatDir); ok && held.By == claimByHook && held.SentAt != 0 {
+			return nil
+		}
+		taken = true
+		return writeClaim(seatDir, compactClaim{By: claimBySupervisor, At: now, SentAt: now, Used: used, Count: count})
+	})
+	return taken && err == nil
+}
+
+// releaseClaim removes the claim taken at the time at, and leaves any claim taken since.
+func releaseClaim(seatDir string, at float64) {
+	_ = withClaimLock(seatDir, func() error {
+		if held, ok := readClaim(seatDir); ok && held.At == at {
+			return os.Remove(filepath.Join(seatDir, compactClaimFile))
+		}
+		return nil
+	})
+}
+
+// agyAtPrompt says Stop was the last thing this conversation's loop did. The transcript cannot say it for a turn the hook
+// terminated: its newest record is the USER_INPUT nobody answered, which reads as a turn still running.
+func agyAtPrompt(seatDir, path string) bool {
+	mark, err := os.ReadFile(filepath.Join(seatDir, compactAtPromptFile))
+	if err != nil {
+		return false
+	}
+	id := strings.TrimSpace(string(mark))
+	return id != "" && id == conversationOf(path)
+}
+
 // hookHoldsClaim says the hook path owns this seat's compact right now, so the supervisor leaves the seat alone.
 func hookHoldsClaim(seatDir string, now float64) bool {
 	held, ok := readClaim(seatDir)
@@ -165,12 +230,33 @@ func compactHookLive(seatDir string) bool {
 // compactTrigger is one seat, as the hook and the MCP server see it from inside the seat's environment.
 type compactTrigger struct {
 	Root, Room, Seat string
-	Now              func() float64
+	// Conversation is the one the hook's payload names; "" reads it from the transcript path (the MCP server's case).
+	Conversation string
+	Now          func() float64
 	// Spawn starts the detached sender; a seam because a test must not start a process.
 	Spawn func(root, room, seat string) error
 }
 
 func (t *compactTrigger) seatDir() string { return clientruntime.SeatDir(t.Root, t.Room, t.Seat) }
+
+func (t *compactTrigger) conversation(path string) string {
+	if t.Conversation != "" {
+		return t.Conversation
+	}
+	return conversationOf(path)
+}
+
+// dropForeignClaim voids a claim another conversation took: that conversation is gone with its process, and its sender
+// with it. Nothing in this conversation may answer to it.
+func (t *compactTrigger) dropForeignClaim(conversation string) {
+	dir := t.seatDir()
+	held, ok := readClaim(dir)
+	if !ok || held.belongsTo(conversation) {
+		return
+	}
+	releaseClaim(dir, held.At)
+	appendTriggerLog(dir, fmt.Sprintf("%s: dropped the claim of conversation %s, this one is %s", t.Seat, held.Conversation, conversation))
+}
 
 // compactEndTurnText is what the model is told, by the hook's injected step or in the MCP tool's result.
 func compactEndTurnText(used int) string {
@@ -183,7 +269,8 @@ func compactEndTurnText(used int) string {
 // context with the supervisor's reader and answers what the model must be told, "" meaning nothing. force is compact_me,
 // which a seat may call under the limit. A claim someone already holds is honoured, whoever holds it.
 func (t *compactTrigger) arrange(path string, force bool) string {
-	dir, now := t.seatDir(), t.Now()
+	dir, now, conversation := t.seatDir(), t.Now(), t.conversation(path)
+	t.dropForeignClaim(conversation)
 	// A claim is answered before the size is compared: compact_me arranges under the limit too, and its next model
 	// call must still be held to it.
 	if held, ok := readClaim(dir); ok && held.fresh(now) {
@@ -204,7 +291,8 @@ func (t *compactTrigger) arrange(path string, force bool) string {
 			return nil // taken since the read above: the holder acts, this call says nothing
 		}
 		tell = compactEndTurnText(used)
-		return writeClaim(dir, compactClaim{By: claimByHook, At: now, Used: used, Count: compactions(path), Path: path})
+		return writeClaim(dir, compactClaim{By: claimByHook, At: now, Used: used, Count: compactions(path), Path: path,
+			Conversation: conversation})
 	})
 	if err != nil {
 		return ""
@@ -223,7 +311,9 @@ type agyHookPayload struct {
 // preInvocation answers agy's PreInvocation: nothing under the limit, the instruction the first time past it, and a
 // terminate from then on.
 func (t *compactTrigger) preInvocation(payload agyHookPayload) string {
+	t.Conversation = payload.ConversationID
 	t.markHook(payload.ConversationID)
+	_ = os.Remove(filepath.Join(t.seatDir(), compactAtPromptFile))
 	if t.arrange(payload.TranscriptPath, false) == "" {
 		return "{}"
 	}
@@ -259,29 +349,33 @@ func (t *compactTrigger) answerArranged() string {
 	return answer
 }
 
-// stop handles agy's Stop: the seat is at its prompt, so an arranged compact goes out now. A seat past the limit whose
-// last turn called no tool arranges it here. Its answer is always {}, which lets the seat stop.
+// stop handles agy's Stop: the seat is at its prompt, so an arranged compact goes out now, background work or not. A seat
+// past the limit whose last turn called no tool arranges it here. Its answer is always {}, which lets the seat stop.
 func (t *compactTrigger) stop(payload agyHookPayload) string {
+	t.Conversation = payload.ConversationID
 	t.markHook(payload.ConversationID)
-	// A broken conversation fails every input, /compact among them; the supervisor's recovery owns that seat. A loop
-	// with background work still running can come back, so the next Stop is the moment.
-	if payload.TerminationReason == "ERROR" || (payload.FullyIdle != nil && !*payload.FullyIdle) {
+	// A broken conversation fails every input, /compact among them; the supervisor's recovery owns that seat.
+	if payload.TerminationReason == "ERROR" {
 		return "{}"
 	}
+	if payload.ConversationID != "" {
+		_ = os.WriteFile(filepath.Join(t.seatDir(), compactAtPromptFile), []byte(payload.ConversationID), 0o600)
+	}
 	t.arrange(payload.TranscriptPath, false)
-	dir, send, now := t.seatDir(), false, t.Now()
+	dir, send, now, at := t.seatDir(), false, t.Now(), 0.0
 	_ = withClaimLock(dir, func() error {
 		held, ok := readClaim(dir)
 		if !ok || held.By != claimByHook || held.SentAt != 0 || !held.fresh(now) {
 			return nil
 		}
-		held.SentAt = now
+		held.SentAt, at = now, held.At
 		send = true
 		return writeClaim(dir, held)
 	})
 	if send {
 		if err := t.Spawn(t.Root, t.Room, t.Seat); err != nil {
 			appendTriggerLog(dir, "cannot start the sender: "+err.Error())
+			releaseClaim(dir, at)
 		}
 	}
 	return "{}"
@@ -338,15 +432,23 @@ func (s *compactSender) run() {
 		appendTriggerLog(dir, "no arranged compact to send")
 		return
 	}
+	// The hook marks the conversation before it starts this process, so a different mark is a seat restarted since.
+	if mark, err := os.ReadFile(filepath.Join(dir, compactHookMarkFile)); err == nil && !claim.belongsTo(strings.TrimSpace(string(mark))) {
+		appendTriggerLog(dir, s.Seat+": /compact not sent, the claim's conversation is gone")
+		releaseClaim(dir, claim.At)
+		return
+	}
 	if err := s.Say(s.Room, s.Seat, "/compact", true); err != nil {
-		appendTriggerLog(dir, "/compact not delivered: "+err.Error())
+		appendTriggerLog(dir, "/compact not delivered, claim released: "+err.Error())
+		releaseClaim(dir, claim.At)
 		return
 	}
 	appendTriggerLog(dir, fmt.Sprintf("%s: sent /compact at %s", s.Seat, seatlog.Kilo(claim.Used)))
 	start := s.Now()
 	for compactions(claim.Path) <= claim.Count {
 		if s.Now()-start > witnessWindow {
-			appendTriggerLog(dir, fmt.Sprintf("%s: /compact NOT witnessed in %.0fs", s.Seat, witnessWindow))
+			appendTriggerLog(dir, fmt.Sprintf("%s: /compact NOT witnessed in %.0fs, claim released", s.Seat, witnessWindow))
+			releaseClaim(dir, claim.At)
 			return
 		}
 		s.Sleep(compactPoll)
@@ -356,7 +458,7 @@ func (s *compactSender) run() {
 		seatlog.Kilo(claim.Used), seatlog.Kilo(after)))
 	// The compact is done, so the claim goes with it: lastContext reads no size until the next model call writes one,
 	// which is what stops the resume's first hook from reading the old size and arranging a second compact.
-	_ = withClaimLock(dir, func() error { return os.Remove(filepath.Join(dir, compactClaimFile)) })
+	releaseClaim(dir, claim.At)
 	s.resume(dir)
 }
 

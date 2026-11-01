@@ -110,6 +110,10 @@ type Supervisor struct {
 	ClaimCompact func(seat string, used, count int, now float64) bool
 	HookHolds    func(seat string, now float64) bool
 	HookLive     func(seat string) bool
+	// ClaimDir is the directory holding a seat's compact claim, which settleClaim reads and ends; nil means no hook path.
+	ClaimDir func(seat string) string
+	// Started is when the seat's current process began (unix seconds), 0 when it cannot be read. nil never skips.
+	Started func(room, seat string) float64
 
 	State map[string]*seatState
 }
@@ -156,6 +160,8 @@ func New(room string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 	}
 	supervisor.HookHolds = func(seat string, now float64) bool { return hookHoldsClaim(seatDir(seat), now) }
 	supervisor.HookLive = func(seat string) bool { return compactHookLive(seatDir(seat)) }
+	supervisor.ClaimDir = seatDir
+	supervisor.Started = func(room, seat string) float64 { return sessionCreated(stateRoot, room, seat) }
 	supervisor.Log = func(text string) {
 		fmt.Fprintf(out, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), text)
 	}
@@ -218,6 +224,18 @@ func (s *Supervisor) Step() {
 		// transcript is the broken conversation's, and it reads as mid-turn for as long as it stays broken.
 		if runtime == "agy" && s.recoverBrokenAgy(seat, path, state, now) {
 			continue
+		}
+		if runtime == "agy" {
+			// A TRANSCRIPT OLDER THAN THE SEAT IS THE LAST CONVERSATION'S: agy-conversation names the new one only at the
+			// first tool call, so until then the size read here belongs to a context the seat no longer has. A /compact
+			// sent on it lands in a fresh conversation, as "Nothing to compact yet", on top of the first message.
+			if s.Started != nil && s.Started(s.Room, seat) > modTime(path) {
+				*state = seatState{}
+				continue
+			}
+			if s.settleClaim(seat, path, state, used, hasUsed, now) {
+				continue
+			}
 		}
 		if state.hasBefore {
 			count := compactions(path)
@@ -401,6 +419,64 @@ func (s *Supervisor) Step() {
 	}
 }
 
+// settleClaim bounds a claim the hook path took, and says whether it typed the seat's /compact this pass. Every claim ends
+// here if nothing else ended it, so a seat is never left at its prompt behind one: past the window the claim is released,
+// and a seat at its prompt holding one nobody is sending is compacted at once.
+func (s *Supervisor) settleClaim(seat, path string, state *seatState, used int, hasUsed bool, now float64) bool {
+	if s.ClaimDir == nil {
+		return false
+	}
+	dir := s.ClaimDir(seat)
+	claim, ok := readClaim(dir)
+	if !ok || claim.By != claimByHook {
+		return false
+	}
+	if !claim.belongsTo(conversationOf(path)) {
+		releaseClaim(dir, claim.At)
+		s.Log(fmt.Sprintf("%s: dropped a compact claim of its previous conversation", seat))
+		return false
+	}
+	if claim.SentAt != 0 {
+		if !claim.fresh(now) {
+			releaseClaim(dir, claim.At)
+			s.Log(fmt.Sprintf("%s: its sender ended nothing in %.0fs, compact claim released", seat, witnessWindow))
+		}
+		return false
+	}
+	count := compactions(path)
+	if count > claim.Count {
+		// Compacted some other way (an operator's /compact): the claim's work is done and nothing owes a resume.
+		releaseClaim(dir, claim.At)
+		s.Log(fmt.Sprintf("%s: already compacted, compact claim released", seat))
+		return false
+	}
+	quiet := now - claim.At
+	if since := now - modTime(path); since < quiet {
+		quiet = since
+	}
+	if quiet >= claimTakeoverGrace && s.Idle(s.Room, seat) {
+		before := claim.Used
+		if hasUsed {
+			before = used
+		}
+		if !supervisorTakeover(dir, before, count, now) {
+			return false
+		}
+		state.sent, state.before, state.hasBefore, state.count = now, before, true, count
+		if err := s.Say(s.Room, seat, "/compact", true); err != nil {
+			s.Log(fmt.Sprintf("%s: /compact not delivered (%v)", seat, err))
+		}
+		s.Log(fmt.Sprintf("%s: at its prompt holding a compact claim %.0fs old with no sender: took it over, sent /compact at %s",
+			seat, now-claim.At, seatlog.Kilo(before)))
+		return true
+	}
+	if !claim.fresh(now) {
+		releaseClaim(dir, claim.At)
+		s.Log(fmt.Sprintf("%s: a compact claim expired unsent and the seat is not at its prompt: released", seat))
+	}
+	return false
+}
+
 // claimAgy takes the seat's compact claim for an agy seat; no other runtime has a hook path to race with.
 func (s *Supervisor) claimAgy(runtime, seat string, used, count int, now float64) bool {
 	if runtime != "agy" || s.ClaimCompact == nil {
@@ -504,7 +580,7 @@ func seatIdleReason(stateRoot, room, seat string) (bool, string) {
 	if path == "" {
 		return false, "the agy transcript of this seat could not be found, so nothing can say whether it is at its prompt"
 	}
-	return seatlog.AgyTurnEnded(path), ""
+	return seatlog.AgyTurnEnded(path) || agyAtPrompt(clientruntime.SeatDir(stateRoot, room, seat), path), ""
 }
 
 // roomIdleReason reads a seat's idleness through clientruntime.ReadSeatActivity, the runtime's own session list.

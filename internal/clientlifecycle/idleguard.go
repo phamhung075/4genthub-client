@@ -43,6 +43,8 @@ type stallState struct {
 	nudged float64
 	count  int
 	told   bool
+	// claimLogged is the compact claim, and whether it was fresh, that the log has already said something about.
+	claimLogged string
 }
 
 // IdleGuard is one `idle-run`. Every external reading is a field, so one pass is testable with no room, no
@@ -82,6 +84,8 @@ type IdleGuard struct {
 	Director func(room string) string
 	// Stamp is `4genteam clock --short`; nil reads the clock.
 	Stamp func() string
+	// Claim reads the seat's compact claim (agycompact.go); nil means no hook path.
+	Claim func(seat string) (compactClaim, bool)
 
 	State   map[string]*stallState
 	decided float64 // the newest log time of the quiet already decided, so one quiet is decided once
@@ -133,6 +137,7 @@ func NewIdleGuard(room, lead string, quiet, stall int, stateRoot string, out io.
 	g.Log = func(text string) { fmt.Fprintf(out, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), text) }
 	g.WaitProbes = seatwait.LiveProbes()
 	g.Escalate = escalateToOwner
+	g.Claim = func(seat string) (compactClaim, bool) { return readClaim(clientruntime.SeatDir(stateRoot, room, seat)) }
 	return g
 }
 
@@ -259,6 +264,9 @@ func (g *IdleGuard) nudge(seat string, silent, now float64, state *stallState) {
 	if now-state.nudged < g.Stall {
 		return
 	}
+	if g.holdForClaim(seat, silent, now, state) {
+		return
+	}
 	if ok, why := g.Wake(g.Room); !ok {
 		g.Log(fmt.Sprintf("%s: stuck %.0fs, nudge held: %s", seat, silent, why))
 		return
@@ -277,6 +285,35 @@ func (g *IdleGuard) nudge(seat string, silent, now float64, state *stallState) {
 	g.Say(g.Room, seat, stallText, false)
 	state.count++
 	g.Log(fmt.Sprintf("%s: stuck %.0fs, told to continue (%d of %d)", seat, silent, state.count, stallNudges))
+}
+
+// holdForClaim answers whether a compact claim explains the silence. A seat holding a live claim is about to be compacted
+// and is resumed after: a nudge would start a turn the hook terminates, and its Escape could cancel the /compact (aa2-gemini,
+// 2026-11-01: one nudge every 2.5 minutes, each renewing the claim). A claim past its window is said, once, and the nudge
+// goes out, because its PreInvocation or Stop is what moves the seat when no supervisor runs.
+func (g *IdleGuard) holdForClaim(seat string, silent, now float64, state *stallState) bool {
+	if g.Claim == nil {
+		return false
+	}
+	claim, ok := g.Claim(seat)
+	if !ok {
+		return false
+	}
+	fresh := claim.fresh(now)
+	said := fmt.Sprintf("%f/%t", claim.At, fresh)
+	logged := state.claimLogged == said
+	state.claimLogged = said
+	if fresh {
+		if !logged {
+			g.Log(fmt.Sprintf("%s: quiet %.0fs holding a compact claim (%s, %s): no nudge", seat, silent, claim.By, seatlog.Kilo(claim.Used)))
+		}
+		return true
+	}
+	if !logged {
+		g.Log(fmt.Sprintf("%s: quiet %.0fs holding a STALE compact claim, %.0fs old (%s, sent: %t): no /compact is coming from it",
+			seat, silent, now-claim.At, claim.By, claim.SentAt != 0))
+	}
+	return false
 }
 
 // decide asks Jev, once per quiet, whether the room should carry on, and tells the lead the answer.

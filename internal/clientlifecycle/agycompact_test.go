@@ -107,17 +107,78 @@ func TestAStopPastTheLimitWithNoToolCallStillCompacts(t *testing.T) {
 }
 
 func TestAStopThatCannotCompactLeavesTheSeatAlone(t *testing.T) {
+	f := newTriggerFixture(t, 500)
+	f.trigger.stop(agyHookPayload{TerminationReason: "ERROR", TranscriptPath: f.path})
+	if f.spawned != 0 {
+		t.Fatal("a broken conversation: the sender started")
+	}
+}
+
+// aa2-gemini, 2026-11-01: a Stop with a background grep running sent nothing, agy fires no second Stop until that work
+// ends, and the seat sat at its prompt holding the claim. A /compact typed at such a prompt runs (measured on agy 1.4.12).
+func TestAStopWithBackgroundWorkStillSends(t *testing.T) {
+	f := newTriggerFixture(t, 500)
+	f.trigger.preInvocation(f.payload())
 	busy := false
-	for name, payload := range map[string]agyHookPayload{
-		"a broken conversation": {TerminationReason: "ERROR"},
-		"background work":       {FullyIdle: &busy},
-	} {
-		f := newTriggerFixture(t, 500)
-		payload.TranscriptPath = f.path
-		f.trigger.stop(payload)
-		if f.spawned != 0 {
-			t.Fatalf("%s: the sender started", name)
-		}
+	payload := f.payload()
+	payload.FullyIdle = &busy
+	f.trigger.stop(payload)
+	if f.spawned != 1 {
+		t.Fatalf("spawned = %d", f.spawned)
+	}
+}
+
+// The second half of the same incident: a start that fails must not leave a claim that says it was sent.
+func TestASenderThatCannotStartReleasesTheClaim(t *testing.T) {
+	f := newTriggerFixture(t, 500)
+	f.trigger.Spawn = func(string, string, string) error { return errors.New("no fork") }
+	f.trigger.stop(f.payload())
+	if _, ok := readClaim(f.dir); ok {
+		t.Fatal("the claim outlived a sender that never started")
+	}
+}
+
+// aa2-gemini, 2026-11-01: reseated under a claim, the new conversation's first message was terminated by the old claim,
+// and its Stop typed /compact over it: "Nothing to compact yet".
+func TestANewConversationIsNotHeldToTheOldOnesClaim(t *testing.T) {
+	f := newTriggerFixture(t, 500)
+	f.trigger.preInvocation(agyHookPayload{ConversationID: "old", TranscriptPath: f.path})
+	f.write(50) // the new conversation's own transcript, under the limit
+	fresh := agyHookPayload{ConversationID: "new", TranscriptPath: f.path}
+	if answer := f.trigger.preInvocation(fresh); answer != "{}" {
+		t.Fatalf("the first message of the new conversation was answered %s", answer)
+	}
+	f.trigger.stop(fresh)
+	if f.spawned != 0 {
+		t.Fatal("a /compact was sent to a conversation with nothing to compact")
+	}
+	if _, ok := readClaim(f.dir); ok {
+		t.Fatal("the old conversation's claim survived")
+	}
+}
+
+func TestAConversationIsReadFromItsTranscriptPath(t *testing.T) {
+	if got := conversationOf("/home/x/.gemini/antigravity-cli/brain/abc-1/.system_generated/logs/transcript.jsonl"); got != "abc-1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := conversationOf("/tmp/transcript.jsonl"); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestAStopMarksTheSeatAtItsPromptUntilTheNextModelCall(t *testing.T) {
+	f := newTriggerFixture(t, 50)
+	path := "/home/x/brain/conv/.system_generated/logs/transcript.jsonl"
+	f.trigger.stop(f.payload())
+	if !agyAtPrompt(f.dir, path) {
+		t.Fatal("a Stop did not mark the seat at its prompt")
+	}
+	if agyAtPrompt(f.dir, "/home/x/brain/other/.system_generated/logs/transcript.jsonl") {
+		t.Fatal("another conversation read as at its prompt")
+	}
+	f.trigger.preInvocation(f.payload())
+	if agyAtPrompt(f.dir, path) {
+		t.Fatal("a running turn read as at its prompt")
 	}
 }
 
@@ -276,6 +337,33 @@ func TestAnUnwitnessedCompactSendsNoResume(t *testing.T) {
 	}
 }
 
+// A claim always ends: neither a /compact nobody witnessed nor one that never reached the seat may keep holding it.
+func TestASenderThatFailsReleasesTheClaim(t *testing.T) {
+	for name, say := range map[string]error{"not witnessed": nil, "not delivered": errors.New("no pane")} {
+		f, sender, _ := senderFixture(t, 500)
+		failure := say
+		sender.Say = func(string, string, string, bool) error { return failure }
+		sender.run()
+		if _, ok := readClaim(f.dir); ok {
+			t.Fatalf("%s: the claim outlived the sender", name)
+		}
+	}
+}
+
+func TestASenderDoesNotTypeIntoAConversationTheClaimIsNotFor(t *testing.T) {
+	f, sender, said := senderFixture(t, 500)
+	if err := os.WriteFile(filepath.Join(f.dir, compactHookMarkFile), []byte("restarted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sender.run()
+	if len(*said) != 0 {
+		t.Fatalf("said = %q", *said)
+	}
+	if _, ok := readClaim(f.dir); ok {
+		t.Fatal("the claim of a gone conversation survived")
+	}
+}
+
 func TestAResumeTheGateCannotReadIsHeldNotSent(t *testing.T) {
 	_, sender, said := senderFixture(t, 500)
 	failures := 0
@@ -336,6 +424,112 @@ func TestTheSupervisorLeavesASeatTheHookHolds(t *testing.T) {
 	claim, ok := readClaim(f.dir)
 	if !ok || claim.By != claimBySupervisor {
 		t.Fatalf("the supervisor's /compact left claim %+v", claim)
+	}
+}
+
+// claimSupervisor is a supervisor with the claim path wired to the fixture's seat.
+func claimSupervisor(f *triggerFixture, idle *bool, said *[]string, logged *[]string) *Supervisor {
+	return &Supervisor{Room: "room", Quiet: 0, Out: &bytes.Buffer{}, State: map[string]*seatState{},
+		StateRoot: f.t.TempDir(),
+		Now:       func() float64 { return f.now },
+		Seats:     func(string) []string { return []string{"seat"} },
+		SeatLog:   func(string, string) (string, string) { return f.path, "agy" },
+		Idle:      func(string, string) bool { return *idle },
+		Say:       func(_, _, text string, _ bool) error { *said = append(*said, text); return nil },
+		Log:       func(text string) { *logged = append(*logged, text) },
+		ClaimCompact: func(_ string, used, count int, now float64) bool {
+			return supervisorClaim(f.dir, used, count, now)
+		},
+		HookHolds: func(_ string, now float64) bool { return hookHoldsClaim(f.dir, now) },
+		HookLive:  func(string) bool { return true },
+		ClaimDir:  func(string) string { return f.dir },
+	}
+}
+
+// The backstop does not wait out the window for a seat at its prompt: a claim nobody is sending is taken over, once the
+// Stop hook has had its moment, and a Stop arriving after that types nothing.
+func TestTheSupervisorTakesOverAClaimOnASeatAtItsPrompt(t *testing.T) {
+	f := newTriggerFixture(t, 500)
+	idle, said, logged := true, []string{}, []string{}
+	supervisor := claimSupervisor(f, &idle, &said, &logged)
+	f.now = wallClock()
+	f.trigger.preInvocation(f.payload())
+	supervisor.Step()
+	if len(said) != 0 {
+		t.Fatalf("no grace for the Stop hook: said %q", said)
+	}
+	f.now += claimTakeoverGrace + 1
+	if err := os.Chtimes(f.path, time.Unix(int64(f.now)-20, 0), time.Unix(int64(f.now)-20, 0)); err != nil {
+		t.Fatal(err)
+	}
+	supervisor.Step()
+	if len(said) != 1 || said[0] != "/compact" {
+		t.Fatalf("said %q, logged %q", said, logged)
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "took it over") {
+		t.Fatalf("logged %q", logged)
+	}
+	f.trigger.stop(f.payload())
+	if f.spawned != 0 {
+		t.Fatal("a Stop after the takeover started a second /compact")
+	}
+}
+
+// A seat that cannot be proved idle is not typed into, and its claim still ends at the window.
+func TestAClaimPastItsWindowIsReleasedOnABusySeat(t *testing.T) {
+	f := newTriggerFixture(t, 500)
+	idle, said, logged := false, []string{}, []string{}
+	supervisor := claimSupervisor(f, &idle, &said, &logged)
+	f.now = wallClock()
+	f.trigger.preInvocation(f.payload())
+	supervisor.Step()
+	if _, ok := readClaim(f.dir); !ok {
+		t.Fatal("a fresh claim was released")
+	}
+	f.now += witnessWindow + 1
+	supervisor.Step()
+	if len(said) != 0 {
+		t.Fatalf("said %q", said)
+	}
+	if _, ok := readClaim(f.dir); ok {
+		t.Fatal("the claim outlived its window")
+	}
+}
+
+// Compacted some other way (an operator's /compact): nothing is typed on top of it.
+func TestAClaimOnACompactedSeatIsReleased(t *testing.T) {
+	f := newTriggerFixture(t, 500)
+	idle, said, logged := true, []string{}, []string{}
+	supervisor := claimSupervisor(f, &idle, &said, &logged)
+	f.now = wallClock()
+	f.trigger.preInvocation(f.payload())
+	file, err := os.OpenFile(f.path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = file.WriteString(agyCheckpoint + "\n")
+	_ = file.Close()
+	f.now += claimTakeoverGrace + 30
+	supervisor.Step()
+	if len(said) != 0 {
+		t.Fatalf("said %q", said)
+	}
+	if _, ok := readClaim(f.dir); ok {
+		t.Fatal("the claim outlived the compaction")
+	}
+}
+
+// agy-conversation names the new conversation only at the first tool call, so a reseated seat reads the old transcript,
+// past the limit and final-answered: a /compact on that reading lands on the fresh prompt.
+func TestATranscriptOlderThanTheSeatIsNotCompacted(t *testing.T) {
+	f := newTriggerFixture(t, 500)
+	idle, said, logged := true, []string{}, []string{}
+	supervisor := claimSupervisor(f, &idle, &said, &logged)
+	f.now = wallClock() + 60
+	supervisor.Started = func(string, string) float64 { return f.now - 5 }
+	supervisor.Step()
+	if len(said) != 0 {
+		t.Fatalf("said %q to a seat younger than its transcript", said)
 	}
 }
 

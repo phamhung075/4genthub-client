@@ -207,3 +207,33 @@ func TestAFreshSeatIsNotNudgedForTheSilenceOfItsPreviousSession(t *testing.T) {
 		t.Fatalf("a seat silent for a whole stall since its start was not nudged; said %q", r.said)
 	}
 }
+
+// aa2-gemini, 2026-11-01: a nudge every 2.5 minutes on a seat holding a compact claim, each one a turn the hook ended or a
+// paid model call that renewed the claim. A live claim explains the silence; a stale one is said once and the nudge goes.
+func TestTheIdleGuardHoldsItsNudgeForALiveClaimAndSaysAStaleOne(t *testing.T) {
+	r := newGuardRoom(t, map[string]bool{"lead": true, "go-dev": false}, clientjev.Selection{})
+	var logged []string
+	r.guard.Log = func(text string) { logged = append(logged, text) }
+	r.guard.Claim = func(seat string) (compactClaim, bool) {
+		if seat != "go-dev" {
+			return compactClaim{}, false
+		}
+		return compactClaim{By: claimByHook, At: 9990, Used: 76000}, true
+	}
+	r.guard.Step(context.Background())
+	if len(r.said) != 0 {
+		t.Fatalf("a seat holding a live claim was told %q", r.said)
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "holding a compact claim") {
+		t.Fatalf("logged %q", logged)
+	}
+	r.now = 9990 + witnessWindow + 1000
+	logged = nil
+	r.guard.Step(context.Background())
+	if !strings.Contains(strings.Join(logged, "\n"), "STALE compact claim") {
+		t.Fatalf("logged %q", logged)
+	}
+	if len(r.said) != 1 {
+		t.Fatalf("past the claim the nudge is the seat's way out; said %q", r.said)
+	}
+}
