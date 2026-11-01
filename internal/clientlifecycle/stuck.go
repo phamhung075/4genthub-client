@@ -53,7 +53,7 @@ import (
 
 const (
 	stuckUsage = "usage: 4genteam stuck ROOM [--once|--every DURATION] [--idle-after DURATION] " +
-		"[--escalate-after DURATION] [--state-root DIR] [--json] [--dry-run]"
+		"[--escalate-after DURATION] [--state-root DIR] [--json] [--dry-run] [--loops [--exit-with-room] [--clear]]"
 
 	// stuckEvery is how often agent runs the scan: the SAME cadence as the overlap detector beside it (4.5's
 	// ten minutes). The plan's 5.3c leaves the loop's cadence to one number; two timers in one loop that
@@ -625,6 +625,8 @@ func stuckMessage(finding stuckFinding) string {
 	case stuckIdleKind:
 		return fmt.Sprintf("A seat is idle. Seat %s: %s. Nothing is blocked. The lead decides whether it takes "+
 			"work; this alert assigns nothing.", name, finding.Reason)
+	case stuckLoopKind:
+		return fmt.Sprintf("A seat was stopped for looping. Seat %s: %s.", name, finding.Reason)
 	default:
 		return fmt.Sprintf("A queue row is stuck. Row %s: %s. Nothing is blocked. The row is not moved by this "+
 			"alert; the lead decides whether it is re-scoped or handed on.", name, finding.Reason)
@@ -659,6 +661,8 @@ func stuckEscalationSubject(finding stuckFinding) string {
 		return "board task " + finding.ID + " is past its due date"
 	case stuckIdleKind:
 		return "seat " + finding.ID + " has been idle past the window"
+	case stuckLoopKind:
+		return "seat " + finding.ID + " was stopped for looping"
 	default:
 		return "queue row " + finding.ID + " is stuck"
 	}
@@ -822,7 +826,14 @@ func (stuckCommand) Run(_ context.Context, args []string, stdout, stderr io.Writ
 				"blocked: the first alert goes to the seat the finding names and to the lead, and a finding still\n"+
 				"there an hour later is written to the room's human as a queue row. A finding is sent once at each\n"+
 				"rung and a rung is never re-sent while it stands. agent runs this every "+stuckEvery.String()+" on its\n"+
-				"own; this verb is the run on request, one scan by default.")
+				"own; this verb is the run on request, one scan by default.\n\n"+
+				"--loops runs the other half instead: a seat repeating one tool call (or getting one answer) with no\n"+
+				"file written, read from its session log, is steered, then interrupted and steered, then stopped with\n"+
+				"an alert in `room status`, `ps` and its pane title. One action per seat per cooldown, and no model is\n"+
+				"used. A seat quiet inside one long command is not looping. LOOP_REPEAT_LIMIT (8, 0 turns it off),\n"+
+				"LOOP_WINDOW_SECONDS (600) and LOOP_COOLDOWN_SECONDS (120) are read from the env file. agent runs this\n"+
+				"every "+clientservices.LoopEvery.String()+" per room, and so does `up --room-only`, with --exit-with-room (leave when\n"+
+				"the room has had no live seat for a while). --clear drops the room's loop records.")
 		return clientcmd.ExitOK
 	}
 	flags := flag.NewFlagSet("stuck", flag.ContinueOnError)
@@ -833,6 +844,9 @@ func (stuckCommand) Run(_ context.Context, args []string, stdout, stderr io.Writ
 	stateRoot := flags.String("state-root", "", "where OpenRig keeps its per-seat state: the flag, else this machine's own")
 	asJSON := flags.Bool("json", false, "print one scan's report as JSON (one scan, never a loop)")
 	dryRun := flags.Bool("dry-run", false, "print what would be sent and send nothing, and remember nothing")
+	loops := flags.Bool("loops", false, "run the seat-loop guard instead of the alert scan")
+	exitWithRoom := flags.Bool("exit-with-room", false, "with --loops: leave once the room has had no live seat for a while")
+	clearLoops := flags.Bool("clear", false, "with --loops: drop the room's loop records and exit")
 	// THE ROOM IS LIFTED OUT OF THE ARGUMENTS BEFORE THE FLAGS ARE PARSED, because flag.Parse STOPS at the
 	// first non-flag argument: with the documented order (`stuck ROOM --dry-run`) the flag was left as a
 	// second positional, ignored, and the verb SENT what a dry run exists to hold back. The built binary
@@ -854,11 +868,19 @@ func (stuckCommand) Run(_ context.Context, args []string, stdout, stderr io.Writ
 		fmt.Fprintf(stderr, "4genteam stuck: %v\n", err)
 		return clientcmd.ExitUnavailable
 	}
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, os.Interrupt)
+	if *loops {
+		stop := make(chan struct{})
+		go func() {
+			<-interrupted
+			close(stop)
+		}()
+		return runStuckLoops(room, root, *every, *exitWithRoom, *dryRun, *clearLoops, stop, stdout, stderr)
+	}
 	deps := stuckDepsFor(root)
 	opts := stuckOptions{Room: room, IdleAfter: *idle, EscalateAfter: *escalate}
 
-	interrupted := make(chan os.Signal, 1)
-	signal.Notify(interrupted, os.Interrupt)
 	for {
 		opts.Now = deps.now()
 		report := stuckScanFor(deps, opts)

@@ -194,7 +194,8 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 				"--room-only stops after the room: it starts the daemon, starts the room from the definition or its\n"+
 				"own spec.json, and prints one line per seat. It EXCLUDES agent, the bridge, the watch view, the UI\n"+
 				"and herdr, whose failures are not this verb's verdict - and it must not be used to make a red go\n"+
-				"away.\n"+
+				"away. It starts one small process beside the room, the room's seat-loop guard (`stuck ROOM --loops`),\n"+
+				"which leaves when the room does, and it warns that no compaction supervisor or watchdog runs.\n"+
 				"--respawn REPLACES the running runtime daemon instead of reusing it: agent is stopped (it is the\n"+
 				"single restart authority, so its children stop with it), then the daemon serving this state root\n"+
 				"is signalled and waited out, and this same run starts the daemon again - so the binary installed\n"+
@@ -231,7 +232,7 @@ func (upCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer)
 	flags := flag.NewFlagSet("up", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	teamDir := flags.String("team", "", "the team definition directory that holds team.json (optional: a room with its own record starts from it)")
-	roomOnly := flags.Bool("room-only", false, "start the daemon and the room, print a line per seat, and stop before agent, the bridge, the watch view and the UI")
+	roomOnly := flags.Bool("room-only", false, "start the daemon, the room and its loop guard, print a line per seat, and stop before agent, the bridge, the watch view and the UI")
 	respawn := flags.Bool("respawn", false, "stop agent and replace the runtime daemon serving this state root, so the installed binary serves the room")
 	flagArgs, positional := splitFlagsAndPositional(rest)
 	for _, arg := range flagArgs {
@@ -403,7 +404,12 @@ func runUp(name, teamDir, stateDir string, allowPeak, roomOnly, respawn bool, st
 	}
 	// --room-only is an INSTRUMENT: it ends here, with the room's own verdict. The guard is deliberate - a
 	// red that comes from the bridge, the UI or herdr is not evidence about the room.
+	//
+	// THE ONE THING IT STARTS BESIDE THE ROOM IS THE ROOM'S LOOP GUARD, and it says what the room runs without: a
+	// room started this way had no safeguard at all, and a seat looped in it until the founder saw it on the grid
+	// (aa2-gemini, 2026-11-01). The guard's own failure is a warning, not this verb's verdict.
 	if roomOnly {
+		startLoopGuard(name, stateDir, stdout, stderr)
 		return clientcmd.ExitOK
 	}
 	// 7.5: a bridge refused for a missing AGENTHUB_URL or AGENTHUB_TOKEN is a FAILED `up`. The check runs

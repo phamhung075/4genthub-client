@@ -371,6 +371,12 @@ func agentSpecs(rooms []string, root string) []agentSpec {
 				logPath:   budgetLog,
 				threshold: clientservices.SilentAfter(clientservices.BudgetEvery),
 			},
+			agentSpec{
+				safeguard: clientservices.LoopGuard, room: room,
+				argv:      loopGuardArgv(room, root),
+				logPath:   LoopLogPath(room, root),
+				threshold: clientservices.SilentAfter(clientservices.LoopEvery),
+			},
 		)
 	}
 	specs = append(specs, agentSpec{

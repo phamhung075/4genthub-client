@@ -19,6 +19,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientenv"
 	"github.com/phamhung075/4genthub-client/internal/clientruntime"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
+	"github.com/phamhung075/4genthub-client/internal/seatloop"
 )
 
 const usage = "usage: 4genteam ps [--state-root DIR] [ROOM] [--nodes | --compact | --grid] [--json]"
@@ -197,8 +198,12 @@ func collect(stateRoot string, sessions []session, only string) []Seat {
 			seat.Status, seat.Error = "quota", marker
 		}
 		seat.Activity = activity(snap.LogPath)
+		if record, found := seatloop.Load(stateRoot, room)[member]; found {
+			seat.Status, seat.Error = "looping", record.Status()
+		}
 		seats = append(seats, seat)
 	}
+	seats = append(seats, stoppedForLooping(stateRoot, seats, only)...)
 	sort.Slice(seats, func(i, j int) bool {
 		if seats[i].Room != seats[j].Room {
 			return seats[i].Room < seats[j].Room
@@ -206,6 +211,33 @@ func collect(stateRoot string, sessions []session, only string) []Seat {
 		return seats[i].Member < seats[j].Member
 	})
 	return seats
+}
+
+// loopAlertShown is how long a seat the loop guard stopped keeps its row with no session behind it.
+const loopAlertShown = 24 * time.Hour
+
+// stoppedForLooping are the seats the loop guard stopped: they have no session, so the session list above cannot
+// show them, and a stopped seat with no row is the alert nobody sees.
+func stoppedForLooping(stateRoot string, listed []Seat, only string) []Seat {
+	present := map[string]bool{}
+	for _, seat := range listed {
+		present[seat.Room+"\x00"+seat.Member] = true
+	}
+	var rows []Seat
+	for _, room := range seatloop.Rooms(stateRoot) {
+		if only != "" && room != only {
+			continue
+		}
+		for member, record := range seatloop.Load(stateRoot, room) {
+			if !record.Stopped || present[room+"\x00"+member] || time.Since(record.At) > loopAlertShown {
+				continue
+			}
+			rows = append(rows, Seat{Room: room, Member: member, Session: clientruntime.SeatSessionName(room, member),
+				Status: "loop-stopped", Error: record.Status(), Uptime: "-", Activity: since(record.At) + " ago",
+				startedAt: record.At, RoomName: room, LogicalID: room + "." + member})
+		}
+	}
+	return rows
 }
 
 func quotaIn(path string) string {

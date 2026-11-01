@@ -71,6 +71,10 @@ func stubHeartbeat(t *testing.T) *[]string {
 func restoreAll(t *testing.T) {
 	t.Helper()
 	stubHeartbeat(t)
+	// The loop guard is a process of its own: its start has its own cases (stuckloop_test.go).
+	savedGuard := startLoopGuard
+	t.Cleanup(func() { startLoopGuard = savedGuard })
+	startLoopGuard = func(string, string, io.Writer, io.Writer) {}
 	// The worktrees step touches git and the machine's checkouts. Every case that is not ABOUT it starts
 	// from a stub, so a lifecycle assertion never depends on the repository the test binary was built
 	// in; the two cases that assert the step replace it with their own.

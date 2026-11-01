@@ -164,6 +164,32 @@ the process that calls it, so a process whose home is elsewhere does not find it
 If nothing appears, check those two first: a stopped seat has no pane, and a missing `herdr` or
 `tmux` is a prerequisite to fix rather than work around.
 
+## Seat loop guard
+
+A seat that repeats one tool call turn after turn spends a model turn each time and never stops on its own
+(aa2-gemini, 2026-11-01: `manage_task status task-249`, 20 times in three minutes, a `schedule` or an `lsof` between
+every few). `4genteam stuck ROOM --loops --every 15s` reads every live seat's session log through the feed's own
+adapters, so it covers agy, omp and Claude Code alike, and it uses no model.
+
+- **It fires** when a seat makes the same call with the same arguments `LOOP_REPEAT_LIMIT` (8) times inside
+  `LOOP_WINDOW_SECONDS` (600), or gets the same non-empty answer that many times in a row (numbers ignored), with no
+  write between. A successful write that was not made before, or a message reaching the seat, starts the count over.
+- **It does not fire** on a seat inside one long command (it logs nothing, and a repeat older than three minutes does
+  not count), or on different work such as reading different files.
+- **The ladder**, at least `LOOP_COOLDOWN_SECONDS` (120) apart and each rung earned by repeats made after the last:
+  a steer through the seat's input path; an interrupt and a second steer; the seat is stopped and one row goes to the
+  room's human. Each rung is logged in `logs/loop-guard-ROOM.log`, and the record shows on the seat's row in
+  `4genteam room status`, in `4genteam ps` (status `looping` or `loop-stopped`) and in its pane title. A seat clear for
+  a whole window is forgotten. A stopped seat comes back with `4genteam room reseat ROOM SEAT`; `stuck ROOM --loops
+  --clear` drops the records. `stuck ROOM --loops --dry-run` shows what it would do. `LOOP_REPEAT_LIMIT=0` turns it off.
+- **Who runs it:** `agent`, for every room it lists, and `up ROOM --room-only`, which starts this one guard and nothing
+  else beside the room (it leaves when the room has had no live seat for five minutes). Running `up ROOM --room-only`
+  again on a room that is up reads the room, restarts no seat, and starts the guard if it is missing. `room status`
+  prints a `protection:` line when a running room has no guard, or a guard and no supervisor.
+- **The defaults were measured** by replaying this machine's 458 agy and omp logs (2026-11-01, sampling every sixth
+  record): 12 firings, 11 of them `manage_task status` polls of a background task and one a repeated identical answer.
+  Replayed on the incident's own transcript it fires at its 8th call, 57 s in, 2 min 18 s before the owner's message.
+
 ## Rules
 
 - **Never press Ctrl-C or type into a raw `tmux attach` pane of a seat, and never use `tmux send-keys`
@@ -205,6 +231,10 @@ If nothing appears, check those two first: a stopped seat has no pane, and a mis
   the soft-limit notice, because a pasted notice starts a model turn. `4genteam room compact ROOM`
   does the same for agy seats, and refuses a mid-turn agy seat by name (exit 2). On its own,
   agy 1.4.9 compacts only near 270k tokens (measured), and its `/config` has no compaction setting.
+  A seat that never goes idle is not left to that: past the warn limit it gets one witness window (180 s) to reach a
+  safe point, past the hard limit none, then it is interrupted (Escape), and once its log has been quiet for
+  `COMPACT_QUIET_SECONDS` it gets `/compact`. Measured on agy 1.4.12: `/compact` at the prompt and after an interrupt
+  each wrote a `CHECKPOINT`; the interrupted turn's transcript ends on the cut call, so it never reads as idle.
 - An agy seat whose pane shows `agent executor error: ... maxMessageTokens must be positive, got 0`
   at its bottom for two supervisor passes (30 s apart) is restarted by the same supervisor, then
   given its last instruction again in the fresh conversation. That error breaks the conversation:

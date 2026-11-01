@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/phamhung075/4genthub-client/internal/seatloop"
 )
 
 const feedPollInterval = time.Second
@@ -50,6 +52,12 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 		}
 		header = newHeader(seats[0], colours[seats[0]], compactLimit(), model,
 			func(line string) { fmt.Fprintln(out, line) })
+		header.alert = func() string {
+			if record, found := seatloop.Load(root, s.room)[seats[0]]; found {
+				return record.Status()
+			}
+			return ""
+		}
 		if paneID := os.Getenv("HERDR_PANE_ID"); paneID != "" {
 			header.pane = func(title string) { _, _ = herdr(ctx, "pane", "rename", paneID, title) }
 		}

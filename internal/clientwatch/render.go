@@ -724,6 +724,9 @@ type Header struct {
 	// pane, when set, takes the title instead of the feed: the grid pane's own title carries it.
 	pane func(title string)
 
+	// alert, when set, is what the loop guard last did about this seat, "" for nothing.
+	alert func() string
+
 	// now and out are the clock and the sink, so a test can drive the repeat rule without waiting.
 	now func() time.Time
 	out func(string)
@@ -783,6 +786,11 @@ func (h *Header) title() string {
 	title := bold + fg(h.colour) + "== " + who + " ==" + reset + "  " + tokenBar(h.tokens, h.limit)
 	if status := h.status(); status != "" {
 		title += "  " + status
+	}
+	if h.alert != nil {
+		if alert := h.alert(); alert != "" {
+			title += "  " + bold + fg(196) + alert + reset
+		}
 	}
 	return title
 }

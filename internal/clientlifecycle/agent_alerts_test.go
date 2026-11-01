@@ -84,7 +84,7 @@ func TestAPausedHostPublishesNoSilence(t *testing.T) {
 			name, room string
 			pid        int
 		}{{clientservices.Watchdog, "demo", 4102}, {clientservices.Messages, "demo", 4105}, {clientservices.RoomGuard, "demo", 4106},
-			{clientservices.Budget, "demo", 4107}, {clientservices.Bridge, "", 4103}, {clientservices.Agent, "", 4104}} {
+			{clientservices.Budget, "demo", 4107}, {clientservices.LoopGuard, "demo", 4108}, {clientservices.Bridge, "", 4103}, {clientservices.Agent, "", 4104}} {
 			f.beat(s.name, s.room, 0, s.pid)
 		}
 		f.manager.pass()

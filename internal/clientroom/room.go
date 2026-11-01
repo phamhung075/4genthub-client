@@ -40,6 +40,7 @@ import (
 	"github.com/phamhung075/4genthub-client/internal/clientsync"
 	"github.com/phamhung075/4genthub-client/internal/clientwatch"
 	"github.com/phamhung075/4genthub-client/internal/seatlog"
+	"github.com/phamhung075/4genthub-client/internal/seatloop"
 	"github.com/phamhung075/4genthub-client/internal/seatwait"
 )
 
@@ -323,7 +324,42 @@ func seatRunning(seat clientruntime.SeatStatus) bool {
 func seatRow(seat clientruntime.SeatStatus, stateRoot string) string {
 	row := fmt.Sprintf("%s %s %s %s", seat.Seat, seat.Runtime, seat.State, seat.SessionName)
 	wait := waitNote(stateRoot, seat, &seat.Alert)
-	return row + alertNote(seat.Alert) + wait + parkNote(stateRoot, seat)
+	return row + alertNote(seat.Alert) + wait + parkNote(stateRoot, seat) + loopNote(stateRoot, seat)
+}
+
+// loopNote is what the loop guard last did about this seat (internal/seatloop), or "".
+func loopNote(stateRoot string, seat clientruntime.SeatStatus) string {
+	record, ok := seatloop.Load(stateRoot, seat.Room)[seat.Seat]
+	if !ok {
+		return ""
+	}
+	return " " + record.Status()
+}
+
+// roomProtection is what a running room runs without, as one line, or "" when nothing is missing. A room started
+// with --room-only has no supervisor and no watchdog, and a room with no guard can loop unseen: the seat rows alone
+// cannot say so. A variable so a case decides it without a process table.
+var roomProtection = protectionOf
+
+func protectionOf(room string) string {
+	live, err := clientservices.Live(clientservices.Pattern(clientservices.LoopGuard, room))
+	if err != nil {
+		return "protection: could not be read: " + err.Error()
+	}
+	state, stateErr := clientservices.ReadAgentState()
+	listed := false
+	for _, name := range state.Rooms {
+		listed = listed || name == room
+	}
+	agent, agentErr := clientservices.Live(clientservices.Pattern(clientservices.Agent, ""))
+	supervised := stateErr == nil && agentErr == nil && listed && len(agent) > 0
+	switch {
+	case len(live) == 0:
+		return "protection: UNPROTECTED, no loop guard runs for this room: `4genteam up " + room + " --room-only` starts one and restarts nothing"
+	case !supervised:
+		return "protection: loop guard only; no compaction supervisor, watchdog or idle guard runs for this room (`4genteam up " + room + "` starts them)"
+	}
+	return ""
 }
 
 // waitNote is the seat's declared wait (internal/seatwait), `waiting=<kind>:<target> <elapsed>/<max>`, or "".
@@ -401,6 +437,15 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	// whose reason nobody can read is a seat an operator will start again.
 	for _, seat := range seats {
 		fmt.Fprintln(stdout, seatRow(seat, inv.stateDir))
+	}
+	for _, seat := range seats {
+		if strings.EqualFold(strings.TrimSpace(seat.State), "running") {
+			if line := roomProtection(inv.room); line != "" {
+				// On stderr: stdout is one row per seat, which scripts read, and a person sees both.
+				fmt.Fprintln(stderr, line)
+			}
+			break
+		}
 	}
 	return clientcmd.ExitOK
 }

@@ -27,6 +27,9 @@ For every seat of every room, and for whoever drives them:
 
 The queue handoff and the task's board record stay: they are read on demand, not pushed into a session.
 
+**Do not poll.** A background task wakes you when it ends: end your turn instead of re-checking it. A seat that repeats
+one call with nothing written is steered, interrupted and then stopped by the loop guard (`docs/WATCH.md`).
+
 ## When to start workers
 
 | Start workers | Keep it yourself |

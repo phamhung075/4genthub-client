@@ -44,8 +44,11 @@ const (
 	RoomGuard = "roomguard"
 	// Budget is the room's budget guard: it parks a seat that crosses the room's own spend or call ceiling.
 	Budget = "budget"
-	Bridge = "bridge"
-	Agent  = "agent"
+	// LoopGuard is the room's seat-loop guard, `stuck ROOM --loops`: it steers, interrupts and at last stops a seat
+	// repeating one call with no progress.
+	LoopGuard = "loopguard"
+	Bridge    = "bridge"
+	Agent     = "agent"
 	// OrphanHandoffs is 7.11's row about WORK rather than about a child: the pending handoffs whose
 	// destination seat is not running. It carries no process, so its rows have no pid and no heartbeat.
 	OrphanHandoffs = "orphan_handoffs"
@@ -110,6 +113,8 @@ const (
 	// BudgetEvery is the budget guard's pass interval, 15 s: one of its two ceilings is counted per minute,
 	// so a pass that waited longer than a minute could not tell a burst from a habit.
 	BudgetEvery = 15 * time.Second
+	// LoopEvery is the loop guard's pass interval, 15 s: a looping seat takes a turn every few seconds.
+	LoopEvery = 15 * time.Second
 	// BridgeBackoffCap is the bridge's own retry cap, 120 s (clientbridge.MaxBackoffSecs).
 	BridgeBackoffCap = 120 * time.Second
 	// AgentHeartbeat is the socket heartbeat agent answers to, 25 s (the server's ready.heartbeat_s).
@@ -119,14 +124,14 @@ const (
 // Safeguards is the list a report walks: the room-scoped rows first, then the two machine-scoped rows.
 // One bridge per machine and one agent per machine, which is why those two carry no room.
 func Safeguards() []string {
-	return []string{Compact, Watchdog, Messages, RoomGuard, Budget, Bridge, Agent}
+	return []string{Compact, Watchdog, Messages, RoomGuard, Budget, LoopGuard, Bridge, Agent}
 }
 
 // RoomScoped reports whether a safeguard runs once per room rather than once per machine. It decides both
 // the heartbeat file's name and whether the row carries a room at all.
 func RoomScoped(safeguard string) bool {
 	return safeguard == Compact || safeguard == Watchdog || safeguard == Messages || safeguard == RoomGuard ||
-		safeguard == Budget
+		safeguard == Budget || safeguard == LoopGuard
 }
 
 // Scope is WHERE a service runs: once per MACHINE, or once per ROOM. It is 7.8's second column, and
@@ -171,6 +176,7 @@ var Obligatory = []Service{
 	{Name: Messages, Scope: Room, Check: safeguardCheck(Messages), RestartBy: Agent},
 	{Name: RoomGuard, Scope: Room, Check: safeguardCheck(RoomGuard), RestartBy: Agent},
 	{Name: Budget, Scope: Room, Check: safeguardCheck(Budget), RestartBy: Agent},
+	{Name: LoopGuard, Scope: Room, Check: safeguardCheck(LoopGuard), RestartBy: Agent},
 	{Name: Bridge, Scope: Machine, Check: safeguardCheck(Bridge), RestartBy: Agent},
 	// Nothing LOCAL restarts agent: `up` starts it, and its own death is reported rather than repaired.
 	{Name: Agent, Scope: Machine, Check: safeguardCheck(Agent), RestartBy: ""},
@@ -208,6 +214,8 @@ func DefaultSilentAfter(safeguard string) time.Duration {
 		return SilentAfter(RoomGuardEvery)
 	case Budget:
 		return SilentAfter(BudgetEvery)
+	case LoopGuard:
+		return SilentAfter(LoopEvery)
 	case Bridge:
 		return SilentAfter(BridgeBackoffCap)
 	case Agent:
@@ -230,6 +238,8 @@ func Pattern(safeguard, room string) string {
 		return "^[^ ]*4genteam idle-run --room " + room
 	case Budget:
 		return "^[^ ]*4genteam budget-run --room " + room
+	case LoopGuard:
+		return "^[^ ]*4genteam stuck " + room + " --loops"
 	case Messages:
 		return "^[^ ]*4genteam sync messages --room " + room + " --watch"
 	case Bridge:

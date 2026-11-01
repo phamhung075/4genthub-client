@@ -144,6 +144,7 @@ func (f *healthFixture) everythingRunning() {
 	f.running(clientservices.Messages, "demo", 4105)
 	f.running(clientservices.RoomGuard, "demo", 4106)
 	f.running(clientservices.Budget, "demo", 4107)
+	f.running(clientservices.LoopGuard, "demo", 4108)
 	f.running(clientservices.Bridge, "", 4103)
 	f.running(clientservices.Agent, "", 4104)
 }
