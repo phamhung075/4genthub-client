@@ -108,6 +108,8 @@ func Commands() []clientcmd.Command {
 		agentCommand{},
 		overlapCommand{},
 		stuckCommand{},
+		compactHookCommand{},
+		mcpCommand{},
 	}
 }
 

@@ -235,6 +235,30 @@ adapters, so it covers agy, omp and Claude Code alike, and it uses no model.
   safe point, past the hard limit none, then it is interrupted (Escape), and once its log has been quiet for
   `COMPACT_QUIET_SECONDS` it gets `/compact`. Measured on agy 1.4.12: `/compact` at the prompt and after an interrupt
   each wrote a `CHECKPOINT`; the interrupted turn's transcript ends on the cut call, so it never reads as idle.
+- An agy seat also compacts itself, at the tool call that crossed the limit, with no supervisor needed (`up --room-only`).
+  The seat start adds a `compact-trigger` entry to agy's global `~/.gemini/config/hooks.json`, and a server
+  `agenthub_compact` (`4genteam mcp compact`) to its global `mcp_config.json` (agy has no per-seat file: the seat's
+  `mcp.json` is omp's). Both do nothing outside a seat.
+  - **What triggers it:** every tool call, built-in or MCP. agy runs `PreInvocation` before each model call, so after
+    each batch of tools (measured on 1.4.12: `run_command`, `read_file`, MCP calls). A `PostToolUse` answer cannot reach
+    the model, and no reading changes between a tool and the next model call, so nothing runs per tool.
+  - **Under `COMPACT_LIMIT_TOKENS`:** the hook answers `{}`, with no file written. It costs about 4 ms per model call
+    (50 runs in 0.20 s on a 128 KB transcript).
+  - **Past it:** the hook takes the seat's claim and injects a one-turn message: end the turn now. A model that calls a
+    tool anyway is stopped by the next `PreInvocation` (`terminate`), before the model is called.
+  - **At the prompt:** agy's `Stop` hook starts a detached sender, which types `/compact` once, waits for the `CHECKPOINT`
+    and sends the resume through the off-peak gate. A `Stop` past the limit with no claim (a turn with no tool, an
+    interrupted turn) arranges it there. A `Stop` on an error, or with background work still running, sends nothing.
+  - **The tools:** `compact_me` arranges the compact at any size. `context_usage` reads the context; past the limit its
+    answer carries the same instruction. Both go through the function the hook uses.
+  - **With the supervisor:** `<seat dir>/compact-claim.json` is taken under a lock by whoever will type `/compact`, and is
+    fresh for 180 s, the supervisor's witness window. The supervisor skips a seat whose hook holds the claim, and it
+    sends no notice or warning to a seat whose current conversation has run the hook, because a text typed mid-turn is
+    queued and starts a turn in front of the `/compact`. Past the window the supervisor is the backstop, as above.
+  - **Measured on a scratch seat (limit 25k):** crossing at 65k after a built-in `echo`, the model ended its turn, and
+    `/compact` went out 5 s later: 66.3k to 23.3k in 7 s, resumed, remaining steps done. With the supervisor running
+    beside it: one `CHECKPOINT`, no notice. `compact_me` at 19k and a forced `terminate`: the same.
+  - The sender's log is `<seat dir>/compact-trigger.log`.
 - An agy seat whose pane shows `agent executor error: ... maxMessageTokens must be positive, got 0`
   at its bottom for two supervisor passes (30 s apart) is restarted by the same supervisor, then
   given its last instruction again in the fresh conversation. That error breaks the conversation:

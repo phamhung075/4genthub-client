@@ -104,6 +104,12 @@ type Supervisor struct {
 	Pane    func(room, seat string) (string, bool)
 	Recover func(room, seat string) error
 	Brief   func(room, seat, text string) error
+	// ClaimCompact takes the seat's claim before an agy /compact is typed, and false means the hook path holds it.
+	// HookHolds says the hook path is compacting the seat now, HookLive that its conversation runs the hook at all
+	// (agycompact.go). nil means no hook path, as in tests that do not ask about one.
+	ClaimCompact func(seat string, used, count int, now float64) bool
+	HookHolds    func(seat string, now float64) bool
+	HookLive     func(seat string) bool
 
 	State map[string]*seatState
 }
@@ -144,6 +150,12 @@ func New(room string, quiet int, stateRoot string, out io.Writer) *Supervisor {
 	supervisor.Pane = agyPane
 	supervisor.Recover = agyRestart
 	supervisor.Brief = agyBrief
+	seatDir := func(seat string) string { return clientruntime.SeatDir(stateRoot, room, seat) }
+	supervisor.ClaimCompact = func(seat string, used, count int, now float64) bool {
+		return supervisorClaim(seatDir(seat), used, count, now)
+	}
+	supervisor.HookHolds = func(seat string, now float64) bool { return hookHoldsClaim(seatDir(seat), now) }
+	supervisor.HookLive = func(seat string) bool { return compactHookLive(seatDir(seat)) }
 	supervisor.Log = func(text string) {
 		fmt.Fprintf(out, "%s %s\n", time.Now().Format("2006-01-02 15:04:05"), text)
 	}
@@ -271,6 +283,11 @@ func (s *Supervisor) Step() {
 			state.sent = 0
 			continue
 		}
+		// THE HOOK PATH HOLDS THIS SEAT: its sender types the /compact and the resume. Past the claim's window the seat
+		// is the supervisor's again, so a sender that died leaves the backstop below in place.
+		if runtime == "agy" && s.HookHolds != nil && s.HookHolds(seat, now) {
+			continue
+		}
 		silent := now - modTime(path)
 		urgent, hard := used >= seatlog.WarnLimit, used >= seatlog.HardLimit
 		if !urgent && now-state.sent <= cooldown {
@@ -280,9 +297,15 @@ func (s *Supervisor) Step() {
 		// STARTS A TURN, so the notice ("find a safe point, stop") would spend a model turn - on the shared
 		// agy quota - to reach the state the seat is already in. A working agy seat is told as any other.
 		quietAgy := runtime == "agy" && s.Idle(s.Room, seat)
+		// A seat whose hook is live is told by the hook at its next model call. A notice typed now would be queued,
+		// start a turn when this one ends, and catch the hook's /compact mid-turn.
+		hookLive := runtime == "agy" && s.HookLive != nil && s.HookLive(seat)
 		if !state.told {
 			state.told = true
-			if quietAgy {
+			if hookLive {
+				s.Log(fmt.Sprintf("%s: %s of %s (%s), its hook tells it: no notice", seat,
+					seatlog.Kilo(used), seatlog.Kilo(seatlog.CompactLimit), runtime))
+			} else if quietAgy {
 				s.Log(fmt.Sprintf("%s: %s of %s (%s), at its prompt: compacted without the notice", seat,
 					seatlog.Kilo(used), seatlog.Kilo(seatlog.CompactLimit), runtime))
 			} else {
@@ -293,7 +316,7 @@ func (s *Supervisor) Step() {
 		}
 		if used >= seatlog.WarnLimit && !state.warned {
 			state.warned, state.warnedAt = true, now
-			if !quietAgy {
+			if !quietAgy && !hookLive {
 				s.Say(s.Room, seat, warningText(), false)
 				s.Log(fmt.Sprintf("%s: warned, %s of %s", seat, seatlog.Kilo(used), seatlog.Kilo(seatlog.HardLimit)))
 			}
@@ -323,7 +346,11 @@ func (s *Supervisor) Step() {
 			// minute and never compacted. A log that has stayed quiet since the interrupt is the seat at its prompt.
 			if runtime == "agy" && state.interrupted > 0 && now-state.interrupted >= float64(s.Quiet) &&
 				silent >= float64(s.Quiet) && now-state.sent > witnessWindow {
-				state.sent, state.before, state.hasBefore, state.count = now, used, true, compactions(path)
+				count := compactions(path)
+				if !s.claimAgy(runtime, seat, used, count, now) {
+					continue
+				}
+				state.sent, state.before, state.hasBefore, state.count = now, used, true, count
 				_ = s.Say(s.Room, seat, "/compact", true)
 				s.Log(fmt.Sprintf("%s: quiet %.0fs after the interrupt at %s, sent /compact", seat, silent, seatlog.Kilo(used)))
 				continue
@@ -353,7 +380,11 @@ func (s *Supervisor) Step() {
 			continue
 		}
 		if (urgent || silent >= float64(s.Quiet)) && s.Idle(s.Room, seat) {
-			state.sent, state.before, state.hasBefore, state.count = now, used, true, compactions(path)
+			count := compactions(path)
+			if !s.claimAgy(runtime, seat, used, count, now) {
+				continue
+			}
+			state.sent, state.before, state.hasBefore, state.count = now, used, true, count
 			s.Say(s.Room, seat, "/compact", true)
 			note := ""
 			if urgent {
@@ -368,6 +399,14 @@ func (s *Supervisor) Step() {
 	if err := clientservices.WriteHeartbeat(s.StateRoot, clientservices.Compact, s.Room); err != nil {
 		s.Log("cannot write the heartbeat: " + err.Error())
 	}
+}
+
+// claimAgy takes the seat's compact claim for an agy seat; no other runtime has a hook path to race with.
+func (s *Supervisor) claimAgy(runtime, seat string, used, count int, now float64) bool {
+	if runtime != "agy" || s.ClaimCompact == nil {
+		return true
+	}
+	return s.ClaimCompact(seat, used, count, now)
 }
 
 func witnessed(done bool) string {
@@ -400,7 +439,8 @@ func warningText() string {
 }
 
 // lastContext is last_context: the tokens of the NEWEST reading in the log, taken from its tail because
-// it is a last reading.
+// it is a last reading. A reading older than the newest agy CHECKPOINT is the size of a context that no longer exists,
+// so it answers no reading until the next model call writes one.
 func lastContext(path string) (int, bool) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -426,6 +466,9 @@ func lastContext(path string) (int, bool) {
 	for i := len(lines) - 1; i >= 0; i-- {
 		if tokens, ok := seatlog.ContextTokens(lines[i]); ok && tokens > 0 {
 			return tokens, true
+		}
+		if strings.Contains(lines[i], `"type":"CHECKPOINT"`) {
+			return 0, false
 		}
 	}
 	return 0, false
