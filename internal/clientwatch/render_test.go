@@ -469,7 +469,7 @@ func TestAgyTranscriptEventsAndTokens(t *testing.T) {
 		if strings.Contains(line, "▸ say") && strings.Contains(line, "Running identity check") {
 			hasSay = true
 		}
-		if strings.Contains(line, "run_command") && strings.Contains(line, "room whoami --json") {
+		if strings.Contains(line, "❯ bash") && strings.Contains(line, "room whoami --json") {
 			hasTool = true
 		}
 	}

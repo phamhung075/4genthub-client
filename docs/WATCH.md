@@ -33,8 +33,15 @@ prints the 2 of its two columns, with the bottom row spanning both.
 
 A pane exists for every seat the room is running (they come from the room's live tmux sessions).
 The feed reads a seat's newest session log — the omp state directory under
-`~/.config/4genthub/` first, else the seat's Claude Code project log. A runtime the client has no
-log reader for (`codex`, `agy`) keeps its pane and its header and shows no events.
+`~/.config/4genthub/` first, else the seat's Claude Code project log; an agy seat's transcript is
+read from agy's own home. A runtime the client has no log reader for (`codex`) keeps its pane and its
+header and shows no events.
+
+An agy seat's pane reads like an omp seat's: `internal/clientwatch/agy.go` maps agy's tools onto omp's
+(`run_command` is `bash`, `read_file` and `view_file` are `read`, `write_file` is `write`, `edit_file` is
+`edit`, `call_mcp_tool` is the MCP tool it calls), decodes the arguments and strips the envelope off a
+result, and the one renderer does the rest. A tool it does not know prints its name and one `key: value`
+row per argument.
 
 ## What a line means
 

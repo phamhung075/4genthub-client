@@ -40,6 +40,8 @@ type renderOptions struct {
 	errorsOnly bool
 	// calls ties a result to its call. Nil when the caller renders without state.
 	calls *callTracker
+	// agy ties an agy seat's results to its calls. Nil when the caller renders without state.
+	agy *agyPairs
 }
 
 func (o renderOptions) keep(kind string) bool { return o.only == nil || o.only[kind] }

@@ -281,7 +281,7 @@ func callBody(args any) string {
 	if !ok {
 		return pythonText(args)
 	}
-	for _, key := range []string{"command", "CommandLine", "path", "AbsolutePath", "TargetFile", "target_file", "intent", "prompt", "code"} {
+	for _, key := range []string{"command", "path", "intent", "prompt", "code", "query", "summary"} {
 		if value, present := object.get(key); present {
 			return pythonText(value)
 		}
@@ -453,7 +453,7 @@ func eventsWith(line string, o renderOptions) []string {
 	if rendered, isHook := hookEvents(record, o); isHook {
 		return rendered
 	}
-	if converted, isAgy := agyToOMP(record); isAgy {
+	if converted, isAgy := agyToOMP(record, o.agy); isAgy {
 		out := []string{}
 		for _, c := range converted {
 			out = append(out, ompEvents(c, o)...)
@@ -465,90 +465,6 @@ func eventsWith(line string, o renderOptions) []string {
 		out = append(out, ompEvents(converted, o)...)
 	}
 	return out
-}
-
-// agyToOMP maps an Antigravity CLI (agy) transcript record onto omp records.
-func agyToOMP(record *orderedJSONObject) ([]*orderedJSONObject, bool) {
-	kindRaw, present := record.get("type")
-	if !present {
-		return nil, false
-	}
-	kind, ok := kindRaw.(string)
-	if !ok {
-		return nil, false
-	}
-
-	switch kind {
-	case "PLANNER_RESPONSE":
-		parts := []any{}
-		if thinking, ok := record.get("thinking"); ok {
-			if thStr, ok := thinking.(string); ok && strings.TrimSpace(thStr) != "" {
-				p := &orderedJSONObject{}
-				p.keys = append(p.keys, "type", "thinking")
-				p.values = append(p.values, "thinking", thStr)
-				parts = append(parts, p)
-			}
-		}
-		if content, ok := record.get("content"); ok {
-			if cStr, ok := content.(string); ok && strings.TrimSpace(cStr) != "" {
-				p := &orderedJSONObject{}
-				p.keys = append(p.keys, "type", "text")
-				p.values = append(p.values, "text", cStr)
-				parts = append(parts, p)
-			}
-		}
-		if rawCalls, ok := record.get("tool_calls"); ok {
-			if calls, ok := rawCalls.([]any); ok {
-				for _, call := range calls {
-					callObj, ok := call.(*orderedJSONObject)
-					if !ok {
-						continue
-					}
-					name, _ := callObj.get("name")
-					args, _ := callObj.get("args")
-					if args == nil {
-						args, _ = callObj.get("arguments")
-					}
-					p := &orderedJSONObject{}
-					p.keys = append(p.keys, "type", "name", "arguments")
-					p.values = append(p.values, "toolCall", name, args)
-					parts = append(parts, p)
-				}
-			}
-		}
-		inner := &orderedJSONObject{}
-		inner.keys = append(inner.keys, "role", "content")
-		inner.values = append(inner.values, "assistant", parts)
-		wrapper := &orderedJSONObject{}
-		wrapper.keys = append(wrapper.keys, "message")
-		wrapper.values = append(wrapper.values, inner)
-		return []*orderedJSONObject{wrapper}, true
-
-	case "GENERIC":
-		text := ""
-		if c, ok := record.get("content"); ok {
-			text = pythonText(c)
-		}
-		isErr := false
-		if st, ok := record.get("status"); ok {
-			if sStr, ok := st.(string); ok && sStr == "ERROR" {
-				isErr = true
-			}
-		}
-		return []*orderedJSONObject{toolResultRecord(isErr, text)}, true
-
-	case "USER_INPUT":
-		text := ""
-		if c, ok := record.get("content"); ok {
-			text = pythonText(c)
-		}
-		part := &orderedJSONObject{}
-		part.keys = append(part.keys, "type", "text")
-		part.values = append(part.values, "text", text)
-		return []*orderedJSONObject{wrapContent(nil, "user", []any{part})}, true
-	}
-
-	return nil, false
 }
 
 func numberValue(record *orderedJSONObject, key string) *int {

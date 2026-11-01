@@ -62,10 +62,15 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 	positions := map[string]position{}
 
 	opts := renderOptions{width: lineWidth(s.width, header != nil), lines: s.lines, detail: s.detail, expand: s.expand,
-		only: s.onlyKinds(), errorsOnly: s.errorsOnly, calls: newCallTracker()}
+		only: s.onlyKinds(), errorsOnly: s.errorsOnly}
 	views := map[string]*seatView{}
+	// Calls are tied to results per seat: agy's call ids restart with each seat's step count.
+	trackers := map[string]*callTracker{}
+	pairs := map[string]*agyPairs{}
 	for _, seat := range seats {
 		views[seat] = &seatView{}
+		trackers[seat] = newCallTracker()
+		pairs[seat] = newAgyPairs()
 	}
 
 	show := func(seat, line string) {
@@ -74,7 +79,9 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 		}
 		at := recordTime(line)
 		view := views[seat]
-		texts := eventsWith(line, opts)
+		seatOpts := opts
+		seatOpts.calls, seatOpts.agy = trackers[seat], pairs[seat]
+		texts := eventsWith(line, seatOpts)
 		if header != nil && len(texts) > 0 {
 			header.touch(at)
 		}
@@ -119,8 +126,10 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 			}
 			lines := readLines(logPath)
 			shown := []string{}
+			seatFilter := filterOpts
+			seatFilter.agy = pairs[seat]
 			for _, line := range lines {
-				if len(eventsWith(line, filterOpts)) > 0 {
+				if len(eventsWith(line, seatFilter)) > 0 {
 					shown = append(shown, line)
 				}
 			}
@@ -163,6 +172,7 @@ func runFeed(ctx context.Context, s shared, out io.Writer) error {
 			current := positions[seat]
 			if current.path != logPath {
 				current = position{path: logPath, offset: 0}
+				trackers[seat], pairs[seat] = newCallTracker(), newAgyPairs()
 			}
 			size := logSize(logPath)
 			if size > current.offset {
