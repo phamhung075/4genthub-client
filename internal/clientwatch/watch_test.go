@@ -872,3 +872,15 @@ func TestInputSenderIsNeverUnknown(t *testing.T) {
 		t.Errorf("operator shell signs as %q, want %q", got, clientruntime.HumanSender)
 	}
 }
+
+// An operator's /compact wrapped in the envelope reaches the model as prose and nothing compacts.
+func TestOnlyABareSlashWordIsACommand(t *testing.T) {
+	for line, want := range map[string]bool{
+		"/compact": true, "/clear": true, "/model-x": true,
+		"/tmp is full": false, "/home/x": false, "compact": false, "/": false, "/compact now": false, "/compact\nnext": false,
+	} {
+		if got := isSlashCommand(line); got != want {
+			t.Errorf("isSlashCommand(%q) = %v", line, got)
+		}
+	}
+}

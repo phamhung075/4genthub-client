@@ -135,6 +135,7 @@ The same verb reads standard input, so the owner's shell (or a script) sends one
 
 ```bash
 printf 'message\n' | 4genteam input --room <ROOM> --seat <SEAT>   # prints "<SEAT> > sent"
+printf '/compact\n' | 4genteam input --room <ROOM> --seat <SEAT>  # one /word from the operator's shell goes unwrapped
 ```
 
 Piped standard input is ONE message, however many lines it has, and prints one `sent`; a failed send exits

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -472,9 +473,20 @@ var sendLine = func(ctx context.Context, room, seat, text string) error {
 	if err != nil {
 		return err
 	}
-	_, err = clientruntime.RuntimeSendText(address.SessionName, text, clientruntime.SendOptions{Sender: inputSender(os.Getenv)})
+	sender := inputSender(os.Getenv)
+	if sender == clientruntime.HumanSender && isSlashCommand(text) {
+		return clientruntime.NewClient("").SendText(address.SessionName, text, "input")
+	}
+	_, err = clientruntime.RuntimeSendText(address.SessionName, text, clientruntime.SendOptions{Sender: sender})
 	return err
 }
+
+// slashCommand is one bare word after a slash. Nothing else is a command: `/tmp is full` and `/home/x` are messages.
+var slashCommand = regexp.MustCompile(`^/[A-Za-z][A-Za-z0-9_-]*$`)
+
+// isSlashCommand says an operator's line is a command for the seat's runtime, which goes out unwrapped: with the envelope
+// around it a /compact reaches the model as prose and nothing compacts.
+func isSlashCommand(line string) bool { return slashCommand.MatchString(line) }
 
 // inputSender is the name an `input` line is signed with. A seat's shell signs as its own session. A shell
 // with no seat session is the operator's - the lead window's input pane, or a script the owner (or the
