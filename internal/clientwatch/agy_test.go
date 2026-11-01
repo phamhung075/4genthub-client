@@ -197,3 +197,10 @@ func TestAgyWithoutPairingStillStripsTheEnvelope(t *testing.T) {
 		t.Errorf("got %q", out)
 	}
 }
+
+func TestAgyRecordTimeIsTheSeats(t *testing.T) {
+	at := recordTime(`{"type":"GENERIC","created_at":"2026-10-28T04:40:29Z"}`)
+	if at.UTC().Format("2006-01-02T15:04:05") != "2026-10-28T04:40:29" {
+		t.Errorf("got %v", at)
+	}
+}

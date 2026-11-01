@@ -238,15 +238,18 @@ func padRight(text string, width int) string {
 }
 
 // recordTime is when the seat logged the record, so the clock on a line is the seat's and a replay is
-// not stamped with the minute the viewer started. A record with no readable time is stamped now.
+// not stamped with the minute the viewer started. omp calls the field timestamp, agy created_at. A record with no
+// readable time is stamped now.
 func recordTime(line string) time.Time {
 	decoded, _, err := decodeOrderedJSON(line)
 	if err == nil {
 		if record, ok := decoded.(*orderedJSONObject); ok {
-			if value, present := record.get("timestamp"); present {
-				if text, ok := value.(string); ok {
-					if at, err := time.Parse(time.RFC3339Nano, text); err == nil {
-						return at.Local()
+			for _, key := range []string{"timestamp", "created_at"} {
+				if value, present := record.get(key); present {
+					if text, ok := value.(string); ok {
+						if at, err := time.Parse(time.RFC3339Nano, text); err == nil {
+							return at.Local()
+						}
 					}
 				}
 			}
