@@ -468,6 +468,25 @@ fn agy_guard_entry() -> serde_json::Value {
     })
 }
 
+/// The name of the second entry the runtime owns in agy's global `hooks.json`: the client's compact trigger.
+const AGY_COMPACT_HOOK: &str = "compact-trigger";
+
+/// The entry that lets the client compact an agy seat at the tool call that crossed the limit (client
+/// `clientlifecycle/agycompact.go`, docs/WATCH.md). PreInvocation runs before every model call and Stop when the loop
+/// ends. An older client on PATH answers with no JSON and a failure, so the line falls back to `{}`, which is also what
+/// a session that is not a seat gets: a client fault must not cost a seat its turn.
+fn agy_compact_entry() -> serde_json::Value {
+    let command = |phase: &str| {
+        format!(
+            "if [ -n \"$AGENTHUB_SEAT\" ]; then 4genteam compact-hook {phase} 2>/dev/null || echo '{{}}'; else echo '{{}}'; fi"
+        )
+    };
+    serde_json::json!({
+        "PreInvocation": [{"type": "command", "timeout": 5, "command": command("pre-invocation")}],
+        "Stop": [{"type": "command", "timeout": 5, "command": command("stop")}],
+    })
+}
+
 /// The settings file a claude seat is launched with (`--settings`); the runner adds the flag when it is there.
 pub(crate) const CLAUDE_SETTINGS_FILE: &str = "settings.json";
 
@@ -537,8 +556,8 @@ pub(crate) fn write_claude_guard_settings_when(
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-/// Make sure agy's global `hooks.json` carries the seat guard, and touch nothing else in it: the file also holds
-/// other tools' hooks. A file that is not a JSON object is an error rather than a file to overwrite.
+/// Make sure agy's global `hooks.json` carries the seat guard and the compact trigger, and touch nothing else in it:
+/// the file also holds other tools' hooks. A file that is not a JSON object is an error rather than a file to overwrite.
 fn install_agy_guard_hook(home: &Path) -> Result<(), String> {
     let path = home.join(".gemini").join("config").join("hooks.json");
     let mut hooks = match fs::read_to_string(&path) {
@@ -554,11 +573,13 @@ fn install_agy_guard_hook(home: &Path) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
     };
-    let entry = agy_guard_entry();
-    if hooks.get(AGY_GUARD_HOOK) == Some(&entry) {
+    let guard = agy_guard_entry();
+    let compact = agy_compact_entry();
+    if hooks.get(AGY_GUARD_HOOK) == Some(&guard) && hooks.get(AGY_COMPACT_HOOK) == Some(&compact) {
         return Ok(());
     }
-    hooks[AGY_GUARD_HOOK] = entry;
+    hooks[AGY_GUARD_HOOK] = guard;
+    hooks[AGY_COMPACT_HOOK] = compact;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
@@ -609,7 +630,20 @@ fn agy_deepseek_entry() -> serde_json::Value {
     serde_json::json!({"command": "sh", "args": ["-c", AGY_DEEPSEEK_COMMAND], "disabled": false})
 }
 
-/// Make sure agy's global `mcp_config.json` carries the seat's MCP server and, when the seat's environment names
+/// The third entry the runtime owns in agy's global file: the client's own server, `4genteam mcp compact`, which
+/// serves `compact_me` and `context_usage` to the seat in its environment.
+const AGY_COMPACT_SERVER: &str = "agenthub_compact";
+
+/// What an agy session runs for that server. A session that is not a seat starts nothing.
+const AGY_COMPACT_COMMAND: &str =
+    "if [ -n \"$AGENTHUB_SEAT\" ]; then exec 4genteam mcp compact; fi";
+
+/// The entry agy loads for the compact server.
+fn agy_compact_mcp_entry() -> serde_json::Value {
+    serde_json::json!({"command": "sh", "args": ["-c", AGY_COMPACT_COMMAND], "disabled": false})
+}
+
+/// Make sure agy's global `mcp_config.json` carries the seat's MCP server, the compact server and, when the seat's environment names
 /// a script, the delegation server, and touch nothing else in it: the file also holds the owner's own servers. A
 /// file that is not a JSON object is an error rather than a file to overwrite, and so is an `mcpServers` that is
 /// not an object.
@@ -652,6 +686,11 @@ fn install_agy_mcp_server(home: &Path, deepseek: bool) -> Result<(), String> {
         let entry = agy_mcp_entry();
         if servers.get(AGY_MCP_SERVER) != Some(&entry) {
             servers.insert(AGY_MCP_SERVER.to_string(), entry);
+            changed = true;
+        }
+        let entry = agy_compact_mcp_entry();
+        if servers.get(AGY_COMPACT_SERVER) != Some(&entry) {
+            servers.insert(AGY_COMPACT_SERVER.to_string(), entry);
             changed = true;
         }
         if deepseek {
@@ -5220,6 +5259,19 @@ mod tests {
             pre.contains("--agy-hook pre") && pre.contains(r#"{"decision":"ask"}"#),
             "{pre}"
         );
+        // The compact trigger sits beside the guard, runs in a seat only, and falls back to {} for a client without it.
+        for (event, phase) in [("PreInvocation", "pre-invocation"), ("Stop", "stop")] {
+            let line = hooks[AGY_COMPACT_HOOK][event][0]["command"]
+                .as_str()
+                .unwrap();
+            assert!(
+                line.starts_with("if [ -n \"$AGENTHUB_SEAT\" ]; then 4genteam compact-hook ")
+                    && line.contains(phase)
+                    && line.contains("|| echo '{}'")
+                    && line.ends_with("else echo '{}'; fi"),
+                "{line}"
+            );
+        }
         fs::write(&path, "[1]").unwrap();
         assert!(install_agy_guard_hook(&home).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), "[1]");
@@ -5400,6 +5452,10 @@ mod tests {
             "another server was touched"
         );
         assert!(config["mcpServers"][AGY_MCP_SERVER].is_object());
+        assert_eq!(
+            config["mcpServers"][AGY_COMPACT_SERVER]["args"][1], AGY_COMPACT_COMMAND,
+            "the compact server is not installed beside the seat's server"
+        );
         let _ = fs::remove_dir_all(&home);
     }
 
