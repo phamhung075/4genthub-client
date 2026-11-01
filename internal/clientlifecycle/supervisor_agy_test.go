@@ -76,3 +76,66 @@ func TestAnAgyCheckpointWitnessesTheCompaction(t *testing.T) {
 		t.Errorf("the CHECKPOINT did not witness the compaction; log:\n%s", strings.Join(logged, "\n"))
 	}
 }
+
+// The task-249 seat at a limit far past hard: never at its prompt by the transcript's word, so the pass interrupts
+// it, and a log quiet since then is what lets /compact through. Before this it was interrupted every minute forever.
+func TestAnAgySeatPastHardThatNeverReadsIdleIsInterruptedThenCompacted(t *testing.T) {
+	withDocumentedLimits(t)
+	var sent, interrupted []string
+	path := agyLogFile(t, 340_000, false, 600)
+	supervisor := supervisorFor(path, "agy", true, &sent, &interrupted)
+	now := float64(time.Now().Unix())
+	supervisor.Now = func() float64 { return now }
+	supervisor.Step()
+	if len(interrupted) != 1 || containsCompact(sent) {
+		t.Fatalf("first pass: interrupted %v, sent %v", interrupted, sent)
+	}
+	now += float64(supervisor.Quiet) + 1
+	supervisor.Step()
+	if !containsCompact(sent) {
+		t.Fatalf("after the interrupt and a quiet log, sent %v", sent)
+	}
+	count := len(sent)
+	for i := 0; i < 5; i++ {
+		now += 10
+		supervisor.Step()
+	}
+	if len(sent) != count {
+		t.Fatalf("an unwitnessed /compact was typed again inside the window: %v", sent[count:])
+	}
+}
+
+// Past the warn limit and below hard: the warning first, one witness window to reach a safe point, then the same.
+func TestAnAgySeatPastWarnThatNeverReadsIdleGetsItsGraceThenIsCompacted(t *testing.T) {
+	withDocumentedLimits(t)
+	var sent, interrupted []string
+	path := agyLogFile(t, 260_000, false, 600)
+	supervisor := supervisorFor(path, "agy", true, &sent, &interrupted)
+	now := float64(time.Now().Unix())
+	supervisor.Now = func() float64 { return now }
+	supervisor.Step()
+	now += witnessWindow - 10
+	supervisor.Step()
+	if len(interrupted) != 0 || containsCompact(sent) {
+		t.Fatalf("inside the grace: interrupted %v, sent %v", interrupted, sent)
+	}
+	now += 11
+	supervisor.Step()
+	if len(interrupted) != 1 || containsCompact(sent) {
+		t.Fatalf("past the grace: interrupted %v, sent %v", interrupted, sent)
+	}
+	now += float64(supervisor.Quiet) + 1
+	supervisor.Step()
+	if !containsCompact(sent) {
+		t.Fatalf("after the interrupt and a quiet log, sent %v", sent)
+	}
+}
+
+func containsCompact(sent []string) bool {
+	for _, text := range sent {
+		if strings.HasPrefix(text, "/compact") {
+			return true
+		}
+	}
+	return false
+}

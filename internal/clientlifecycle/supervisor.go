@@ -60,6 +60,8 @@ type seatState struct {
 	brokenSeen   float64
 	recovered    float64
 	brokenLogged bool
+	// warnedAt is when the warn-limit message went out, which is what an agy seat's grace is counted from.
+	warnedAt float64
 }
 
 // Supervisor is one `compact-run`: what it watches, its limits, and the seams the suite replaces.
@@ -290,7 +292,7 @@ func (s *Supervisor) Step() {
 			}
 		}
 		if used >= seatlog.WarnLimit && !state.warned {
-			state.warned = true
+			state.warned, state.warnedAt = true, now
 			if !quietAgy {
 				s.Say(s.Room, seat, warningText(), false)
 				s.Log(fmt.Sprintf("%s: warned, %s of %s", seat, seatlog.Kilo(used), seatlog.Kilo(seatlog.HardLimit)))
@@ -309,11 +311,31 @@ func (s *Supervisor) Step() {
 				s.RPCCompact(s.Room, seat)))
 			continue
 		}
-		if hard && !s.Idle(s.Room, seat) {
+		// THE CLIENT COMPACTS AN AGY SEAT THAT NEVER GOES IDLE. An omp seat is compacted past the warn limit through its
+		// runner, whatever it is doing; agy has no runner, and a /compact typed mid-turn only queues, so a seat that
+		// keeps calling tools (aa2-gemini, 2026-11-01, at 340% of its limit) was never compacted below the hard limit.
+		// It gets the warning's safe point, one witness window, and is then interrupted the way a hard-limit seat is.
+		agyPastGrace := runtime == "agy" && urgent && state.warned && now-state.warnedAt > witnessWindow
+		if (hard || agyPastGrace) && !s.Idle(s.Room, seat) {
+			// AN INTERRUPTED AGY SEAT NEVER READS IDLE: idleness is "the newest record is a final answer", and agy
+			// 1.4.12 leaves an interrupted turn ending on the call it cut (measured on a scratch session, where
+			// /compact typed at that prompt then wrote its CHECKPOINT). Without this the seat is interrupted every
+			// minute and never compacted. A log that has stayed quiet since the interrupt is the seat at its prompt.
+			if runtime == "agy" && state.interrupted > 0 && now-state.interrupted >= float64(s.Quiet) &&
+				silent >= float64(s.Quiet) && now-state.sent > witnessWindow {
+				state.sent, state.before, state.hasBefore, state.count = now, used, true, compactions(path)
+				_ = s.Say(s.Room, seat, "/compact", true)
+				s.Log(fmt.Sprintf("%s: quiet %.0fs after the interrupt at %s, sent /compact", seat, silent, seatlog.Kilo(used)))
+				continue
+			}
 			if now-state.interrupted > interruptGap {
 				s.Interrupt(s.Room, seat)
 				state.interrupted = now
-				s.Log(fmt.Sprintf("%s: interrupted at %s (hard limit)", seat, seatlog.Kilo(used)))
+				reason := "hard limit"
+				if !hard {
+					reason = "warn limit, past its grace"
+				}
+				s.Log(fmt.Sprintf("%s: interrupted at %s (%s)", seat, seatlog.Kilo(used), reason))
 				// AND WHY NOTHING WAS COMPACTED, on this line, where the false is ACTED ON: this branch returns every
 				// pass, so the quiet-triggered compact below never fires, and a read that answered nothing must not
 				// look the same as a seat that is simply working. Rate-limited with the interrupt above; a deliberate
@@ -324,6 +346,10 @@ func (s *Supervisor) Step() {
 					}
 				}
 			}
+			continue
+		}
+		// A /compact not yet witnessed is not typed again every pass: the witness window above decides when it failed.
+		if state.hasBefore && now-state.sent <= witnessWindow {
 			continue
 		}
 		if (urgent || silent >= float64(s.Quiet)) && s.Idle(s.Room, seat) {
