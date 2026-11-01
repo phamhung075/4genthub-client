@@ -81,6 +81,13 @@ Read it from git (`git log`, `git diff main..<branch>`, `git show <commit>`), no
 
 Stale worktrees (`/tmp/wt-*`, `/tmp/gate-*`, prunable entries in `git worktree list`) are listed and pruned by the client. Do not remove a worktree with `rm`. Use `safe-file-removal` for single files only.
 
+What a room has grown, and what is done with it (owner, 2026-11-01: clean right after a merge, no sprawl where nobody knows what is merged):
+
+- `4genteam worktree status ROOM` (or `--all`, `--main DIR`, `--json`) reads every worktree and branch: merged or commits ahead, uncommitted and untracked counts, size, last commit, owning seat and whether it is live, stash count. It writes nothing, so run it any time.
+- `4genteam worktree clean ROOM` is a dry run. With `--apply` it removes clean merged worktrees (nested ones first), deletes merged branches with `git branch -d` and drops rebuildable caches. Anything with uncommitted work, unmerged commits, a live seat, a `.obsolete` name or no `.git` is listed as a decision and left alone. It never passes `--force` and never touches a remote ref. Only the room's lead, on its own room, or the owner may `--apply`.
+
+Details: `docs/WORKTREES.md`.
+
 ## Ruled (architect, 2026-10-11: `ai_docs/core-architecture/seat-worktrees.md`)
 
 - **Your worktree and branch:** `<roomDir>/wt/<seat>` on `<room>/<seat>`, for example `4genthub-min/go-dev`. The reviewer's worktree is detached. Your client code lives in exactly one place, `<roomDir>/wt/<seat>/agenthub_client`, on the branch you commit to: `<room>/<seat>` for a seat that has none, and the lane branch a seat migrated off `<roomDir>/wt/<seat>-client` kept - a second copy at `<seat>-client` is the pre-derivation layout, and `up` removes it, clean only, so the branch survives. `.claude` is not a submodule here and is never linked. Never run `git submodule update` there.
@@ -91,5 +98,6 @@ Stale worktrees (`/tmp/wt-*`, `/tmp/gate-*`, prunable entries in `git worktree l
   2. The reviewer gates its tip `C`. The verdict names `C`, the main tip `M`, every `branch=sha` it contains, the commands run, and each result.
   3. The lead checks that integration = `C` and main = `M`, then runs `git merge --ff-only C` in the main checkout.
   4. The lead re-checks that main = `C`.
+  5. For each branch that landed, the same hand that merged runs `4genteam worktree clean --main <repo> --branch <branch> --apply`: its worktree and branch go right away. It exits 3 and names the reason when the branch has to stay; that is a follow-up, not a failed land. The client has no land verb, so this step is the routine's, not automatic.
 - **On a conflict:** the lead aborts and returns the item to you. Run `git merge <room>/integration` on your branch, resolve it there, and name your new tip.
 - **After a land that contains your tip:** run `git merge --ff-only main` before your next edit.

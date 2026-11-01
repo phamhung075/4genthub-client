@@ -1,6 +1,7 @@
 // Package clientworktree owns the room's derived seat worktrees: the start step that creates them
 // (Ensure), the ruling's read-only check over them (Check), and the two operator verbs
-// (`worktree list`, `worktree prune`) that read and clean up `git worktree list`.
+// (`worktree list`, `worktree prune`) that read and clean up `git worktree list`, and the two that
+// manage every worktree and branch a room has grown (`worktree status`, `worktree clean`, inventory.go and clean.go).
 //
 // THE LIST IS DERIVED, NEVER WRITTEN DOWN. The ONE derivation is clientservices.DerivedWorktrees,
 // ruled in ai_docs/core-architecture/seat-worktrees.md and compiled there for 7.8's reason; this

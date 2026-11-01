@@ -30,11 +30,11 @@ type worktreeCommand struct{}
 
 func (worktreeCommand) Name() string { return "worktree" }
 func (worktreeCommand) Summary() string {
-	return "the room's derived seat worktrees: list them, prune the ones nobody owns"
+	return "worktrees and branches: status of what is merged or not, clean what is done; list, prune the derived ones"
 }
 func (worktreeCommand) NeedsRoom() bool { return false }
 
-const worktreeVerbs = "list, prune"
+const worktreeVerbs = "list, prune, status, clean"
 
 func (worktreeCommand) Run(_ context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
@@ -47,6 +47,10 @@ func (worktreeCommand) Run(_ context.Context, args []string, stdout, stderr io.W
 		err = runList(args[1:], stdout)
 	case "prune":
 		err = runPrune(args[1:], stdout)
+	case "status":
+		err = runStatus(args[1:], stdout)
+	case "clean":
+		err = runClean(args[1:], stdout)
 	case "-h", "--help", "help":
 		printWorktreeUsage(stdout)
 		return clientcmd.ExitOK
@@ -71,10 +75,12 @@ Read and clean up the room's derived seat worktrees. The list is derived from th
 own record (clientservices.DerivedWorktrees), so nothing here keeps a list of its own.
 
 verbs:
-  list   print the room's derived worktrees and every other foreign entry of git worktree list
-  prune  remove only /tmp/wt-*, /tmp/gate-* and prunable entries, naming everything kept
+  list    print the room's derived worktrees and every other foreign entry of git worktree list
+  prune   remove only /tmp/wt-*, /tmp/gate-* and prunable entries, naming everything kept
+  status  every worktree and branch: merged or not, dirty or not, size, who owns it (ROOM, --all or --main)
+  clean   dry run, or --apply: remove what is merged and clean, drop caches, list the rest as decisions
 
-options:
+options of list and prune:
   --main DIR         the checkout whose worktrees these are (default: git rev-parse --show-toplevel)
   --state-root DIR   the store the room is read under (default: this machine's own)
 
