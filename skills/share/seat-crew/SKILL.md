@@ -1,6 +1,6 @@
 ---
 name: seat-crew
-description: "Use whenever a task has two or more independent parts, a repo-wide read, a long log or a bulk mechanical change. Every seat leads its own crew of DeepSeek workers through deepseek-offload: split the work, start one worker per part in parallel, verify each report, and own the result."
+description: "Use whenever a task has two or more independent parts, a repo-wide read, a long log or a bulk mechanical change. Every seat leads its own crew of DeepSeek workers through deepseek-offload: split the work, start one worker per part in parallel, verify each report, and own the result. Also holds the rule for every seat and principal on when to report: only when a task is done, needs a decision, or is blocked."
 signals:
   - command: deepseek_agent
 ---
@@ -11,6 +11,21 @@ Every seat is the leader of its own small team. The room's seats are the departm
 under you are DeepSeek Harness sessions started through the `deepseek-offload` skill. You keep the
 judgment, the edits that need your context, the verification and the record; workers do the reading,
 scanning, drafting and parallel legwork. Your seat's `<seat>-workflow` says what YOUR workers may do.
+
+## Report only at important steps (founder ruling 2026-11-01)
+
+For every seat of every room, and for whoever drives them:
+
+- **A seat reports only when a task is done, needs a decision, or is blocked.** A report is a few lines,
+  result first (its shape is in `short-output`).
+- **No progress narration and no status messages** to the principal or to a Claude session while work runs.
+- **Long output stays out of a Claude session's context.** Seat screens, logs and long output stay in a file
+  or the queue; the report names the path.
+- **A principal or orchestrator, including a Claude session driving rooms or offload jobs, does not poll**
+  seat screens or job detail. It waits for the report or the completion notice and reads only what a review
+  needs. One read to diagnose a fault (a missing notice, a seat past its time box) is not following work.
+
+The queue handoff and the task's board record stay: they are read on demand, not pushed into a session.
 
 ## When to start workers
 

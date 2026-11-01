@@ -15,6 +15,8 @@ Output tokens are the expensive ones. Spend them on the next action, not on narr
 
 ## Reply
 
+This is the shape of a report. When to send one at all is the rule in `seat-crew`, "Report only at important steps".
+
 1. **Result first**: done / blocked / verdict, in the first line.
 2. Then at most **5 short lines**: what changed (paths), what was verified (command), what is open.
 3. No preamble, recap, thanks, or closing offer. No restating the question.

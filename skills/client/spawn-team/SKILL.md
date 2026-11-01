@@ -63,7 +63,7 @@ Always watch an omp seat team with the grid script, not with bare tiles:
 
 - One herdr workspace `<room> grid`, one pane per seat, 2 columns, each pane a live feed of that seat's tool calls, reasoning (`~ think`), replies (`▸ say`) and incoming messages (`◂ in`).
 - `4genteam continue <room>` already runs it at the end (skip with `ROOM_CONTINUE_WATCH=0`). After `4genteam up <room> --team <DIR>` or a runtime switch run it yourself. It never talks to a seat. It closes the room's earlier grid and lead workspaces first, so a relaunch always gives the same single wall: the seat name, model and token meter in each pane, 2 columns, `--back 40 --width 0 --lines 60 --detail`.
-- The secondary view is a seat's own screen, and this client has no verb that opens one raw `tmux attach` tile per seat: read that pane with `4genteam capture <session>`, or attach by hand. Use it for a seat's own screen, not as the default.
+- The secondary view is a seat's own screen, and this client has no verb that opens one raw `tmux attach` tile per seat: read that pane with `4genteam capture <session>`, or attach by hand. Use it to diagnose a fault on a seat's own screen, not as the default and not to follow its work (`seat-crew`, "Report only at important steps").
 - omp and claude-code seats have a session log (a claude-code seat shows its model and tokens too). A runtime with no log reader yet (Codex, agy) keeps its pane and header but shows no events.
 - Full reference: `docs/WATCH.md`.
 

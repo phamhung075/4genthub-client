@@ -11,6 +11,9 @@ seats running in tmux.
 
 Full reference: `docs/WATCH.md` in the `4genthub-client` repository.
 
+This view is for the owner's eyes. A principal, including a Claude session, opens it on request and does not
+read panes or feeds to follow work: see `seat-crew`, "Report only at important steps".
+
 ## Open it
 
 ```bash
@@ -151,8 +154,8 @@ back watched; skip that with `ROOM_CONTINUE_WATCH=0`.
   one.** The runner reads that pane: Ctrl-C aborts the agent's turn, and a typed line becomes a prompt
   with no sender. Use `4genteam input` as above.
 - The secondary view is a seat's own screen, and the client has no verb that opens one raw
-  `tmux attach` tile per seat: read that pane with `4genteam capture <session>`, or attach by
-  hand. It is not the way to watch a room.
+  `tmux attach` tile per seat: to diagnose a fault, read that pane with `4genteam capture <session>`, or attach by
+  hand. It is not the way to watch a room or to follow a seat's work.
 - Each pane runs the client with `exec`, so the pane closes when that client exits. Reopen the view
   with the verb instead of expecting a dead pane to come back.
 - A running pane never picks up a code change: each pane runs the binary it started with. After
