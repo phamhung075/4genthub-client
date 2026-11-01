@@ -1,5 +1,5 @@
 """Unit tests for cost.py on synthetic turns: python3 -m unittest discover -s <this dir>."""
-import math, os, sys, unittest
+import json, math, os, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import benchmark  # noqa: E402
@@ -111,10 +111,8 @@ class BeforeAfter(unittest.TestCase):
         self.assertIn('-25%', out)
 
 
-
 class Waits(unittest.TestCase):
     def test_wait_share_kinds_and_targets(self):
-        import json, tempfile
         now = d.datetime(2026, 10, 29, 12, 0, tzinfo=d.timezone.utc)
         lines = [
             {'ts': '2026-10-29T08:00:00Z', 'event': 'start', 'room': 'r', 'seat': 'rust-dev', 'kind': 'merge', 'target': 'a@1', 'max_s': 3600},
@@ -135,6 +133,43 @@ class Waits(unittest.TestCase):
         self.assertEqual(w['ended'], {'expired': 1})
         self.assertIn('rust-dev 4% (1x)', benchmark.wait_line(w)[0])
         self.assertIsNone(benchmark.wait_stats('/nonexistent/waits.jsonl', 24, now))
+
+
+class Offload(unittest.TestCase):
+    def test_deduplicates_usage_by_attempt_and_revision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, 'repo')
+            jobs_dir = os.path.join(repo, 'scratch', 'dsh-offload', 'jobs')
+            os.makedirs(jobs_dir)
+            sid = 'sess-123'
+            with open(os.path.join(jobs_dir, 'job-1.json'), 'w') as f:
+                json.dump({'jobId': 'job-1', 'sessionId': sid, 'startedAt': 1000, 'finishedAt': 61000}, f)
+            sess_dir = os.path.join(tmp, 'dsh', 'sessions', '--w--', sid)
+            os.makedirs(sess_dir)
+            stream = os.path.join(sess_dir, 'session.v4.stream.jsonl')
+            frames = [
+                {'seq': 1, 'frame': {'type': 'chunk', 'attemptId': 'a1', 'revision': 10, 'time': 2000,
+                                     'chunk': {'type': 'usage', 'usage': {'inputTokens': 100_000, 'cacheReadTokens': 900_000, 'outputTokens': 10_000}}}},
+                # duplicate attemptId + revision -> must be deduplicated
+                {'seq': 2, 'frame': {'type': 'chunk', 'attemptId': 'a1', 'revision': 10, 'time': 2000,
+                                     'chunk': {'type': 'usage', 'usage': {'inputTokens': 100_000, 'cacheReadTokens': 900_000, 'outputTokens': 10_000}}}},
+                {'seq': 3, 'frame': {'type': 'chunk', 'attemptId': 'a1', 'revision': 11, 'time': 3000,
+                                     'chunk': {'type': 'usage', 'usage': {'inputTokens': 50_000, 'cacheReadTokens': 100_000, 'outputTokens': 5_000}}}},
+            ]
+            with open(stream, 'w') as f:
+                for fr in frames:
+                    f.write(json.dumps(fr) + '\n')
+            res = cost.offload_usage([repo], 500, 70000, dsh_home=os.path.join(tmp, 'dsh'))
+            self.assertEqual(res['runs'], 1)
+            self.assertEqual(res['sessions'], 1)
+            self.assertEqual(res['steps'], 2)
+            self.assertEqual(res['job_minutes'], 1)
+            self.assertEqual(res['tokens_in'], 150_000)
+            self.assertEqual(res['cache_read'], 1_000_000)
+            self.assertEqual(res['tokens_out'], 15_000)
+            expected_usd = (150_000 * 0.15 + 1_000_000 * 0.003 + 15_000 * 0.60) / 1e6
+            self.assertAlmostEqual(res['usd'], expected_usd, places=4)
+
 
 if __name__ == '__main__':
     unittest.main()

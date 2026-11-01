@@ -3,11 +3,13 @@
 
 Reads <state-root>/rooms/<room>/seats/<seat>/tool-calls.jsonl and `git log` of the hub, the client
 and every project repo the room works in. A project repo is found through the git worktrees under
-<state-root>/rooms/<room>/wt/ (or named with --repo); its log covers the main checkout's HEAD and the
-HEAD of each of the room's worktrees, so seat branches that are not merged yet still count.
-It also reads the room's turn metrics (`4genteam room metrics ROOM --since Hh --print`) for the cost
-model in cost.py: fitted prices, spend split, per-seat cost and activity, the compaction optimum, and
-merges and branch waste in each project repo.
+<state-root>/rooms/<room>/wt/ (or ~/projects/<room>, or seat tool-calls paths, or named with --repo);
+its log covers the main checkout's HEAD and the HEAD of each of the room's worktrees, so seat branches
+that are not merged yet still count.
+It also reads the room's turn metrics (`4genteam room metrics ROOM --since Hh --print`) and any
+deepseek-offload jobs (`<repo>/scratch/dsh-offload/jobs/job-*.json` + `~/.dsh/sessions/*/<sid>/session*.stream.jsonl`)
+for the cost model in cost.py: fitted prices, spend split, per-seat cost and activity, offload usage,
+the compaction optimum, and merges and branch waste in each project repo.
 Prints a brief report (default, ~25 lines), the full one (--full) or one JSON object (--json), and
 appends one JSON line to <state-root>/benchmarks/<room>.jsonl; `--change TEXT` appends a change
 marker instead, and every run compares itself with the last run before the latest marker.
@@ -54,6 +56,8 @@ def file_kind(p):
 def seat_calls(state, room, hours):
     cut = d.datetime.now(d.timezone.utc) - d.timedelta(hours=hours)
     root = f'{state}/rooms/{room}/seats'
+    if not os.path.isdir(root):
+        return {}
     out = {}
     for seat in sorted(os.listdir(root)):
         path = f'{root}/{seat}/tool-calls.jsonl'
@@ -98,27 +102,61 @@ def room_heads(repo, wt_root):
     return sorted(set(heads), key=heads.index)
 
 
-def project_repos(wt_root, known):
-    """Repos other than the hub and the client that have a worktree under the room's wt/ (depth 2).
-    A seat's wt/<seat> is often a hub worktree with the project checked out inside it
-    (wt/lead/aa2-rs), so the walk goes on into a hub or client worktree instead of stopping there."""
+def project_repos(wt_root, known, state=None, room=None, hub=None):
+    """Repos other than the hub and the client that the room works in.
+    Checks <state-root>/rooms/<room>/wt/ (depth 2) first; when the room's worktrees have been
+    cleaned, falls back to ~/projects/<room>, <hub>/<room>, and git roots referenced in the
+    room's seat tool-calls.jsonl logs."""
     found = {}
-    if not os.path.isdir(wt_root):
-        return []
-    todo = [(os.path.join(wt_root, n), 1) for n in sorted(os.listdir(wt_root))]
-    while todo:
-        path, depth = todo.pop(0)
-        if not os.path.isdir(path) or os.path.islink(path):
-            continue
-        if os.path.exists(os.path.join(path, '.git')):
-            cd = common_dir(path)
-            if cd and cd not in known and cd not in found:
-                main = os.path.dirname(cd) if os.path.basename(cd) == '.git' else path
-                found[cd] = main
-            if cd not in known:
+
+    def add_candidate(path):
+        if not path or not os.path.isdir(path):
+            return
+        cd = common_dir(path)
+        if cd and cd not in known and cd not in found:
+            found[cd] = os.path.dirname(cd) if os.path.basename(cd) == '.git' else os.path.realpath(path)
+
+    if os.path.isdir(wt_root):
+        todo = [(os.path.join(wt_root, n), 1) for n in sorted(os.listdir(wt_root))]
+        while todo:
+            path, depth = todo.pop(0)
+            if not os.path.isdir(path) or os.path.islink(path):
                 continue
-        if depth < 2:
-            todo += [(os.path.join(path, n), depth + 1) for n in sorted(os.listdir(path))]
+            if os.path.exists(os.path.join(path, '.git')):
+                cd = common_dir(path)
+                if cd and cd not in known and cd not in found:
+                    found[cd] = os.path.dirname(cd) if os.path.basename(cd) == '.git' else path
+                if cd not in known:
+                    continue
+            if depth < 2:
+                todo += [(os.path.join(path, n), depth + 1) for n in sorted(os.listdir(path))]
+    if not found and room:
+        for cand in (os.path.expanduser(f'~/projects/{room}'), os.path.join(hub, room) if hub else None):
+            if cand and os.path.exists(os.path.join(cand, '.git')):
+                add_candidate(cand)
+    if not found and state and room:
+        seats_dir = f'{state}/rooms/{room}/seats'
+        if os.path.isdir(seats_dir):
+            seen_dirs = set()
+            path_re = re.compile(r'(/home/[^"\'\s:;]+)')
+            for seat in sorted(os.listdir(seats_dir)):
+                tc = f'{seats_dir}/{seat}/tool-calls.jsonl'
+                if not os.path.exists(tc):
+                    continue
+                with open(tc) as f:
+                    for i, line in enumerate(f):
+                        if i >= 500 or found:
+                            break
+                        for m in path_re.findall(line):
+                            cur = m if os.path.isdir(m) else os.path.dirname(m)
+                            for _ in range(4):
+                                if not cur or cur in ('/', '/home') or cur in seen_dirs:
+                                    break
+                                seen_dirs.add(cur)
+                                if os.path.exists(os.path.join(cur, '.git')):
+                                    add_candidate(cur)
+                                    break
+                                cur = os.path.dirname(cur)
     return list(found.values())
 
 
@@ -134,8 +172,6 @@ def commit_lines(repo, hours, wt_root):
             lines[file_kind(m[2])] += int(m[1])
     return {'path': os.path.realpath(repo), 'heads': len(heads), 'commits': commits,
             'merges': int(merges), **lines}
-
-
 
 
 def pct(n, total):
@@ -237,11 +273,7 @@ def _ts(value):
 
 
 def wait_stats(path, hours, now):
-    """Declared seat waits (`4genteam wait`) in the window, from <state-root>/rooms/<room>/waits.jsonl.
-
-    A start and its end make one interval; a start with no end yet runs to now (at most its max). Each interval is
-    clipped to the window. Answers per-seat waiting seconds and share, totals by kind and by kind:target, and how
-    the waits ended - so the director sees where the pipeline blocks."""
+    """Declared seat waits (`4genteam wait`) in the window, from <state-root>/rooms/<room>/waits.jsonl."""
     lo = now - d.timedelta(hours=hours)
     open_, spans, ended = {}, [], collections.Counter()
     try:
@@ -257,7 +289,7 @@ def wait_stats(path, hours, now):
         if ev == 'start':
             open_[seat] = e
         elif ev == 'end':
-            start = open_.pop(seat, None)
+            open_.pop(seat, None)
             t1 = _ts(e['ts'])
             t0 = t1 - d.timedelta(seconds=e.get('duration_s', 0))
             spans.append((seat, e.get('kind'), e.get('target'), t0, t1))
@@ -297,7 +329,7 @@ def wait_line(w):
     return [f'waits: {seats}; by kind {kinds}; top {tops}' + (f'; ended {ended}' if ended else '')]
 
 
-def brief(room, hours, c, prod, waste):
+def brief(room, hours, c, prod, waste, offload=None):
     out = []
     if c:
         sp, pr = c['split_pct'], c['prices']
@@ -320,6 +352,11 @@ def brief(room, hours, c, prod, waste):
         out.append(line)
     else:
         out.append(f'{room} {hours}h: no turn metrics (4genteam room metrics failed); cost section skipped')
+    if offload and (offload['runs'] or offload['steps']):
+        out.append(f"offload: ${offload['usd']:.2f} ({offload['runs']} runs, {offload['sessions']} sessions, "
+                   f"{offload['steps']} steps, {offload['job_minutes']}m); "
+                   f"miss {offload['tokens_in'] / 1e6:.2f}M hit {offload['cache_read'] / 1e6:.1f}M "
+                   f"out {offload['tokens_out'] / 1e6:.2f}M; hit ratio {offload['hit_ratio']:.3f}")
     for w in waste:
         out.append(f"waste {os.path.basename(w['path'])}: {w['scratch']} of {w['branches']} branches active "
                    f"in the window are scratch (named {len(w['scratch_named'])}, already in {w['main']} "
@@ -327,7 +364,7 @@ def brief(room, hours, c, prod, waste):
     return out
 
 
-def full(room, hours, c, prod, waste, seats, repos, prev):
+def full(room, hours, c, prod, waste, seats, repos, prev, offload=None):
     out = [f'{room}, last {hours}h (share of tool calls)']
     for seat, s in seats.items():
         n = s['calls']
@@ -350,6 +387,9 @@ def full(room, hours, c, prod, waste, seats, repos, prev):
         for seat, s in c['seats'].items():
             acts = ', '.join(f'{a} {v[0]} ${v[1]:.2f}' for a, v in s['activity'].items())
             out.append(f"  {seat:10} peak {k(s['peak'])} after {k(s['after'])}: {acts}")
+    if offload and (offload['runs'] or offload['steps']):
+        su = offload['split_usd']
+        out.append(f"offload spend $ miss {su['miss']:.2f} hit {su['hit']:.2f} out {su['out']:.2f}")
     for w in waste:
         for key in ('scratch_named', 'in_main', 'duplicates'):
             if w[key]:
@@ -361,12 +401,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('room')
     ap.add_argument('--hours', type=int, default=24)
+    ap.add_argument('--since', help='ISO start timestamp for offload/window override')
+    ap.add_argument('--until', help='ISO end timestamp for offload/window override')
     ap.add_argument('--state-root', default=os.path.expanduser('~/.config/4genthub'))
     hub, client = default_repos()
     ap.add_argument('--hub', default=hub, help='hub repo (default: the parent of the client checkout)')
     ap.add_argument('--client', default=client, help='client repo (default: the repo of this script)')
     ap.add_argument('--repo', action='append', default=[],
-                    help='project repo to count (repeatable); default: found from the room worktrees')
+                    help='project repo to count (repeatable); default: found from the room worktrees or ~/projects/<room>')
     ap.add_argument('--metrics', help='read turn metrics from this saved `room metrics --print` file')
     ap.add_argument('--change', metavar='TEXT', help='append a change marker and exit (no measurement)')
     mode = ap.add_mutually_exclusive_group()
@@ -391,7 +433,7 @@ def main():
         if path:
             repos[name] = commit_lines(path, a.hours, wt_root)
             known.add(common_dir(path))
-    projects = a.repo or project_repos(wt_root, known)
+    projects = a.repo or project_repos(wt_root, known, state=a.state_root, room=a.room, hub=a.hub)
     for path in projects:
         name = os.path.basename(os.path.realpath(path))
         while name in repos:
@@ -403,17 +445,27 @@ def main():
     except (OSError, subprocess.CalledProcessError) as e:
         print(f'warning: no turn metrics: {e}', file=sys.stderr)
         c = None
+
+    hi_dt = _ts(a.until) if a.until else now
+    lo_dt = _ts(a.since) if a.since else (hi_dt - d.timedelta(hours=a.hours))
+    offload = cost.offload_usage(
+        projects,
+        int(lo_dt.timestamp() * 1000),
+        int(hi_dt.timestamp() * 1000),
+        prices=(c or {}).get('prices'),
+    )
     waste = [w for w in (cost.git_waste(os.path.realpath(p), a.hours) for p in projects) if w]
     merges = sum(w['merges'] for w in waste)
+    total_usd = ((c['usd'] if c else 0) + (offload['usd'] if offload else 0))
     prod = {'merges': merges, 'commits': sum(repos[n]['commits'] for n in repos if n not in ('hub', 'client')),
-            'usd_merge': round(c['usd'] / merges, 4) if c and merges else None,
+            'usd_merge': round(total_usd / merges, 4) if total_usd and merges else None,
             'scratch': sum(w['scratch'] for w in waste)}
 
     waits = wait_stats(f'{a.state_root}/rooms/{a.room}/waits.jsonl', a.hours, now)
     history = read_history(hist)
     prev = next((r for r in reversed(history) if r.get('kind', 'run') == 'run'), None)
     result = {'kind': 'run', 'at': now.isoformat(timespec='seconds'), 'hours': a.hours, 'seats': seats,
-              **repos, 'repos': list(repos), 'cost': c, 'productivity': prod, 'waste': waste,
+              **repos, 'repos': list(repos), 'cost': c, 'offload': offload, 'productivity': prod, 'waste': waste,
               'waits': waits}
     with open(hist, 'a') as f:
         f.write(json.dumps(result) + '\n')
@@ -421,10 +473,10 @@ def main():
     if a.json:
         print(json.dumps(result, separators=(',', ':')))
         return
-    lines = brief(a.room, a.hours, c, prod, waste)
+    lines = brief(a.room, a.hours, c, prod, waste, offload=offload)
     lines += wait_line(waits)
     if a.full:
-        lines += full(a.room, a.hours, c, prod, waste, seats, repos, prev)
+        lines += full(a.room, a.hours, c, prod, waste, seats, repos, prev, offload=offload)
     lines += compare(history, result, now)
     print('\n'.join(lines))
 

@@ -1,17 +1,18 @@
 """Cost and performance model of a room, from `4genteam room metrics ROOM --since Hh --print`.
 
-Pure python3 stdlib, no I/O except `load_metrics` (runs the binary) and `git_waste` (runs git), so the
-math is testable on a synthetic turn list. Token units: tokens_in = cache-miss input, cache_read =
-cache-hit input, tokens_out = output. "miss tokens" is the unit of the compaction model: one hit token
-costs w_r = hit price / miss price miss tokens.
+Pure python3 stdlib, no I/O except `load_metrics` (runs the binary), `offload_usage` (reads offload
+jobs and session streams) and `git_waste` (runs git), so the math is testable on a synthetic turn list.
+Token units: tokens_in = cache-miss input, cache_read = cache-hit input, tokens_out = output. "miss
+tokens" is the unit of the compaction model: one hit token costs w_r = hit price / miss price miss tokens.
 """
-import collections, json, math, re, statistics, subprocess, time
+import collections, glob, json, math, os, re, statistics, subprocess, time
 
 COMPACT_DROP = 0.6      # a compaction: context falls below 0.6x the previous turn ...
 COMPACT_MIN = 40_000    # ... and the previous turn carried more than 40k
 GROWTH_MAX = 50_000     # per-turn growth above this is a file dump or a new session, not growth
 COORD = ('queue-poll', 'queue-write')
 SCRATCH = re.compile(r'^(gate-|proof-|tmp-|.*-rebased)')
+DEFAULT_PRICES = {'miss': 0.15, 'hit': 0.003, 'out': 0.60}
 
 
 def load_metrics(room, hours, path=None):
@@ -179,6 +180,87 @@ def analyse(turns, hours):
                 'p90': pctl(ctxs, 0.9), 'max': max(ctxs, default=0)},
         'coord': round(coord / len(turns), 4) if turns else 0,
         'compaction': model, 'seats': seats,
+    }
+
+
+def _find_usage(obj):
+    """Extract (attempt_id, revision, time_ms, miss, hit, out) from a stream.jsonl record if it is a usage event."""
+    frame = obj.get('frame') if isinstance(obj.get('frame'), dict) else obj
+    chunk = frame.get('chunk') if isinstance(frame.get('chunk'), dict) else frame
+    if chunk.get('type') != 'usage' and frame.get('type') != 'usage' and obj.get('type') != 'usage':
+        return None
+    u = chunk.get('usage') if isinstance(chunk.get('usage'), dict) else chunk
+    att = frame.get('attemptId') or chunk.get('attemptId') or obj.get('attemptId')
+    rev = frame.get('revision') if frame.get('revision') is not None else (
+        chunk.get('revision') if chunk.get('revision') is not None else obj.get('revision'))
+    t_ms = frame.get('time') or chunk.get('time') or obj.get('time')
+    miss = int(u.get('inputTokens') or 0)
+    hit = int(u.get('cacheReadTokens') or 0)
+    out = int(u.get('outputTokens') or 0)
+    return att, rev, t_ms, miss, hit, out
+
+
+def offload_usage(repos, lo_ms, hi_ms, prices=None, dsh_home=None):
+    """Aggregate deepseek-offload jobs and deduplicated usage chunks across project repos in [lo_ms, hi_ms]."""
+    dsh_home = dsh_home or os.environ.get('DSH_HOME') or os.path.expanduser('~/.dsh')
+    pr = prices if (prices and any(v > 0 for v in prices.values())) else DEFAULT_PRICES
+    jobs, sessions = [], set()
+    for repo in repos:
+        pattern = os.path.join(os.path.realpath(repo), 'scratch', 'dsh-offload', 'jobs', 'job-*.json')
+        for path in sorted(glob.glob(pattern)):
+            try:
+                j = json.loads(open(path).read())
+            except (OSError, ValueError):
+                continue
+            st = j.get('startedAt') or j.get('workerStartedAt')
+            if not st:
+                continue
+            if lo_ms <= st <= hi_ms:
+                jobs.append(j)
+                if j.get('sessionId'):
+                    sessions.add(j['sessionId'])
+    seen = {}
+    for sid in sorted(sessions):
+        for sp in sorted(glob.glob(os.path.join(dsh_home, 'sessions', '*', sid, 'session*.stream.jsonl'))):
+            try:
+                f = open(sp)
+            except OSError:
+                continue
+            with f:
+                for line in f:
+                    if '"usage"' not in line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    parsed = _find_usage(rec)
+                    if not parsed:
+                        continue
+                    att, rev, t_ms, miss, hit, out = parsed
+                    if t_ms and not (lo_ms <= t_ms <= hi_ms):
+                        continue
+                    key = (att, rev) if (att is not None or rev is not None) else (sid, len(seen))
+                    seen[key] = (miss, hit, out)
+    miss = sum(v[0] for v in seen.values())
+    hit = sum(v[1] for v in seen.values())
+    out = sum(v[2] for v in seen.values())
+    split_usd = {k: pr[k] * n / 1e6 for k, n in (('miss', miss), ('hit', hit), ('out', out))}
+    usd = sum(split_usd.values())
+    dur_min = sum(((j.get('finishedAt') or j['startedAt']) - j['startedAt']) / 60_000
+                  for j in jobs if j.get('startedAt'))
+    return {
+        'runs': len(jobs),
+        'sessions': len(sessions),
+        'steps': len(seen),
+        'job_minutes': round(dur_min),
+        'tokens_in': miss,
+        'cache_read': hit,
+        'tokens_out': out,
+        'usd': round(usd, 4),
+        'prices': {k: round(v, 4) for k, v in pr.items()},
+        'split_usd': {k: round(v, 4) for k, v in split_usd.items()},
+        'hit_ratio': round(hit / (hit + miss), 4) if hit + miss else 0,
     }
 
 
