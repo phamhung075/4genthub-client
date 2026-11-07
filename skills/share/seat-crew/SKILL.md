@@ -117,11 +117,18 @@ by bash before the worker sees it. `--read-only` for every job whose deliverable
 only for a write job in your own worktree. Never pass `--allow-git-write`: you commit, workers do not.
 
 **Waiting.** Do not poll in a loop. Start the crew, do your own part, then collect each `result`.
-When nothing else is left, run one background `wait` for all of them:
+When nothing else is left, start one background `wait` per job, all in the same turn. Never wait on
+several jobs in one command (a `for` loop or an `&&` chain): it wakes you only when the last job ends,
+so a job that finished first goes unnoticed.
 
 ```sh
-for j in <id1> <id2> <id3>; do node "$OFF" wait $j --timeout-ms 1800000 2>&1 | sed -n '/--- result ---/,$p' | cut -c1-2000 | head -40; done
+# one background command PER job (same OFF and DSH_OFFLOAD_JOB_DIR as the start):
+node "$OFF" wait <id1> --timeout-ms 1800000 2>&1 \
+  | sed -n -e '/^dsh-offload:/p' -e '/--- result ---/,$p' | cut -c1-2000 | head -40; echo "wait exit=${PIPESTATUS[0]}"
 ```
+
+The `/^dsh-offload:/p` clause keeps the runner's errors and `PIPESTATUS[0]` its exit code; without
+them a failed `wait` (for example an unknown job id) ends with empty output and exit 0.
 
 ## The work order (every worker, every time)
 
